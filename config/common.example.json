@@ -1,0 +1,43 @@
+{
+  "mqtt": {
+    "broker_host": "127.0.0.1",
+    "broker_port": 1883,
+    "topic_prefix": "/projects/remote-rover",
+    "client_id": "",
+    "control_topic": "control/manual",
+    "state_topic": "telemetry/state",
+    "camera_topic": "camera-feed",
+    "control_hz": 20,
+    "telemetry_hz": 2,
+    "failsafe_timeout_ms": 250,
+    "control_mode": "hybrid",
+    "digital_throttle_step": 1.0,
+    "digital_steer_step": 1.0,
+    "video_endpoint": "",
+    "battery_pct": 67.0,
+    "voltage_v": 22.56,
+    "current_a": 10.0,
+    "temperature_c": 17.0
+  },
+  "key_bindings": {
+    "forward": ["arrow_up", "w"],
+    "backward": ["arrow_down", "s"],
+    "left": ["arrow_left", "a"],
+    "right": ["arrow_right", "d"],
+    "camera_toggle": ["v"]
+  },
+  "video": {
+    "enabled": true,
+    "ingest_mode": "mqtt_frames",
+    "delivery_mode": "websocket_mjpeg"
+  },
+  "gcs": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "state_backend": "memory",
+    "controller_lock_backend": "memory",
+    "telemetry_stale_ms": 2000,
+    "controller_lease_ms": 3000,
+    "title": "Remote Rover GCS"
+  }
+}

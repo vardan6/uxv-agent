@@ -1,0 +1,176 @@
+:root {
+  --bg: #08131b;
+  --panel: rgba(10, 27, 38, 0.8);
+  --panel-strong: rgba(14, 38, 53, 0.92);
+  --line: rgba(146, 188, 214, 0.22);
+  --text: #ebf4f8;
+  --muted: #9ab4c2;
+  --accent: #35c6a0;
+  --accent-strong: #12e0ac;
+  --warn: #f2b544;
+  --danger: #ff6d5e;
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(53, 198, 160, 0.15), transparent 25%),
+    radial-gradient(circle at top right, rgba(104, 181, 255, 0.12), transparent 20%),
+    linear-gradient(180deg, #071018 0%, #091722 40%, #050c12 100%);
+}
+.shell {
+  width: min(1400px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0 40px;
+}
+.hero, .panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border-radius: 24px;
+  margin-bottom: 18px;
+}
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+h1, h2, p { margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); }
+.lede { max-width: 58ch; color: var(--muted); margin-top: 12px; }
+.hero-actions { display: flex; gap: 12px; align-items: flex-start; }
+button, select {
+  font: inherit;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+button {
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(53,198,160,0.25), rgba(53,198,160,0.08));
+  color: var(--text);
+  cursor: pointer;
+}
+button.ghost {
+  background: rgba(255,255,255,0.04);
+}
+.grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+.top-grid { grid-template-columns: 1.8fr 1fr; }
+.middle-grid { grid-template-columns: 1.1fr 1fr 0.9fr; }
+.panel {
+  border-radius: 20px;
+  padding: 18px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.pill.ok { color: var(--accent-strong); }
+.pill.warn { color: var(--warn); }
+.pill.danger { color: var(--danger); }
+.video-frame-wrap {
+  position: relative;
+  min-height: 320px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.06));
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#video-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+}
+.video-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px 18px;
+}
+.stats.compact { grid-template-columns: 1fr; }
+.stats div {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.stats dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+.stats dd { margin: 0; }
+.status-banner, .hint { color: var(--muted); margin-top: 16px; }
+.dpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.dpad-row {
+  display: flex;
+  gap: 12px;
+}
+.control-btn {
+  min-width: 120px;
+  min-height: 84px;
+  background: linear-gradient(180deg, rgba(96, 141, 255, 0.18), rgba(96, 141, 255, 0.08));
+}
+.control-btn.active {
+  border-color: rgba(18,224,172,0.55);
+  background: linear-gradient(180deg, rgba(18,224,172,0.35), rgba(18,224,172,0.16));
+  transform: translateY(1px);
+}
+label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+label span { color: var(--muted); }
+select {
+  padding: 11px 12px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+@media (max-width: 1100px) {
+  .top-grid, .middle-grid { grid-template-columns: 1fr; }
+  .hero { flex-direction: column; }
+}
