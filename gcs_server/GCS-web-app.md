@@ -19,13 +19,17 @@ Implemented:
 - MQTT telemetry subscription
 - MQTT control publication
 - browser controller lock
+- automatic control request on dashboard connect
 - keyboard and on-screen controls
 - broker state and freshness display
 - configurable video ingest/delivery modes
 - MQTT camera frame subscription and browser rendering path
+- simulator-side MQTT camera frame publication
+- dedicated MQTT setup page (`/setup/mqtt`)
+- live broker/topic/control-rate update API (`/api/mqtt-config`) with runtime reconnect
+- appearance settings (theme mode + light/dark theme variants) persisted in browser storage
 
 Not implemented yet:
-- simulator camera frame publishing
 - WebRTC transport
 - Redis-backed state sharing
 - authentication
@@ -49,9 +53,12 @@ Browsers do not publish directly to MQTT.
 - Manual driving controls
 - Keyboard bindings: arrow keys and `W/A/S/D`
 - On-screen control buttons with active press indication
+- Dashboard status banner for control, broker, and theme state feedback
 - Broker connection/freshness visibility without artificial ping traffic
 - One active controller, multiple monitoring clients
 - Video transport modeled as separate ingest and delivery modes
+- Browser-based MQTT setup and runtime reconnect workflow
+- Persisted light/dark/system theme preferences
 
 ## Video Design
 
@@ -78,6 +85,12 @@ Important config sections:
 - `video.*`
 - `gcs.*`
 
+The setup page can update the live `mqtt.*` section and the GCS reconnects without process restart.
+
 ## Main Gap To Close Next
 
-The highest-value next implementation step is adding simulator camera frame publication to `mqtt.camera_topic` so the current GCS video path becomes fully end-to-end.
+The next gap is not feature bootstrap but hardening:
+- validate the current MQTT-frame video path under disconnect/reconnect conditions
+- keep `mqtt_frames -> websocket_mjpeg` as a bootstrap/debug path
+- add a production media path later without breaking the current fallback
+- move from memory-only state/lock backend to Redis if multi-instance operation is needed

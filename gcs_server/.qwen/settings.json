@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/vardana/.qwen/**)",
+      "Read(//home/vardana/.npm-global/lib/node_modules/@qwen-code/qwen-code/bundled/qc-helper/docs/configuration/**)"
+    ]
+  },
+  "$version": 3
+}

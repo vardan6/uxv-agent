@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MQTT Setup | Remote Rover GCS</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <main class="shell shell-narrow">
+      <section class="hero hero-setup">
+        <div>
+          <p class="eyebrow">Broker Setup</p>
+          <h1>MQTT Connection</h1>
+          <p class="lede">This GCS reads and updates the shared 3D environment config so both services point at the same MQTT broker and topics.</p>
+        </div>
+        <div class="hero-actions">
+          <a class="nav-link nav-link-accent" href="/">Back to Dashboard</a>
+        </div>
+      </section>
+
+      <section class="grid single-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>3D Env MQTT Settings</h2>
+            <span id="setup-broker-pill" class="pill warn">Loading</span>
+          </div>
+          <p class="hint">Saved to <code id="settings-path">-</code>. After save, the GCS reconnects using these values immediately.</p>
+
+          <form id="mqtt-form" class="form-grid">
+            <label>
+              <span>Broker Host</span>
+              <input id="broker-host" name="broker_host" type="text" placeholder="192.0.2.10" required>
+            </label>
+            <label>
+              <span>Broker Port</span>
+              <input id="broker-port" name="broker_port" type="number" min="1" step="1" required>
+            </label>
+            <label>
+              <span>Topic Prefix</span>
+              <input id="topic-prefix" name="topic_prefix" type="text" placeholder="/projects/remote-rover">
+            </label>
+            <label>
+              <span>Client ID</span>
+              <input id="client-id-input" name="client_id" type="text" placeholder="gcs-web">
+            </label>
+            <label>
+              <span>Control Topic</span>
+              <input id="control-topic" name="control_topic" type="text" placeholder="control/manual" required>
+            </label>
+            <label>
+              <span>Telemetry Topic</span>
+              <input id="state-topic" name="state_topic" type="text" placeholder="telemetry/state" required>
+            </label>
+            <label>
+              <span>Camera Topic</span>
+              <input id="camera-topic" name="camera_topic" type="text" placeholder="camera-feed" required>
+            </label>
+            <label>
+              <span>Control Rate (Hz)</span>
+              <input id="control-hz" name="control_hz" type="number" min="1" step="1" required>
+            </label>
+
+            <div class="form-actions">
+              <button type="submit">Save MQTT Settings</button>
+              <button id="reload-config" type="button" class="ghost">Reload</button>
+            </div>
+          </form>
+
+          <p id="setup-status" class="status-banner">Loading shared MQTT settings.</p>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/mqtt-setup.js" defer></script>
+  </body>
+</html>

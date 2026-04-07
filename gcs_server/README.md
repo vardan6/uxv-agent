@@ -9,17 +9,22 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Live telemetry dashboard
 - Broker status and topic freshness status
 - Controller lock: one active browser controls, others observe
+- Automatic control-claim request when a dashboard client connects
 - Keyboard control via arrow keys and `W/A/S/D`
 - On-screen control buttons with immediate active-state feedback
 - Configurable video pipeline modes
 - MQTT camera-frame ingest and WebSocket MJPEG-style browser delivery
+- End-to-end simulator POV JPEG publication over MQTT
+- Dedicated MQTT setup page (`/setup/mqtt`) for broker/topic/control-rate editing
+- Live MQTT reconfiguration via API without restarting the GCS process
+- Theme controls with persisted mode + light/dark theme variants
 
 ## Current Limitations
 
-- Simulator camera frame publishing is not implemented yet, so the GCS video panel will remain empty until a publisher sends frames to `mqtt.camera_topic`
 - State backend is in-memory only
 - No authentication or authorization
 - No WebRTC transport yet
+- MQTT settings are persisted to local shared config only (no secrets manager)
 
 ## Dependencies
 
@@ -27,15 +32,33 @@ Install from the workspace root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-pip install -r requirements-gcs.txt
+pip install -r gcs_server/requirements-gcs.txt
 ```
 
 ## Run
+
+From the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
 python -m gcs_server
 ```
+
+From inside the `gcs_server/` directory:
+
+```bash
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
+.venv/bin/python app.py
+```
+
+Using the helper script inside `gcs_server/`:
+
+```bash
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
+./run.sh
+```
+
+`python -m gcs_server` does not work from inside `gcs_server/` itself because Python needs the parent directory on `sys.path` to resolve the `gcs_server` package.
 
 Default URL:
 - `http://localhost:8080`
@@ -84,16 +107,26 @@ Main modules:
 - `ws.py`: WebSocket connection manager
 - `video.py`: MQTT camera frame decoding helper
 - `static/`: browser UI assets
+  - `index.html` + `app.js`: dashboard UI
+  - `mqtt-setup.html` + `mqtt-setup.js`: MQTT setup/config UI
 
 ## Browser Control Flow
 
 1. Browser opens `/ws`
 2. GCS sends initial runtime snapshot
-3. User clicks `Take Control`
-4. Browser sends control button states over WebSocket
+3. Browser requests control lock (or user can manually take/release)
+4. Browser sends control button states over WebSocket when it owns control
 5. GCS publishes digital control frames to MQTT at `control_hz`
 6. Active controller lease is renewed while held input is being published
 7. Telemetry and camera frames received from MQTT are broadcast to connected browsers
+
+## MQTT Setup Flow
+
+1. Browser opens `/setup/mqtt`
+2. GCS returns current MQTT config from shared settings file (`/api/mqtt-config`)
+3. User edits host/port/topics/control rate and saves
+4. GCS writes updated shared config and reconnects MQTT runtime immediately
+5. Dashboard broker status updates via WebSocket broadcast
 
 ## Video Pipeline Model
 
@@ -107,8 +140,18 @@ Planned future modes:
 - ingest: `rtp_udp`, `rtsp`, `whip`
 - delivery: `webrtc_direct`, `webrtc_sfu`
 
+## Current Priority
+
+The current bootstrap path is functional:
+- browser sends control to GCS
+- GCS publishes MQTT control frames
+- simulator publishes telemetry and JPEG camera frames
+- GCS relays telemetry and frames to browsers
+
+The next work is runtime hardening and a future production media path, not basic camera publication.
+
 ## Repository Note
 
-`gcs_server/` is now tracked under the parent `remote-rover/` repository root.
+`gcs_server/` is tracked under the parent `remote-rover/` repository root.
 
 That is the intended structure for ongoing development.

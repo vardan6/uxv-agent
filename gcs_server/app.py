@@ -5,12 +5,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+import uvicorn
 
-from gcs_server.config import load_config, save_config
-from gcs_server.runtime import AppRuntime, build_runtime
+try:
+    from gcs_server.config import load_config, save_config
+    from gcs_server.runtime import AppRuntime, build_runtime
+except ModuleNotFoundError:
+    from config import load_config, save_config
+    from runtime import AppRuntime, build_runtime
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -31,6 +36,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def add_cache_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/setup/") or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
@@ -59,6 +75,53 @@ async def snapshot(request: Request) -> dict[str, Any]:
 async def get_config(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     return runtime.config.raw
+
+
+@app.get("/api/mqtt-config")
+async def get_mqtt_config(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    return {
+        "mqtt": runtime.config.mqtt,
+        "settings_path": str(runtime.config.settings_path),
+    }
+
+
+@app.post("/api/mqtt-config")
+async def set_mqtt_config(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    mqtt_payload = payload.get("mqtt")
+    if not isinstance(mqtt_payload, dict):
+        raise HTTPException(status_code=400, detail="mqtt object is required")
+
+    current = dict(runtime.config.mqtt)
+    updated = {
+        "broker_host": str(mqtt_payload.get("broker_host", current.get("broker_host", ""))).strip(),
+        "broker_port": int(mqtt_payload.get("broker_port", current.get("broker_port", 1883))),
+        "topic_prefix": str(mqtt_payload.get("topic_prefix", current.get("topic_prefix", ""))).strip(),
+        "client_id": str(mqtt_payload.get("client_id", current.get("client_id", ""))).strip(),
+        "control_topic": str(mqtt_payload.get("control_topic", current.get("control_topic", "control/manual"))).strip(),
+        "state_topic": str(mqtt_payload.get("state_topic", current.get("state_topic", "telemetry/state"))).strip(),
+        "camera_topic": str(mqtt_payload.get("camera_topic", current.get("camera_topic", "camera-feed"))).strip(),
+        "control_hz": int(mqtt_payload.get("control_hz", current.get("control_hz", 20))),
+    }
+    if not updated["broker_host"]:
+        raise HTTPException(status_code=400, detail="broker_host is required")
+    if updated["broker_port"] <= 0:
+        raise HTTPException(status_code=400, detail="broker_port must be positive")
+    if updated["control_hz"] <= 0:
+        raise HTTPException(status_code=400, detail="control_hz must be positive")
+
+    runtime.config.raw.setdefault("mqtt", {}).update(updated)
+    save_config(runtime.config)
+    await runtime.reconfigure_mqtt(runtime.config.mqtt)
+    snapshot = await runtime.state_store.snapshot()
+    await runtime.ws_manager.broadcast({"type": "broker", "data": snapshot["broker"]})
+    return JSONResponse({
+        "ok": True,
+        "mqtt": runtime.config.mqtt,
+        "settings_path": str(runtime.config.settings_path),
+    })
 
 
 @app.post("/api/video-mode")
@@ -147,3 +210,18 @@ async def websocket_endpoint(websocket: WebSocket):
         controller = await runtime.state_store.controller_snapshot()
         await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
         await runtime.ws_manager.disconnect(client_id)
+
+
+@app.get("/setup/mqtt")
+async def mqtt_setup_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "mqtt-setup.html")
+
+
+if __name__ == "__main__":
+    config = load_config()
+    uvicorn.run(
+        app,
+        host=str(config.gcs["host"]),
+        port=int(config.gcs["port"]),
+        reload=False,
+    )

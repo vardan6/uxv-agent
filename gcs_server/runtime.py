@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gcs_server.config import AppConfig
-from gcs_server.control import ControlService
-from gcs_server.mqtt_service import MQTTRuntime
-from gcs_server.state import LocalStateBackend
-from gcs_server.ws import WebSocketManager
+try:
+    from gcs_server.config import AppConfig
+    from gcs_server.control import ControlService
+    from gcs_server.mqtt_service import MQTTRuntime
+    from gcs_server.state import LocalStateBackend
+    from gcs_server.ws import WebSocketManager
+except ModuleNotFoundError:
+    from config import AppConfig
+    from control import ControlService
+    from mqtt_service import MQTTRuntime
+    from state import LocalStateBackend
+    from ws import WebSocketManager
 
 
 @dataclass(slots=True)
@@ -16,6 +23,13 @@ class AppRuntime:
     ws_manager: WebSocketManager
     mqtt_runtime: MQTTRuntime
     control_service: ControlService
+
+    async def reconfigure_mqtt(self, mqtt_config: dict[str, object]) -> None:
+        self.config.raw["mqtt"] = dict(mqtt_config)
+        self.mqtt_runtime.update_config(self.config.mqtt)
+        await self.control_service.update_control_hz(int(self.config.mqtt["control_hz"]))
+        await self.mqtt_runtime.stop()
+        await self.mqtt_runtime.start()
 
 
 async def build_runtime(config: AppConfig) -> AppRuntime:

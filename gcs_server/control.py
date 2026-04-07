@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ControlService:
@@ -38,44 +41,68 @@ class ControlService:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            self._task = None
+
+    async def update_control_hz(self, control_hz: int) -> None:
+        async with self._lock:
+            self._control_hz = max(1, int(control_hz))
 
     async def set_buttons(self, client_id: str, buttons: dict[str, Any]) -> bool:
         if not await self._controller_store.renew_controller(client_id):
             return False
+        frame = None
         async with self._lock:
             self._owner_client_id = client_id
             for name in self._buttons:
                 if name in buttons:
                     self._buttons[name] = bool(buttons[name])
             self._pending_neutral = True
+            frame = self._build_frame_locked()
+        if frame is not None:
+            await self._publish_func(frame)
         return True
 
     async def clear_buttons(self, client_id: str) -> None:
+        frame = None
         async with self._lock:
             if self._owner_client_id != client_id:
                 return
             for name in self._buttons:
                 self._buttons[name] = False
             self._pending_neutral = True
+            frame = self._build_frame_locked()
+        if frame is not None:
+            await self._publish_func(frame)
+
+    def _build_frame_locked(self) -> dict[str, Any] | None:
+        active = any(self._buttons.values())
+        owner = self._owner_client_id
+        if not active and not self._pending_neutral:
+            return None
+        frame = {
+            "mode": "digital",
+            "buttons": dict(self._buttons),
+            "source": f"gcs:{owner}" if owner else "gcs",
+            "timestamp": time.time(),
+        }
+        if not active:
+            self._pending_neutral = False
+        return frame
 
     async def _run(self) -> None:
-        period = 1.0 / self._control_hz
         while self._running:
-            frame = None
-            async with self._lock:
-                active = any(self._buttons.values())
-                owner = self._owner_client_id
-                if active or self._pending_neutral:
-                    frame = {
-                        "mode": "digital",
-                        "buttons": dict(self._buttons),
-                        "source": f"gcs:{owner}" if owner else "gcs",
-                        "timestamp": time.time(),
-                    }
-                    if not active:
-                        self._pending_neutral = False
-            if frame is not None:
-                if owner:
-                    await self._controller_store.renew_controller(owner)
-                await self._publish_func(frame)
-            await asyncio.sleep(period)
+            try:
+                owner = None
+                frame = None
+                async with self._lock:
+                    owner = self._owner_client_id
+                    frame = self._build_frame_locked()
+                if frame is not None:
+                    if owner:
+                        await self._controller_store.renew_controller(owner)
+                    await self._publish_func(frame)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Control loop publish failed")
+            await asyncio.sleep(1.0 / self._control_hz)

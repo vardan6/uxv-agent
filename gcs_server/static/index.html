@@ -3,7 +3,39 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <title>Remote Rover GCS</title>
+    <script>
+      (function () {
+        const MODE_KEY = 'gcs-theme-mode';
+        const LIGHT_KEY = 'gcs-theme-light';
+        const DARK_KEY = 'gcs-theme-dark';
+        const validModes = new Set(['system', 'light', 'dark']);
+        const validLightThemes = new Set(['vscode-light', 'quiet-light', 'cool-light', 'sandstone-light']);
+        const validDarkThemes = new Set(['vscode-dark', 'graphite-dark', 'midnight-dark', 'deep-forest-dark']);
+        let mode = 'system';
+        let lightTheme = 'vscode-light';
+        let darkTheme = 'vscode-dark';
+        try {
+          const storedMode = localStorage.getItem(MODE_KEY);
+          const storedLight = localStorage.getItem(LIGHT_KEY);
+          const storedDark = localStorage.getItem(DARK_KEY);
+          mode = validModes.has(storedMode) ? storedMode : 'system';
+          lightTheme = validLightThemes.has(storedLight) ? storedLight : 'vscode-light';
+          darkTheme = validDarkThemes.has(storedDark) ? storedDark : 'vscode-dark';
+        } catch (_) {
+          mode = 'system';
+          lightTheme = 'vscode-light';
+          darkTheme = 'vscode-dark';
+        }
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const resolvedMode = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+        const activeTheme = resolvedMode === 'dark' ? darkTheme : lightTheme;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.dataset.colorMode = resolvedMode;
+        document.documentElement.dataset.theme = activeTheme;
+      }());
+    </script>
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
@@ -15,8 +47,8 @@
           <p class="lede">Browser-based monitoring, control, and MQTT-backed video transport for the rover simulator.</p>
         </div>
         <div class="hero-actions">
-          <button id="take-control">Take Control</button>
-          <button id="release-control" class="ghost">Release Control</button>
+          <a class="nav-link nav-link-accent" href="/setup/mqtt">MQTT Setup</a>
+          <button id="control-toggle" class="control-toggle pending">Take Control</button>
         </div>
       </section>
 
@@ -28,29 +60,52 @@
           </div>
           <div class="video-frame-wrap">
             <img id="video-frame" alt="Rover video feed" />
+            <div class="video-osd" aria-label="Telemetry overlay">
+              <div id="osd-line-position" class="video-osd-line">position x:+00.00 y:+00.00 z:+0.00</div>
+              <div id="osd-line-speed" class="video-osd-line">speed 0.0 km/h (0.00 m/s)  heading 0.0 deg</div>
+              <div id="osd-line-gps" class="video-osd-line">gps lat:0.000000 lon:0.000000 alt:0.00 m</div>
+              <div id="osd-line-power" class="video-osd-line">power batt:0%  0.00V  0.0A  0.0C</div>
+              <div id="osd-line-camera" class="video-osd-line">camera mode:-  endpoint:-  rx:no data</div>
+            </div>
             <div id="video-empty" class="video-empty">Waiting for camera frames on MQTT.</div>
           </div>
         </article>
 
-        <article class="panel status-panel">
-          <div class="panel-head">
-            <h2>Broker & Control</h2>
-            <span id="broker-pill" class="pill warn">Connecting</span>
-          </div>
-          <dl class="stats compact">
-            <div><dt>Controller</dt><dd id="controller-owner">Unclaimed</dd></div>
-            <div><dt>Telemetry</dt><dd id="telemetry-freshness">No data</dd></div>
-            <div><dt>Camera</dt><dd id="camera-freshness">No data</dd></div>
-            <div><dt>Client ID</dt><dd id="client-id">-</dd></div>
-          </dl>
-          <p id="status-banner" class="status-banner">Connecting to GCS runtime.</p>
-        </article>
+        <div class="side-stack">
+          <article class="panel status-panel">
+            <div class="panel-head">
+              <h2>Broker & Control</h2>
+              <span id="broker-pill" class="pill warn">Connecting</span>
+            </div>
+            <dl class="stats compact">
+              <div><dt>Controller</dt><dd id="controller-owner">Unclaimed</dd></div>
+              <div><dt>Telemetry</dt><dd id="telemetry-freshness">No data</dd></div>
+              <div><dt>Camera</dt><dd id="camera-freshness">No data</dd></div>
+              <div><dt>Client ID</dt><dd id="client-id">-</dd></div>
+            </dl>
+            <p id="status-banner" class="status-banner">Connecting to GCS runtime.</p>
+          </article>
+
+          <article class="panel controls-panel">
+            <div class="panel-head"><h2>Drive Controls</h2></div>
+            <p class="hint">Use arrow keys or W/A/S/D. Control works only while this browser owns the lock.</p>
+            <div class="dpad">
+              <button data-control="forward" class="control-btn">Forward</button>
+              <div class="dpad-row">
+                <button data-control="left" class="control-btn">Left</button>
+                <button data-control="backward" class="control-btn">Backward</button>
+                <button data-control="right" class="control-btn">Right</button>
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section class="grid middle-grid">
         <article class="panel telemetry-panel">
           <div class="panel-head"><h2>Telemetry</h2></div>
           <dl class="stats">
+            <div><dt>Last received</dt><dd id="telemetry-last-received">No data</dd></div>
             <div><dt>Position</dt><dd id="pos">-</dd></div>
             <div><dt>Speed</dt><dd id="speed">-</dd></div>
             <div><dt>Heading</dt><dd id="heading">-</dd></div>
@@ -58,19 +113,6 @@
             <div><dt>Camera</dt><dd id="camera-mode">-</dd></div>
             <div><dt>Power</dt><dd id="power">-</dd></div>
           </dl>
-        </article>
-
-        <article class="panel controls-panel">
-          <div class="panel-head"><h2>Drive Controls</h2></div>
-          <p class="hint">Use arrow keys or W/A/S/D. Buttons highlight immediately; control is accepted only when this browser owns the controller lock.</p>
-          <div class="dpad">
-            <button data-control="forward" class="control-btn">Forward</button>
-            <div class="dpad-row">
-              <button data-control="left" class="control-btn">Left</button>
-              <button data-control="backward" class="control-btn">Backward</button>
-              <button data-control="right" class="control-btn">Right</button>
-            </div>
-          </div>
         </article>
 
         <article class="panel settings-panel">
@@ -99,6 +141,37 @@
             <span>Video enabled</span>
           </label>
           <button id="save-video-settings">Save Video Settings</button>
+
+          <div class="settings-group">
+            <div class="panel-head"><h2>Appearance</h2></div>
+            <label>
+              <span>Theme mode</span>
+              <select id="theme-mode-select">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+            <label>
+              <span>Default light theme</span>
+              <select id="light-theme-select">
+                <option value="vscode-light">VS Code Light</option>
+                <option value="quiet-light">Quiet Light</option>
+                <option value="cool-light">Cool Light</option>
+                <option value="sandstone-light">Sandstone Light</option>
+              </select>
+            </label>
+            <label>
+              <span>Default dark theme</span>
+              <select id="dark-theme-select">
+                <option value="vscode-dark">VS Code Dark</option>
+                <option value="graphite-dark">Graphite Dark</option>
+                <option value="midnight-dark">Midnight Dark</option>
+                <option value="deep-forest-dark">Deep Forest Dark</option>
+              </select>
+            </label>
+            <p class="settings-note">System follows your OS preference. Light and dark defaults are stored separately, which is how modern apps usually handle theme switching.</p>
+          </div>
         </article>
       </section>
     </main>

@@ -4,8 +4,8 @@ Current workspace layout:
 
 - `3d-env/`: Panda3D rover simulator and simulator-specific docs
 - `gcs_server/`: browser-based Ground Control Station (GCS) backend and static frontend
-- `requirements-gcs.txt`: Python dependencies for the GCS app
-- `gcs_server/GCS-web-app.md`: GCS product/spec document, updated to current state
+- `gcs_server/requirements-gcs.txt`: Python dependencies for the GCS app
+- `gcs_server/GCS-web-app.md`: GCS product/spec document
 - `remote_rover_architecture_and_implementation_plan.md`: current architecture and implementation roadmap
 
 ## Current Status
@@ -13,12 +13,14 @@ Current workspace layout:
 Implemented:
 - 3D rover simulator in Python with Panda3D + Bullet physics
 - MQTT bridge in the simulator for manual control input and telemetry output
+- MQTT camera-frame publishing from the simulator POV buffer
 - Ground Control Station web app in a separate `gcs_server/` directory
 - Shared config model centered on `config/common.example.json` with local overrides in `config/common.local.json`
-- Browser-side controller lock, telemetry dashboard, and MQTT camera-frame subscription path in the GCS
+- Browser-side controller lock, telemetry dashboard, and MQTT camera-frame rendering path in the GCS
+- GCS MQTT setup page (`/setup/mqtt`) with live broker/topic/control-rate reconfiguration
+- Dashboard appearance/theme preferences persisted in browser storage
 
 Not yet implemented:
-- Simulator camera frame publishing to MQTT
 - Redis-backed shared GCS state
 - Production WebRTC media path
 - Authentication / authorization
@@ -35,6 +37,7 @@ remote-rover/
     initial-hl-design.md
   gcs_server/
     app.py
+    requirements-gcs.txt
     mqtt_service.py
     GCS-web-app.md
     static/
@@ -42,7 +45,6 @@ remote-rover/
   config/
     common.example.json
     README.md
-  requirements-gcs.txt
   remote_rover_architecture_and_implementation_plan.md
   PROJECT_REVIEW_AND_CURRENT_STATE.md
 ```
@@ -50,7 +52,7 @@ remote-rover/
 ## Run The Simulator
 
 ```bash
-cd 3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
 pip install -r requirements.txt
 python simulator/main.py
 ```
@@ -59,7 +61,7 @@ python simulator/main.py
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-pip install -r requirements-gcs.txt
+pip install -r gcs_server/requirements-gcs.txt
 python -m gcs_server
 ```
 
@@ -76,18 +78,35 @@ The GCS reads shared config through `gcs_server/config.py` using:
 - `remote-rover/config/common.local.json` (preferred writable local file)
 - `remote-rover/config/common.example.json` (tracked fallback template)
 
+The GCS MQTT setup page (`/setup/mqtt`) updates `mqtt.*` in `common.local.json` and triggers immediate broker reconnect in the running GCS.
+
 Important shared keys:
 - `mqtt.broker_host`
 - `mqtt.broker_port`
 - `mqtt.topic_prefix`
+- `mqtt.client_id`
 - `mqtt.control_topic`
 - `mqtt.state_topic`
 - `mqtt.camera_topic`
+- `mqtt.control_hz`
 - `video.enabled`
 - `video.ingest_mode`
 - `video.delivery_mode`
 - `gcs.host`
 - `gcs.port`
+
+## Current Priority
+
+The codebase has reached the first end-to-end MQTT bootstrap:
+- simulator receives MQTT control
+- simulator publishes telemetry
+- simulator publishes JPEG camera frames
+- GCS renders telemetry and camera frames in the browser
+
+The next work should focus on hardening that path:
+- validate reconnect and freshness behavior under broker loss
+- decide whether MQTT-frame video remains a debug/fallback path only
+- add Redis if multi-instance GCS deployment is needed
 
 ## Repository Status
 

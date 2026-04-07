@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from typing import Any
 
 import paho.mqtt.client as mqtt
 
-from gcs_server.video import decode_mqtt_frame
+try:
+    from gcs_server.video import decode_mqtt_frame
+except ModuleNotFoundError:
+    from video import decode_mqtt_frame
 
 
 def _topic_join(prefix: str, leaf: str) -> str:
@@ -16,6 +20,9 @@ def _topic_join(prefix: str, leaf: str) -> str:
     if p and l:
         return f"{p}/{l}"
     return p or l
+
+
+logger = logging.getLogger(__name__)
 
 
 class MQTTRuntime:
@@ -57,13 +64,25 @@ class MQTTRuntime:
         finally:
             self._client = None
 
+    def update_config(self, cfg: dict[str, Any]) -> None:
+        self._cfg = cfg
+
     async def publish_control(self, frame: dict[str, Any]) -> None:
         if self._client is None:
+            logger.warning("Skipping control publish because MQTT client is not initialized")
             return
         topic = _topic_join(self._cfg["topic_prefix"], self._cfg["control_topic"])
         payload = json.dumps(frame, separators=(",", ":"))
         with self._publish_lock:
-            self._client.publish(topic, payload=payload, qos=0, retain=False)
+            info = self._client.publish(topic, payload=payload, qos=0, retain=False)
+        logger.info(
+            "Published control frame topic=%s rc=%s mid=%s connected=%s payload=%s",
+            topic,
+            info.rc,
+            getattr(info, "mid", None),
+            self._client.is_connected(),
+            payload,
+        )
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if self._loop is None:
