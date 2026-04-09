@@ -21,7 +21,8 @@ class LocalStateBackend:
     def __init__(self, telemetry_stale_ms: int, controller_lease_ms: int):
         self._lock = asyncio.Lock()
         self._telemetry_stale_ms = telemetry_stale_ms
-        self._controller_lease_ms = controller_lease_ms
+        # `controller_lease_ms <= 0` disables automatic controller expiration.
+        self._controller_lease_ms = max(0, int(controller_lease_ms))
         self._latest_telemetry: dict[str, Any] = {}
         self._latest_video_frame: dict[str, Any] | None = None
         self._broker = BrokerSnapshot(status="connecting", last_event_ts=time.time())
@@ -85,9 +86,12 @@ class LocalStateBackend:
             owner = self._controller["active_client_id"]
             if owner not in (None, client_id):
                 return False
+            now = time.time()
             self._controller["active_client_id"] = client_id
-            self._controller["lease_expires_at"] = time.time() + (self._controller_lease_ms / 1000.0)
-            self._controller["last_input_ts"] = time.time()
+            self._controller["lease_expires_at"] = (
+                now + (self._controller_lease_ms / 1000.0) if self._controller_lease_ms > 0 else 0.0
+            )
+            self._controller["last_input_ts"] = now
             return True
 
     async def renew_controller(self, client_id: str) -> bool:
@@ -95,7 +99,9 @@ class LocalStateBackend:
             self._expire_controller_locked()
             if self._controller["active_client_id"] != client_id:
                 return False
-            self._controller["lease_expires_at"] = time.time() + (self._controller_lease_ms / 1000.0)
+            self._controller["lease_expires_at"] = (
+                time.time() + (self._controller_lease_ms / 1000.0) if self._controller_lease_ms > 0 else 0.0
+            )
             self._controller["last_input_ts"] = time.time()
             return True
 
@@ -116,6 +122,8 @@ class LocalStateBackend:
             return copy.deepcopy(self._controller)
 
     def _expire_controller_locked(self) -> None:
+        if self._controller_lease_ms <= 0:
+            return
         if self._controller["active_client_id"] and time.time() >= self._controller["lease_expires_at"]:
             self._controller = {
                 "active_client_id": None,

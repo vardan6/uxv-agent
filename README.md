@@ -12,6 +12,7 @@ Current workspace layout:
 
 Implemented:
 - 3D rover simulator in Python with Panda3D + Bullet physics
+- Redesigned 3D world (April 8, 2026): deterministic dual-valley map with two solar plants, a central operations building, drivable interconnecting roads, larger trees, and mixed-size stones
 - MQTT bridge in the simulator for manual control input and telemetry output
 - MQTT camera-frame publishing from the simulator POV buffer
 - Ground Control Station web app in a separate `gcs_server/` directory
@@ -56,6 +57,24 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
 pip install -r requirements.txt
 python simulator/main.py
 ```
+
+## 3D World Update (April 8, 2026)
+
+The simulator map was upgraded with a major terrain and scene redesign:
+- terrain extent increased to `400 x 400` world units (`2x` each side from `200 x 200`)
+- terrain grid density doubled to preserve detail at larger scale (`160 -> 320`)
+- deterministic terrain shaping with higher hills and two designed valleys
+- one solar plant in each valley (dense procedural panel arrays)
+- a central building between both plants
+- flattened rover pathways:
+  - loop road around each solar plant
+  - connector road between plants
+  - building-to-plant roads
+- larger trees and a broader mix of small stones + large boulders
+
+Primary implementation files:
+- `3d-env/simulator/terrain.py`
+- `3d-env/simulator/main.py`
 
 ## Run The GCS
 
