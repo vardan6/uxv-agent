@@ -1,5 +1,11 @@
 # Ground Control Station (GCS) Web App
 
+> Historical product/spec note.
+> For the current documentation set, start with:
+> - `../docs/README.md`
+> - `../docs/gcs_server/README.md`
+> - `../docs/gcs_server/technical-details.md`
+
 ## Purpose
 
 The Ground Control Station is the browser-based operator interface for the Remote Rover system.

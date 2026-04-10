@@ -1,5 +1,11 @@
 # Remote Rover GCS
 
+> Note:
+> For the current documentation set and high-level project context, start with:
+> - `../docs/README.md`
+> - `../docs/gcs_server/README.md`
+> - `../docs/gcs_server/technical-details.md`
+
 `gcs_server/` is the browser-facing Ground Control Station for the Remote Rover project.
 
 It is a Python FastAPI application with a static frontend. It connects to the same MQTT broker as the simulator, subscribes to rover telemetry and camera topics, publishes control commands, and serves a browser UI for monitoring and manual driving.

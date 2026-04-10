@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -23,6 +24,7 @@ def _topic_join(prefix: str, leaf: str) -> str:
 
 
 logger = logging.getLogger(__name__)
+PRESENCE_PUBLISH_INTERVAL_S = 30.0
 
 
 class MQTTRuntime:
@@ -34,28 +36,44 @@ class MQTTRuntime:
         self._client: mqtt.Client | None = None
         self._started = False
         self._publish_lock = threading.Lock()
+        self._presence_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         if self._started:
             return
         self._started = True
         self._loop = asyncio.get_running_loop()
-        client_id = (self._cfg.get("client_id") or "gcs-web").strip()
+        client_id = self._gcs_id()
         self._client = mqtt.Client(client_id=client_id, clean_session=True)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
         self._client.reconnect_delay_set(min_delay=2, max_delay=15)
+        self._client.will_set(
+            self._presence_topic(),
+            payload=json.dumps(self._presence_payload(False), separators=(",", ":")),
+            qos=0,
+            retain=True,
+        )
         self._client.connect_async(
             str(self._cfg["broker_host"]),
             int(self._cfg["broker_port"]),
             keepalive=30,
         )
         self._client.loop_start()
+        self._presence_task = asyncio.create_task(self._presence_loop(), name="gcs-presence-loop")
         await self._state_store.set_broker_state("connecting", False)
 
     async def stop(self) -> None:
         self._started = False
+        if self._presence_task is not None:
+            self._presence_task.cancel()
+            try:
+                await self._presence_task
+            except asyncio.CancelledError:
+                pass
+            self._presence_task = None
+        await self.publish_presence_snapshot(force_active=False)
         if self._client is None:
             return
         try:
@@ -84,6 +102,25 @@ class MQTTRuntime:
             payload,
         )
 
+    async def publish_presence_snapshot(self, force_active: bool | None = None) -> None:
+        if self._client is None:
+            return
+        browser_count = await self._ws_manager.connection_count()
+        controller = await self._state_store.controller_snapshot()
+        is_active = browser_count > 0 if force_active is None else bool(force_active)
+        payload = self._presence_payload(
+            is_active,
+            browser_count=browser_count,
+            active_controller_id=controller.get("active_client_id"),
+        )
+        with self._publish_lock:
+            self._client.publish(
+                self._presence_topic(),
+                payload=json.dumps(payload, separators=(",", ":")),
+                qos=0,
+                retain=True,
+            )
+
     def _on_connect(self, client, _userdata, _flags, rc):
         if self._loop is None:
             return
@@ -94,6 +131,7 @@ class MQTTRuntime:
             client.subscribe(camera_topic, qos=0)
             self._schedule(self._state_store.set_broker_state("connected", True))
             self._schedule(self._ws_manager.broadcast({"type": "broker", "data": {"status": "connected", "connected": True}}))
+            self._schedule(self.publish_presence_snapshot())
         else:
             msg = f"connect failed rc={rc}"
             self._schedule(self._state_store.set_broker_state("connect_failed", False, msg))
@@ -142,3 +180,37 @@ class MQTTRuntime:
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+
+    async def _presence_loop(self) -> None:
+        while self._started:
+            try:
+                await self.publish_presence_snapshot()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Presence publish failed")
+            await asyncio.sleep(PRESENCE_PUBLISH_INTERVAL_S)
+
+    def _gcs_id(self) -> str:
+        return (self._cfg.get("client_id") or "gcs-web").strip()
+
+    def _presence_topic(self) -> str:
+        topic = _topic_join(
+            self._cfg.get("topic_prefix", ""),
+            self._cfg.get("gcs_presence_topic", "gcs/presence"),
+        ).rstrip("/")
+        return f"{topic}/{self._gcs_id()}"
+
+    def _presence_payload(
+        self,
+        active: bool,
+        browser_count: int = 0,
+        active_controller_id: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "gcs_id": self._gcs_id(),
+            "active": bool(active),
+            "timestamp": time.time(),
+            "browser_count": int(browser_count),
+            "active_controller_id": active_controller_id,
+        }

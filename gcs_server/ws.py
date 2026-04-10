@@ -21,6 +21,10 @@ class WebSocketManager:
         async with self._lock:
             self._sockets.pop(client_id, None)
 
+    async def connection_count(self) -> int:
+        async with self._lock:
+            return len(self._sockets)
+
     async def send(self, client_id: str, message: dict[str, Any]) -> None:
         async with self._lock:
             ws = self._sockets.get(client_id)

@@ -160,6 +160,7 @@ async def controller_action(action: str, request: Request) -> JSONResponse:
 
     controller = await runtime.state_store.controller_snapshot()
     await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
+    await runtime.mqtt_runtime.publish_presence_snapshot()
     return JSONResponse({"ok": ok, "controller": controller})
 
 
@@ -168,6 +169,7 @@ async def websocket_endpoint(websocket: WebSocket):
     runtime = _runtime(websocket)
     client_id = websocket.query_params.get("client_id") or uuid.uuid4().hex[:12]
     await runtime.ws_manager.connect(client_id, websocket)
+    await runtime.mqtt_runtime.publish_presence_snapshot()
     snapshot = await runtime.state_store.snapshot()
     await runtime.ws_manager.send(client_id, {
         "type": "snapshot",
@@ -194,12 +196,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 ok = await runtime.state_store.try_claim_controller(client_id)
                 controller = await runtime.state_store.controller_snapshot()
                 await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
+                await runtime.mqtt_runtime.publish_presence_snapshot()
                 await runtime.ws_manager.send(client_id, {"type": "take_control_result", "ok": ok})
             elif msg_type == "release_control":
                 await runtime.control_service.clear_buttons(client_id)
                 await runtime.state_store.release_controller(client_id)
                 controller = await runtime.state_store.controller_snapshot()
                 await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
+                await runtime.mqtt_runtime.publish_presence_snapshot()
             elif msg_type == "ping":
                 await runtime.ws_manager.send(client_id, {"type": "pong"})
     except WebSocketDisconnect:
@@ -210,6 +214,7 @@ async def websocket_endpoint(websocket: WebSocket):
         controller = await runtime.state_store.controller_snapshot()
         await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
         await runtime.ws_manager.disconnect(client_id)
+        await runtime.mqtt_runtime.publish_presence_snapshot()
 
 
 @app.get("/setup/mqtt")
