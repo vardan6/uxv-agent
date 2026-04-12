@@ -14,6 +14,7 @@ It is organized for two audiences:
 - [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
 - [Simulation Platform Requirements](./simulation-platform-requironments.md): stable requirements baseline for the next simulator and replay/map/logging work
 - [Simulation Platform Plan](./simulation-platform-plan.md): current implementation and remaining phases for the simulator transition
+- [rover-sim-next Phase 1 Checklist](./rover-sim-next-phase-1-checklist.md): concrete first implementation checklist by file and module for the successor simulator
 - [Run And Config Guide](./operations/run-and-config.md): how to run the simulator and GCS, and where runtime configuration lives
 
 ## Subproject Documents
