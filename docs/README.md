@@ -12,12 +12,15 @@ It is organized for two audiences:
 - [Current State](./current-state.md): what is implemented now, what is partially implemented, and the main current limitations
 - [Architecture](./architecture.md): how the simulator, GCS, broker, and shared config fit together
 - [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
+- [Simulation Platform Requirements](./simulation-platform-requironments.md): stable requirements baseline for the next simulator and replay/map/logging work
+- [Simulation Platform Plan](./simulation-platform-plan.md): current implementation and remaining phases for the simulator transition
 - [Run And Config Guide](./operations/run-and-config.md): how to run the simulator and GCS, and where runtime configuration lives
 
 ## Subproject Documents
 
 - [3D Simulator Docs](./3d-env/README.md): simulator purpose, features, controls, telemetry publishing policy, and technical structure
 - [GCS Server Docs](./gcs_server/README.md): Ground Control Station purpose, browser workflow, MQTT integration, and technical structure
+- [rover-sim-next Scaffold](/mnt/c/Users/vardana/Documents/Proj/remote-rover/rover-sim-next/README.md): current successor-simulator scaffold and intended ROS 2 + Gazebo direction
 
 ## Existing Historical Documents
 

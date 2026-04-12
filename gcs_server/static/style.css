@@ -355,6 +355,8 @@ select:focus-visible {
 
 .top-grid { grid-template-columns: 1.8fr 1fr; }
 .middle-grid { grid-template-columns: 1.2fr 0.9fr; }
+.replay-grid { grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
+.replay-bottom-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .side-stack {
   display: grid;
@@ -521,6 +523,72 @@ select:focus-visible {
   line-height: 1.4;
 }
 
+.replay-main {
+  display: grid;
+  gap: 18px;
+}
+
+.replay-map {
+  min-height: 380px;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.replay-sidebar {
+  position: sticky;
+  top: 18px;
+}
+
+.session-list,
+.event-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-item {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 6px;
+  background: var(--button-secondary-bg);
+}
+
+.session-item.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent) 6%, transparent));
+}
+
+.session-item strong,
+.event-row strong {
+  display: block;
+}
+
+.session-item span,
+.event-row span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.transport-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+#timeline-scrubber {
+  width: 100%;
+}
+
+.event-row {
+  padding: 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
 .control-btn.active {
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--accent) 16%, transparent));
@@ -603,9 +671,13 @@ code {
 
 @media (max-width: 1100px) {
   .top-grid,
-  .middle-grid { grid-template-columns: 1fr; }
+  .middle-grid,
+  .replay-grid,
+  .replay-bottom-grid { grid-template-columns: 1fr; }
 
   .hero { flex-direction: column; }
+
+  .replay-sidebar { position: static; }
 
   .video-osd {
     top: 16px;

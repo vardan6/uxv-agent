@@ -11,6 +11,7 @@ const setupEls = {
   stateTopic: document.getElementById('state-topic'),
   cameraTopic: document.getElementById('camera-topic'),
   controlHz: document.getElementById('control-hz'),
+  simulationBackend: document.getElementById('simulation-backend-select'),
   reload: document.getElementById('reload-config'),
 };
 
@@ -41,7 +42,7 @@ function updateSetupBrokerPill(broker) {
   setupEls.brokerPill.classList.add(badge.tone || 'danger');
 }
 
-function fillForm(mqtt = {}) {
+function fillForm(mqtt = {}, simulation = {}) {
   setupEls.brokerHost.value = mqtt.broker_host || '';
   setupEls.brokerPort.value = mqtt.broker_port ?? 1883;
   setupEls.topicPrefix.value = mqtt.topic_prefix || '';
@@ -50,6 +51,7 @@ function fillForm(mqtt = {}) {
   setupEls.stateTopic.value = mqtt.state_topic || 'telemetry/state';
   setupEls.cameraTopic.value = mqtt.camera_topic || 'camera-feed';
   setupEls.controlHz.value = mqtt.control_hz ?? 20;
+  setupEls.simulationBackend.value = simulation.backend || '3d-env';
 }
 
 async function readJson(url, options) {
@@ -68,7 +70,7 @@ async function loadSetup() {
     readJson('/api/mqtt-config'),
     readJson('/api/snapshot'),
   ]);
-  fillForm(config.mqtt);
+  fillForm(config.mqtt, snapshot.simulation || {});
   setupEls.settingsPath.textContent = config.settings_path || '-';
   updateSetupBrokerPill(snapshot.broker || { status: 'disconnected', connected: false });
   setSetupStatus(`Current broker target: ${config.mqtt.broker_host}:${config.mqtt.broker_port}.`);
@@ -97,7 +99,16 @@ async function saveSetup(event) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  fillForm(result.mqtt);
+  await readJson('/api/simulation-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      simulation: {
+        backend: setupEls.simulationBackend.value,
+      },
+    }),
+  });
+  fillForm(result.mqtt, { backend: setupEls.simulationBackend.value });
   setupEls.settingsPath.textContent = result.settings_path || '-';
   setSetupStatus(`Saved. GCS is reconnecting to ${result.mqtt.broker_host}:${result.mqtt.broker_port}.`);
   window.setTimeout(loadSetup, 800);

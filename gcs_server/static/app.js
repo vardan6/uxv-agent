@@ -5,6 +5,7 @@ const state = {
   controlRequestPending: false,
   lastTelemetryTs: 0,
   latestTelemetry: {},
+  simulation: {},
   themeMode: 'system',
   lightTheme: 'vscode-light',
   darkTheme: 'vscode-dark',
@@ -24,6 +25,7 @@ const els = {
   controllerOwner: document.getElementById('controller-owner'),
   telemetryFreshness: document.getElementById('telemetry-freshness'),
   cameraFreshness: document.getElementById('camera-freshness'),
+  simulationBackend: document.getElementById('simulation-backend'),
   clientId: document.getElementById('client-id'),
   statusBanner: document.getElementById('status-banner'),
   telemetryLastReceived: document.getElementById('telemetry-last-received'),
@@ -270,6 +272,15 @@ function updateController(controller = {}) {
     els.controllerOwner.textContent = isController ? 'This browser' : (owner || 'Unclaimed');
   }
   renderControlToggle();
+}
+
+function updateSimulation(simulation = {}) {
+  state.simulation = simulation || {};
+  if (els.simulationBackend) {
+    const backend = simulation.backend || '-';
+    const version = simulation.backend_version ? ` (${simulation.backend_version})` : '';
+    els.simulationBackend.textContent = `${backend}${version}`;
+  }
 }
 
 function updateTelemetry(data = {}) {
@@ -568,6 +579,7 @@ async function loadSnapshot() {
   updateController(snapshot.controller);
   updateTelemetry(snapshot.telemetry);
   updateVideoMode(snapshot.video);
+  updateSimulation(snapshot.simulation || {});
   if (snapshot.video.latest_frame) updateVideoFrame(snapshot.video.latest_frame);
 }
 
@@ -587,10 +599,13 @@ function connectSocket() {
       updateController(msg.data.controller);
       updateTelemetry(msg.data.telemetry);
       updateVideoMode(msg.data.video);
+      updateSimulation(msg.data.simulation || {});
       if (msg.data.video.latest_frame) updateVideoFrame(msg.data.video.latest_frame);
     } else if (msg.type === 'telemetry') {
       updateTelemetry(msg.data);
       updateBrokerPill(msg.broker);
+    } else if (msg.type === 'simulation_config') {
+      updateSimulation(msg.data);
     } else if (msg.type === 'broker') {
       updateBrokerPill(msg.data);
     } else if (msg.type === 'controller') {

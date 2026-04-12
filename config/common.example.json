@@ -42,5 +42,20 @@
     "telemetry_stale_ms": 2000,
     "controller_lease_ms": 3000,
     "title": "Remote Rover GCS"
+  },
+  "simulation": {
+    "backend": "3d-env",
+    "backend_version": "dev",
+    "available_backends": ["3d-env", "rover-sim-next"]
+  },
+  "logging": {
+    "replay_db_path": "data/gcs_replay.sqlite3",
+    "auto_start_session": true
+  },
+  "map": {
+    "site_name": "default-site",
+    "default_center_lat": 40.1772,
+    "default_center_lon": 44.5035,
+    "default_zoom": 13
   }
 }

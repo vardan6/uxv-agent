@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Remote Rover Replay</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Replay</p>
+          <h1>Recorded Sessions</h1>
+          <p class="lede">Review rover motion, telemetry, and runtime events from the GCS session log.</p>
+        </div>
+        <div class="hero-actions">
+          <a class="nav-link" href="/">Dashboard</a>
+          <button id="refresh-sessions" class="nav-link">Refresh Sessions</button>
+          <button id="rollover-session" class="nav-link nav-link-accent">Start New Session</button>
+        </div>
+      </section>
+
+      <section class="grid replay-grid">
+        <article class="panel replay-sidebar">
+          <div class="panel-head">
+            <h2>Sessions</h2>
+            <span id="current-session-pill" class="pill">No active session</span>
+          </div>
+          <div id="session-list" class="session-list"></div>
+        </article>
+
+        <div class="replay-main">
+          <article class="panel replay-map-panel">
+            <div class="panel-head">
+              <h2>Map Playback</h2>
+              <span id="loaded-session-pill" class="pill warn">No session loaded</span>
+            </div>
+            <div id="replay-map" class="replay-map"></div>
+          </article>
+
+          <section class="grid replay-bottom-grid">
+            <article class="panel replay-controls-panel">
+              <div class="panel-head"><h2>Transport</h2></div>
+              <div class="transport-row">
+                <button id="play-pause">Play</button>
+                <button id="seek-start" class="ghost">Start</button>
+                <label>
+                  <span>Speed</span>
+                  <select id="replay-speed">
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="2">2x</option>
+                    <option value="4">4x</option>
+                  </select>
+                </label>
+              </div>
+              <input id="timeline-scrubber" type="range" min="0" max="0" value="0">
+              <p id="timeline-status" class="status-banner">Load a session to begin replay.</p>
+            </article>
+
+            <article class="panel replay-telemetry-panel">
+              <div class="panel-head"><h2>Telemetry Snapshot</h2></div>
+              <dl class="stats">
+                <div><dt>Position</dt><dd id="replay-pos">-</dd></div>
+                <div><dt>Speed</dt><dd id="replay-speed-card">-</dd></div>
+                <div><dt>Heading</dt><dd id="replay-heading">-</dd></div>
+                <div><dt>GPS</dt><dd id="replay-gps">-</dd></div>
+                <div><dt>Camera</dt><dd id="replay-camera">-</dd></div>
+                <div><dt>Power</dt><dd id="replay-power">-</dd></div>
+              </dl>
+            </article>
+
+            <article class="panel replay-events-panel">
+              <div class="panel-head"><h2>Runtime Events</h2></div>
+              <div id="event-list" class="event-list"></div>
+            </article>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/static/replay.js" defer></script>
+  </body>
+</html>

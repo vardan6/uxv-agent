@@ -15,6 +15,7 @@
           <p class="lede">This GCS reads and updates the shared 3D environment config so both services point at the same MQTT broker and topics.</p>
         </div>
         <div class="hero-actions">
+          <a class="nav-link" href="/replay">Replay</a>
           <a class="nav-link nav-link-accent" href="/">Back to Dashboard</a>
         </div>
       </section>
@@ -59,6 +60,13 @@
             <label>
               <span>Control Rate (Hz)</span>
               <input id="control-hz" name="control_hz" type="number" min="1" step="1" required>
+            </label>
+            <label>
+              <span>Active Simulator Backend</span>
+              <select id="simulation-backend-select" name="simulation_backend">
+                <option value="3d-env">3d-env</option>
+                <option value="rover-sim-next">rover-sim-next</option>
+              </select>
             </label>
 
             <div class="form-actions">

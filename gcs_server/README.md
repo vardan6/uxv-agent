@@ -14,6 +14,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 
 - Live telemetry dashboard
 - Broker status and topic freshness status
+- Config-backed simulator backend identity: `3d-env` or `rover-sim-next`
 - Controller lock: one active browser controls, others observe
 - Automatic control-claim request when a dashboard client connects
 - Keyboard control via arrow keys and `W/A/S/D`
@@ -23,6 +24,9 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - End-to-end simulator POV JPEG publication over MQTT
 - Dedicated MQTT setup page (`/setup/mqtt`) for broker/topic/control-rate editing
 - Live MQTT reconfiguration via API without restarting the GCS process
+- SQLite-backed replay/session logging
+- Replay session APIs
+- Separate replay page with first Leaflet-based map playback
 - Theme controls with persisted mode + light/dark theme variants
 
 ## Current Limitations
@@ -31,6 +35,8 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - No authentication or authorization
 - No WebRTC transport yet
 - MQTT settings are persisted to local shared config only (no secrets manager)
+- Live dashboard map is not implemented yet
+- Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
 
 ## Dependencies
 
@@ -97,6 +103,13 @@ Main config sections it consumes:
     "port": 8080,
     "telemetry_stale_ms": 2000,
     "controller_lease_ms": 3000
+  },
+  "simulation": {
+    "backend": "3d-env",
+    "available_backends": ["3d-env", "rover-sim-next"]
+  },
+  "logging": {
+    "replay_db_path": "data/gcs_replay.sqlite3"
   }
 }
 ```
@@ -110,11 +123,14 @@ Main modules:
 - `mqtt_service.py`: MQTT connect/subscribe/publish logic
 - `control.py`: control loop, held-button publishing, controller lease renewal
 - `state.py`: local in-memory runtime state and freshness tracking
+- `replay_store.py`: SQLite session logging and replay data access
+- `telemetry.py`: normalized telemetry shaping for replay and UI consistency
 - `ws.py`: WebSocket connection manager
 - `video.py`: MQTT camera frame decoding helper
 - `static/`: browser UI assets
   - `index.html` + `app.js`: dashboard UI
   - `mqtt-setup.html` + `mqtt-setup.js`: MQTT setup/config UI
+  - `replay.html` + `replay.js`: replay page and playback UI
 
 ## Browser Control Flow
 
@@ -124,15 +140,31 @@ Main modules:
 4. Browser sends control button states over WebSocket when it owns control
 5. GCS publishes digital control frames to MQTT at `control_hz`
 6. Active controller lease is renewed while held input is being published
-7. Telemetry and camera frames received from MQTT are broadcast to connected browsers
+7. Telemetry is normalized and persisted for replay
+8. Telemetry and camera frames received from MQTT are broadcast to connected browsers
 
 ## MQTT Setup Flow
 
 1. Browser opens `/setup/mqtt`
 2. GCS returns current MQTT config from shared settings file (`/api/mqtt-config`)
 3. User edits host/port/topics/control rate and saves
-4. GCS writes updated shared config and reconnects MQTT runtime immediately
-5. Dashboard broker status updates via WebSocket broadcast
+4. User can also select the active simulator backend identity
+5. GCS writes updated shared config and reconnects MQTT runtime immediately
+6. Dashboard broker status updates via WebSocket broadcast
+
+## Replay Model
+
+Implemented now:
+- GCS records sessions to SQLite
+- telemetry, control frames, runtime events, and camera timing metadata are recorded
+- `/api/replay/sessions` lists sessions
+- `/api/replay/sessions/{session_id}` returns session timeline detail
+- `/replay` provides the first playback UI
+
+Not implemented yet:
+- recorded video playback
+- simulator-origin log import path
+- live dashboard map sharing the same playback/live model
 
 ## Video Pipeline Model
 
@@ -154,7 +186,11 @@ The current bootstrap path is functional:
 - simulator publishes telemetry and JPEG camera frames
 - GCS relays telemetry and frames to browsers
 
-The next work is runtime hardening and a future production media path, not basic camera publication.
+The next work is:
+- simulator-side logging
+- live map on the main dashboard
+- actual `rover-sim-next` backend implementation
+- future synchronized recorded video support
 
 ## Repository Note
 

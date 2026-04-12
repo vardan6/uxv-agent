@@ -11,6 +11,9 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
     "video": {},
     "gcs": {},
     "key_bindings": {},
+    "simulation": {},
+    "logging": {},
+    "map": {},
 }
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -48,6 +51,18 @@ class AppConfig:
     @property
     def key_bindings(self) -> dict[str, list[str]]:
         return self.raw["key_bindings"]
+
+    @property
+    def simulation(self) -> dict[str, Any]:
+        return self.raw["simulation"]
+
+    @property
+    def logging(self) -> dict[str, Any]:
+        return self.raw["logging"]
+
+    @property
+    def map(self) -> dict[str, Any]:
+        return self.raw["map"]
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

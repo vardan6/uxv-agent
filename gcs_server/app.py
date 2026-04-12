@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if runtime.replay_store.current_session_id:
+            runtime.replay_store.finish_session(runtime.replay_store.current_session_id, reason="runtime_shutdown")
         await runtime.control_service.stop()
         await runtime.mqtt_runtime.stop()
 
@@ -68,13 +70,50 @@ async def health(request: Request) -> dict[str, Any]:
 @app.get("/api/snapshot")
 async def snapshot(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
-    return await runtime.state_store.snapshot()
+    data = await runtime.state_store.snapshot()
+    data["simulation"] = runtime.config.simulation
+    return data
 
 
 @app.get("/api/config")
 async def get_config(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     return runtime.config.raw
+
+
+@app.get("/api/simulation-config")
+async def get_simulation_config(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    return {
+        "simulation": runtime.config.simulation,
+        "logging": {
+            "replay_db_path": str(runtime.replay_store.db_path),
+            "current_session_id": runtime.replay_store.current_session_id,
+        },
+    }
+
+
+@app.post("/api/simulation-config")
+async def set_simulation_config(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    simulation_payload = payload.get("simulation")
+    if not isinstance(simulation_payload, dict):
+        raise HTTPException(status_code=400, detail="simulation object is required")
+
+    current = dict(runtime.config.simulation)
+    updated = {
+        "backend": str(simulation_payload.get("backend", current.get("backend", "3d-env"))).strip() or "3d-env",
+        "backend_version": str(simulation_payload.get("backend_version", current.get("backend_version", "dev"))).strip() or "dev",
+        "available_backends": list(current.get("available_backends", ["3d-env", "rover-sim-next"])),
+    }
+    runtime.config.raw["simulation"] = updated
+    save_config(runtime.config)
+    runtime.replay_store.update_backend(updated["backend"], updated["backend_version"])
+    runtime.replay_store.rollover_session(reason=f"backend_change:{updated['backend']}")
+    runtime.replay_store.log_runtime_event("simulation_backend_changed", updated)
+    await runtime.ws_manager.broadcast({"type": "simulation_config", "data": updated})
+    return JSONResponse({"ok": True, "simulation": updated})
 
 
 @app.get("/api/mqtt-config")
@@ -124,6 +163,36 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
     })
 
 
+@app.get("/api/replay/sessions")
+async def replay_sessions(request: Request, limit: int = 100) -> dict[str, Any]:
+    runtime = _runtime(request)
+    return {
+        "sessions": runtime.replay_store.list_sessions(limit=limit),
+        "current_session_id": runtime.replay_store.current_session_id,
+    }
+
+
+@app.post("/api/replay/sessions/rollover")
+async def rollover_replay_session(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    reason = str(payload.get("reason", "manual_rollover"))
+    session_id = runtime.replay_store.rollover_session(reason=reason)
+    return JSONResponse({"ok": True, "current_session_id": session_id})
+
+
+@app.get("/api/replay/sessions/{session_id}")
+async def replay_session_detail(session_id: str, request: Request, limit: int = 2000) -> dict[str, Any]:
+    runtime = _runtime(request)
+    session = runtime.replay_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {
+        "session": session,
+        "timeline": runtime.replay_store.get_session_timeline(session_id, limit=limit),
+    }
+
+
 @app.post("/api/video-mode")
 async def set_video_mode(request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -152,9 +221,11 @@ async def controller_action(action: str, request: Request) -> JSONResponse:
 
     if action == "take":
         ok = await runtime.state_store.try_claim_controller(client_id)
+        runtime.replay_store.log_runtime_event("controller_take_attempt", {"client_id": client_id, "ok": ok})
     elif action == "release":
         ok = await runtime.state_store.release_controller(client_id)
         await runtime.control_service.clear_buttons(client_id)
+        runtime.replay_store.log_runtime_event("controller_release_attempt", {"client_id": client_id, "ok": ok})
     else:
         raise HTTPException(status_code=404, detail="unknown action")
 
@@ -171,6 +242,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await runtime.ws_manager.connect(client_id, websocket)
     await runtime.mqtt_runtime.publish_presence_snapshot()
     snapshot = await runtime.state_store.snapshot()
+    snapshot["simulation"] = runtime.config.simulation
     await runtime.ws_manager.send(client_id, {
         "type": "snapshot",
         "client_id": client_id,
@@ -220,6 +292,11 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/setup/mqtt")
 async def mqtt_setup_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "mqtt-setup.html")
+
+
+@app.get("/replay")
+async def replay_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "replay.html")
 
 
 if __name__ == "__main__":

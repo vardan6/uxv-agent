@@ -28,10 +28,13 @@ PRESENCE_PUBLISH_INTERVAL_S = 30.0
 
 
 class MQTTRuntime:
-    def __init__(self, cfg: dict[str, Any], state_store, ws_manager):
+    def __init__(self, cfg: dict[str, Any], state_store, ws_manager, replay_store=None, backend_resolver=None, telemetry_normalizer=None):
         self._cfg = cfg
         self._state_store = state_store
         self._ws_manager = ws_manager
+        self._replay_store = replay_store
+        self._backend_resolver = backend_resolver or (lambda: "3d-env")
+        self._telemetry_normalizer = telemetry_normalizer or (lambda payload, backend: payload)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: mqtt.Client | None = None
         self._started = False
@@ -63,6 +66,11 @@ class MQTTRuntime:
         self._client.loop_start()
         self._presence_task = asyncio.create_task(self._presence_loop(), name="gcs-presence-loop")
         await self._state_store.set_broker_state("connecting", False)
+        if self._replay_store is not None:
+            self._replay_store.log_runtime_event(
+                "mqtt_start",
+                {"broker_host": str(self._cfg["broker_host"]), "broker_port": int(self._cfg["broker_port"])},
+            )
 
     async def stop(self) -> None:
         self._started = False
@@ -81,6 +89,8 @@ class MQTTRuntime:
             self._client.disconnect()
         finally:
             self._client = None
+        if self._replay_store is not None:
+            self._replay_store.log_runtime_event("mqtt_stop", {})
 
     def update_config(self, cfg: dict[str, Any]) -> None:
         self._cfg = cfg
@@ -101,6 +111,11 @@ class MQTTRuntime:
             self._client.is_connected(),
             payload,
         )
+        if self._replay_store is not None:
+            self._replay_store.log_runtime_event(
+                "mqtt_control_published",
+                {"topic": topic, "mid": getattr(info, "mid", None), "rc": info.rc},
+            )
 
     async def publish_presence_snapshot(self, force_active: bool | None = None) -> None:
         if self._client is None:
@@ -129,17 +144,26 @@ class MQTTRuntime:
             camera_topic = _topic_join(self._cfg["topic_prefix"], self._cfg["camera_topic"])
             client.subscribe(state_topic, qos=0)
             client.subscribe(camera_topic, qos=0)
+            if self._replay_store is not None:
+                self._replay_store.log_runtime_event(
+                    "mqtt_connected",
+                    {"state_topic": state_topic, "camera_topic": camera_topic},
+                )
             self._schedule(self._state_store.set_broker_state("connected", True))
             self._schedule(self._ws_manager.broadcast({"type": "broker", "data": {"status": "connected", "connected": True}}))
             self._schedule(self.publish_presence_snapshot())
         else:
             msg = f"connect failed rc={rc}"
+            if self._replay_store is not None:
+                self._replay_store.log_runtime_event("mqtt_connect_failed", {"rc": rc, "message": msg}, level="error")
             self._schedule(self._state_store.set_broker_state("connect_failed", False, msg))
 
     def _on_disconnect(self, _client, _userdata, rc):
         if self._loop is None:
             return
         status = "reconnecting" if rc != 0 else "disconnected"
+        if self._replay_store is not None:
+            self._replay_store.log_runtime_event("mqtt_disconnected", {"rc": rc, "status": status}, level="warn" if rc != 0 else "info")
         self._schedule(self._state_store.set_broker_state(status, False))
         self._schedule(self._ws_manager.broadcast({"type": "broker", "data": {"status": status, "connected": False}}))
 
@@ -159,16 +183,25 @@ class MQTTRuntime:
             self._schedule(self._handle_camera(frame))
 
     async def _handle_telemetry(self, payload: dict[str, Any]) -> None:
-        await self._state_store.set_telemetry(payload)
+        normalized = self._telemetry_normalizer(payload, self._backend_resolver())
+        await self._state_store.set_telemetry(normalized)
+        if self._replay_store is not None:
+            self._replay_store.log_telemetry(normalized)
         snapshot = await self._state_store.snapshot()
         await self._ws_manager.broadcast({
             "type": "telemetry",
-            "data": payload,
+            "data": normalized,
             "broker": snapshot["broker"],
         })
 
     async def _handle_camera(self, frame: dict[str, Any]) -> None:
         await self._state_store.set_video_frame(frame)
+        if self._replay_store is not None:
+            self._replay_store.log_camera_timing(
+                pts=float(frame.get("timestamp") or time.time()),
+                frame_index=int(frame.get("frame_index")) if isinstance(frame.get("frame_index"), int) else None,
+                meta={"mime_type": frame.get("mime_type"), "bytes": len(frame.get("data", ""))},
+            )
         modes = await self._state_store.get_video_modes()
         if not modes.get("enabled", True):
             return
