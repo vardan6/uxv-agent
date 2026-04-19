@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Settings | Remote Rover GCS</title>
+    <script>
+      (function () {
+        const MODE_KEY = 'gcs-theme-mode';
+        const LIGHT_KEY = 'gcs-theme-light';
+        const DARK_KEY = 'gcs-theme-dark';
+        const validModes = new Set(['system', 'light', 'dark']);
+        const validLightThemes = new Set(['vscode-light', 'quiet-light', 'cool-light', 'sandstone-light']);
+        const validDarkThemes = new Set(['vscode-dark', 'graphite-dark', 'midnight-dark', 'deep-forest-dark']);
+        let mode = 'system';
+        let lightTheme = 'vscode-light';
+        let darkTheme = 'vscode-dark';
+        try {
+          const storedMode = localStorage.getItem(MODE_KEY);
+          const storedLight = localStorage.getItem(LIGHT_KEY);
+          const storedDark = localStorage.getItem(DARK_KEY);
+          mode = validModes.has(storedMode) ? storedMode : 'system';
+          lightTheme = validLightThemes.has(storedLight) ? storedLight : 'vscode-light';
+          darkTheme = validDarkThemes.has(storedDark) ? storedDark : 'vscode-dark';
+        } catch (_) {}
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const resolvedMode = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+        const activeTheme = resolvedMode === 'dark' ? darkTheme : lightTheme;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.dataset.colorMode = resolvedMode;
+        document.documentElement.dataset.theme = activeTheme;
+      }());
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body data-page="settings">
+    <main class="app-shell" data-app-shell>
+      <section data-page-intro></section>
+
+      <section class="settings-tabs" aria-label="Settings sections">
+        <a class="settings-tab" data-settings-tab-link href="?tab=connectivity">Connectivity</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=video">Video</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=appearance">Appearance</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=json">JSON</a>
+      </section>
+
+      <section class="settings-stack">
+        <section id="tab-connectivity" class="settings-pane" data-settings-tab="connectivity">
+          <div class="settings-grid">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Broker</p>
+                  <h2>MQTT Connectivity</h2>
+                </div>
+                <span id="setup-broker-pill" class="pill warn">Loading</span>
+              </div>
+              <p class="hint">Saved to <code id="settings-path">-</code>. After save, the GCS reconnects using these values immediately.</p>
+              <form id="mqtt-form" class="form-grid">
+                <label>
+                  <span>Broker Host</span>
+                  <input id="broker-host" name="broker_host" type="text" placeholder="192.0.2.10" required>
+                </label>
+                <label>
+                  <span>Broker Port</span>
+                  <input id="broker-port" name="broker_port" type="number" min="1" step="1" required>
+                </label>
+                <label>
+                  <span>Topic Prefix</span>
+                  <input id="topic-prefix" name="topic_prefix" type="text" placeholder="/projects/remote-rover">
+                </label>
+                <label>
+                  <span>Client ID</span>
+                  <input id="client-id-input" name="client_id" type="text" placeholder="gcs-web">
+                </label>
+                <label>
+                  <span>Control Topic</span>
+                  <input id="control-topic" name="control_topic" type="text" placeholder="control/manual" required>
+                </label>
+                <label>
+                  <span>Telemetry Topic</span>
+                  <input id="state-topic" name="state_topic" type="text" placeholder="telemetry/state" required>
+                </label>
+                <label>
+                  <span>Camera Topic</span>
+                  <input id="camera-topic" name="camera_topic" type="text" placeholder="camera-feed" required>
+                </label>
+                <label>
+                  <span>Control Rate (Hz)</span>
+                  <input id="control-hz" name="control_hz" type="number" min="1" step="1" required>
+                </label>
+                <label>
+                  <span>Active Simulator Backend</span>
+                  <select id="simulation-backend-select" name="simulation_backend">
+                    <option value="3d-env">3d-env</option>
+                    <option value="rover-sim-next">rover-sim-next</option>
+                  </select>
+                </label>
+                <div class="form-actions">
+                  <button type="submit">Save Connectivity</button>
+                  <button id="reload-config" type="button" class="ghost">Reload</button>
+                </div>
+              </form>
+              <p id="setup-status" class="status-banner">Loading shared MQTT settings.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-video" class="settings-pane" data-settings-tab="video" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Pipeline</p>
+                  <h2>Video Settings</h2>
+                </div>
+                <span id="video-settings-pill" class="pill">Loading</span>
+              </div>
+              <label>
+                <span>Ingest mode</span>
+                <select id="ingest-mode">
+                  <option value="mqtt_frames">mqtt_frames</option>
+                  <option value="rtp_udp">rtp_udp</option>
+                  <option value="rtsp">rtsp</option>
+                  <option value="whip">whip</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Delivery mode</span>
+                <select id="delivery-mode">
+                  <option value="websocket_mjpeg">websocket_mjpeg</option>
+                  <option value="webrtc_direct">webrtc_direct</option>
+                  <option value="webrtc_sfu">webrtc_sfu</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+              <label class="checkbox-row">
+                <input id="video-enabled" type="checkbox" checked>
+                <span>Video enabled</span>
+              </label>
+              <div class="form-actions form-actions-inline">
+                <button id="save-video-settings" type="button">Save Video Settings</button>
+              </div>
+              <p id="video-settings-status" class="status-banner">Loading current video mode.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-appearance" class="settings-pane" data-settings-tab="appearance" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Theme</p>
+                  <h2>Appearance</h2>
+                </div>
+                <span id="appearance-pill" class="pill">Local preference</span>
+              </div>
+              <label>
+                <span>Theme mode</span>
+                <select id="theme-mode-select">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </label>
+              <label>
+                <span>Default light theme</span>
+                <select id="light-theme-select">
+                  <option value="vscode-light">VS Code Light</option>
+                  <option value="quiet-light">Quiet Light</option>
+                  <option value="cool-light">Cool Light</option>
+                  <option value="sandstone-light">Sandstone Light</option>
+                </select>
+              </label>
+              <label>
+                <span>Default dark theme</span>
+                <select id="dark-theme-select">
+                  <option value="vscode-dark">VS Code Dark</option>
+                  <option value="graphite-dark">Graphite Dark</option>
+                  <option value="midnight-dark">Midnight Dark</option>
+                  <option value="deep-forest-dark">Deep Forest Dark</option>
+                </select>
+              </label>
+              <p class="settings-note">Theme mode follows the browser and OS when set to system. Light and dark defaults are stored separately.</p>
+              <p id="appearance-status" class="status-banner">Theme preferences are stored in this browser.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-json" class="settings-pane" data-settings-tab="json" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Config I/O</p>
+                  <h2>JSON Import & Export</h2>
+                </div>
+                <span class="pill">Backend + Local</span>
+              </div>
+              <section class="settings-source-block" aria-labelledby="connectivity-source-title">
+                <div class="settings-source-header">
+                  <p id="connectivity-source-title" class="settings-note">Config source options</p>
+                  <p class="settings-source-copy">Load connectivity values from a backend JSON path or a local JSON file, or export the current form values without changing runtime config.</p>
+                </div>
+                <div class="settings-source-grid">
+                  <div class="settings-source-actions">
+                    <div class="settings-source-action-row">
+                      <button id="load-backend-path" type="button" class="ghost">Load from Backend Path</button>
+                      <button id="save-backend-path" type="button" class="ghost">Save to Backend Path</button>
+                    </div>
+                    <button id="save-local-file" type="button" class="ghost settings-source-action-secondary">Save to Local JSON</button>
+                  </div>
+                  <div class="settings-source-fields">
+                    <label class="settings-source-field">
+                      <span>Backend JSON Path (inside <code>../config</code>)</span>
+                      <input id="backend-config-path" type="text" placeholder="common.local.json">
+                    </label>
+                    <label class="settings-source-field">
+                      <span>Load from Local JSON</span>
+                      <input id="local-config-file" type="file" accept="application/json,.json">
+                    </label>
+                  </div>
+                </div>
+              </section>
+              <p id="json-settings-status" class="status-banner">Loading backend config path details.</p>
+            </article>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/common.js" defer></script>
+    <script src="/static/settings.js" defer></script>
+  </body>
+</html>

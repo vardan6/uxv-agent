@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -18,6 +19,7 @@ except ModuleNotFoundError:
     from runtime import AppRuntime, build_runtime
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
 @asynccontextmanager
@@ -44,7 +46,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def add_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/setup/") or path.startswith("/static/"):
+    if path == "/" or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -55,9 +57,60 @@ def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
     return request_or_socket.app.state.runtime
 
 
+def _connectivity_payload(config) -> dict[str, Any]:
+    return {
+        "mqtt": {
+            "broker_host": config.mqtt.get("broker_host", ""),
+            "broker_port": int(config.mqtt.get("broker_port", 1883)),
+            "topic_prefix": config.mqtt.get("topic_prefix", ""),
+            "client_id": config.mqtt.get("client_id", ""),
+            "control_topic": config.mqtt.get("control_topic", "control/manual"),
+            "state_topic": config.mqtt.get("state_topic", "telemetry/state"),
+            "camera_topic": config.mqtt.get("camera_topic", "camera-feed"),
+            "control_hz": int(config.mqtt.get("control_hz", 20)),
+        },
+        "simulation": {
+            "backend": str(config.simulation.get("backend", "3d-env")) or "3d-env",
+        },
+    }
+
+
+def _resolve_backend_config_path(path_text: str) -> Path:
+    cleaned = (path_text or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    raw_path = Path(cleaned)
+    resolved = raw_path.resolve(strict=False) if raw_path.is_absolute() else (CONFIG_DIR / raw_path).resolve(strict=False)
+    config_root = CONFIG_DIR.resolve(strict=False)
+    try:
+        resolved.relative_to(config_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="path must stay inside the config directory") from exc
+    return resolved
+
+
+def _load_existing_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON at {path}: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="backend config file must contain a top-level JSON object")
+    return data
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/settings")
+async def settings_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "settings.html")
 
 
 @app.get("/api/health")
@@ -160,6 +213,63 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         "ok": True,
         "mqtt": runtime.config.mqtt,
         "settings_path": str(runtime.config.settings_path),
+    })
+
+
+@app.post("/api/connectivity/load-from-path")
+async def load_connectivity_from_path(request: Request) -> JSONResponse:
+    payload = await request.json()
+    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
+    if not resolved_path.exists():
+        raise HTTPException(status_code=404, detail="config file not found")
+
+    config = load_config(resolved_path)
+    result = _connectivity_payload(config)
+    result["resolved_path"] = str(resolved_path)
+    return JSONResponse(result)
+
+
+@app.post("/api/connectivity/save-to-path")
+async def save_connectivity_to_path(request: Request) -> JSONResponse:
+    payload = await request.json()
+    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
+
+    mqtt_payload = payload.get("mqtt")
+    simulation_payload = payload.get("simulation")
+    if not isinstance(mqtt_payload, dict):
+        raise HTTPException(status_code=400, detail="mqtt object is required")
+    if simulation_payload is not None and not isinstance(simulation_payload, dict):
+        raise HTTPException(status_code=400, detail="simulation must be an object")
+
+    existing = _load_existing_json_dict(resolved_path)
+    mqtt_out = dict(existing.get("mqtt", {})) if isinstance(existing.get("mqtt"), dict) else {}
+    mqtt_out.update({
+        "broker_host": str(mqtt_payload.get("broker_host", "")).strip(),
+        "broker_port": int(mqtt_payload.get("broker_port", 1883)),
+        "topic_prefix": str(mqtt_payload.get("topic_prefix", "")).strip(),
+        "client_id": str(mqtt_payload.get("client_id", "")).strip(),
+        "control_topic": str(mqtt_payload.get("control_topic", "control/manual")).strip(),
+        "state_topic": str(mqtt_payload.get("state_topic", "telemetry/state")).strip(),
+        "camera_topic": str(mqtt_payload.get("camera_topic", "camera-feed")).strip(),
+        "control_hz": int(mqtt_payload.get("control_hz", 20)),
+    })
+    existing["mqtt"] = mqtt_out
+
+    simulation_out = dict(existing.get("simulation", {})) if isinstance(existing.get("simulation"), dict) else {}
+    simulation_backend = str((simulation_payload or {}).get("backend", simulation_out.get("backend", "3d-env"))).strip() or "3d-env"
+    simulation_out["backend"] = simulation_backend
+    existing["simulation"] = simulation_out
+
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(resolved_path, "w", encoding="utf-8") as fh:
+        json.dump(existing, fh, indent=2)
+        fh.write("\n")
+
+    return JSONResponse({
+        "ok": True,
+        "resolved_path": str(resolved_path),
+        "mqtt": mqtt_out,
+        "simulation": {"backend": simulation_backend},
     })
 
 
@@ -290,8 +400,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 @app.get("/setup/mqtt")
-async def mqtt_setup_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "mqtt-setup.html")
+async def mqtt_setup_page() -> RedirectResponse:
+    return RedirectResponse(url="/settings?tab=connectivity", status_code=307)
 
 
 @app.get("/replay")

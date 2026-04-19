@@ -906,6 +906,23 @@ select {
   border-top-left-radius: 20px;
 }
 
+body[data-page="settings"] .page-intro {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 8px 4px 18px;
+  margin-bottom: 0;
+  margin-top: 0;
+  border-radius: 0;
+}
+
+body[data-page="settings"] .app-shell.has-page-intro .app-header {
+  margin-bottom: 18px;
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+}
+
 body[data-page="settings"] .page-lede {
   max-width: 72ch;
 }
