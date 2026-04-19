@@ -310,9 +310,7 @@ body {
 }
 
 .app-shell.has-page-intro .app-header {
-  margin-bottom: 0;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+  margin-bottom: 16px;
 }
 
 .app-header-inner {
@@ -342,7 +340,8 @@ body {
 }
 
 .app-brand strong {
-  font-size: 1.05rem;
+  font-size: clamp(1.6rem, 2.4vw, 2.2rem);
+  line-height: 1.1;
   letter-spacing: 0.01em;
 }
 
@@ -408,25 +407,16 @@ button,
   margin-bottom: 18px;
 }
 
-.app-shell.has-page-intro .page-intro {
-  margin-top: -1px;
-  margin-bottom: 18px;
-  border-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  border-bottom-left-radius: 24px;
-  border-bottom-right-radius: 24px;
-  box-shadow: var(--shadow);
-}
-
-.page-intro h1,
+.page-intro h2,
 .panel h2,
 p {
   margin: 0;
 }
 
-.page-intro h1 {
-  font-size: clamp(1.9rem, 4.2vw, 3.2rem);
+.page-intro h2 {
+  font-size: clamp(1.35rem, 2.6vw, 1.85rem);
+  line-height: 1.24;
+  letter-spacing: 0.01em;
   margin-top: 8px;
 }
 
@@ -435,6 +425,10 @@ p {
   color: var(--muted);
   margin-top: 12px;
   line-height: 1.5;
+}
+
+.page-intro .inline-actions {
+  margin-top: 16px;
 }
 
 .page-grid,
@@ -452,7 +446,7 @@ p {
   grid-template-columns: minmax(0, 1.7fr) 380px;
   grid-template-areas:
     "video controls"
-    "telemetry status";
+    "telemetry telemetry";
   align-items: start;
 }
 
@@ -906,21 +900,8 @@ select {
   border-top-left-radius: 20px;
 }
 
-body[data-page="settings"] .page-intro {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  backdrop-filter: none;
-  padding: 8px 4px 18px;
-  margin-bottom: 0;
-  margin-top: 0;
-  border-radius: 0;
-}
-
 body[data-page="settings"] .app-shell.has-page-intro .app-header {
-  margin-bottom: 18px;
-  border-bottom-left-radius: 22px;
-  border-bottom-right-radius: 22px;
+  margin-bottom: 16px;
 }
 
 body[data-page="settings"] .page-lede {
@@ -960,9 +941,8 @@ code {
   .dashboard-grid {
     grid-template-areas:
       "video"
-      "telemetry"
       "controls"
-      "status";
+      "telemetry";
   }
 
   .replay-sidebar {

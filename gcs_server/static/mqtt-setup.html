@@ -3,24 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <title>MQTT Setup | Remote Rover GCS</title>
     <link rel="stylesheet" href="/static/style.css">
   </head>
-  <body>
-    <main class="shell shell-narrow">
-      <section class="hero hero-setup">
-        <div>
-          <p class="eyebrow">Broker Setup</p>
-          <h1>MQTT Connection</h1>
-          <p class="lede">This GCS reads and updates the shared 3D environment config so both services point at the same MQTT broker and topics.</p>
-        </div>
-        <div class="hero-actions">
-          <a class="nav-link" href="/replay">Replay</a>
-          <a class="nav-link nav-link-accent" href="/">Back to Dashboard</a>
-        </div>
+  <body data-page="settings">
+    <main class="app-shell" data-app-shell>
+      <section data-page-intro></section>
+      <section class="inline-actions">
+        <a class="nav-link" href="/settings">Settings</a>
+        <a class="nav-link" href="/replay">Replay</a>
+        <a class="nav-link nav-link-accent" href="/">Back to Dashboard</a>
       </section>
 
-      <section class="grid single-grid">
+      <section class="page-grid">
         <article class="panel">
           <div class="panel-head">
             <h2>3D Env MQTT Settings</h2>
@@ -80,6 +76,7 @@
       </section>
     </main>
 
+    <script src="/static/common.js" defer></script>
     <script src="/static/mqtt-setup.js" defer></script>
   </body>
 </html>

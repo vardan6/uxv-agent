@@ -13,19 +13,12 @@
       crossorigin=""
     >
   </head>
-  <body>
-    <main class="shell">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Replay</p>
-          <h1>Recorded Sessions</h1>
-          <p class="lede">Review rover motion, telemetry, and runtime events from the GCS session log.</p>
-        </div>
-        <div class="hero-actions">
-          <a class="nav-link" href="/">Dashboard</a>
-          <button id="refresh-sessions" class="nav-link">Refresh Sessions</button>
-          <button id="rollover-session" class="nav-link nav-link-accent">Start New Session</button>
-        </div>
+  <body data-page="replay">
+    <main class="app-shell" data-app-shell>
+      <section data-page-intro></section>
+      <section class="inline-actions">
+        <button id="refresh-sessions" class="ghost" type="button">Refresh Sessions</button>
+        <button id="rollover-session" type="button">Start New Session</button>
       </section>
 
       <section class="grid replay-grid">
@@ -92,6 +85,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
+    <script src="/static/common.js" defer></script>
     <script src="/static/replay.js" defer></script>
   </body>
 </html>

@@ -15,6 +15,14 @@ const setupEls = {
   reload: document.getElementById('reload-config'),
 };
 
+if (window.GCSCommon) {
+  window.GCSCommon.initShell({
+    page: 'settings',
+    title: 'MQTT Setup',
+    subtitle: 'Update broker and topic values used by GCS runtime and the simulator integration.',
+  });
+}
+
 function setSetupStatus(text) {
   setupEls.status.textContent = text;
 }

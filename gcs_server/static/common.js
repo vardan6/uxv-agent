@@ -110,7 +110,7 @@
       intro.innerHTML = `
         <div>
           <p class="page-kicker">${title}</p>
-          <h1>${title}</h1>
+          <h2>${title}</h2>
           ${subtitle ? `<p class="page-lede">${subtitle}</p>` : ''}
         </div>
       `;

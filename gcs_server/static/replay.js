@@ -227,6 +227,13 @@ function bindReplayActions() {
 }
 
 async function initReplay() {
+  if (window.GCSCommon?.initShell) {
+    window.GCSCommon.initShell({
+      page: 'replay',
+      title: 'Recorded Sessions',
+      subtitle: 'Review rover motion, telemetry, and runtime events from the GCS session log.',
+    });
+  }
   ensureMap();
   bindReplayActions();
   await loadSessions();

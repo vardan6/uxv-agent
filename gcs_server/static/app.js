@@ -43,12 +43,6 @@ const els = {
   videoFrame: document.getElementById('video-frame'),
   videoEmpty: document.getElementById('video-empty'),
   videoModePill: document.getElementById('video-mode-pill'),
-  ingestMode: document.getElementById('ingest-mode'),
-  deliveryMode: document.getElementById('delivery-mode'),
-  videoEnabled: document.getElementById('video-enabled'),
-  themeModeSelect: document.getElementById('theme-mode-select'),
-  lightThemeSelect: document.getElementById('light-theme-select'),
-  darkThemeSelect: document.getElementById('dark-theme-select'),
 };
 
 const THEME_MODE_STORAGE_KEY = 'gcs-theme-mode';
@@ -91,15 +85,7 @@ function getActiveThemeName() {
 }
 
 function syncThemeControls() {
-  if (els.themeModeSelect) {
-    els.themeModeSelect.value = state.themeMode;
-  }
-  if (els.lightThemeSelect) {
-    els.lightThemeSelect.value = state.lightTheme;
-  }
-  if (els.darkThemeSelect) {
-    els.darkThemeSelect.value = state.darkTheme;
-  }
+  // Dashboard has no theme controls; keep this as a no-op for shared theme state logic.
 }
 
 function applyThemeState() {
@@ -295,11 +281,11 @@ function updateTelemetry(data = {}) {
 }
 
 function updateVideoMode(mode = {}) {
-  if (!els.ingestMode || !els.deliveryMode || !els.videoEnabled || !els.videoModePill) return;
-  els.ingestMode.value = mode.ingest_mode || 'mqtt_frames';
-  els.deliveryMode.value = mode.delivery_mode || 'websocket_mjpeg';
-  els.videoEnabled.checked = mode.enabled !== false;
-  els.videoModePill.textContent = `${els.ingestMode.value} -> ${els.deliveryMode.value}`;
+  if (!els.videoModePill) return;
+  const ingest = mode.ingest_mode || 'mqtt_frames';
+  const delivery = mode.delivery_mode || 'websocket_mjpeg';
+  const enabled = mode.enabled !== false;
+  els.videoModePill.textContent = enabled ? `${ingest} -> ${delivery}` : 'Disabled';
 }
 
 function updateVideoFrame(frame = {}) {
@@ -508,48 +494,17 @@ function bindActions() {
       await setControlEnabled(state.controller?.active_client_id !== state.clientId);
     });
   }
-  const saveVideoSettings = document.getElementById('save-video-settings');
-  if (saveVideoSettings) {
-    saveVideoSettings.addEventListener('click', async () => {
-      const result = await postJson('/api/video-mode', {
-        enabled: els.videoEnabled?.checked ?? true,
-        ingest_mode: els.ingestMode?.value || 'mqtt_frames',
-        delivery_mode: els.deliveryMode?.value || 'websocket_mjpeg',
-      });
-      updateVideoMode(result.video);
-      setStatus('Video settings saved.');
-    });
-  }
-  if (els.themeModeSelect) {
-    els.themeModeSelect.addEventListener('change', (event) => {
-      setThemeMode(event.target.value);
-      const resolvedMode = getResolvedThemeMode();
-      const activeTheme = getActiveThemeName();
-      setStatus(`Theme mode set to ${themeLabel(state.themeMode)}. Active ${resolvedMode} theme: ${themeLabel(activeTheme)}.`);
-    });
-  }
-  if (els.lightThemeSelect) {
-    els.lightThemeSelect.addEventListener('change', (event) => {
-      setLightTheme(event.target.value);
-      const resolvedMode = getResolvedThemeMode();
-      setStatus(
-        resolvedMode === 'light'
-          ? `Active light theme: ${themeLabel(state.lightTheme)}.`
-          : `Light default saved as ${themeLabel(state.lightTheme)}.`
-      );
-    });
-  }
-  if (els.darkThemeSelect) {
-    els.darkThemeSelect.addEventListener('change', (event) => {
-      setDarkTheme(event.target.value);
-      const activeLabel = getResolvedThemeMode() === 'dark' ? `Active dark theme: ${themeLabel(state.darkTheme)}.` : `Dark default saved as ${themeLabel(state.darkTheme)}.`;
-      setStatus(activeLabel);
-    });
-  }
 }
 
 function initDashboard() {
   if (!document.querySelector('.controls-panel')) return;
+  if (window.GCSCommon?.initShell) {
+    window.GCSCommon.initShell({
+      page: 'dashboard',
+      title: 'Dashboard',
+      subtitle: 'Browser-based monitoring and low-latency manual control for the rover simulator.',
+    });
+  }
   initTheme();
   renderControlToggle();
   window.setInterval(renderTelemetryLastReceived, 1000);
