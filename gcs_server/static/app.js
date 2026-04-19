@@ -2,7 +2,8 @@ const state = {
   clientId: crypto.randomUUID ? crypto.randomUUID() : `gcs-${Date.now()}`,
   socket: null,
   controller: null,
-  controlRequestPending: false,
+  controlActivationPending: false,
+  browserControlActive: false,
   lastTelemetryTs: 0,
   latestTelemetry: {},
   simulation: {},
@@ -21,7 +22,8 @@ const state = {
 
 const els = {
   brokerPill: document.getElementById('broker-pill'),
-  controlToggle: document.getElementById('control-toggle'),
+  roverPill: document.getElementById('rover-pill'),
+  controlStatePill: document.getElementById('control-state-pill'),
   controllerOwner: document.getElementById('controller-owner'),
   telemetryFreshness: document.getElementById('telemetry-freshness'),
   cameraFreshness: document.getElementById('camera-freshness'),
@@ -52,6 +54,8 @@ const THEME_MODES = new Set(['system', 'light', 'dark']);
 const LIGHT_THEMES = new Set(['vscode-light', 'quiet-light', 'cool-light', 'sandstone-light']);
 const DARK_THEMES = new Set(['vscode-dark', 'graphite-dark', 'midnight-dark', 'deep-forest-dark']);
 const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+const ROVER_CONNECTED_THRESHOLD_SECONDS = 2;
+const ROVER_WARNING_THRESHOLD_SECONDS = 60;
 
 if (els.clientId) {
   els.clientId.textContent = state.clientId;
@@ -165,49 +169,70 @@ function setDarkTheme(theme) {
 }
 
 function renderControlToggle() {
-  if (!els.controlToggle) return;
+  if (!els.controlStatePill) return;
   const owner = state.controller?.active_client_id;
   const isController = owner === state.clientId;
-  let label = 'Take Control';
-  let tone = 'off';
-  if (state.controlRequestPending) {
-    label = isController ? 'Releasing...' : 'Taking Control...';
-    tone = 'pending';
-  } else if (isController) {
-    label = 'Release Control';
-    tone = 'on';
+  let label = 'Inactive';
+  let tone = 'warn';
+  if (state.controlActivationPending) {
+    label = state.browserControlActive ? 'Activating' : 'Deactivating';
+  } else if (state.browserControlActive && isController) {
+    label = 'Active';
+    tone = 'ok';
+  } else if (owner && !isController) {
+    label = 'Other Browser Active';
+    tone = 'warn';
   }
-  els.controlToggle.textContent = label;
-  els.controlToggle.classList.toggle('on', tone === 'on');
-  els.controlToggle.classList.toggle('off', tone === 'off');
-  els.controlToggle.classList.toggle('pending', tone === 'pending');
+  setPillState(els.controlStatePill, label, tone);
 }
 
-function brokerBadgeState(broker = {}) {
-  if (!broker.connected) {
-    return { label: broker.status || 'disconnected', tone: 'danger' };
+function setPillState(element, label, tone) {
+  if (!element) return;
+  element.textContent = label;
+  element.className = 'pill';
+  element.classList.add(tone);
+}
+
+function renderBrokerIndicator(broker = {}) {
+  if (!els.brokerPill) return;
+  if (broker.connected === true) {
+    setPillState(els.brokerPill, 'Connected', 'ok');
+    return;
   }
-  if (!broker.last_telemetry_ts && !broker.last_camera_ts) {
-    return { label: 'Connected, waiting for data', tone: 'warn' };
+  if (broker.status === 'connecting') {
+    setPillState(els.brokerPill, 'Connecting', 'warn');
+    return;
   }
-  if (broker.telemetry_stale && broker.camera_stale) {
-    return { label: 'Connected, stale data', tone: 'warn' };
+  setPillState(els.brokerPill, 'Disconnected', 'danger');
+}
+
+function renderRoverIndicator() {
+  if (!els.roverPill) return;
+  if (!state.lastTelemetryTs) {
+    setPillState(els.roverPill, 'No data', 'danger');
+    return;
   }
-  if (broker.telemetry_stale || broker.camera_stale) {
-    return { label: 'Connected, partial data', tone: 'warn' };
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - (state.lastTelemetryTs * 1000)) / 1000));
+  if (ageSeconds < ROVER_CONNECTED_THRESHOLD_SECONDS) {
+    setPillState(els.roverPill, 'Connected', 'ok');
+    return;
   }
-  return { label: 'Connected', tone: 'ok' };
+  if (ageSeconds < ROVER_WARNING_THRESHOLD_SECONDS) {
+    setPillState(els.roverPill, `${ageSeconds}s delayed`, 'warn');
+    return;
+  }
+  setPillState(els.roverPill, 'Unavailable', 'danger');
 }
 
 function updateBrokerPill(broker = {}) {
-  if (!els.brokerPill || !els.telemetryFreshness || !els.cameraFreshness) return;
+  renderBrokerIndicator(broker);
   state.lastTelemetryTs = typeof broker.last_telemetry_ts === 'number' ? broker.last_telemetry_ts : 0;
-  const badge = brokerBadgeState(broker);
-  els.brokerPill.textContent = badge.label;
-  els.brokerPill.className = 'pill';
-  els.brokerPill.classList.add(badge.tone);
-  els.telemetryFreshness.textContent = broker.telemetry_stale ? 'Stale' : 'Fresh';
-  els.cameraFreshness.textContent = broker.camera_stale ? 'Stale' : 'Fresh';
+  if (els.telemetryFreshness) {
+    els.telemetryFreshness.textContent = broker.telemetry_stale ? 'Stale' : 'Fresh';
+  }
+  if (els.cameraFreshness) {
+    els.cameraFreshness.textContent = broker.camera_stale ? 'Stale' : 'Fresh';
+  }
   renderTelemetryLastReceived();
 }
 
@@ -215,6 +240,7 @@ function renderTelemetryLastReceived() {
   if (!els.telemetryLastReceived) return;
   if (!state.lastTelemetryTs) {
     els.telemetryLastReceived.textContent = 'No data';
+    renderRoverIndicator();
     renderTelemetryOsd();
     return;
   }
@@ -229,6 +255,7 @@ function renderTelemetryLastReceived() {
   });
 
   els.telemetryLastReceived.textContent = `${formatAge(ageSeconds)} ago (${exactTime})`;
+  renderRoverIndicator();
   renderTelemetryOsd();
 }
 
@@ -249,13 +276,19 @@ function updateController(controller = {}) {
   state.controller = controller;
   const owner = controller.active_client_id;
   const isController = owner === state.clientId;
-  if (state.controlRequestPending) {
+  if (state.controlActivationPending) {
     if (isController || owner === null) {
-      state.controlRequestPending = false;
+      state.controlActivationPending = false;
     }
   }
   if (els.controllerOwner) {
-    els.controllerOwner.textContent = isController ? 'This browser' : (owner || 'Unclaimed');
+    if (isController) {
+      els.controllerOwner.textContent = 'This browser';
+    } else if (owner) {
+      els.controllerOwner.textContent = 'Another browser';
+    } else {
+      els.controllerOwner.textContent = 'Inactive';
+    }
   }
   renderControlToggle();
 }
@@ -391,35 +424,43 @@ function sendControlState() {
 }
 
 async function setControlEnabled(enabled) {
-  state.controlRequestPending = true;
+  state.browserControlActive = enabled;
+  state.controlActivationPending = true;
   renderControlToggle();
   try {
     const action = enabled ? 'take' : 'release';
     if (enabled) {
-      setStatus('Requesting controller lock for this browser.');
+      setStatus('Activating browser control for this dashboard.');
     } else {
-      setStatus('Releasing controller lock for this browser.');
       clearControls();
+      setStatus('Deactivating browser control for this dashboard.');
     }
     const result = await postJson(`/api/controller/${action}`, { client_id: state.clientId });
-    state.controlRequestPending = false;
+    state.controlActivationPending = false;
     updateController(result.controller || {});
     setStatus(
       enabled
-        ? (result.ok ? 'Control enabled for this browser.' : 'Another browser currently owns control.')
-        : (result.ok ? 'Control released for this browser.' : 'This browser did not own control.')
+        ? 'Browser control active while this dashboard remains focused.'
+        : 'Browser control inactive while this dashboard is unfocused.'
     );
   } catch (error) {
-    state.controlRequestPending = false;
+    state.controlActivationPending = false;
+    state.browserControlActive = !!(state.controller?.active_client_id === state.clientId);
     renderControlToggle();
-    setStatus(`Controller request failed: ${error.message}`);
+    setStatus(`Control state update failed: ${error.message}`);
   }
 }
 
-function clearControls() {
+function clearControls(sendUpdate = true) {
   Object.keys(state.buttons).forEach((key) => { state.buttons[key] = false; });
   syncButtons();
-  sendControlState();
+  if (sendUpdate) {
+    sendControlState();
+  }
+}
+
+function canControlLocally() {
+  return state.browserControlActive && state.controller?.active_client_id === state.clientId;
 }
 
 function syncButtons() {
@@ -433,8 +474,8 @@ function bindControlButtons() {
     const key = btn.dataset.control;
     const activate = (ev) => {
       ev.preventDefault();
-      if (state.controller?.active_client_id !== state.clientId) {
-        setStatus('Control is off for this browser.');
+      if (!canControlLocally()) {
+        setStatus('Control is inactive until this dashboard is focused.');
         return;
       }
       state.buttons[key] = true;
@@ -443,9 +484,12 @@ function bindControlButtons() {
     };
     const deactivate = (ev) => {
       ev.preventDefault();
+      if (!state.buttons[key]) return;
       state.buttons[key] = false;
       syncButtons();
-      sendControlState();
+      if (canControlLocally()) {
+        sendControlState();
+      }
     };
     btn.addEventListener('mousedown', activate);
     btn.addEventListener('touchstart', activate, { passive: false });
@@ -460,7 +504,7 @@ function bindKeyboard() {
   window.addEventListener('keydown', (event) => {
     const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
     if (!key) return;
-    if (state.controller?.active_client_id !== state.clientId) return;
+    if (!canControlLocally()) return;
     if (state.buttons[key]) return;
     state.buttons[key] = true;
     syncButtons();
@@ -470,13 +514,15 @@ function bindKeyboard() {
   window.addEventListener('keyup', (event) => {
     const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
     if (!key) return;
-    if (state.controller?.active_client_id !== state.clientId) return;
+    if (!canControlLocally()) return;
     state.buttons[key] = false;
     syncButtons();
     sendControlState();
     event.preventDefault();
   });
-  window.addEventListener('blur', clearControls);
+  window.addEventListener('focus', syncBrowserControlState);
+  window.addEventListener('blur', syncBrowserControlState);
+  document.addEventListener('visibilitychange', syncBrowserControlState);
 }
 
 async function postJson(url, payload) {
@@ -488,12 +534,24 @@ async function postJson(url, payload) {
   return response.json();
 }
 
-function bindActions() {
-  if (els.controlToggle) {
-    els.controlToggle.addEventListener('click', async () => {
-      await setControlEnabled(state.controller?.active_client_id !== state.clientId);
-    });
+function desiredBrowserControlState() {
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+async function syncBrowserControlState() {
+  const desired = desiredBrowserControlState();
+  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+    state.browserControlActive = desired;
+    renderControlToggle();
+    return;
   }
+  if (state.controlActivationPending) return;
+  const currentlyOwned = state.controller?.active_client_id === state.clientId;
+  if (desired === currentlyOwned && desired === state.browserControlActive) {
+    renderControlToggle();
+    return;
+  }
+  await setControlEnabled(desired);
 }
 
 function initDashboard() {
@@ -510,7 +568,6 @@ function initDashboard() {
   window.setInterval(renderTelemetryLastReceived, 1000);
   bindControlButtons();
   bindKeyboard();
-  bindActions();
   if (themeMedia) {
     const onThemeChange = () => {
       if (state.themeMode !== 'system') return;
@@ -544,7 +601,9 @@ function connectSocket() {
 
   state.socket.addEventListener('open', () => {
     setStatus('Connected to GCS runtime.');
-    setControlEnabled(true);
+    state.browserControlActive = desiredBrowserControlState();
+    renderControlToggle();
+    void syncBrowserControlState();
   });
   state.socket.addEventListener('close', () => setStatus('WebSocket disconnected. Reload to reconnect.'));
   state.socket.addEventListener('message', (event) => {
@@ -565,15 +624,16 @@ function connectSocket() {
       updateBrokerPill(msg.data);
     } else if (msg.type === 'controller') {
       updateController(msg.data);
+      void syncBrowserControlState();
     } else if (msg.type === 'video_frame') {
       updateVideoFrame(msg.data);
     } else if (msg.type === 'video_mode') {
       updateVideoMode(msg.data);
     } else if (msg.type === 'error') {
-      state.controlRequestPending = false;
+      state.controlActivationPending = false;
       renderControlToggle();
       setStatus(msg.message);
-      clearControls();
+      clearControls(false);
     }
   });
 }

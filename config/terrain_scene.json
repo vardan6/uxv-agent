@@ -1,0 +1,60 @@
+{
+  "terrain_size": 400,
+  "tile_count": 320,
+  "scene_layout": {
+    "plant_a": {
+      "label": "Plant A",
+      "kind": "plant",
+      "model_ref": "plant_a",
+      "center": [-108.0, -84.0],
+      "pad_half_extents": [26.0, 17.0],
+      "floor_z": -5.2,
+      "loop_half_extents": [37.0, 26.0]
+    },
+    "plant_b": {
+      "label": "Plant B",
+      "kind": "plant",
+      "model_ref": "plant_b",
+      "center": [112.0, 82.0],
+      "pad_half_extents": [26.0, 17.0],
+      "floor_z": -4.6,
+      "loop_half_extents": [37.0, 26.0]
+    },
+    "building": {
+      "label": "Operations Building",
+      "kind": "building",
+      "model_ref": "building",
+      "center": [0.0, -2.0],
+      "pad_half_extents": [18.0, 13.0],
+      "floor_z": -1.6
+    },
+    "start_hub": {
+      "label": "Start Hub",
+      "kind": "hub",
+      "model_ref": "start_hub",
+      "center": [0.0, 20.0],
+      "pad_half_extents": [13.0, 9.0],
+      "surround_half_extents": [40.0, 30.0],
+      "floor_z": -0.8
+    },
+    "roads": {
+      "width": 7.5,
+      "feather": 12.0
+    },
+    "spawn": {
+      "xy": [0.0, 20.0]
+    }
+  },
+  "valleys": [
+    [-108.0, -84.0, 58.0, 10.0],
+    [112.0, 82.0, 60.0, 9.6]
+  ],
+  "hills": [
+    [-150.0, -18.0, 50.0, 8.0],
+    [-48.0, -146.0, 44.0, 7.2],
+    [148.0, 22.0, 52.0, 8.4],
+    [42.0, 142.0, 45.0, 7.0],
+    [0.0, -178.0, 38.0, 6.2],
+    [0.0, 176.0, 36.0, 5.8]
+  ]
+}

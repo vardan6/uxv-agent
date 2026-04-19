@@ -25,7 +25,7 @@ Implemented:
 - MQTT telemetry subscription
 - MQTT control publication
 - browser controller lock
-- automatic control request on dashboard connect
+- focus-driven browser controller activation
 - keyboard and on-screen controls
 - broker state and freshness display
 - configurable video ingest/delivery modes
@@ -62,6 +62,7 @@ Browsers do not publish directly to MQTT.
 - Dashboard status banner for control, broker, and theme state feedback
 - Broker connection/freshness visibility without artificial ping traffic
 - One active controller, multiple monitoring clients
+- Browser control is active only while the dashboard remains visible and focused
 - Video transport modeled as separate ingest and delivery modes
 - Browser-based MQTT setup and runtime reconnect workflow
 - Persisted light/dark/system theme preferences

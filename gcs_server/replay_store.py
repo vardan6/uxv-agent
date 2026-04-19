@@ -213,6 +213,24 @@ class ReplayStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def delete_session(self, session_id: str) -> bool:
+        if session_id == self._current_session_id:
+            raise ValueError("cannot delete the active session")
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM replay_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if exists is None:
+                return False
+            conn.execute("DELETE FROM replay_media_refs WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM replay_runtime_events WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM replay_controls WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM replay_telemetry WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM replay_sessions WHERE session_id = ?", (session_id,))
+            conn.commit()
+        return True
+
     def get_session_timeline(self, session_id: str, limit: int = 2000) -> dict[str, Any]:
         with self._connect() as conn:
             telemetry_rows = conn.execute(

@@ -49,7 +49,7 @@ class ControlService:
             self._control_hz = max(1, int(control_hz))
 
     async def set_buttons(self, client_id: str, buttons: dict[str, Any]) -> bool:
-        if not await self._controller_store.renew_controller(client_id):
+        if not await self._controller_store.note_controller_input(client_id):
             return False
         frame = None
         async with self._lock:
@@ -103,8 +103,6 @@ class ControlService:
                     owner = self._owner_client_id
                     frame = self._build_frame_locked()
                 if frame is not None:
-                    if owner:
-                        await self._controller_store.renew_controller(owner)
                     if self._replay_store is not None:
                         self._replay_store.log_control(frame, source=f"loop:{owner or 'gcs'}")
                     await self._publish_func(frame)

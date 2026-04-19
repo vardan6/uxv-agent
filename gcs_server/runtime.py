@@ -49,7 +49,6 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         replay_store.ensure_session()
     state_store = LocalStateBackend(
         telemetry_stale_ms=int(config.gcs["telemetry_stale_ms"]),
-        controller_lease_ms=int(config.gcs["controller_lease_ms"]),
     )
     await state_store.set_video_modes(
         enabled=bool(config.video["enabled"]),

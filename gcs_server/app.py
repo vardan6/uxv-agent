@@ -14,9 +14,11 @@ import uvicorn
 try:
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
+    from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
+    from scene_map import get_scene_map_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -303,6 +305,30 @@ async def replay_session_detail(session_id: str, request: Request, limit: int = 
     }
 
 
+@app.delete("/api/replay/sessions/{session_id}")
+async def delete_replay_session(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    try:
+        deleted = runtime.replay_store.delete_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="session not found")
+    return JSONResponse({
+        "ok": True,
+        "deleted_session_id": session_id,
+        "current_session_id": runtime.replay_store.current_session_id,
+    })
+
+
+@app.get("/api/replay/scene-map")
+async def replay_scene_map(backend: str = "3d-env", grid_size: int = 128) -> dict[str, Any]:
+    try:
+        return get_scene_map_payload(backend=backend, grid_size=grid_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/video-mode")
 async def set_video_mode(request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -374,18 +400,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
             elif msg_type == "control_release":
                 await runtime.control_service.clear_buttons(client_id)
-            elif msg_type == "take_control":
-                ok = await runtime.state_store.try_claim_controller(client_id)
-                controller = await runtime.state_store.controller_snapshot()
-                await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
-                await runtime.mqtt_runtime.publish_presence_snapshot()
-                await runtime.ws_manager.send(client_id, {"type": "take_control_result", "ok": ok})
-            elif msg_type == "release_control":
-                await runtime.control_service.clear_buttons(client_id)
-                await runtime.state_store.release_controller(client_id)
-                controller = await runtime.state_store.controller_snapshot()
-                await runtime.ws_manager.broadcast({"type": "controller", "data": controller})
-                await runtime.mqtt_runtime.publish_presence_snapshot()
             elif msg_type == "ping":
                 await runtime.ws_manager.send(client_id, {"type": "pong"})
     except WebSocketDisconnect:

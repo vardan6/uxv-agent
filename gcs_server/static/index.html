@@ -64,19 +64,24 @@
         <article class="panel controls-panel">
           <div class="panel-head">
             <h2>Controls & Connection</h2>
-            <span id="broker-pill" class="pill warn">Connecting</span>
           </div>
           <div class="inline-actions">
-            <button id="control-toggle" class="control-toggle pending">Take Control</button>
+            <div class="indicator-row control-state-row">
+              <span>Browser Control</span>
+              <span id="control-state-pill" class="pill warn">Inactive</span>
+            </div>
           </div>
-          <dl class="stats compact">
-            <div><dt>Controller</dt><dd id="controller-owner">Unclaimed</dd></div>
-            <div><dt>Telemetry</dt><dd id="telemetry-freshness">No data</dd></div>
-            <div><dt>Camera</dt><dd id="camera-freshness">No data</dd></div>
-            <div><dt>Backend</dt><dd id="simulation-backend">-</dd></div>
-            <div><dt>Client ID</dt><dd id="client-id">-</dd></div>
-          </dl>
-          <p class="hint">Use arrow keys or W/A/S/D. Control works only while this browser owns the lock.</p>
+          <div class="connection-indicators" aria-label="Connection indicators">
+            <div class="indicator-row">
+              <span>Broker</span>
+              <span id="broker-pill" class="pill warn">Connecting</span>
+            </div>
+            <div class="indicator-row">
+              <span>Rover</span>
+              <span id="rover-pill" class="pill danger">No data</span>
+            </div>
+          </div>
+          <p class="hint">Use arrow keys or W/A/S/D. Control is active only while this dashboard tab is visible and focused.</p>
           <div class="dpad">
             <button data-control="forward" class="control-btn">Forward</button>
             <div class="dpad-row">
@@ -89,8 +94,13 @@
         </article>
 
         <article class="panel telemetry-panel">
-          <div class="panel-head"><h2>Telemetry</h2></div>
+          <div class="panel-head"><h2>Telemetry & Runtime</h2></div>
           <dl class="stats">
+            <div><dt>Controller</dt><dd id="controller-owner">Unclaimed</dd></div>
+            <div><dt>Client ID</dt><dd id="client-id">-</dd></div>
+            <div><dt>Telemetry Stream</dt><dd id="telemetry-freshness">No data</dd></div>
+            <div><dt>Camera Stream</dt><dd id="camera-freshness">No data</dd></div>
+            <div><dt>Backend</dt><dd id="simulation-backend">-</dd></div>
             <div><dt>Last received</dt><dd id="telemetry-last-received">No data</dd></div>
             <div><dt>Position</dt><dd id="pos">-</dd></div>
             <div><dt>Speed</dt><dd id="speed">-</dd></div>

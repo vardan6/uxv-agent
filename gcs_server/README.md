@@ -16,7 +16,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Broker status and topic freshness status
 - Config-backed simulator backend identity: `3d-env` or `rover-sim-next`
 - Controller lock: one active browser controls, others observe
-- Automatic control-claim request when a dashboard client connects
+- Focus-driven browser control activation
 - Keyboard control via arrow keys and `W/A/S/D`
 - On-screen control buttons with immediate active-state feedback
 - Configurable video pipeline modes
@@ -101,8 +101,7 @@ Main config sections it consumes:
   "gcs": {
     "host": "127.0.0.1",
     "port": 8080,
-    "telemetry_stale_ms": 2000,
-    "controller_lease_ms": 3000
+    "telemetry_stale_ms": 2000
   },
   "simulation": {
     "backend": "3d-env",
@@ -121,7 +120,7 @@ Main modules:
 - `app.py`: FastAPI app, HTTP routes, WebSocket endpoint, lifespan wiring
 - `runtime.py`: runtime assembly for services
 - `mqtt_service.py`: MQTT connect/subscribe/publish logic
-- `control.py`: control loop, held-button publishing, controller lease renewal
+- `control.py`: control loop and held-button publishing
 - `state.py`: local in-memory runtime state and freshness tracking
 - `replay_store.py`: SQLite session logging and replay data access
 - `telemetry.py`: normalized telemetry shaping for replay and UI consistency
@@ -136,12 +135,16 @@ Main modules:
 
 1. Browser opens `/ws`
 2. GCS sends initial runtime snapshot
-3. Browser requests control lock (or user can manually take/release)
-4. Browser sends control button states over WebSocket when it owns control
+3. Focused and visible browser dashboard becomes the active controller
+4. Browser sends control button states over WebSocket while it remains the active controller
 5. GCS publishes digital control frames to MQTT at `control_hz`
-6. Active controller lease is renewed while held input is being published
+6. Browser blur or hidden state clears inputs and deactivates browser control
 7. Telemetry is normalized and persisted for replay
 8. Telemetry and camera frames received from MQTT are broadcast to connected browsers
+
+## Control Regression Notes
+
+See [docs/gcs_server/regressions.md](../docs/gcs_server/regressions.md) for pinned one-line control invariants that should not regress.
 
 ## MQTT Setup Flow
 

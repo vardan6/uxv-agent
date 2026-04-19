@@ -40,7 +40,6 @@
     "state_backend": "memory",
     "controller_lock_backend": "memory",
     "telemetry_stale_ms": 2000,
-    "controller_lease_ms": 3000,
     "title": "Remote Rover GCS"
   },
   "simulation": {
