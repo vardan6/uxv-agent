@@ -27,6 +27,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - SQLite-backed replay/session logging
 - Replay session APIs
 - Separate replay page with first Leaflet-based map playback
+- Replay scene map loaded from `config/terrain_scene.v1.json`
 - Theme controls with persisted mode + light/dark theme variants
 
 ## Current Limitations
@@ -119,6 +120,7 @@ Main modules:
 
 - `app.py`: FastAPI app, HTTP routes, WebSocket endpoint, lifespan wiring
 - `runtime.py`: runtime assembly for services
+- `scene_map.py`: replay scene-map payload from the shared terrain manifest
 - `mqtt_service.py`: MQTT connect/subscribe/publish logic
 - `control.py`: control loop and held-button publishing
 - `state.py`: local in-memory runtime state and freshness tracking

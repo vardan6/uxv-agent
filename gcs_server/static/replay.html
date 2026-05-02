@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>Remote Rover Replay</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/style.css?v=terrain-map-20260427h">
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -48,7 +49,62 @@
                 <h2>Map Playback</h2>
                 <span id="loaded-session-pill" class="pill warn">No session loaded</span>
               </div>
-              <div id="replay-map" class="replay-map"></div>
+              <div class="map-layer-toolbar" aria-label="Map layers">
+                <label><input id="layer-terrain" type="checkbox" checked> <span>Terrain</span></label>
+                <label><input id="layer-roads" type="checkbox" checked> <span>Roads</span></label>
+                <label><input id="layer-objects" type="checkbox" checked> <span>Objects</span></label>
+                <label><input id="layer-grid" type="checkbox" checked> <span>Grid</span></label>
+                <label><input id="layer-points" type="checkbox" checked> <span>Telemetry Points</span></label>
+                <label><input id="layer-path" type="checkbox" checked> <span>Path</span></label>
+              </div>
+              <div id="replay-map" class="replay-map">
+                <div id="map-overlay-controls" class="map-overlay-controls" aria-label="Map tools">
+                  <div class="map-overlay-card map-overlay-selects">
+                    <label title="Choose how the generated terrain is rendered on the replay map.">
+                      <span class="map-tool-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M4 7.4 9.6 4l5 2.5L20 4v12.6L14.4 20l-5-2.5L4 20V7.4Zm2 1.1v8l3.2-1.9v-8L6 8.5Zm5.2-1.9v8.1l3.2 1.6V8.2l-3.2-1.6Zm5.2 1.4v8l1.6-1V7l-1.6 1Z"/></svg>
+                      </span>
+                      <span class="map-tool-label">View</span>
+                      <select id="map-view-mode" title="Map rendering mode">
+                        <option value="virtual">Virtual Terrain</option>
+                        <option value="cad">CAD/Object View</option>
+                        <option value="heightmap">Heightmap</option>
+                        <option value="satellite-debug">GPS/Satellite Debug</option>
+                      </select>
+                    </label>
+                    <label title="Choose whether the map stays free or follows the rover during replay.">
+                      <span class="map-tool-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3 5 21l7-3 7 3-7-18Zm0 5.6 3.4 8.8-3.4-1.5-3.4 1.5L12 8.6Z"/></svg>
+                      </span>
+                      <span class="map-tool-label">Nav</span>
+                      <select id="map-nav-mode" title="Map navigation behavior">
+                        <option value="free">Free Pan</option>
+                        <option value="follow">Follow Rover</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="map-overlay-card map-fit-actions" aria-label="Map fit actions">
+                    <button id="fit-terrain" class="map-tool-button" type="button" title="Fit the full generated terrain scene in the map view" aria-label="Fit terrain">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5h5v2H7v3H5V5Zm9 0h5v5h-2V7h-3V5ZM5 14h2v3h3v2H5v-5Zm12 0h2v5h-5v-2h3v-3Z"/></svg>
+                      <span>Fit Terrain</span>
+                    </button>
+                    <button id="fit-path" class="map-tool-button" type="button" title="Fit the loaded replay route in the map view" aria-label="Fit path">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.5 6A2.5 2.5 0 1 0 6.5 11 2.5 2.5 0 0 0 6.5 6Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM17.5 13A2.5 2.5 0 1 0 17.5 18 2.5 2.5 0 0 0 17.5 13Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM9.1 9.4l1.2-1.5 5.6 4.7-1.2 1.5-5.6-4.7Z"/></svg>
+                      <span>Fit Path</span>
+                    </button>
+                    <button id="jump-rover" class="map-tool-button" type="button" title="Center the map on the rover at the current replay frame" aria-label="Jump to rover">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.8 4.5 21 12 17.8 19.5 21 12 2.8Zm0 5.2 3.8 9.2-3.8-1.6-3.8 1.6L12 8Z"/></svg>
+                      <span>Jump Rover</span>
+                    </button>
+                  </div>
+                  <span id="map-mode-note" class="map-mode-note">Scene coordinates: X east, Y north.</span>
+                </div>
+              </div>
+              <div class="map-info-bar">
+                <span id="map-cursor">Cursor: -</span>
+                <span id="map-path-stats">Path: -</span>
+                <span id="map-object-detail">Selection: none</span>
+              </div>
             </article>
 
             <article class="panel replay-controls-panel">
@@ -85,7 +141,13 @@
           </article>
 
           <article class="panel replay-events-panel">
-            <div class="panel-head"><h2>Runtime Events</h2></div>
+            <div class="panel-head"><h2>Replay Records</h2></div>
+            <div class="record-tabs" role="tablist" aria-label="Replay record type">
+              <button id="records-telemetry" class="record-tab active" type="button" data-record-view="telemetry">Telemetry Frames</button>
+              <button id="records-controls" class="record-tab" type="button" data-record-view="controls">Controls</button>
+              <button id="records-events" class="record-tab" type="button" data-record-view="events">System Events</button>
+              <button id="records-all" class="record-tab" type="button" data-record-view="all">All Timeline</button>
+            </div>
             <div id="event-list" class="event-list"></div>
           </article>
         </section>
@@ -98,6 +160,6 @@
       crossorigin=""
     ></script>
     <script src="/static/common.js" defer></script>
-    <script src="/static/replay.js" defer></script>
+    <script src="/static/replay.js?v=terrain-map-20260427h" defer></script>
   </body>
 </html>

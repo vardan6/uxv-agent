@@ -362,7 +362,7 @@ function telemetryCardHeading(data = {}) {
 
 function telemetryCardGps(data = {}) {
   const gps = data.gps || {};
-  return `${num(gps.lat, 5)}, ${num(gps.lon, 5)}, alt ${num(gps.alt)}m`;
+  return `${num(gps.lat, 6)}, ${num(gps.lon, 6)}, alt ${num(gps.alt)}m`;
 }
 
 function telemetryCardCamera(data = {}) {

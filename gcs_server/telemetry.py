@@ -18,6 +18,7 @@ def normalize_telemetry(payload: dict[str, Any] | None, backend_type: str) -> di
     speed = raw.get("speed") or {}
     camera = raw.get("camera") or {}
     power = raw.get("power") or {}
+    georeference = raw.get("georeference") or {}
 
     normalized = {
         "timestamp": _num(raw.get("timestamp"), 0.0),
@@ -49,6 +50,7 @@ def normalize_telemetry(payload: dict[str, Any] | None, backend_type: str) -> di
             "current_a": _num(power.get("current_a")),
             "temperature_c": _num(power.get("temperature_c")),
         },
+        "georeference": copy.deepcopy(georeference),
     }
     normalized["map_pose"] = {
         "lat": normalized["gps"]["lat"],

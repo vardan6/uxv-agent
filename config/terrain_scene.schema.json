@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "terrain-scene/v1",
+  "title": "Remote Rover Terrain Scene",
+  "type": "object",
+  "required": ["schema_version", "units", "coordinate_system", "bounds", "terrain", "roads", "objects", "spawn_points"],
+  "properties": {
+    "schema_version": { "const": "terrain-scene/v1" },
+    "units": {
+      "type": "object",
+      "required": ["linear", "angular"],
+      "properties": {
+        "linear": { "const": "m" },
+        "angular": { "const": "deg" }
+      }
+    },
+    "coordinate_system": {
+      "type": "object",
+      "required": ["up_axis", "x_axis", "y_axis", "origin"],
+      "properties": {
+        "up_axis": { "const": "Z" },
+        "x_axis": { "const": "east" },
+        "y_axis": { "const": "north" },
+        "origin": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number" }
+        },
+        "georeference": {
+          "type": "object",
+          "required": ["type", "origin_lat", "origin_lon", "origin_alt", "origin_local"],
+          "properties": {
+            "type": { "const": "local_tangent_plane" },
+            "origin_lat": { "type": "number" },
+            "origin_lon": { "type": "number" },
+            "origin_alt": { "type": "number" },
+            "origin_local": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "required": ["min", "max"]
+    },
+    "terrain": {
+      "type": "object",
+      "required": ["id", "kind", "size", "tile_count", "heightfield"],
+      "properties": {
+        "kind": { "const": "heightfield" },
+        "heightfield": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "number" }
+          }
+        }
+      }
+    },
+    "roads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "geometry", "centerline"]
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "pose", "geometry"],
+        "properties": {
+          "pose": {
+            "type": "object",
+            "required": ["position", "rotation_euler_deg"]
+          }
+        }
+      }
+    },
+    "spawn_points": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "pose"]
+      }
+    }
+  }
+}

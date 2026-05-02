@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     from gcs_server.config import AppConfig
@@ -18,6 +19,16 @@ except ModuleNotFoundError:
     from state import LocalStateBackend
     from telemetry import normalize_telemetry
     from ws import WebSocketManager
+
+
+GCS_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_replay_db_path(path: object) -> Path:
+    db_path = Path(str(path))
+    if db_path.is_absolute():
+        return db_path
+    return GCS_DIR / db_path
 
 
 @dataclass(slots=True)
@@ -39,7 +50,7 @@ class AppRuntime:
 
 async def build_runtime(config: AppConfig) -> AppRuntime:
     replay_store = ReplayStore(
-        db_path=config.logging["replay_db_path"],
+        db_path=_resolve_replay_db_path(config.logging["replay_db_path"]),
         backend_type=str(config.simulation["backend"]),
         backend_version=str(config.simulation.get("backend_version", "dev")),
         source_node_id=str(config.mqtt.get("client_id") or "gcs-web"),
