@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from gcs_server.config import AppConfig
+    from gcs_server.ai.secret_store import SecretStore
+    from gcs_server.ai.session_store import AISessionStore
+    from gcs_server.config import AppConfig, ROOT_DIR
     from gcs_server.control import ControlService
     from gcs_server.mqtt_service import MQTTRuntime
     from gcs_server.replay_store import ReplayStore
@@ -12,7 +15,9 @@ try:
     from gcs_server.telemetry import normalize_telemetry
     from gcs_server.ws import WebSocketManager
 except ModuleNotFoundError:
-    from config import AppConfig
+    from ai.secret_store import SecretStore
+    from ai.session_store import AISessionStore
+    from config import AppConfig, ROOT_DIR
     from control import ControlService
     from mqtt_service import MQTTRuntime
     from replay_store import ReplayStore
@@ -22,6 +27,7 @@ except ModuleNotFoundError:
 
 
 GCS_DIR = Path(__file__).resolve().parent
+RUNTIME_DIR = ROOT_DIR / ".runtime"
 
 
 def _resolve_replay_db_path(path: object) -> Path:
@@ -29,6 +35,13 @@ def _resolve_replay_db_path(path: object) -> Path:
     if db_path.is_absolute():
         return db_path
     return GCS_DIR / db_path
+
+
+def _ai_worker_count(value: object) -> int:
+    try:
+        return max(1, min(16, int(value)))
+    except (TypeError, ValueError):
+        return 4
 
 
 @dataclass(slots=True)
@@ -39,6 +52,9 @@ class AppRuntime:
     mqtt_runtime: MQTTRuntime
     control_service: ControlService
     replay_store: ReplayStore
+    ai_store: AISessionStore
+    secret_store: SecretStore
+    ai_executor: ThreadPoolExecutor
 
     async def reconfigure_mqtt(self, mqtt_config: dict[str, object]) -> None:
         self.config.raw["mqtt"] = dict(mqtt_config)
@@ -58,6 +74,16 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     )
     if config.logging.get("auto_start_session", True):
         replay_store.ensure_session()
+    ai_store = AISessionStore(
+        db_path=_resolve_replay_db_path(config.logging.get("ai_sessions_db_path", "data/gcs_ai_sessions.sqlite3")),
+    )
+    secret_store = SecretStore(
+        db_path=RUNTIME_DIR / "secrets" / "llm_secrets.sqlite3",
+    )
+    ai_executor = ThreadPoolExecutor(
+        max_workers=_ai_worker_count(config.gcs.get("ai_worker_threads", 4)),
+        thread_name_prefix="gcs-ai-llm",
+    )
     state_store = LocalStateBackend(
         telemetry_stale_ms=int(config.gcs["telemetry_stale_ms"]),
     )
@@ -88,4 +114,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         mqtt_runtime=mqtt_runtime,
         control_service=control_service,
         replay_store=replay_store,
+        ai_store=ai_store,
+        secret_store=secret_store,
+        ai_executor=ai_executor,
     )

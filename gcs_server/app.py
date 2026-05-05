@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,10 +18,12 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 try:
+    from gcs_server.ai.chat_service import AIChatService
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
+    from ai.chat_service import AIChatService
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
     from scene_map import get_scene_map_payload
@@ -44,6 +48,7 @@ PROVIDER_TYPES = {
 }
 
 MODEL_CATEGORIES = {"chat", "reasoning", "planner", "reporting", "embeddings", "vision", "tool_calling"}
+SECRET_REF_PREFIX = "secret://"
 
 ROUTING_PURPOSES = {
     "general_chat": "General Chat",
@@ -68,6 +73,26 @@ def _sanitize_secret_ref(value: Any) -> str:
     return secret_ref
 
 
+def _sanitize_stored_secret_ref(value: Any) -> str:
+    secret_ref = str(value or "").strip()
+    if not secret_ref.startswith(SECRET_REF_PREFIX):
+        return ""
+    return secret_ref
+
+
+def _default_provider_secret_ref(provider_id: str) -> str:
+    return f"{SECRET_REF_PREFIX}provider-{provider_id}"
+
+
+def _redact_secret_text(value: Any) -> str:
+    return re.sub(
+        r"\b([A-Za-z_][A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)=([^\s,;]+)",
+        r"\1=********",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
@@ -82,6 +107,7 @@ async def lifespan(app: FastAPI):
             runtime.replay_store.finish_session(runtime.replay_store.current_session_id, reason="runtime_shutdown")
         await runtime.control_service.stop()
         await runtime.mqtt_runtime.stop()
+        runtime.ai_executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)
@@ -92,7 +118,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def add_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/static/"):
+    if path == "/" or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/ai") or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -149,16 +175,35 @@ def _load_existing_json_dict(path: Path) -> dict[str, Any]:
     return data
 
 
-def _provider_public(provider: dict[str, Any]) -> dict[str, Any]:
+def _provider_public(provider: dict[str, Any], runtime: AppRuntime | None = None) -> dict[str, Any]:
     out = dict(provider)
-    out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
-    if out.get("secret_value"):
-        out["secret_value"] = "********"
+    auth_mode = str(out.get("auth_mode", "env_var")).strip()
+    if auth_mode == "stored_secret":
+        out["secret_ref"] = _sanitize_stored_secret_ref(out.get("secret_ref", ""))
+        out["has_secret"] = bool(
+            runtime
+            and out["secret_ref"]
+            and runtime.secret_store.has_secret(out["secret_ref"])
+        )
+    else:
+        out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
+        out["has_secret"] = False
+    out.pop("secret_value", None)
+    last_check = out.get("last_check")
+    if isinstance(last_check, dict):
+        redacted_check = dict(last_check)
+        if "message" in redacted_check:
+            redacted_check["message"] = _redact_secret_text(redacted_check["message"])
+        out["last_check"] = redacted_check
     return out
 
 
 def _provider_export(provider: dict[str, Any]) -> dict[str, Any]:
-    out = _provider_public(provider)
+    out = dict(provider)
+    out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
+    if str(out.get("auth_mode", "")).strip() == "stored_secret":
+        out["secret_ref"] = ""
+    out["has_secret"] = False
     out.pop("last_check", None)
     out.pop("secret_value", None)
     return out
@@ -185,12 +230,12 @@ def _normalize_provider(payload: dict[str, Any], existing: dict[str, Any] | None
         raise HTTPException(status_code=400, detail="display_name is required")
 
     auth_mode = str(payload.get("auth_mode", current.get("auth_mode", "env_var"))).strip()
-    if auth_mode not in {"env_var", "none"}:
-        raise HTTPException(status_code=400, detail="auth_mode must be env_var or none")
+    if auth_mode not in {"env_var", "stored_secret", "none"}:
+        raise HTTPException(status_code=400, detail="auth_mode must be env_var, stored_secret, or none")
 
     base_url = str(payload.get("base_url", current.get("base_url", ""))).strip()
     model_id = str(payload.get("model_id", current.get("model_id", ""))).strip()
-    if provider_type != "ollama" and not model_id:
+    if not model_id:
         raise HTTPException(status_code=400, detail="model_id is required")
 
     provider_id = str(current.get("id") or payload.get("id") or f"provider-{uuid.uuid4().hex[:12]}").strip()
@@ -208,6 +253,12 @@ def _normalize_provider(payload: dict[str, Any], existing: dict[str, Any] | None
     }
     if auth_mode == "env_var" and not normalized["secret_ref"]:
         raise HTTPException(status_code=400, detail="secret_ref is required for env_var auth")
+    if auth_mode == "stored_secret":
+        normalized["secret_ref"] = _sanitize_stored_secret_ref(payload.get("secret_ref", current.get("secret_ref", "")))
+        if not normalized["secret_ref"]:
+            normalized["secret_ref"] = _default_provider_secret_ref(provider_id)
+    if auth_mode == "none":
+        normalized["secret_ref"] = ""
     return normalized
 
 
@@ -240,14 +291,28 @@ def _http_json_probe(url: str, secret: str | None = None) -> tuple[bool, str]:
         return False, "request timed out"
 
 
-def _check_provider(provider: dict[str, Any]) -> dict[str, Any]:
-    if provider.get("auth_mode") == "env_var":
+def _check_provider(runtime: AppRuntime, provider: dict[str, Any], secret_override: str | None = None) -> dict[str, Any]:
+    auth_mode = str(provider.get("auth_mode", "")).strip()
+    if auth_mode == "env_var":
         secret_ref = str(provider.get("secret_ref", "")).strip()
         if not secret_ref:
             return {"status": "missing_key", "ok": False, "message": "missing environment variable name"}
         secret = os.environ.get(secret_ref)
         if not secret:
             return {"status": "missing_key", "ok": False, "message": f"environment variable {secret_ref} is not set"}
+    elif auth_mode == "stored_secret":
+        if secret_override is not None:
+            secret = secret_override
+        else:
+            secret_ref = _sanitize_stored_secret_ref(provider.get("secret_ref", ""))
+            if not secret_ref:
+                return {"status": "missing_key", "ok": False, "message": "stored secret reference is missing"}
+            try:
+                secret = runtime.secret_store.get_secret(secret_ref)
+            except KeyError:
+                return {"status": "missing_key", "ok": False, "message": "stored API key is not set"}
+        if not secret:
+            return {"status": "missing_key", "ok": False, "message": "stored API key is empty"}
     else:
         secret = None
 
@@ -399,6 +464,11 @@ async def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings.html")
 
 
+@app.get("/ai")
+async def ai_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "ai.html")
+
+
 @app.get("/api/health")
 async def health(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
@@ -427,7 +497,7 @@ async def get_llm_providers(request: Request) -> dict[str, Any]:
     if not isinstance(providers, list):
         runtime.config.raw["llm_providers"] = []
         providers = runtime.config.raw["llm_providers"]
-    return {"providers": [_provider_public(provider) for provider in providers if isinstance(provider, dict)]}
+    return {"providers": [_provider_public(provider, runtime) for provider in providers if isinstance(provider, dict)]}
 
 
 @app.post("/api/llm-providers")
@@ -437,13 +507,18 @@ async def create_llm_provider(request: Request) -> JSONResponse:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="provider payload must be an object")
     provider = _normalize_provider(payload)
+    secret_value = str(payload.get("secret_value", "")).strip()
+    if provider.get("auth_mode") == "stored_secret":
+        if not secret_value:
+            raise HTTPException(status_code=400, detail="secret_value is required for stored_secret auth")
+        runtime.secret_store.set_secret(str(provider.get("secret_ref", "")), secret_value)
     providers = runtime.config.raw.setdefault("llm_providers", [])
     if not isinstance(providers, list):
         runtime.config.raw["llm_providers"] = []
         providers = runtime.config.raw["llm_providers"]
     providers.append(provider)
     save_config(runtime.config)
-    return JSONResponse({"ok": True, "provider": _provider_public(provider)})
+    return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
 
 
 @app.put("/api/llm-providers/{provider_id}")
@@ -455,31 +530,77 @@ async def update_llm_provider(provider_id: str, request: Request) -> JSONRespons
     index, current = _find_provider(runtime, provider_id)
     provider = _normalize_provider(payload, current)
     provider["id"] = provider_id
+    previous_auth_mode = str(current.get("auth_mode", "")).strip()
+    previous_secret_ref = str(current.get("secret_ref", "")).strip()
+    secret_value = str(payload.get("secret_value", "")).strip()
+    if provider.get("auth_mode") == "stored_secret":
+        if secret_value:
+            runtime.secret_store.set_secret(str(provider.get("secret_ref", "")), secret_value)
+        elif not runtime.secret_store.has_secret(str(provider.get("secret_ref", ""))):
+            raise HTTPException(status_code=400, detail="secret_value is required for stored_secret auth")
+    if previous_auth_mode == "stored_secret" and provider.get("auth_mode") != "stored_secret" and previous_secret_ref:
+        runtime.secret_store.delete_secret(previous_secret_ref)
     runtime.config.raw["llm_providers"][index] = provider
     save_config(runtime.config)
-    return JSONResponse({"ok": True, "provider": _provider_public(provider)})
+    return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
+
+
+@app.delete("/api/llm-providers/{provider_id}")
+async def delete_llm_provider(provider_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    index, provider = _find_provider(runtime, provider_id)
+    del runtime.config.raw["llm_providers"][index]
+    if str(provider.get("auth_mode", "")).strip() == "stored_secret":
+        runtime.secret_store.delete_secret(str(provider.get("secret_ref", "")).strip())
+
+    routing = runtime.config.raw.get("model_routing")
+    if isinstance(routing, dict):
+        for rule in routing.values():
+            if not isinstance(rule, dict):
+                continue
+            if rule.get("primary_provider_id") == provider_id:
+                rule["primary_provider_id"] = ""
+            fallback_ids = rule.get("fallback_provider_ids")
+            if isinstance(fallback_ids, list):
+                rule["fallback_provider_ids"] = [item for item in fallback_ids if item != provider_id]
+
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "deleted_provider_id": provider_id, "provider": _provider_public(provider, runtime)})
 
 
 @app.post("/api/llm-providers/{provider_id}/check")
 async def check_llm_provider(provider_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
     index, provider = _find_provider(runtime, provider_id)
-    check = _check_provider(provider)
+    check = _check_provider(runtime, provider)
     provider["last_check"] = check
     runtime.config.raw["llm_providers"][index] = provider
     save_config(runtime.config)
-    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider), "check": check})
+    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider, runtime), "check": check})
 
 
 @app.post("/api/llm-providers/check-draft")
 async def check_llm_provider_draft(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="provider payload must be an object")
     provider = _normalize_provider(payload)
-    check = _check_provider(provider)
+    secret_value = str(payload.get("secret_value", "")).strip()
+    draft_secret_override = None
+    if provider.get("auth_mode") == "stored_secret":
+        if not secret_value:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "provider": _provider_public(provider, runtime),
+                    "check": {"status": "missing_key", "ok": False, "message": "stored API key is required for draft check"},
+                }
+            )
+        draft_secret_override = secret_value
+    check = _check_provider(runtime, provider, secret_override=draft_secret_override)
     provider["last_check"] = check
-    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider), "check": check})
+    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider, runtime), "check": check})
 
 
 @app.get("/api/model-routing")
@@ -516,7 +637,7 @@ async def get_llm_settings(request: Request) -> dict[str, Any]:
         routing = _default_routing(providers)
         runtime.config.raw["model_routing"] = routing
     return {
-        "providers": [_provider_public(provider) for provider in providers],
+        "providers": [_provider_public(provider, runtime) for provider in providers],
         "purposes": ROUTING_PURPOSES,
         "routing": routing,
     }
@@ -540,9 +661,222 @@ async def set_llm_settings(request: Request) -> JSONResponse:
     save_config(runtime.config)
     return JSONResponse({
         "ok": True,
-        "providers": [_provider_public(provider) for provider in providers],
+        "providers": [_provider_public(provider, runtime) for provider in providers],
         "routing": runtime.config.raw["model_routing"],
     })
+
+
+def _public_ai_session(session: dict[str, Any], include_messages: bool = False) -> dict[str, Any]:
+    out = dict(session)
+    if not include_messages:
+        out.pop("messages", None)
+    return out
+
+
+def _ai_chat_service(runtime: AppRuntime) -> AIChatService:
+    return AIChatService(runtime.ai_store, secret_resolver=runtime.secret_store.get_secret)
+
+
+async def _run_ai_call(runtime: AppRuntime, func, *args) -> Any:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(runtime.ai_executor, func, *args)
+
+
+def _llm_provider_http_exception(exc: Exception) -> HTTPException | None:
+    try:
+        import httpx
+    except ImportError:
+        httpx = None
+
+    if httpx is not None:
+        if isinstance(exc, httpx.TimeoutException):
+            return HTTPException(status_code=504, detail="LLM provider request timed out.")
+        if isinstance(exc, httpx.ConnectError):
+            return HTTPException(status_code=503, detail="Could not connect to the LLM provider.")
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            if status_code == 404:
+                return HTTPException(status_code=400, detail="LLM provider model or endpoint was not found. Check the model ID and base URL.")
+            if status_code == 429:
+                return HTTPException(status_code=429, detail="LLM provider rate limit or quota was reached.")
+            return HTTPException(status_code=502, detail=f"LLM provider request failed with HTTP {status_code}.")
+
+    try:
+        import ollama
+    except ImportError:
+        ollama = None
+
+    if ollama is not None:
+        response_error = getattr(ollama, "ResponseError", None)
+        if response_error and isinstance(exc, response_error):
+            status_code = int(getattr(exc, "status_code", 0) or 0)
+            message = str(getattr(exc, "error", "") or exc).strip() or "Ollama request failed."
+            if status_code == 404:
+                return HTTPException(status_code=400, detail=f"Ollama model was not found. Pull the model or check model_id. {message}")
+            return HTTPException(status_code=502, detail=message)
+
+    try:
+        import openai
+    except ImportError:
+        return None
+
+    authentication_error = getattr(openai, "AuthenticationError", None)
+    permission_denied_error = getattr(openai, "PermissionDeniedError", None)
+    not_found_error = getattr(openai, "NotFoundError", None)
+    bad_request_error = getattr(openai, "BadRequestError", None)
+    rate_limit_error = getattr(openai, "RateLimitError", None)
+    timeout_error = getattr(openai, "APITimeoutError", None)
+    connection_error = getattr(openai, "APIConnectionError", None)
+    status_error = getattr(openai, "APIStatusError", None)
+
+    if authentication_error and isinstance(exc, authentication_error):
+        return HTTPException(
+            status_code=400,
+            detail="LLM provider authentication failed. Check the configured API key.",
+        )
+    if permission_denied_error and isinstance(exc, permission_denied_error):
+        return HTTPException(
+            status_code=400,
+            detail="LLM provider permission denied. Check API key access for this model.",
+        )
+    if not_found_error and isinstance(exc, not_found_error):
+        return HTTPException(
+            status_code=400,
+            detail="LLM provider model or endpoint was not found. Check the model ID and base URL.",
+        )
+    if bad_request_error and isinstance(exc, bad_request_error):
+        return HTTPException(
+            status_code=400,
+            detail=_llm_provider_error_detail(exc, "LLM provider rejected the request."),
+        )
+    if rate_limit_error and isinstance(exc, rate_limit_error):
+        return HTTPException(status_code=429, detail="LLM provider rate limit or quota was reached.")
+    if timeout_error and isinstance(exc, timeout_error):
+        return HTTPException(status_code=504, detail="LLM provider request timed out.")
+    if connection_error and isinstance(exc, connection_error):
+        return HTTPException(status_code=503, detail="Could not connect to the LLM provider.")
+    if status_error and isinstance(exc, status_error):
+        return HTTPException(
+            status_code=502,
+            detail=_llm_provider_error_detail(exc, "LLM provider request failed."),
+        )
+    return None
+
+
+def _llm_provider_error_detail(exc: Exception, fallback: str) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        for key in ("detail", "message", "error"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict) and isinstance(value.get("message"), str):
+                return value["message"].strip()
+    return fallback
+
+
+@app.get("/api/ai/sessions")
+async def list_ai_sessions(request: Request, include_archived: bool = False, limit: int = 100) -> dict[str, Any]:
+    runtime = _runtime(request)
+    sessions = runtime.ai_store.list_sessions(limit=limit, include_archived=include_archived)
+    return {"sessions": [_public_ai_session(session) for session in sessions]}
+
+
+@app.post("/api/ai/sessions")
+async def create_ai_session(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="session payload must be an object")
+    session = runtime.ai_store.create_session(
+        title=str(payload.get("title", "New chat")),
+        mode=str(payload.get("mode", "general_chat")),
+        provider_id=str(payload.get("provider_id", "")),
+    )
+    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+
+
+@app.get("/api/ai/sessions/{session_id}")
+async def get_ai_session(session_id: str, request: Request, include_archived: bool = False) -> dict[str, Any]:
+    runtime = _runtime(request)
+    session = runtime.ai_store.get_session(session_id, include_messages=True)
+    if session is None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+    if session.get("archived_at") is not None and not include_archived:
+        raise HTTPException(status_code=404, detail="AI session not found")
+    return {"session": _public_ai_session(session, include_messages=True)}
+
+
+@app.patch("/api/ai/sessions/{session_id}")
+async def update_ai_session(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="session payload must be an object")
+    session = runtime.ai_store.update_session(
+        session_id,
+        title=str(payload["title"]) if "title" in payload else None,
+        provider_id=str(payload["provider_id"]) if "provider_id" in payload else None,
+        mode=str(payload["mode"]) if "mode" in payload else None,
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+
+
+@app.delete("/api/ai/sessions/{session_id}")
+async def archive_ai_session(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    if not runtime.ai_store.archive_session(session_id):
+        raise HTTPException(status_code=404, detail="AI session not found")
+    return JSONResponse({"ok": True, "archived_session_id": session_id})
+
+
+@app.post("/api/ai/sessions/{session_id}/restore")
+async def restore_ai_session(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    if not runtime.ai_store.restore_session(session_id):
+        raise HTTPException(status_code=404, detail="AI session not found")
+    session = runtime.ai_store.get_session(session_id, include_messages=False)
+    return JSONResponse({"ok": True, "session": _public_ai_session(session or {})})
+
+
+@app.post("/api/ai/sessions/{session_id}/messages")
+async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="message payload must be an object")
+    content = str(payload.get("content", ""))
+    try:
+        result = await _run_ai_call(runtime, _ai_chat_service(runtime).send_message, runtime.config, session_id, content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        provider_error = _llm_provider_http_exception(exc)
+        if provider_error is not None:
+            raise provider_error from exc
+        raise
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/api/ai/sessions/{session_id}/retry")
+async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    try:
+        result = await _run_ai_call(runtime, _ai_chat_service(runtime).retry_last_response, runtime.config, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        provider_error = _llm_provider_http_exception(exc)
+        if provider_error is not None:
+            raise provider_error from exc
+        raise
+    return JSONResponse({"ok": True, **result})
 
 
 @app.post("/api/settings/export")

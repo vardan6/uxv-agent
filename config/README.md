@@ -41,6 +41,32 @@ Before every push, run a quick search for sensitive endpoint values and confirm 
 - GCS reads and persists shared runtime settings in `common.local.json`, falling back to `common.example.json`
 - Simulator and GCS read terrain/map/static-object data from `terrain_scene.v1.json`
 - Simulator GPS telemetry is artificial and derived from `terrain_scene.v1.json` `coordinate_system.georeference`; it is not read from the laptop/browser location
+- GCS stores LLM provider records under `llm_providers` and purpose-based model routing under `model_routing`
+- GCS settings JSON export/import can operate on selected sections without clearing missing sections from older files
+
+## LLM Provider Secrets
+
+LLM provider settings should use `secret_ref` values that name environment variables.
+Tracked config and exported JSON intended for commit must not contain raw API key values.
+
+Example:
+
+```json
+{
+  "llm_providers": [
+    {
+      "display_name": "Local Ollama",
+      "provider_type": "ollama",
+      "auth_mode": "none",
+      "secret_ref": "",
+      "base_url": "http://localhost:11434",
+      "model_id": "llama3.1",
+      "capabilities": ["chat"],
+      "enabled": true
+    }
+  ]
+}
+```
 
 ## Terrain Scene Regeneration
 

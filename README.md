@@ -6,6 +6,8 @@ Remote Rover is a rover-control platform built around two working applications:
 
 It also contains `rover-sim-next/`, the scaffold for the planned ROS 2 + Gazebo successor simulator.
 
+The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
+
 The system already supports the full working control loop:
 - browser control through the GCS
 - MQTT control delivery to the simulator
@@ -76,4 +78,4 @@ For cross-platform launcher details, shared config behavior, and telemetry polic
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is to evolve this into a rover that can be supervised and controlled through AI agents: an operator should be able to communicate with the rover through prompts, monitor telemetry and video in the dashboard, submit higher-level tasks, and let AI-assisted workflows interpret, plan, report, and eventually control rover actions through approved safety boundaries. The next AI feature-planning track is adding LLM provider settings, basic LLM chat, AI sessions, supervised rover-intent parsing, and later LangGraph/RAG-backed mission planning. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is AI-assisted remote robot operation: an operator prompts by text or voice, external AI agents generate a mission using map and robot context, the mission is passed to an autopilot/control layer, and AI agents monitor execution in parallel. If new obstacles, map mismatches, sensor findings, or other rule-triggering events make the mission unsafe or impossible, the agents either adjust within approved policy or report to a human for a revised prompt or decision. The first GCS-side AI foundation now exists through LLM provider settings, provider checks, model routing, and selected-section JSON settings import/export. The next AI implementation track is provider-backed chat, AI sessions, mission generation, supervised rover-intent parsing, and later LangGraph/RAG-backed mission monitoring and planning. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.

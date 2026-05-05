@@ -40,6 +40,7 @@
     "state_backend": "memory",
     "controller_lock_backend": "memory",
     "telemetry_stale_ms": 2000,
+    "ai_worker_threads": 4,
     "title": "Remote Rover GCS"
   },
   "simulation": {
@@ -49,6 +50,7 @@
   },
   "logging": {
     "replay_db_path": "data/gcs_replay.sqlite3",
+    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
     "auto_start_session": true
   },
   "map": {
@@ -56,5 +58,7 @@
     "default_center_lat": 40.1772,
     "default_center_lon": 44.5035,
     "default_zoom": 13
-  }
+  },
+  "llm_providers": [],
+  "model_routing": {}
 }

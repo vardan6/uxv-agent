@@ -21,3 +21,4 @@ imgui.ini
 config/common.local.json
 
 gcs_server/data/
+.runtime/

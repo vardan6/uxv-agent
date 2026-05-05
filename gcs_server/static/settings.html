@@ -249,12 +249,17 @@
                   <span>Auth Mode</span>
                   <select id="llm-auth-mode">
                     <option value="env_var">Environment variable</option>
+                    <option value="stored_secret">Store API key in this GCS instance</option>
                     <option value="none">No auth</option>
                   </select>
                 </label>
                 <label>
-                  <span>Secret / Env Var</span>
+                  <span id="llm-secret-ref-label">Secret / Env Var</span>
                   <input id="llm-secret-ref" type="text" placeholder="OPENROUTER_API_KEY">
+                </label>
+                <label id="llm-secret-value-row">
+                  <span>API Key Value</span>
+                  <input id="llm-secret-value" type="password" autocomplete="off" placeholder="Paste API key">
                 </label>
                 <label>
                   <span>Base URL</span>
@@ -291,6 +296,9 @@
                 <span id="llm-registry-pill" class="pill">Loading</span>
               </div>
               <p class="settings-note">Check verifies auth, base URL, and the provider model endpoint. It does not run chat prompts or rover intent parsing.</p>
+              <div class="form-actions form-actions-inline">
+                <button id="llm-add-example-providers" type="button" class="ghost">Add Missing Example Providers</button>
+              </div>
               <div id="llm-provider-list" class="llm-provider-list" aria-live="polite"></div>
             </article>
 

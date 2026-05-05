@@ -96,6 +96,7 @@
         <nav class="app-nav" aria-label="Primary">
           <a class="app-nav-link${page === 'dashboard' ? ' active' : ''}" href="/"${page === 'dashboard' ? ' aria-current="page"' : ''}>Dashboard</a>
           <a class="app-nav-link${page === 'replay' ? ' active' : ''}" href="/replay"${page === 'replay' ? ' aria-current="page"' : ''}>Replay</a>
+          <a class="app-nav-link${page === 'ai' ? ' active' : ''}" href="/ai"${page === 'ai' ? ' aria-current="page"' : ''}>AI Chat</a>
           <a class="app-nav-link${page === 'settings' ? ' active' : ''}" href="/settings"${page === 'settings' ? ' aria-current="page"' : ''}>Settings</a>
         </nav>
       </div>

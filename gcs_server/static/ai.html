@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>AI Chat | Remote Rover GCS</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body data-page="ai">
+    <main class="app-shell" data-app-shell>
+      <section data-page-intro></section>
+
+      <section class="ai-chat-shell">
+        <aside class="panel ai-sidebar">
+          <div class="ai-sidebar-head">
+            <div>
+              <p class="section-kicker">Sessions</p>
+              <h2>Chats</h2>
+            </div>
+            <div class="ai-sidebar-head-actions">
+              <button id="ai-show-archived" class="ghost" type="button" title="Show archived chats" aria-pressed="false">Archived</button>
+              <button id="ai-new-session" type="button" title="New chat" aria-label="New chat">+</button>
+            </div>
+          </div>
+          <input id="ai-session-search" type="search" placeholder="Search sessions" autocomplete="off">
+          <div id="ai-session-list" class="ai-session-list"></div>
+        </aside>
+
+        <button
+          id="ai-layout-resizer"
+          class="ai-layout-resizer"
+          type="button"
+          role="separator"
+          aria-label="Resize sessions panel"
+          aria-orientation="vertical"
+          aria-valuemin="240"
+          aria-valuemax="560"
+          aria-valuenow="340"
+          title="Drag to resize sessions panel"
+        ></button>
+
+        <section class="panel ai-chat-panel">
+          <div class="ai-chat-head">
+            <div>
+              <p class="section-kicker">General Chat</p>
+              <h2 id="ai-session-title">New chat</h2>
+            </div>
+            <div class="ai-chat-actions">
+              <select id="ai-provider-select" title="Chat provider"></select>
+              <button id="ai-rename-session" class="ghost" type="button">Rename</button>
+              <button id="ai-archive-session" class="ghost" type="button">Archive</button>
+            </div>
+          </div>
+
+          <div class="ai-provider-strip">
+            <span id="ai-provider-pill" class="pill">Provider: routing default</span>
+            <span id="ai-status-pill" class="pill warn">Idle</span>
+          </div>
+
+          <div id="ai-message-list" class="ai-message-list" aria-live="polite"></div>
+
+          <form id="ai-message-form" class="ai-composer">
+            <textarea id="ai-message-input" rows="3" placeholder="Ask the configured General Chat provider"></textarea>
+            <div class="ai-composer-actions">
+              <p id="ai-status" class="status-banner">Create or open a session to begin.</p>
+              <div class="inline-actions">
+                <button id="ai-retry-response" class="ghost" type="button" title="Retry the last model response">Retry response</button>
+                <button id="ai-send-message" type="submit">Send</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <button
+          id="ai-height-resizer"
+          class="ai-height-resizer"
+          type="button"
+          role="separator"
+          aria-label="Resize chat panels height"
+          aria-orientation="horizontal"
+          aria-valuemin="420"
+          aria-valuemax="1100"
+          aria-valuenow="680"
+          title="Drag to resize chat panels height"
+        ></button>
+      </section>
+    </main>
+
+    <script src="/static/common.js" defer></script>
+    <script src="/static/ai.js" defer></script>
+  </body>
+</html>
