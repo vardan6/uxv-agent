@@ -463,7 +463,7 @@ p {
   --replay-sidebar-width: 320px;
   display: grid;
   grid-template-columns: minmax(260px, var(--replay-sidebar-width)) 22px minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
   gap: 0;
 }
 
@@ -799,13 +799,13 @@ select:focus-visible {
 
 .map-overlay-controls {
   position: absolute;
-  top: 9px;
-  right: 9px;
+  top: 8px;
+  right: 8px;
   z-index: 740;
   display: grid;
   justify-items: end;
-  gap: 6px;
-  max-width: min(500px, calc(100% - 18px));
+  gap: 5px;
+  max-width: min(460px, calc(100% - 16px));
   pointer-events: none;
 }
 
@@ -814,7 +814,7 @@ select:focus-visible {
   color: #f8f5ec;
   background: rgba(24, 31, 28, 0.78);
   border: 1px solid rgba(248, 245, 236, 0.22);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(12px);
 }
@@ -822,15 +822,15 @@ select:focus-visible {
 .map-overlay-selects {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px;
+  gap: 5px;
+  padding: 5px;
 }
 
 .map-overlay-selects label {
   display: grid;
   grid-template-columns: auto auto minmax(116px, 1fr);
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   margin-bottom: 0;
   min-width: 0;
 }
@@ -839,50 +839,58 @@ select:focus-visible {
 .map-tool-button svg {
   display: inline-grid;
   place-items: center;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
 .map-tool-icon svg,
 .map-tool-button svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   fill: currentColor;
 }
 
 .map-tool-label {
   color: rgba(248, 245, 236, 0.78);
-  font-size: 0.64rem;
+  font-size: 0.58rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .map-overlay-selects select {
-  min-height: 26px;
-  min-width: 116px;
-  padding: 4px 24px 4px 7px;
+  min-height: 23px;
+  min-width: 106px;
+  padding: 3px 22px 3px 7px;
   color: #f8f5ec;
+  font-size: 0.68rem;
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(248, 245, 236, 0.22);
   box-shadow: none;
+}
+
+.map-overlay-selects select option {
+  color: #f8f5ec;
+  background: #24342d;
 }
 
 .map-fit-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: end;
-  gap: 5px;
-  padding: 6px;
+  gap: 4px;
+  padding: 5px;
 }
 
 .map-tool-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 27px;
-  padding: 5px 7px;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
   color: #f8f5ec;
   font-size: 0.7rem;
   font-weight: 800;
@@ -894,19 +902,6 @@ select:focus-visible {
 .map-tool-button:hover {
   background: rgba(255, 255, 255, 0.17);
   border-color: rgba(248, 245, 236, 0.34);
-}
-
-.map-mode-note {
-  pointer-events: auto;
-  justify-self: end;
-  max-width: min(430px, 100%);
-  padding: 5px 8px;
-  border-radius: 11px;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
-  font-size: 0.74rem;
-  line-height: 1.35;
 }
 
 .replay-map {
@@ -1011,6 +1006,45 @@ select:focus-visible {
     linear-gradient(135deg, #26312b, #565246);
 }
 
+.replay-map .leaflet-control-zoom {
+  margin-top: 8px;
+  margin-left: 8px;
+  border: 1px solid rgba(248, 245, 236, 0.18);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(24, 31, 28, 0.78);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+}
+
+.replay-map .leaflet-control-zoom a {
+  width: 26px;
+  height: 26px;
+  line-height: 24px;
+  color: #f8f5ec;
+  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+  border-bottom: 1px solid rgba(248, 245, 236, 0.16);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-shadow: none;
+}
+
+.replay-map .leaflet-control-zoom a:last-child {
+  border-bottom: 0;
+}
+
+.replay-map .leaflet-control-zoom a:hover,
+.replay-map .leaflet-control-zoom a:focus {
+  color: #f8f5ec;
+  background: rgba(255, 255, 255, 0.17);
+}
+
+.replay-map .leaflet-control-zoom a.leaflet-disabled {
+  color: rgba(248, 245, 236, 0.42);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .replay-terrain-canvas {
   pointer-events: none;
   z-index: 180;
@@ -1062,12 +1096,12 @@ select:focus-visible {
 .replay-sidebar {
   position: sticky;
   top: 104px;
-  align-self: start;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  height: clamp(480px, 68vh, 760px);
-  max-height: calc(100vh - 120px);
+  gap: 12px;
+  height: auto;
+  max-height: none;
   overflow: hidden;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
@@ -1080,6 +1114,7 @@ select:focus-visible {
 
 .replay-sidebar .session-list {
   min-height: 0;
+  gap: 8px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -1179,11 +1214,11 @@ select:focus-visible {
 .session-item {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-  padding: 12px;
-  border-radius: 16px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  border-radius: 10px;
   background: var(--button-secondary-gradient);
   border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 }
@@ -1197,7 +1232,7 @@ select:focus-visible {
   width: 100%;
   text-align: left;
   display: grid;
-  gap: 6px;
+  gap: 2px;
   justify-items: start;
   padding: 0;
   background: transparent;
@@ -1214,10 +1249,19 @@ select:focus-visible {
 }
 
 .session-delete {
-  min-width: 88px;
-  min-height: 38px;
-  padding: 8px 10px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
   align-self: center;
+  border-radius: 8px;
+}
+
+.session-delete svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
 
 .session-delete:disabled {
@@ -1226,15 +1270,25 @@ select:focus-visible {
   transform: none;
 }
 
-.session-item strong,
+.session-title,
 .event-row strong {
   display: block;
+  font-size: 0.84rem;
+  line-height: 1.18;
 }
 
-.session-item span,
+.session-select span,
 .event-row span {
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.session-id {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .record-tabs {
@@ -1259,41 +1313,59 @@ select:focus-visible {
 .replay-controls-panel {
   width: 100%;
   justify-self: stretch;
-  padding-top: 12px;
-  padding-bottom: 12px;
+  padding-top: 10px;
+  padding-bottom: 10px;
   padding-left: 16px;
   padding-right: 16px;
 }
 
 .transport-row {
   display: flex;
-  gap: 10px 12px;
-  align-items: end;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
-.replay-controls-panel .transport-row label {
+.transport-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.replay-controls-panel .speed-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 0;
-  min-width: 104px;
+  min-width: 170px;
 }
 
 .replay-controls-panel button,
 .replay-controls-panel select {
-  min-height: 36px;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  min-height: 32px;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
-.replay-controls-panel label {
-  gap: 4px;
+.replay-controls-panel button {
+  min-width: 76px;
+}
+
+.replay-controls-panel select {
+  min-width: 88px;
 }
 
 .replay-controls-panel .status-banner {
-  margin-top: 6px;
+  margin-top: 4px;
   margin-bottom: 0;
-  font-size: 0.9rem;
-  line-height: 1.35;
+  font-size: 0.84rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .replay-telemetry-panel .stats {
@@ -1308,7 +1380,7 @@ select:focus-visible {
 
 #timeline-scrubber {
   width: 100%;
-  margin: 0;
+  margin: 0 0 2px;
 }
 
 label {
@@ -1328,6 +1400,11 @@ select {
   color: var(--text);
   border-radius: 14px;
   border: 1px solid var(--line);
+}
+
+select option {
+  background: var(--panel-strong);
+  color: var(--text);
 }
 
 .checkbox-row {
@@ -1435,6 +1512,161 @@ body[data-page="settings"] .page-lede {
   max-width: 72ch;
 }
 
+.llm-settings-panel {
+  min-width: 0;
+}
+
+.llm-template-row,
+.llm-routing-row,
+.llm-fallback-editor-row,
+.llm-fallback-add-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.25fr) minmax(240px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.llm-template-row {
+  margin: 16px 0;
+}
+
+.llm-provider-list,
+.llm-routing-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.llm-provider-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(240px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel-strong) 62%, transparent);
+}
+
+.llm-provider-title {
+  display: grid;
+  gap: 6px;
+}
+
+.llm-provider-meta,
+.llm-fallback-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.llm-chip {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-strong) 60%, transparent);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.llm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.llm-routing-row {
+  grid-template-columns: minmax(170px, 0.25fr) minmax(240px, 0.38fr) minmax(280px, 1fr);
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+}
+
+.llm-routing-row:last-child {
+  border-bottom: 0;
+}
+
+.llm-routing-row.is-editing {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 36%, transparent);
+}
+
+.llm-fallback-editor {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.llm-fallback-editor-row,
+.llm-fallback-add-row {
+  grid-template-columns: 32px minmax(220px, 1fr) auto auto auto;
+}
+
+.llm-fallback-add-row {
+  grid-template-columns: 32px minmax(220px, 1fr) auto;
+}
+
+.json-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 14px 0 16px;
+}
+
+.json-scope-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.json-scope-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+}
+
+.json-scope-item strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.json-scope-item span span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.json-policy-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.json-policy-list code {
+  white-space: nowrap;
+}
+
+.json-source-fields {
+  margin-top: 12px;
+}
+
+.json-preview {
+  overflow: auto;
+  max-height: 420px;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1518,11 +1750,11 @@ code {
   }
 
   .map-fit-actions {
-    justify-content: stretch;
+    justify-content: end;
   }
 
   .map-tool-button {
-    flex: 1 1 128px;
+    flex: 0 0 30px;
     justify-content: center;
   }
 
@@ -1548,6 +1780,19 @@ code {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  .llm-template-row,
+  .llm-provider-row,
+  .llm-routing-row,
+  .llm-fallback-editor-row,
+  .llm-fallback-add-row,
+  .json-scope-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .llm-fallback-editor {
+    grid-column: 1;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1570,6 +1815,19 @@ code {
     align-items: stretch;
   }
 
+  .transport-row {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .transport-actions {
+    flex: 1 1 auto;
+  }
+
+  .replay-controls-panel .speed-control {
+    flex: 0 1 170px;
+  }
+
   .stats {
     grid-template-columns: 1fr;
   }
@@ -1579,11 +1837,11 @@ code {
   }
 
   .session-item {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 30px;
   }
 
   .session-delete {
-    width: 100%;
+    width: 30px;
   }
 
   .page-intro,

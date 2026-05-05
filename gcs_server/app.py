@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -22,6 +26,46 @@ except ModuleNotFoundError:
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+
+PROVIDER_TYPES = {
+    "openrouter",
+    "nvidia_nim",
+    "openai",
+    "anthropic",
+    "google_gemini",
+    "ollama",
+    "lm_studio",
+    "mistral",
+    "cohere",
+    "together",
+    "groq",
+    "huggingface",
+    "openai_compatible",
+}
+
+MODEL_CATEGORIES = {"chat", "reasoning", "planner", "reporting", "embeddings", "vision", "tool_calling"}
+
+ROUTING_PURPOSES = {
+    "general_chat": "General Chat",
+    "rover_intent_parser": "Rover Intent Parser",
+    "mission_planner": "Mission Planner",
+    "reporter": "Reporter",
+    "embeddings": "Embeddings",
+    "vision_object_description": "Vision / Object Description",
+}
+
+
+def _sanitize_secret_ref(value: Any) -> str:
+    secret_ref = str(value or "").strip()
+    if "=" in secret_ref:
+        secret_ref = secret_ref.split("=", 1)[0].strip()
+    if not secret_ref:
+        return ""
+    if not (secret_ref[0].isalpha() or secret_ref[0] == "_"):
+        return ""
+    if any(not (char.isalnum() or char == "_") for char in secret_ref):
+        return ""
+    return secret_ref
 
 
 @asynccontextmanager
@@ -105,9 +149,249 @@ def _load_existing_json_dict(path: Path) -> dict[str, Any]:
     return data
 
 
+def _provider_public(provider: dict[str, Any]) -> dict[str, Any]:
+    out = dict(provider)
+    out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
+    if out.get("secret_value"):
+        out["secret_value"] = "********"
+    return out
+
+
+def _provider_export(provider: dict[str, Any]) -> dict[str, Any]:
+    out = _provider_public(provider)
+    out.pop("last_check", None)
+    out.pop("secret_value", None)
+    return out
+
+
+def _normalize_capabilities(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace(";", ",").split(",")]
+    elif isinstance(value, list):
+        items = [str(part).strip() for part in value]
+    else:
+        items = []
+    return sorted({item for item in items if item})
+
+
+def _normalize_provider(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    current = existing or {}
+    provider_type = str(payload.get("provider_type", current.get("provider_type", "openai_compatible"))).strip()
+    if provider_type not in PROVIDER_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported provider_type")
+
+    display_name = str(payload.get("display_name", current.get("display_name", ""))).strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="display_name is required")
+
+    auth_mode = str(payload.get("auth_mode", current.get("auth_mode", "env_var"))).strip()
+    if auth_mode not in {"env_var", "none"}:
+        raise HTTPException(status_code=400, detail="auth_mode must be env_var or none")
+
+    base_url = str(payload.get("base_url", current.get("base_url", ""))).strip()
+    model_id = str(payload.get("model_id", current.get("model_id", ""))).strip()
+    if provider_type != "ollama" and not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+
+    provider_id = str(current.get("id") or payload.get("id") or f"provider-{uuid.uuid4().hex[:12]}").strip()
+    normalized = {
+        "id": provider_id,
+        "display_name": display_name,
+        "provider_type": provider_type,
+        "auth_mode": auth_mode,
+        "secret_ref": _sanitize_secret_ref(payload.get("secret_ref", current.get("secret_ref", ""))),
+        "base_url": base_url,
+        "model_id": model_id,
+        "capabilities": _normalize_capabilities(payload.get("capabilities", current.get("capabilities", []))),
+        "enabled": bool(payload.get("enabled", current.get("enabled", True))),
+        "last_check": current.get("last_check") or {"status": "not_tested"},
+    }
+    if auth_mode == "env_var" and not normalized["secret_ref"]:
+        raise HTTPException(status_code=400, detail="secret_ref is required for env_var auth")
+    return normalized
+
+
+def _find_provider(runtime: AppRuntime, provider_id: str) -> tuple[int, dict[str, Any]]:
+    providers = runtime.config.raw.setdefault("llm_providers", [])
+    if not isinstance(providers, list):
+        runtime.config.raw["llm_providers"] = []
+        providers = runtime.config.raw["llm_providers"]
+    for index, provider in enumerate(providers):
+        if isinstance(provider, dict) and provider.get("id") == provider_id:
+            return index, provider
+    raise HTTPException(status_code=404, detail="provider not found")
+
+
+def _http_json_probe(url: str, secret: str | None = None) -> tuple[bool, str]:
+    headers = {"Accept": "application/json"}
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    request = UrlRequest(url, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=8) as response:
+            if 200 <= response.status < 300:
+                return True, f"HTTP {response.status}"
+            return False, f"HTTP {response.status}"
+    except HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except URLError as exc:
+        return False, str(exc.reason)
+    except TimeoutError:
+        return False, "request timed out"
+
+
+def _check_provider(provider: dict[str, Any]) -> dict[str, Any]:
+    if provider.get("auth_mode") == "env_var":
+        secret_ref = str(provider.get("secret_ref", "")).strip()
+        if not secret_ref:
+            return {"status": "missing_key", "ok": False, "message": "missing environment variable name"}
+        secret = os.environ.get(secret_ref)
+        if not secret:
+            return {"status": "missing_key", "ok": False, "message": f"environment variable {secret_ref} is not set"}
+    else:
+        secret = None
+
+    provider_type = str(provider.get("provider_type", ""))
+    base_url = str(provider.get("base_url", "")).strip()
+    if provider_type == "ollama":
+        probe_url = urljoin(base_url.rstrip("/") + "/", "api/tags") if base_url else "http://localhost:11434/api/tags"
+    else:
+        if not base_url:
+            return {"status": "invalid", "ok": False, "message": "base_url is required"}
+        probe_url = urljoin(base_url.rstrip("/") + "/", "models")
+
+    ok, message = _http_json_probe(probe_url, secret)
+    return {
+        "status": "available" if ok else "unavailable",
+        "ok": ok,
+        "message": message,
+        "checked_url": probe_url,
+    }
+
+
+def _normalize_routing(payload: dict[str, Any], providers: list[dict[str, Any]]) -> dict[str, Any]:
+    provider_ids = {str(provider.get("id")) for provider in providers if isinstance(provider, dict)}
+    out: dict[str, Any] = {}
+    for purpose in ROUTING_PURPOSES:
+        raw_rule = payload.get(purpose, {})
+        if not isinstance(raw_rule, dict):
+            raise HTTPException(status_code=400, detail=f"{purpose} routing rule must be an object")
+        primary_id = str(raw_rule.get("primary_provider_id", "")).strip()
+        fallback_ids = [str(item).strip() for item in raw_rule.get("fallback_provider_ids", []) if str(item).strip()]
+        unknown = [item for item in [primary_id, *fallback_ids] if item and item not in provider_ids]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"unknown provider ids in {purpose}: {', '.join(unknown)}")
+        deduped_fallbacks: list[str] = []
+        for fallback_id in fallback_ids:
+            if fallback_id == primary_id or fallback_id in deduped_fallbacks:
+                continue
+            deduped_fallbacks.append(fallback_id)
+        out[purpose] = {
+            "primary_provider_id": primary_id,
+            "fallback_provider_ids": deduped_fallbacks,
+            "allow_runtime_override": bool(raw_rule.get("allow_runtime_override", True)),
+        }
+    return out
+
+
+def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
+    enabled_ids = [str(provider.get("id")) for provider in providers if isinstance(provider, dict) and provider.get("enabled", True)]
+    first = enabled_ids[0] if enabled_ids else ""
+    return {
+        purpose: {
+            "primary_provider_id": first,
+            "fallback_provider_ids": enabled_ids[1:3],
+            "allow_runtime_override": True,
+        }
+        for purpose in ROUTING_PURPOSES
+    }
+
+
+def _selected_sections(payload: dict[str, Any]) -> list[str]:
+    raw_sections = payload.get("sections", [])
+    if not isinstance(raw_sections, list):
+        raise HTTPException(status_code=400, detail="sections must be a list")
+    allowed = {"connectivity", "video", "appearance", "llm_providers", "model_routing"}
+    sections = []
+    for raw_section in raw_sections:
+        section = str(raw_section)
+        if section in allowed and section not in sections:
+            sections.append(section)
+    if not sections:
+        raise HTTPException(status_code=400, detail="at least one valid section is required")
+    return sections
+
+
+def _settings_export_payload(config, sections: list[str]) -> dict[str, Any]:
+    out: dict[str, Any] = {"schema_version": 1}
+    if "connectivity" in sections:
+        out["connectivity"] = _connectivity_payload(config)
+    if "video" in sections:
+        out["video"] = dict(config.video)
+    if "appearance" in sections:
+        out["appearance"] = dict(config.raw.get("appearance", {})) if isinstance(config.raw.get("appearance"), dict) else {}
+    if "llm_providers" in sections:
+        providers = config.raw.get("llm_providers", [])
+        out["llm_providers"] = [_provider_export(provider) for provider in providers if isinstance(provider, dict)]
+    if "model_routing" in sections:
+        out["model_routing"] = dict(config.raw.get("model_routing", {})) if isinstance(config.raw.get("model_routing"), dict) else {}
+    return out
+
+
+def _extract_section_payload(payload: dict[str, Any], section: str) -> Any:
+    if section == "connectivity":
+        if "connectivity" in payload and isinstance(payload["connectivity"], dict):
+            return payload["connectivity"]
+        if "mqtt" in payload:
+            return {"mqtt": payload.get("mqtt"), "simulation": payload.get("simulation", {})}
+        return None
+    return payload.get(section)
+
+
+def _apply_settings_sections(config, payload: dict[str, Any], sections: list[str]) -> list[str]:
+    applied: list[str] = []
+    if "connectivity" in sections:
+        connectivity = _extract_section_payload(payload, "connectivity")
+        if isinstance(connectivity, dict) and isinstance(connectivity.get("mqtt"), dict):
+            config.raw["mqtt"] = dict(connectivity["mqtt"])
+            simulation = connectivity.get("simulation", {})
+            if isinstance(simulation, dict):
+                config.raw.setdefault("simulation", {}).update(simulation)
+            applied.append("connectivity")
+    if "video" in sections:
+        video = _extract_section_payload(payload, "video")
+        if isinstance(video, dict):
+            config.raw["video"] = dict(video)
+            applied.append("video")
+    if "appearance" in sections:
+        appearance = _extract_section_payload(payload, "appearance")
+        if isinstance(appearance, dict):
+            config.raw["appearance"] = dict(appearance)
+            applied.append("appearance")
+    if "llm_providers" in sections:
+        providers_payload = _extract_section_payload(payload, "llm_providers")
+        if isinstance(providers_payload, list):
+            config.raw["llm_providers"] = [
+                _normalize_provider(provider) for provider in providers_payload if isinstance(provider, dict)
+            ]
+            applied.append("llm_providers")
+    if "model_routing" in sections:
+        routing_payload = _extract_section_payload(payload, "model_routing")
+        if isinstance(routing_payload, dict):
+            providers = [provider for provider in config.raw.get("llm_providers", []) if isinstance(provider, dict)]
+            config.raw["model_routing"] = _normalize_routing(routing_payload, providers)
+            applied.append("model_routing")
+    return applied
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
 
 
 @app.get("/settings")
@@ -134,6 +418,220 @@ async def snapshot(request: Request) -> dict[str, Any]:
 async def get_config(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     return runtime.config.raw
+
+
+@app.get("/api/llm-providers")
+async def get_llm_providers(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    providers = runtime.config.raw.setdefault("llm_providers", [])
+    if not isinstance(providers, list):
+        runtime.config.raw["llm_providers"] = []
+        providers = runtime.config.raw["llm_providers"]
+    return {"providers": [_provider_public(provider) for provider in providers if isinstance(provider, dict)]}
+
+
+@app.post("/api/llm-providers")
+async def create_llm_provider(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="provider payload must be an object")
+    provider = _normalize_provider(payload)
+    providers = runtime.config.raw.setdefault("llm_providers", [])
+    if not isinstance(providers, list):
+        runtime.config.raw["llm_providers"] = []
+        providers = runtime.config.raw["llm_providers"]
+    providers.append(provider)
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "provider": _provider_public(provider)})
+
+
+@app.put("/api/llm-providers/{provider_id}")
+async def update_llm_provider(provider_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="provider payload must be an object")
+    index, current = _find_provider(runtime, provider_id)
+    provider = _normalize_provider(payload, current)
+    provider["id"] = provider_id
+    runtime.config.raw["llm_providers"][index] = provider
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "provider": _provider_public(provider)})
+
+
+@app.post("/api/llm-providers/{provider_id}/check")
+async def check_llm_provider(provider_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    index, provider = _find_provider(runtime, provider_id)
+    check = _check_provider(provider)
+    provider["last_check"] = check
+    runtime.config.raw["llm_providers"][index] = provider
+    save_config(runtime.config)
+    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider), "check": check})
+
+
+@app.post("/api/llm-providers/check-draft")
+async def check_llm_provider_draft(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="provider payload must be an object")
+    provider = _normalize_provider(payload)
+    check = _check_provider(provider)
+    provider["last_check"] = check
+    return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider), "check": check})
+
+
+@app.get("/api/model-routing")
+async def get_model_routing(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
+    current = runtime.config.raw.setdefault("model_routing", {})
+    if not isinstance(current, dict) or not current:
+        current = _default_routing(providers)
+        runtime.config.raw["model_routing"] = current
+    return {"purposes": ROUTING_PURPOSES, "routing": current}
+
+
+@app.put("/api/model-routing")
+async def set_model_routing(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    routing_payload = payload.get("routing") if isinstance(payload, dict) else None
+    if not isinstance(routing_payload, dict):
+        raise HTTPException(status_code=400, detail="routing object is required")
+    providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
+    routing = _normalize_routing(routing_payload, providers)
+    runtime.config.raw["model_routing"] = routing
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "purposes": ROUTING_PURPOSES, "routing": routing})
+
+
+@app.get("/api/llm-settings")
+async def get_llm_settings(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
+    routing = runtime.config.raw.setdefault("model_routing", {})
+    if not isinstance(routing, dict) or not routing:
+        routing = _default_routing(providers)
+        runtime.config.raw["model_routing"] = routing
+    return {
+        "providers": [_provider_public(provider) for provider in providers],
+        "purposes": ROUTING_PURPOSES,
+        "routing": routing,
+    }
+
+
+@app.put("/api/llm-settings")
+async def set_llm_settings(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="settings payload must be an object")
+    providers_payload = payload.get("llm_providers", payload.get("providers", []))
+    if not isinstance(providers_payload, list):
+        raise HTTPException(status_code=400, detail="llm_providers must be a list")
+    providers = [_normalize_provider(provider) for provider in providers_payload if isinstance(provider, dict)]
+    routing_payload = payload.get("model_routing", payload.get("routing", {}))
+    if not isinstance(routing_payload, dict):
+        raise HTTPException(status_code=400, detail="model_routing must be an object")
+    runtime.config.raw["llm_providers"] = providers
+    runtime.config.raw["model_routing"] = _normalize_routing(routing_payload, providers) if routing_payload else _default_routing(providers)
+    save_config(runtime.config)
+    return JSONResponse({
+        "ok": True,
+        "providers": [_provider_public(provider) for provider in providers],
+        "routing": runtime.config.raw["model_routing"],
+    })
+
+
+@app.post("/api/settings/export")
+async def export_settings_sections(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="export payload must be an object")
+    sections = _selected_sections(payload)
+    return JSONResponse(_settings_export_payload(runtime.config, sections))
+
+
+@app.post("/api/settings/load-from-path")
+async def load_settings_sections_from_path(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="load payload must be an object")
+    sections = _selected_sections(payload)
+    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
+    if not resolved_path.exists():
+        raise HTTPException(status_code=404, detail="config file not found")
+    data = _load_existing_json_dict(resolved_path)
+    found = [section for section in sections if _extract_section_payload(data, section) is not None]
+    missing = [section for section in sections if section not in found]
+    selected_payload = {"schema_version": data.get("schema_version", 1)}
+    for section in found:
+        selected_payload[section] = _extract_section_payload(data, section)
+    return JSONResponse({
+        "ok": True,
+        "resolved_path": str(resolved_path),
+        "found_sections": found,
+        "missing_sections": missing,
+        "settings": selected_payload,
+    })
+
+
+@app.post("/api/settings/save-to-path")
+async def save_settings_sections_to_path(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="save payload must be an object")
+    sections = _selected_sections(payload)
+    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
+    settings_payload = payload.get("settings")
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=400, detail="settings object is required")
+    existing = _load_existing_json_dict(resolved_path)
+    merged = dict(existing)
+    for section in sections:
+        section_payload = _extract_section_payload(settings_payload, section)
+        if section_payload is None:
+            continue
+        if section == "connectivity":
+            if isinstance(section_payload, dict) and isinstance(section_payload.get("mqtt"), dict):
+                merged["mqtt"] = section_payload["mqtt"]
+                if isinstance(section_payload.get("simulation"), dict):
+                    merged["simulation"] = section_payload["simulation"]
+            merged["connectivity"] = section_payload
+        else:
+            merged[section] = section_payload
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(resolved_path, "w", encoding="utf-8") as fh:
+        json.dump(merged, fh, indent=2)
+        fh.write("\n")
+    return JSONResponse({"ok": True, "resolved_path": str(resolved_path), "saved_sections": sections})
+
+
+@app.post("/api/settings/apply")
+async def apply_settings_sections(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="apply payload must be an object")
+    sections = _selected_sections(payload)
+    settings_payload = payload.get("settings")
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=400, detail="settings object is required")
+    applied = _apply_settings_sections(runtime.config, settings_payload, sections)
+    save_config(runtime.config)
+    if "connectivity" in applied:
+        await runtime.reconfigure_mqtt(runtime.config.mqtt)
+    if "video" in applied:
+        video = runtime.config.video
+        await runtime.state_store.set_video_modes(
+            bool(video.get("enabled", True)),
+            str(video.get("ingest_mode", "mqtt_frames")),
+            str(video.get("delivery_mode", "websocket_mjpeg")),
+        )
+    return JSONResponse({"ok": True, "applied_sections": applied})
 
 
 @app.get("/api/simulation-config")

@@ -53,7 +53,6 @@ const replayEls = {
   mapViewMode: document.getElementById('map-view-mode'),
   mapNavMode: document.getElementById('map-nav-mode'),
   mapOverlayControls: document.getElementById('map-overlay-controls'),
-  mapModeNote: document.getElementById('map-mode-note'),
   mapCursor: document.getElementById('map-cursor'),
   mapPathStats: document.getElementById('map-path-stats'),
   mapObjectDetail: document.getElementById('map-object-detail'),
@@ -83,6 +82,7 @@ const replayEls = {
 const REPLAY_SPLIT_STORAGE_KEY = 'gcs-replay-sidebar-width';
 const REPLAY_SPLIT_MIN = 260;
 const REPLAY_SPLIT_MAX_FRACTION = 0.42;
+const REPLAY_PATH_FIT_PADDING = [64, 64];
 
 function isDesktopReplayLayout() {
   return window.matchMedia('(min-width: 1101px)').matches;
@@ -571,9 +571,9 @@ function renderSessions() {
     selectButton.type = 'button';
     selectButton.className = 'session-select';
     selectButton.innerHTML = `
-      <strong>${sessionLabel(session)}</strong>
+      <strong class="session-title">${sessionLabel(session)}</strong>
       <span>${session.telemetry_count} telemetry • ${session.control_count || 0} controls • ${session.runtime_event_count} events</span>
-      <span>${session.session_id}</span>
+      <span class="session-id" title="${session.session_id}">${session.session_id}</span>
     `;
     selectButton.addEventListener('click', async () => {
       try {
@@ -586,7 +586,8 @@ function renderSessions() {
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'ghost session-delete';
-    deleteButton.textContent = 'Delete';
+    deleteButton.setAttribute('aria-label', `Delete session ${session.session_id}`);
+    deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 7V5.5A2.5 2.5 0 0 1 10.5 3h3A2.5 2.5 0 0 1 16 5.5V7h4v2h-1.2l-1 11H6.2l-1-11H4V7h4Zm2 0h4V5.5a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5V7Zm-2.8 2 .8 9h8l.8-9H7.2Zm2.3 2h2v5h-2v-5Zm3 0h2v5h-2v-5Z"/></svg>';
     const isCurrentSession = session.session_id === replayState.currentSessionId;
     deleteButton.disabled = isCurrentSession;
     deleteButton.title = isCurrentSession ? 'The active session cannot be deleted.' : 'Delete this session';
@@ -963,10 +964,7 @@ function resetMapForSession(sessionDetail) {
   if (!replayState.map) return;
 
   if (fullTrack.length) {
-    replayState.map.fitBounds(L.latLngBounds(fullTrack), {
-      padding: [40, 40],
-      maxZoom: useSceneMap ? 3 : 17,
-    });
+    fitTrackBounds(fullTrack, useSceneMap);
     replayState.mapFocused = true;
     return;
   }
@@ -974,6 +972,14 @@ function resetMapForSession(sessionDetail) {
   if (useSceneMap && replayState.sceneMap) {
     fitSceneMapBounds();
   }
+}
+
+function fitTrackBounds(track, useSceneMap = replayState.mapMode === 'scene') {
+  if (!replayState.map || !track.length) return;
+  replayState.map.fitBounds(L.latLngBounds(track), {
+    padding: REPLAY_PATH_FIT_PADDING,
+    maxZoom: useSceneMap ? 3 : 19,
+  });
 }
 
 function updateMapForIndex(index) {
@@ -1108,11 +1114,6 @@ async function rolloverSession() {
 function syncMapControls() {
   if (replayEls.mapViewMode) replayEls.mapViewMode.value = replayState.visualMode;
   if (replayEls.mapNavMode) replayEls.mapNavMode.value = replayState.navMode;
-  if (replayEls.mapModeNote) {
-    replayEls.mapModeNote.textContent = isSatelliteDebugMode()
-      ? 'Debug only: artificial GPS over real map tiles. Virtual objects are hidden because they do not belong to real satellite imagery.'
-      : `${sceneMapLabel()}: local scene meters, X east, Y north.`;
-  }
   Object.entries(replayState.layerVisibility).forEach(([name, value]) => {
     if (replayEls.layerToggles[name]) replayEls.layerToggles[name].checked = Boolean(value);
   });
@@ -1154,8 +1155,7 @@ function bindMapPointerReadout() {
 function fitCurrentPath() {
   const telemetry = replayState.loadedSession?.timeline?.telemetry || [];
   const track = replayState.mapMode === 'scene' ? getSceneTrack(telemetry) : getGeoTrack(telemetry);
-  if (!replayState.map || !track.length) return;
-  replayState.map.fitBounds(L.latLngBounds(track), { padding: [32, 32], maxZoom: replayState.mapMode === 'scene' ? 3 : 19 });
+  fitTrackBounds(track);
 }
 
 function jumpToRover() {

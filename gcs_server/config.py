@@ -14,6 +14,8 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
     "simulation": {},
     "logging": {},
     "map": {},
+    "llm_providers": [],
+    "model_routing": {},
 }
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -63,6 +65,16 @@ class AppConfig:
     @property
     def map(self) -> dict[str, Any]:
         return self.raw["map"]
+
+    @property
+    def llm_providers(self) -> list[dict[str, Any]]:
+        providers = self.raw.setdefault("llm_providers", [])
+        return providers if isinstance(providers, list) else []
+
+    @property
+    def model_routing(self) -> dict[str, Any]:
+        routing = self.raw.setdefault("model_routing", {})
+        return routing if isinstance(routing, dict) else {}
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
