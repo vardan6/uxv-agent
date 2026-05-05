@@ -144,6 +144,16 @@ class AISessionStore:
             conn.commit()
         return cursor.rowcount > 0
 
+    def purge_session(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM ai_sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM ai_messages WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM ai_sessions WHERE id = ?", (session_id,))
+            conn.commit()
+        return True
+
     def add_message(
         self,
         session_id: str,

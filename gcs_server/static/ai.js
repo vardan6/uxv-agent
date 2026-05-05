@@ -20,6 +20,7 @@ let sessionOpenTimer = 0;
 const aiEls = {
   shell: document.querySelector('.ai-chat-shell'),
   newSession: document.getElementById('ai-new-session'),
+  showActive: document.getElementById('ai-show-active'),
   showArchived: document.getElementById('ai-show-archived'),
   layoutResizer: document.getElementById('ai-layout-resizer'),
   heightResizer: document.getElementById('ai-height-resizer'),
@@ -143,10 +144,13 @@ function renderSessionList() {
     return `
       <div class="ai-session-row${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.id)}">
         <span class="ai-session-row-main">
-          ${isEditing
-            ? `<input class="ai-session-title-input" type="text" value="${escapeHtml(session.title || 'New chat')}" autocomplete="off" aria-label="Session name">`
-            : `<span class="ai-session-row-title">${escapeHtml(session.title || 'New chat')}</span>`}
-          <span class="ai-session-count">${session.message_count || 0}</span>
+          <span class="ai-session-row-title-wrap">
+            ${isEditing
+              ? `<input class="ai-session-title-input" type="text" value="${escapeHtml(session.title || 'New chat')}" autocomplete="off" aria-label="Session name">`
+              : `<span class="ai-session-row-title">${escapeHtml(session.title || 'New chat')}</span>`}
+            <span class="ai-session-count">${session.message_count || 0}</span>
+          </span>
+          <button class="ghost ai-session-delete" type="button" data-action="delete-session" data-session-id="${escapeHtml(session.id)}" title="Delete session" aria-label="Delete session">✕</button>
         </span>
         <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg</span>
         <span class="ai-session-row-preview">${escapeHtml(preview)}</span>
@@ -180,7 +184,7 @@ function renderMessages() {
     ? 'Restore this archived chat to continue messaging'
     : 'Ask the configured General Chat provider';
   aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
-  aiEls.showArchived.textContent = aiState.showArchived ? 'Active chats' : 'Archived';
+  aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
   renderProviderSelect();
   updateComposerState();
 
@@ -208,6 +212,19 @@ function renderMessages() {
     </article>
   `).join('');
   aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
+}
+
+async function deleteSession(sessionId) {
+  const session = aiState.sessions.find((item) => item.id === sessionId);
+  const title = session?.title || 'this chat';
+  if (!window.confirm(`Delete "${title}" permanently? This cannot be undone.`)) return;
+  await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/purge`, { method: 'DELETE' });
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = null;
+  }
+  await loadSessions(true);
+  renderMessages();
+  setAiStatus('Session deleted.', 'ok');
 }
 
 async function loadLlmSettings() {
@@ -329,6 +346,14 @@ async function archiveSession() {
   await loadSessions(true);
   renderMessages();
   setAiStatus('Session archived. Switch back to Active chats to return to the main list.', 'ok');
+}
+
+async function setArchiveFilter(showArchived) {
+  aiState.showArchived = showArchived;
+  aiState.activeSession = null;
+  renderMessages();
+  await loadSessions(true);
+  setAiStatus(showArchived ? 'Viewing archived chats.' : 'Viewing active chats.', 'ok');
 }
 
 async function updateSessionProvider() {
@@ -595,21 +620,17 @@ function bindAi() {
   bindLayoutResizer();
   bindHeightResizer();
   aiEls.newSession.addEventListener('click', () => createSession().catch((error) => setAiStatus(error.message, 'danger')));
-  aiEls.showArchived.addEventListener('click', () => {
-    (async () => {
-      aiState.showArchived = !aiState.showArchived;
-      aiState.activeSession = null;
-      renderMessages();
-      await loadSessions(true);
-      if (aiState.showArchived) {
-        setAiStatus('Viewing archived chats.', 'ok');
-      } else {
-        setAiStatus('Viewing active chats.', 'ok');
-      }
-    })().catch((error) => setAiStatus(error.message, 'danger'));
-  });
+  aiEls.showActive.addEventListener('click', () => setArchiveFilter(false).catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.showArchived.addEventListener('click', () => setArchiveFilter(true).catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.sessionSearch.addEventListener('input', renderSessionList);
   aiEls.sessionList.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-action="delete-session"]');
+    if (removeButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteSession(removeButton.dataset.sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+      return;
+    }
     if (event.target.closest('.ai-session-title-input')) return;
     if (event.detail > 1) return;
     const row = event.target.closest('[data-session-id]');

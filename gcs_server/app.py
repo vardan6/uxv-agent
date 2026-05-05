@@ -841,6 +841,14 @@ async def restore_ai_session(session_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "session": _public_ai_session(session or {})})
 
 
+@app.delete("/api/ai/sessions/{session_id}/purge")
+async def purge_ai_session(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    if not runtime.ai_store.purge_session(session_id):
+        raise HTTPException(status_code=404, detail="AI session not found")
+    return JSONResponse({"ok": True, "deleted_session_id": session_id})
+
+
 @app.post("/api/ai/sessions/{session_id}/messages")
 async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)

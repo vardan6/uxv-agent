@@ -474,10 +474,12 @@ body[data-page="ai"] .page-intro {
 
 .replay-split-pane {
   --replay-sidebar-width: 320px;
+  --replay-pane-height: clamp(720px, 86vh, 1100px);
   display: grid;
   grid-template-columns: minmax(260px, var(--replay-sidebar-width)) 22px minmax(0, 1fr);
   align-items: stretch;
   gap: 0;
+  height: var(--replay-pane-height);
   min-height: 0;
 }
 
@@ -774,16 +776,19 @@ select:focus-visible {
 
 .replay-main {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   align-content: start;
   gap: 14px;
   min-width: 0;
   min-height: 0;
+  height: 100%;
 }
 
 .replay-map-panel {
   display: grid;
   grid-template-rows: auto auto minmax(480px, 1fr) auto;
-  min-height: clamp(600px, 78vh, 920px);
+  min-height: 0;
+  height: 100%;
 }
 
 .map-layer-toolbar {
@@ -1134,6 +1139,7 @@ select:focus-visible {
   gap: 8px;
   overflow-y: auto;
   padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .replay-map-panel,
@@ -1767,6 +1773,7 @@ code {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 18px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .ai-layout-resizer {
@@ -1854,6 +1861,9 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  max-width: 100%;
 }
 
 .ai-sidebar-head h2,
@@ -1864,6 +1874,16 @@ code {
 
 .ai-sidebar-head h2 {
   font-size: clamp(1.45rem, 2vw, 1.9rem);
+}
+
+.ai-sidebar-head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.ai-sidebar-head > :first-child {
+  min-width: 0;
+  flex: 1 1 100%;
 }
 
 .ai-chat-head h2 {
@@ -1884,31 +1904,47 @@ code {
   padding-inline: 12px;
 }
 
+#ai-show-active {
+  min-height: 38px;
+  padding-inline: 12px;
+}
+
+#ai-show-active[aria-pressed="true"],
+#ai-show-archived[aria-pressed="true"] {
+  background: var(--button-active-gradient);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+}
+
+#ai-session-search {
+  width: 100%;
+  min-width: 0;
+}
+
 .ai-session-list {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
   overflow: auto;
-  padding-right: 2px;
+  padding: 2px 12px 8px 0;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .ai-session-row {
   display: grid;
-  justify-items: start;
-  gap: 4px;
+  gap: 3px;
   width: 100%;
-  min-height: 74px;
-  padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
-  border-radius: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 10px;
   text-align: left;
-  background: color-mix(in srgb, var(--text) 3%, transparent);
+  background: var(--button-secondary-gradient);
   cursor: pointer;
 }
 
 .ai-session-row.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: var(--button-active-gradient);
 }
 
@@ -1918,6 +1954,15 @@ code {
 }
 
 .ai-session-row-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ai-session-row-title-wrap {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1925,18 +1970,15 @@ code {
   width: 100%;
 }
 
-.ai-session-row-title,
-.ai-session-row-preview,
-.ai-session-row-meta {
-  max-width: 100%;
+.ai-session-row-title {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ai-session-row-title {
   font-weight: 700;
-  font-size: 1rem;
+  font-size: 1.03rem;
+  line-height: 1.2;
 }
 
 .ai-session-count {
@@ -1949,6 +1991,18 @@ code {
   text-align: center;
   background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.ai-session-delete {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  align-self: center;
+  line-height: 1;
+  font-size: 0.95rem;
 }
 
 .ai-session-title-input {
@@ -1964,7 +2018,17 @@ code {
 .ai-message-meta,
 .ai-message-foot {
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
+  line-height: 1.28;
+}
+
+.ai-session-row-meta,
+.ai-session-row-preview {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-session-row-preview {
@@ -2138,6 +2202,7 @@ code {
   .replay-split-pane {
     grid-template-columns: 1fr;
     gap: 18px;
+    height: auto;
   }
 
   .replay-split-divider {
@@ -2158,6 +2223,7 @@ code {
 
   .replay-map-panel {
     display: block;
+    height: auto;
     min-height: auto;
     border-left: 1px solid var(--line);
     border-radius: 20px;
