@@ -24,6 +24,7 @@ Recommended reading order:
 - [Current State](./docs/current-state.md)
 - [Architecture](./docs/architecture.md)
 - [Implementation Roadmap](./docs/implementation-roadmap.md)
+- [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./docs/ai-agent-rag-implementation-plan.md)
 - [Run And Config Guide](./docs/operations/run-and-config.md)
 
 Subproject documentation:
@@ -75,4 +76,4 @@ For cross-platform launcher details, shared config behavior, and telemetry polic
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. `rover-sim-next` is scaffolded but not yet a working backend. The main next implementation milestone is completing `rover-sim-next` as a GCS-compatible successor simulator while keeping `3d-env` runnable.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is to evolve this into a rover that can be supervised and controlled through AI agents: an operator should be able to communicate with the rover through prompts, monitor telemetry and video in the dashboard, submit higher-level tasks, and let AI-assisted workflows interpret, plan, report, and eventually control rover actions through approved safety boundaries. The next AI feature-planning track is adding LLM provider settings, basic LLM chat, AI sessions, supervised rover-intent parsing, and later LangGraph/RAG-backed mission planning. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.

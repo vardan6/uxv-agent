@@ -84,20 +84,16 @@
                     </label>
                   </div>
                   <div class="map-overlay-card map-fit-actions" aria-label="Map fit actions">
-                    <button id="fit-terrain" class="map-tool-button" type="button" title="Fit the full generated terrain scene in the map view" aria-label="Fit terrain">
+                    <button id="fit-terrain" class="map-tool-button" type="button" title="Fit Terrain: Fit the full generated terrain scene in the map view" aria-label="Fit terrain">
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5h5v2H7v3H5V5Zm9 0h5v5h-2V7h-3V5ZM5 14h2v3h3v2H5v-5Zm12 0h2v5h-5v-2h3v-3Z"/></svg>
-                      <span>Fit Terrain</span>
                     </button>
-                    <button id="fit-path" class="map-tool-button" type="button" title="Fit the loaded replay route in the map view" aria-label="Fit path">
+                    <button id="fit-path" class="map-tool-button" type="button" title="Fit Path: Fit the loaded replay route in the map view" aria-label="Fit path">
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.5 6A2.5 2.5 0 1 0 6.5 11 2.5 2.5 0 0 0 6.5 6Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM17.5 13A2.5 2.5 0 1 0 17.5 18 2.5 2.5 0 0 0 17.5 13Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM9.1 9.4l1.2-1.5 5.6 4.7-1.2 1.5-5.6-4.7Z"/></svg>
-                      <span>Fit Path</span>
                     </button>
-                    <button id="jump-rover" class="map-tool-button" type="button" title="Center the map on the rover at the current replay frame" aria-label="Jump to rover">
+                    <button id="jump-rover" class="map-tool-button" type="button" title="Jump Rover: Center the map on the rover at the current replay frame" aria-label="Jump to rover">
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.8 4.5 21 12 17.8 19.5 21 12 2.8Zm0 5.2 3.8 9.2-3.8-1.6-3.8 1.6L12 8Z"/></svg>
-                      <span>Jump Rover</span>
                     </button>
                   </div>
-                  <span id="map-mode-note" class="map-mode-note">Scene coordinates: X east, Y north.</span>
                 </div>
               </div>
               <div class="map-info-bar">
@@ -109,9 +105,11 @@
 
             <article class="panel replay-controls-panel">
               <div class="transport-row">
-                <button id="play-pause">Play</button>
-                <button id="seek-start" class="ghost">Start</button>
-                <label>
+                <div class="transport-actions" aria-label="Replay playback controls">
+                  <button id="play-pause">Play</button>
+                  <button id="seek-start" class="ghost" title="Reset replay to the first frame">Reset</button>
+                </div>
+                <label class="speed-control">
                   <span>Speed</span>
                   <select id="replay-speed">
                     <option value="0.5">0.5x</option>

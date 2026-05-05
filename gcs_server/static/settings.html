@@ -42,6 +42,7 @@
         <a class="settings-tab" data-settings-tab-link href="?tab=connectivity">Connectivity</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=video">Video</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=appearance">Appearance</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=llm-provider">Add LLM Provider</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=json">JSON</a>
       </section>
 
@@ -190,6 +191,128 @@
           </div>
         </section>
 
+        <section id="tab-llm-provider" class="settings-pane" data-settings-tab="llm-provider" hidden>
+          <div class="settings-grid">
+            <article class="panel panel-secondary llm-settings-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Add or edit</p>
+                  <h2>Provider Settings</h2>
+                </div>
+                <span id="llm-form-mode-pill" class="pill warn">New provider</span>
+              </div>
+              <p class="settings-note">Templates pre-fill common defaults only. Save Provider creates or updates a configured provider.</p>
+              <div class="llm-template-row">
+                <span>Provider template</span>
+                <select id="llm-provider-template">
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="nvidia_nim">NVIDIA NIM / NVIDIA Build</option>
+                  <option value="openai">OpenAI API</option>
+                  <option value="anthropic">Anthropic Claude API</option>
+                  <option value="google_gemini">Google Gemini API</option>
+                  <option value="ollama">Ollama Local</option>
+                  <option value="lm_studio">LM Studio Local</option>
+                  <option value="mistral">Mistral API</option>
+                  <option value="cohere">Cohere API</option>
+                  <option value="together">Together AI</option>
+                  <option value="groq">Groq</option>
+                  <option value="huggingface">Hugging Face Inference</option>
+                  <option value="openai_compatible">Custom / OpenAI-compatible</option>
+                </select>
+                <button id="llm-apply-template" type="button" class="ghost">Apply Template</button>
+              </div>
+              <form id="llm-provider-form" class="form-grid">
+                <input id="llm-provider-id" type="hidden">
+                <label>
+                  <span>Display Name</span>
+                  <input id="llm-display-name" type="text" required>
+                </label>
+                <label>
+                  <span>Provider Type</span>
+                  <select id="llm-provider-type">
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="nvidia_nim">NVIDIA NIM / NVIDIA Build</option>
+                    <option value="openai">OpenAI API</option>
+                    <option value="anthropic">Anthropic Claude API</option>
+                    <option value="google_gemini">Google Gemini API</option>
+                    <option value="ollama">Ollama Local</option>
+                    <option value="lm_studio">LM Studio Local</option>
+                    <option value="mistral">Mistral API</option>
+                    <option value="cohere">Cohere API</option>
+                    <option value="together">Together AI</option>
+                    <option value="groq">Groq</option>
+                    <option value="huggingface">Hugging Face Inference</option>
+                    <option value="openai_compatible">Custom / OpenAI-compatible</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Auth Mode</span>
+                  <select id="llm-auth-mode">
+                    <option value="env_var">Environment variable</option>
+                    <option value="none">No auth</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Secret / Env Var</span>
+                  <input id="llm-secret-ref" type="text" placeholder="OPENROUTER_API_KEY">
+                </label>
+                <label>
+                  <span>Base URL</span>
+                  <input id="llm-base-url" type="url" placeholder="https://openrouter.ai/api/v1">
+                </label>
+                <label>
+                  <span>Model ID</span>
+                  <input id="llm-model-id" type="text" placeholder="anthropic/claude-sonnet">
+                </label>
+                <label>
+                  <span>Capabilities</span>
+                  <input id="llm-capabilities" type="text" placeholder="chat, reasoning">
+                </label>
+                <label class="checkbox-row">
+                  <input id="llm-enabled" type="checkbox" checked>
+                  <span>Enabled</span>
+                </label>
+                <div class="form-actions">
+                  <button type="submit">Save Provider</button>
+                  <button id="llm-check-draft" type="button" class="ghost">Check Draft</button>
+                  <button id="llm-new-provider" type="button" class="ghost">New Provider</button>
+                  <button id="llm-cancel-edit" type="button" class="ghost">Cancel Edit</button>
+                </div>
+              </form>
+              <p id="llm-provider-status" class="status-banner">LLM providers are stored in the active GCS settings file.</p>
+            </article>
+
+            <article class="panel panel-secondary llm-settings-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Registry</p>
+                  <h2>Configured LLMs</h2>
+                </div>
+                <span id="llm-registry-pill" class="pill">Loading</span>
+              </div>
+              <p class="settings-note">Check verifies auth, base URL, and the provider model endpoint. It does not run chat prompts or rover intent parsing.</p>
+              <div id="llm-provider-list" class="llm-provider-list" aria-live="polite"></div>
+            </article>
+
+            <article class="panel panel-secondary llm-settings-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Routing</p>
+                  <h2>Model Routing Rules</h2>
+                </div>
+                <span class="pill">Primary + fallback</span>
+              </div>
+              <p class="settings-note">Each task type gets a primary provider and ordered fallbacks. Runtime selection can skip unavailable providers.</p>
+              <div id="llm-routing-list" class="llm-routing-list"></div>
+              <div class="form-actions">
+                <button id="save-model-routing" type="button">Save Routing</button>
+                <button id="reload-model-routing" type="button" class="ghost">Reload Routing</button>
+              </div>
+              <p id="llm-routing-status" class="status-banner">Routing rules load after providers are available.</p>
+            </article>
+          </div>
+        </section>
+
         <section id="tab-json" class="settings-pane" data-settings-tab="json" hidden>
           <div class="settings-grid settings-grid-compact">
             <article class="panel panel-secondary">
@@ -200,30 +323,98 @@
                 </div>
                 <span class="pill">Backend + Local</span>
               </div>
-              <section class="settings-source-block" aria-labelledby="connectivity-source-title">
+              <section class="settings-source-block" aria-labelledby="json-source-title">
                 <div class="settings-source-header">
-                  <p id="connectivity-source-title" class="settings-note">Config source options</p>
-                  <p class="settings-source-copy">Load connectivity values from a backend JSON path or a local JSON file, or export the current form values without changing runtime config.</p>
+                  <p id="json-source-title" class="settings-note">Config source options</p>
+                  <p class="settings-source-copy">Load or export selected settings sections. Missing sections in an imported JSON file are ignored, so older files do not clear newer settings.</p>
                 </div>
-                <div class="settings-source-grid">
-                  <div class="settings-source-actions">
-                    <div class="settings-source-action-row">
-                      <button id="load-backend-path" type="button" class="ghost">Load from Backend Path</button>
-                      <button id="save-backend-path" type="button" class="ghost">Save to Backend Path</button>
+                <div class="json-scope-grid">
+                  <section>
+                    <p class="settings-note">Export sections</p>
+                    <div class="json-scope-list" aria-label="Export JSON sections">
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="connectivity" checked>
+                        <span><strong>Connectivity</strong><span>MQTT and simulator backend.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="video" checked>
+                        <span><strong>Video</strong><span>Ingest, delivery, and enable state.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="appearance" checked>
+                        <span><strong>Appearance</strong><span>Theme mode and selected themes.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="llm_providers" checked>
+                        <span><strong>LLM Providers</strong><span>Provider records without raw secret values.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="model_routing" checked>
+                        <span><strong>Model Routing Rules</strong><span>Primary and fallback model assignments.</span></span>
+                        <span class="pill">on</span>
+                      </label>
                     </div>
-                    <button id="save-local-file" type="button" class="ghost settings-source-action-secondary">Save to Local JSON</button>
-                  </div>
-                  <div class="settings-source-fields">
-                    <label class="settings-source-field">
-                      <span>Backend JSON Path (inside <code>../config</code>)</span>
-                      <input id="backend-config-path" type="text" placeholder="common.local.json">
-                    </label>
-                    <label class="settings-source-field">
-                      <span>Load from Local JSON</span>
-                      <input id="local-config-file" type="file" accept="application/json,.json">
-                    </label>
-                  </div>
+                    <div class="form-actions">
+                      <button id="save-local-file" type="button">Export Selected JSON</button>
+                      <button id="save-backend-path" type="button" class="ghost">Save to Backend Path</button>
+                      <button id="select-all-export-sections" type="button" class="ghost">Select All</button>
+                    </div>
+                  </section>
+                  <section>
+                    <p class="settings-note">Import and apply sections</p>
+                    <div class="json-scope-list" aria-label="Import JSON sections">
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="connectivity" checked>
+                        <span><strong>Connectivity</strong><span>Unchecked or missing sections stay unchanged.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="video" checked>
+                        <span><strong>Video</strong><span>Apply only when this section exists in the loaded file.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="appearance" checked>
+                        <span><strong>Appearance</strong><span>Browser theme settings from JSON.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="llm_providers" checked>
+                        <span><strong>LLM Providers</strong><span>Restores providers separately from routing.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="model_routing" checked>
+                        <span><strong>Model Routing Rules</strong><span>Primary and fallback model assignments.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                    </div>
+                    <div class="json-policy-list">
+                      <p class="settings-note">Preview shows checked sections that will apply, checked sections missing from the file, and the exact selected JSON payload.</p>
+                      <p class="settings-note"><code>llm_providers</code> exports <code>secret_ref</code> names only, never raw API key values.</p>
+                    </div>
+                    <div class="form-actions">
+                      <button id="load-backend-path" type="button">Load JSON and Preview</button>
+                      <button id="apply-json-settings" type="button" class="ghost">Apply Checked Sections</button>
+                      <button id="select-all-import-sections" type="button" class="ghost">Select All</button>
+                    </div>
+                  </section>
                 </div>
+                <div class="settings-source-fields json-source-fields">
+                  <label class="settings-source-field">
+                    <span>Backend JSON Path (inside <code>../config</code>)</span>
+                    <input id="backend-config-path" type="text" placeholder="common.local.json">
+                  </label>
+                  <label class="settings-source-field">
+                    <span>Load from Local JSON</span>
+                    <input id="local-config-file" type="file" accept="application/json,.json">
+                  </label>
+                </div>
+                <p id="json-preview" class="status-banner json-preview" hidden></p>
               </section>
               <p id="json-settings-status" class="status-banner">Loading backend config path details.</p>
             </article>
