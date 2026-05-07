@@ -359,6 +359,59 @@ def _normalize_routing(payload: dict[str, Any], providers: list[dict[str, Any]])
     return out
 
 
+def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    tts = source.get("tts", {})
+    if not isinstance(tts, dict):
+        tts = {}
+    engine = str(tts.get("engine", "kokoro_service") or "kokoro_service").strip()
+    if engine not in {"browser", "kokoro_service"}:
+        engine = "browser"
+    rate = _bounded_float(tts.get("rate", 1.0), default=1.0, minimum=0.5, maximum=2.0)
+    pitch = _bounded_float(tts.get("pitch", 1.0), default=1.0, minimum=0.0, maximum=2.0)
+    speed = _bounded_float(tts.get("speed", 1.0), default=1.0, minimum=0.5, maximum=2.0)
+    audio_format = str(tts.get("format", "wav") or "wav").strip().lower()
+    if audio_format not in {"wav"}:
+        audio_format = "wav"
+    return {
+        "tts": {
+            "enabled": _bool_setting(tts.get("enabled", True), default=True),
+            "engine": engine,
+            "auto_read": _bool_setting(tts.get("auto_read", False), default=False),
+            "service_url": str(tts.get("service_url", "http://127.0.0.1:9101") or "").strip() or "http://127.0.0.1:9101",
+            "voice": str(tts.get("voice", "af_sky") or "").strip() or "af_sky",
+            "format": audio_format,
+            "speed": speed,
+            "browser_fallback": _bool_setting(tts.get("browser_fallback", True), default=True),
+            "voice_name": str(tts.get("voice_name", "") or "").strip(),
+            "rate": rate,
+            "pitch": pitch,
+        }
+    }
+
+
+def _bounded_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def _bool_setting(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
 def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
     enabled_ids = [str(provider.get("id")) for provider in providers if isinstance(provider, dict) and provider.get("enabled", True)]
     first = enabled_ids[0] if enabled_ids else ""
@@ -376,7 +429,7 @@ def _selected_sections(payload: dict[str, Any]) -> list[str]:
     raw_sections = payload.get("sections", [])
     if not isinstance(raw_sections, list):
         raise HTTPException(status_code=400, detail="sections must be a list")
-    allowed = {"connectivity", "video", "appearance", "llm_providers", "model_routing"}
+    allowed = {"connectivity", "video", "appearance", "ai_settings", "llm_providers", "model_routing"}
     sections = []
     for raw_section in raw_sections:
         section = str(raw_section)
@@ -395,6 +448,8 @@ def _settings_export_payload(config, sections: list[str]) -> dict[str, Any]:
         out["video"] = dict(config.video)
     if "appearance" in sections:
         out["appearance"] = dict(config.raw.get("appearance", {})) if isinstance(config.raw.get("appearance"), dict) else {}
+    if "ai_settings" in sections:
+        out["ai_settings"] = _normalize_ai_settings(config.raw.get("ai_settings", {}))
     if "llm_providers" in sections:
         providers = config.raw.get("llm_providers", [])
         out["llm_providers"] = [_provider_export(provider) for provider in providers if isinstance(provider, dict)]
@@ -433,6 +488,11 @@ def _apply_settings_sections(config, payload: dict[str, Any], sections: list[str
         if isinstance(appearance, dict):
             config.raw["appearance"] = dict(appearance)
             applied.append("appearance")
+    if "ai_settings" in sections:
+        ai_settings = _extract_section_payload(payload, "ai_settings")
+        if isinstance(ai_settings, dict):
+            config.raw["ai_settings"] = _normalize_ai_settings(ai_settings)
+            applied.append("ai_settings")
     if "llm_providers" in sections:
         providers_payload = _extract_section_payload(payload, "llm_providers")
         if isinstance(providers_payload, list):
@@ -1041,6 +1101,71 @@ async def apply_settings_sections(request: Request) -> JSONResponse:
             str(video.get("delivery_mode", "websocket_mjpeg")),
         )
     return JSONResponse({"ok": True, "applied_sections": applied})
+
+
+@app.get("/api/ai-settings")
+async def get_ai_settings(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    return {"ai_settings": _normalize_ai_settings(runtime.config.raw.get("ai_settings", {}))}
+
+
+@app.post("/api/ai-settings")
+async def save_ai_settings(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="AI settings payload must be an object")
+    settings_payload = payload.get("ai_settings", payload)
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=400, detail="ai_settings must be an object")
+    runtime.config.raw["ai_settings"] = _normalize_ai_settings(settings_payload)
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "ai_settings": runtime.config.raw["ai_settings"]})
+
+
+@app.post("/api/ai-tts/speech")
+async def create_ai_tts_speech(request: Request) -> Response:
+    runtime = _runtime(request)
+    settings = _normalize_ai_settings(runtime.config.raw.get("ai_settings", {}))
+    tts = settings["tts"]
+    if not tts["enabled"]:
+        raise HTTPException(status_code=400, detail="text to speech is disabled")
+    if tts["engine"] != "kokoro_service":
+        raise HTTPException(status_code=400, detail="local TTS service is not selected")
+
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="speech payload must be an object")
+    text = str(payload.get("input", payload.get("text", "")) or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="input text is required")
+    if len(text) > 6000:
+        raise HTTPException(status_code=413, detail="input exceeds 6000 characters")
+
+    service_payload = {
+        "input": text,
+        "voice": str(payload.get("voice", tts["voice"]) or tts["voice"]),
+        "format": str(payload.get("format", tts["format"]) or tts["format"]),
+        "speed": _bounded_float(payload.get("speed", tts["speed"]), default=tts["speed"], minimum=0.5, maximum=2.0),
+    }
+    service_url = urljoin(str(tts["service_url"]).rstrip("/") + "/", "v1/audio/speech")
+    service_request = UrlRequest(
+        service_url,
+        data=json.dumps(service_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "audio/wav"},
+        method="POST",
+    )
+    try:
+        with urlopen(service_request, timeout=60) as response:
+            content_type = response.headers.get("Content-Type", "audio/wav")
+            return Response(content=response.read(), media_type=content_type)
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") or f"TTS service returned HTTP {exc.code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except URLError as exc:
+        raise HTTPException(status_code=502, detail=f"TTS service is unreachable: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="TTS service request timed out") from exc
 
 
 @app.get("/api/simulation-config")

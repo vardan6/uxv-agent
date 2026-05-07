@@ -42,8 +42,9 @@
         <a class="settings-tab" data-settings-tab-link href="?tab=connectivity">Connectivity</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=video">Video</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=appearance">Appearance</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=ai-settings">AI Settings</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=llm-provider">Add LLM Provider</a>
-        <a class="settings-tab" data-settings-tab-link href="?tab=json">JSON</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=json">Config I/O</a>
       </section>
 
       <section class="settings-stack">
@@ -187,6 +188,71 @@
               </label>
               <p class="settings-note">Theme mode follows the browser and OS when set to system. Light and dark defaults are stored separately.</p>
               <p id="appearance-status" class="status-banner">Theme preferences are stored in this browser.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-ai-settings" class="settings-pane" data-settings-tab="ai-settings" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Voice</p>
+                  <h2>AI Response Audio</h2>
+                </div>
+                <span id="ai-settings-pill" class="pill">Loading</span>
+              </div>
+              <label class="checkbox-row">
+                <input id="ai-tts-enabled" type="checkbox" checked>
+                <span>Show text-to-speech controls for assistant responses</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="ai-tts-auto-read" type="checkbox">
+                <span>Automatically read new assistant responses</span>
+              </label>
+              <label>
+                <span>Speech Engine</span>
+                <select id="ai-tts-engine">
+                  <option value="kokoro_service">Kokoro local service</option>
+                  <option value="browser">Browser fallback voice</option>
+                </select>
+              </label>
+              <label>
+                <span>Kokoro Service URL</span>
+                <input id="ai-tts-service-url" type="url" value="http://127.0.0.1:9101">
+              </label>
+              <label>
+                <span>Kokoro Voice</span>
+                <input id="ai-tts-service-voice" type="text" value="af_sky">
+              </label>
+              <label>
+                <span>Kokoro Speed</span>
+                <input id="ai-tts-service-speed" type="range" min="0.5" max="2" step="0.1" value="1">
+              </label>
+              <label class="checkbox-row">
+                <input id="ai-tts-browser-fallback" type="checkbox" checked>
+                <span>Use browser voice if the local TTS service fails</span>
+              </label>
+              <label>
+                <span>Browser Voice</span>
+                <select id="ai-tts-voice">
+                  <option value="">Browser default voice</option>
+                </select>
+              </label>
+              <label>
+                <span>Browser Rate</span>
+                <input id="ai-tts-rate" type="range" min="0.5" max="2" step="0.1" value="1">
+              </label>
+              <label>
+                <span>Browser Pitch</span>
+                <input id="ai-tts-pitch" type="range" min="0" max="2" step="0.1" value="1">
+              </label>
+              <div class="form-actions form-actions-inline">
+                <button id="save-ai-settings" type="button">Save AI Settings</button>
+                <button id="test-ai-voice" type="button" class="ghost">Test Voice</button>
+              </div>
+              <p class="settings-note">Kokoro local service should run on port 9101. Browser voices remain available as a fallback, but their quality depends on the operating system.</p>
+              <p id="ai-settings-status" class="status-banner">Loading AI settings.</p>
             </article>
           </div>
         </section>
@@ -356,6 +422,11 @@
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="ai_settings" checked>
+                        <span><strong>AI Settings</strong><span>Response voice playback preferences.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="llm_providers" checked>
                         <span><strong>LLM Providers</strong><span>Provider records without raw secret values.</span></span>
                         <span class="pill">on</span>
@@ -388,6 +459,11 @@
                       <label class="json-scope-item">
                         <input class="json-import-toggle" type="checkbox" value="appearance" checked>
                         <span><strong>Appearance</strong><span>Browser theme settings from JSON.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="ai_settings" checked>
+                        <span><strong>AI Settings</strong><span>Applies response voice playback preferences.</span></span>
                         <span class="pill">safe</span>
                       </label>
                       <label class="json-scope-item">

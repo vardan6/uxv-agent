@@ -9,6 +9,26 @@ const aiState = {
   activeRequestAbortController: null,
   pendingUserMessageId: '',
   pendingAssistantMessageId: '',
+  activeSpeechMessageId: '',
+  activeSpeechUtterance: null,
+  activeSpeechAudio: null,
+  activeSpeechAudioUrl: '',
+  activeSpeechAbortController: null,
+  aiSettings: {
+    tts: {
+      enabled: true,
+      engine: 'kokoro_service',
+      auto_read: false,
+      service_url: 'http://127.0.0.1:9101',
+      voice: 'af_sky',
+      format: 'wav',
+      speed: 1,
+      browser_fallback: true,
+      voice_name: '',
+      rate: 1,
+      pitch: 1,
+    },
+  },
 };
 
 const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
@@ -112,6 +132,225 @@ function providerNameForMessage(message) {
   return provider?.display_name || message.provider_id || 'Unknown provider';
 }
 
+function aiSpeechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function cancelAiSpeech() {
+  if (aiSpeechSupported()) {
+    window.speechSynthesis.cancel();
+  }
+  if (aiState.activeSpeechAbortController) {
+    aiState.activeSpeechAbortController.abort();
+  }
+  if (aiState.activeSpeechAudio) {
+    aiState.activeSpeechAudio.pause();
+    aiState.activeSpeechAudio.src = '';
+  }
+  if (aiState.activeSpeechAudioUrl) {
+    URL.revokeObjectURL(aiState.activeSpeechAudioUrl);
+  }
+  aiState.activeSpeechMessageId = '';
+  aiState.activeSpeechUtterance = null;
+  aiState.activeSpeechAudio = null;
+  aiState.activeSpeechAudioUrl = '';
+  aiState.activeSpeechAbortController = null;
+}
+
+function aiTtsSettings() {
+  return aiState.aiSettings?.tts || {};
+}
+
+function resolveAiSpeechVoice(voiceName) {
+  if (!voiceName || !aiSpeechSupported()) return null;
+  return window.speechSynthesis.getVoices().find((voice) => voice.name === voiceName) || null;
+}
+
+function waitForAiSpeechVoices(voiceName) {
+  if (!voiceName || !aiSpeechSupported() || window.speechSynthesis.getVoices().length) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timeoutId);
+      window.speechSynthesis.removeEventListener?.('voiceschanged', finish);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(finish, 800);
+    if (window.speechSynthesis.addEventListener) {
+      window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
+    } else if (window.speechSynthesis.onvoiceschanged === null) {
+      window.speechSynthesis.onvoiceschanged = finish;
+    }
+  });
+}
+
+function aiTtsUsesService() {
+  return aiTtsSettings().engine === 'kokoro_service';
+}
+
+function aiCanSpeak() {
+  const tts = aiTtsSettings();
+  return tts.enabled !== false && (aiTtsUsesService() || aiSpeechSupported());
+}
+
+function aiSpeakerIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M11 5 6.6 8.5H3.8v7h2.8L11 19V5Z"></path>
+      <path d="M15.2 8.8a4.8 4.8 0 0 1 0 6.4"></path>
+      <path d="M18.4 6a9 9 0 0 1 0 12"></path>
+    </svg>
+  `;
+}
+
+function clearAiSpeechPlayback(messageId) {
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  aiState.activeSpeechMessageId = '';
+  aiState.activeSpeechUtterance = null;
+  aiState.activeSpeechAudio = null;
+  aiState.activeSpeechAudioUrl = '';
+  aiState.activeSpeechAbortController = null;
+  renderMessages({ preserveScroll: true });
+}
+
+async function speakAiMessage(messageId) {
+  if (aiTtsSettings().enabled === false) {
+    setAiStatus('Text to speech is disabled in AI Settings.', 'warn');
+    return;
+  }
+  if (!aiCanSpeak()) {
+    setAiStatus('Text to speech is not supported by this browser.', 'warn');
+    return;
+  }
+  const message = (aiState.activeSession?.messages || []).find((item) => item.id === messageId);
+  const content = String(message?.content || '').trim();
+  if (!content) return;
+  if (aiState.activeSpeechMessageId === messageId) {
+    cancelAiSpeech();
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech stopped.', 'ok');
+    return;
+  }
+
+  cancelAiSpeech();
+  aiState.activeSpeechMessageId = messageId;
+  renderMessages({ preserveScroll: true });
+  if (aiTtsUsesService()) {
+    try {
+      await speakAiMessageWithService(messageId, content);
+      return;
+    } catch (error) {
+      aiState.activeSpeechAbortController = null;
+      if (error?.name === 'AbortError') return;
+      if (aiState.activeSpeechAudio) {
+        aiState.activeSpeechAudio.pause();
+        aiState.activeSpeechAudio.src = '';
+      }
+      if (aiState.activeSpeechAudioUrl) {
+        URL.revokeObjectURL(aiState.activeSpeechAudioUrl);
+      }
+      aiState.activeSpeechAudio = null;
+      aiState.activeSpeechAudioUrl = '';
+      if (!aiTtsSettings().browser_fallback) {
+        clearAiSpeechPlayback(messageId);
+        setAiStatus(`Kokoro speech failed: ${error.message}`, 'warn');
+        return;
+      }
+      setAiStatus('Kokoro speech failed. Falling back to browser voice.', 'warn');
+    }
+  }
+  await speakAiMessageWithBrowser(messageId, content);
+}
+
+async function speakAiMessageWithService(messageId, content) {
+  const tts = aiTtsSettings();
+  const abortController = new AbortController();
+  aiState.activeSpeechAbortController = abortController;
+  setAiStatus('Requesting Kokoro voice audio.', 'ok');
+  const response = await fetch('/api/ai-tts/speech', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: content,
+      voice: tts.voice || 'af_sky',
+      format: tts.format || 'wav',
+      speed: Number.isFinite(Number(tts.speed)) ? Number(tts.speed) : 1,
+    }),
+    signal: abortController.signal,
+  });
+  aiState.activeSpeechAbortController = null;
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const blob = await response.blob();
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const audioUrl = URL.createObjectURL(blob);
+  const audio = new Audio(audioUrl);
+  audio.onended = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      cancelAiSpeech();
+      renderMessages({ preserveScroll: true });
+    }
+  };
+  audio.onerror = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      cancelAiSpeech();
+      renderMessages({ preserveScroll: true });
+      setAiStatus('Speech playback failed.', 'warn');
+    }
+  };
+  aiState.activeSpeechAudio = audio;
+  aiState.activeSpeechAudioUrl = audioUrl;
+  await audio.play();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Reading assistant response with Kokoro.', 'ok');
+}
+
+async function speakAiMessageWithBrowser(messageId, content) {
+  if (!aiSpeechSupported()) {
+    setAiStatus('Text to speech is not supported by this browser.', 'warn');
+    return;
+  }
+  const tts = aiTtsSettings();
+  await waitForAiSpeechVoices(String(tts.voice_name || ''));
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const utterance = new SpeechSynthesisUtterance(content);
+  const voice = resolveAiSpeechVoice(String(tts.voice_name || ''));
+  if (voice) utterance.voice = voice;
+  utterance.rate = Number.isFinite(Number(tts.rate)) ? Number(tts.rate) : 1;
+  utterance.pitch = Number.isFinite(Number(tts.pitch)) ? Number(tts.pitch) : 1;
+  utterance.onend = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      aiState.activeSpeechMessageId = '';
+      aiState.activeSpeechUtterance = null;
+      renderMessages({ preserveScroll: true });
+    }
+  };
+  utterance.onerror = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      aiState.activeSpeechMessageId = '';
+      aiState.activeSpeechUtterance = null;
+      renderMessages({ preserveScroll: true });
+      setAiStatus('Speech playback failed.', 'warn');
+    }
+  };
+  aiState.activeSpeechUtterance = utterance;
+  window.speechSynthesis.speak(utterance);
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Reading assistant response.', 'ok');
+}
+
+async function loadAiSettings() {
+  const result = await aiFetchJson('/api/ai-settings');
+  aiState.aiSettings = result.ai_settings || aiState.aiSettings;
+  if (aiTtsSettings().enabled === false) {
+    cancelAiSpeech();
+  }
+}
+
 function renderProviderSelect() {
   const selectedProviderId = aiState.activeSession?.provider_id || '';
   const defaultProvider = providerById(generalChatProviderId());
@@ -190,7 +429,9 @@ function renderSessionList() {
   }
 }
 
-function renderMessages() {
+function renderMessages(options = {}) {
+  const preserveScroll = Boolean(options.preserveScroll);
+  const previousScrollTop = preserveScroll ? aiEls.messageList.scrollTop : 0;
   const messages = aiState.activeSession?.messages || [];
   const pendingAssistantId = aiState.pendingAssistantMessageId;
   const viewingArchived = Boolean(aiState.activeSession?.archived_at);
@@ -224,11 +465,29 @@ function renderMessages() {
     const isPendingAssistant = message.role === 'assistant'
       && message.id === pendingAssistantId
       && !String(message.content || '').trim();
+    const canSpeak = aiCanSpeak()
+      && message.role === 'assistant'
+      && !isPendingAssistant
+      && Boolean(String(message.content || '').trim());
+    const isSpeaking = aiState.activeSpeechMessageId === message.id;
+    const speakLabel = isSpeaking ? 'Stop reading this response' : 'Read this response aloud';
     return `
     <article class="ai-message ai-message-${escapeHtml(message.role)}${isPendingAssistant ? ' ai-message-pending' : ''}">
       <div class="ai-message-meta">
         <strong>${message.role === 'assistant' ? `Assistant · ${escapeHtml(providerNameForMessage(message))}` : 'You'}</strong>
         <span class="ai-message-meta-actions">
+          ${canSpeak
+            ? `<button
+                class="ghost ai-message-speak${isSpeaking ? ' active' : ''}"
+                type="button"
+                data-message-action="speak"
+                data-message-id="${escapeHtml(message.id)}"
+                data-tooltip="${escapeHtml(speakLabel)}"
+                title="${escapeHtml(speakLabel)}"
+                aria-label="${escapeHtml(speakLabel)}"
+                aria-pressed="${isSpeaking ? 'true' : 'false'}"
+              >${aiSpeakerIcon()}</button>`
+            : ''}
           <button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>
           <span>${escapeHtml(formatAiTime(message.created_at))}</span>
         </span>
@@ -248,7 +507,7 @@ function renderMessages() {
     </article>
   `;
   }).join('');
-  aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
+  aiEls.messageList.scrollTop = preserveScroll ? previousScrollTop : aiEls.messageList.scrollHeight;
 }
 
 function pushLocalPendingMessages(content) {
@@ -357,16 +616,23 @@ async function readJsonLinesStream(response, onEvent) {
 }
 
 function handleAiStreamEvent(eventData) {
+  let autoSpeakMessageId = '';
   if (eventData.type === 'user_message' && eventData.message) {
     replacePendingUserMessage(eventData.message);
   } else if (eventData.type === 'assistant_delta') {
     appendAssistantDelta(String(eventData.delta || ''));
   } else if (eventData.type === 'assistant_message' && eventData.message) {
     replacePendingAssistantMessage(eventData.message);
+    if (aiTtsSettings().enabled !== false && aiTtsSettings().auto_read) {
+      autoSpeakMessageId = eventData.message.id;
+    }
   } else if (eventData.type === 'error') {
     throw new Error(String(eventData.detail || 'Chat streaming failed.'));
   }
   renderMessages();
+  if (autoSpeakMessageId) {
+    speakAiMessage(autoSpeakMessageId).catch((error) => setAiStatus(error.message, 'warn'));
+  }
 }
 
 async function streamAiRequest(url, payload, abortController) {
@@ -912,15 +1178,22 @@ function bindAi() {
     updateComposerState();
   });
   aiEls.messageList.addEventListener('click', (event) => {
-    const action = event.target.closest('[data-message-action="resend"]');
+    const action = event.target.closest('[data-message-action]');
     if (!action) return;
-    resendMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'danger'));
+    if (action.dataset.messageAction === 'speak') {
+      speakAiMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'warn'));
+      return;
+    }
+    if (action.dataset.messageAction === 'resend') {
+      resendMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'danger'));
+    }
   });
   aiEls.retryResponse.addEventListener('click', () => retryResponse().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.stopMessage.addEventListener('click', () => {
     if (!aiState.activeRequestAbortController) return;
     aiState.activeRequestAbortController.abort();
   });
+  window.addEventListener('beforeunload', cancelAiSpeech);
 }
 
 async function initAi() {
@@ -947,6 +1220,7 @@ async function initAi() {
     `;
   }
   bindAi();
+  await loadAiSettings().catch((error) => setAiStatus(error.message, 'warn'));
   renderMessages();
   await loadLlmSettings();
   await loadSessions(true);

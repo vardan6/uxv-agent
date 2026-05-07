@@ -2148,12 +2148,65 @@ code {
   gap: 8px;
 }
 
+.ai-message-speak,
 .ai-message-resend {
   min-height: 28px;
   padding: 4px 8px;
   border-radius: 8px;
   font-size: 0.76rem;
   line-height: 1;
+}
+
+.ai-message-speak {
+  position: relative;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
+.ai-message-speak-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.ai-message-speak.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--button-active-gradient);
+  color: var(--text);
+}
+
+.ai-message-speak::after {
+  position: absolute;
+  right: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  max-width: 220px;
+  width: max-content;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  color: var(--text);
+  content: attr(data-tooltip);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(50%, 4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  white-space: nowrap;
+}
+
+.ai-message-speak:hover::after,
+.ai-message-speak:focus-visible::after {
+  opacity: 1;
+  transform: translate(50%, 0);
 }
 
 .ai-message-body {

@@ -29,6 +29,9 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Separate replay page with first Leaflet-based map playback
 - Replay scene map loaded from `config/terrain_scene.v1.json`
 - Theme controls with persisted mode + light/dark theme variants
+- LLM provider settings, provider checks, and purpose-based model routing
+- `/ai` provider-backed General Chat with persistent SQLite sessions
+- Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
 
 ## Current Limitations
 
@@ -38,6 +41,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
+- AI Chat is read-only; rover intent parsing, RAG/source controls, web research/search, LangGraph workflows, and rover-agent command workflows are not implemented yet
 
 ## Dependencies
 
@@ -109,8 +113,11 @@ Main config sections it consumes:
     "available_backends": ["3d-env", "rover-sim-next"]
   },
   "logging": {
-    "replay_db_path": "data/gcs_replay.sqlite3"
-  }
+    "replay_db_path": "data/gcs_replay.sqlite3",
+    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3"
+  },
+  "llm_providers": [],
+  "model_routing": {}
 }
 ```
 
@@ -128,10 +135,15 @@ Main modules:
 - `telemetry.py`: normalized telemetry shaping for replay and UI consistency
 - `ws.py`: WebSocket connection manager
 - `video.py`: MQTT camera frame decoding helper
+- `ai/provider_registry.py`: configured provider to LangChain model adapter
+- `ai/chat_service.py`: read-only General Chat orchestration
+- `ai/session_store.py`: SQLite AI session and message storage
+- `ai/secret_store.py`: local stored-secret helper
 - `static/`: browser UI assets
   - `index.html` + `app.js`: dashboard UI
   - `mqtt-setup.html` + `mqtt-setup.js`: MQTT setup/config UI
   - `replay.html` + `replay.js`: replay page and playback UI
+  - `ai.html` + `ai.js`: AI Chat sessions UI
 
 ## Browser Control Flow
 
@@ -171,6 +183,26 @@ Not implemented yet:
 - simulator-origin log import path
 - live dashboard map sharing the same playback/live model
 
+## AI Chat Model
+
+Implemented now:
+- `/ai` provides read-only General Chat for configured providers
+- AI sessions and messages persist to SQLite
+- chat calls go through the project LangChain provider adapter layer
+- OpenAI-compatible providers and Ollama are supported by the current runtime adapter
+- the active provider can come from General Chat routing or a per-session provider override
+- streaming send/retry flows are implemented
+
+Not implemented yet:
+- RAG source controls and document upload
+- web research/search as a chat source
+- rover-state, replay-log, and terrain/object retrieval in chat
+- structured rover intent parsing
+- LangGraph mission planning and approval checkpoints
+- AI-assisted command staging or execution
+
+The AI Chat system prompt is intentionally read-only and must not publish rover control commands.
+
 ## Video Pipeline Model
 
 The GCS uses separate ingest and delivery modes.
@@ -192,9 +224,11 @@ The current bootstrap path is functional:
 - GCS relays telemetry and frames to browsers
 
 The next work is:
-- simulator-side logging
-- live map on the main dashboard
 - actual `rover-sim-next` backend implementation
+- RAG/web-grounded AI Chat source controls
+- supervised rover intent parsing and mission draft planning
+- live map on the main dashboard
+- simulator-side logging
 - future synchronized recorded video support
 
 ## Repository Note

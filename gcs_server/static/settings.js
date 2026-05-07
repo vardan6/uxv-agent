@@ -34,6 +34,20 @@ const settingsEls = {
   lightThemeSelect: document.getElementById('light-theme-select'),
   darkThemeSelect: document.getElementById('dark-theme-select'),
   appearanceStatus: document.getElementById('appearance-status'),
+  aiTtsEnabled: document.getElementById('ai-tts-enabled'),
+  aiTtsAutoRead: document.getElementById('ai-tts-auto-read'),
+  aiTtsEngine: document.getElementById('ai-tts-engine'),
+  aiTtsServiceUrl: document.getElementById('ai-tts-service-url'),
+  aiTtsServiceVoice: document.getElementById('ai-tts-service-voice'),
+  aiTtsServiceSpeed: document.getElementById('ai-tts-service-speed'),
+  aiTtsBrowserFallback: document.getElementById('ai-tts-browser-fallback'),
+  aiTtsVoice: document.getElementById('ai-tts-voice'),
+  aiTtsRate: document.getElementById('ai-tts-rate'),
+  aiTtsPitch: document.getElementById('ai-tts-pitch'),
+  aiSettingsPill: document.getElementById('ai-settings-pill'),
+  aiSettingsStatus: document.getElementById('ai-settings-status'),
+  saveAiSettings: document.getElementById('save-ai-settings'),
+  testAiVoice: document.getElementById('test-ai-voice'),
   llmProviderForm: document.getElementById('llm-provider-form'),
   llmProviderId: document.getElementById('llm-provider-id'),
   llmFormModePill: document.getElementById('llm-form-mode-pill'),
@@ -201,6 +215,7 @@ const JSON_SECTION_LABELS = {
   connectivity: 'Connectivity',
   video: 'Video',
   appearance: 'Appearance',
+  ai_settings: 'AI Settings',
   llm_providers: 'LLM Providers',
   model_routing: 'Model Routing',
 };
@@ -224,6 +239,10 @@ function setVideoStatus(text) {
 
 function setAppearanceStatus(text) {
   if (settingsEls.appearanceStatus) settingsEls.appearanceStatus.textContent = text;
+}
+
+function setAiSettingsStatus(text) {
+  if (settingsEls.aiSettingsStatus) settingsEls.aiSettingsStatus.textContent = text;
 }
 
 function setLlmStatus(text) {
@@ -334,7 +353,7 @@ function syncThemeControls() {
 function readSelectedTab() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  return ['connectivity', 'video', 'appearance', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
+  return ['connectivity', 'video', 'appearance', 'ai-settings', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
 }
 
 function renderTabs(tab) {
@@ -380,6 +399,151 @@ async function loadVideoSettings() {
   const snapshot = await readJson('/api/snapshot');
   fillVideoSettings(snapshot.video || {});
   setVideoStatus(`Current delivery path: ${(snapshot.video?.ingest_mode || 'mqtt_frames')} -> ${(snapshot.video?.delivery_mode || 'websocket_mjpeg')}.`);
+}
+
+function aiSpeechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number.parseFloat(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
+function populateAiVoiceOptions(selectedVoiceName = '') {
+  if (!settingsEls.aiTtsVoice) return;
+  const voices = aiSpeechSupported() ? window.speechSynthesis.getVoices() : [];
+  const options = ['<option value="">Browser default voice</option>'];
+  const hasSelectedVoice = selectedVoiceName && voices.some((voice) => voice.name === selectedVoiceName);
+  for (const voice of voices) {
+    const label = `${voice.name} (${voice.lang || 'unknown'})${voice.default ? ' default' : ''}`;
+    options.push(`<option value="${escapeHtml(voice.name)}"${voice.name === selectedVoiceName ? ' selected' : ''}>${escapeHtml(label)}</option>`);
+  }
+  if (selectedVoiceName && !hasSelectedVoice) {
+    options.push(`<option value="${escapeHtml(selectedVoiceName)}" selected>${escapeHtml(`${selectedVoiceName} (saved voice)`)}</option>`);
+  }
+  settingsEls.aiTtsVoice.innerHTML = options.join('');
+  settingsEls.aiTtsVoice.value = selectedVoiceName || '';
+}
+
+function waitForAiSpeechVoices(voiceName) {
+  if (!voiceName || !aiSpeechSupported() || window.speechSynthesis.getVoices().length) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timeoutId);
+      window.speechSynthesis.removeEventListener?.('voiceschanged', finish);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(finish, 800);
+    if (window.speechSynthesis.addEventListener) {
+      window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
+    } else if (window.speechSynthesis.onvoiceschanged === null) {
+      window.speechSynthesis.onvoiceschanged = finish;
+    }
+  });
+}
+
+function fillAiSettings(settings = {}) {
+  const tts = settings.tts || {};
+  settingsEls.aiTtsEnabled.checked = tts.enabled !== false;
+  settingsEls.aiTtsAutoRead.checked = Boolean(tts.auto_read);
+  settingsEls.aiTtsEngine.value = tts.engine === 'kokoro_service' ? 'kokoro_service' : 'browser';
+  settingsEls.aiTtsServiceUrl.value = tts.service_url || 'http://127.0.0.1:9101';
+  settingsEls.aiTtsServiceVoice.value = tts.voice || 'af_sky';
+  settingsEls.aiTtsServiceSpeed.value = String(clampNumber(tts.speed, 1, 0.5, 2));
+  settingsEls.aiTtsBrowserFallback.checked = tts.browser_fallback !== false;
+  settingsEls.aiTtsRate.value = String(clampNumber(tts.rate, 1, 0.5, 2));
+  settingsEls.aiTtsPitch.value = String(clampNumber(tts.pitch, 1, 0, 2));
+  populateAiVoiceOptions(String(tts.voice_name || ''));
+  if (settingsEls.aiSettingsPill) {
+    settingsEls.aiSettingsPill.textContent = settingsEls.aiTtsEnabled.checked
+      ? `Voice: ${settingsEls.aiTtsEngine.value === 'kokoro_service' ? 'Kokoro' : 'Browser'}`
+      : 'Voice disabled';
+    settingsEls.aiSettingsPill.className = `pill ${settingsEls.aiTtsEnabled.checked ? 'ok' : 'warn'}`;
+  }
+}
+
+function readAiSettings() {
+  return {
+    tts: {
+      enabled: settingsEls.aiTtsEnabled.checked,
+      engine: settingsEls.aiTtsEngine.value,
+      auto_read: settingsEls.aiTtsAutoRead.checked,
+      service_url: settingsEls.aiTtsServiceUrl.value.trim() || 'http://127.0.0.1:9101',
+      voice: settingsEls.aiTtsServiceVoice.value.trim() || 'af_sky',
+      format: 'wav',
+      speed: clampNumber(settingsEls.aiTtsServiceSpeed.value, 1, 0.5, 2),
+      browser_fallback: settingsEls.aiTtsBrowserFallback.checked,
+      voice_name: settingsEls.aiTtsVoice.value,
+      rate: clampNumber(settingsEls.aiTtsRate.value, 1, 0.5, 2),
+      pitch: clampNumber(settingsEls.aiTtsPitch.value, 1, 0, 2),
+    },
+  };
+}
+
+async function loadAiSettings() {
+  if (!settingsEls.aiTtsEnabled) return;
+  setAiSettingsStatus('Loading AI settings.');
+  const result = await readJson('/api/ai-settings');
+  fillAiSettings(result.ai_settings || {});
+  setAiSettingsStatus(aiSpeechSupported()
+    ? 'AI voice settings loaded.'
+    : 'This browser does not expose text-to-speech voices.');
+}
+
+async function saveAiSettings() {
+  setAiSettingsStatus('Saving AI settings.');
+  const result = await readJson('/api/ai-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ai_settings: readAiSettings() }),
+  });
+  fillAiSettings(result.ai_settings || {});
+  setAiSettingsStatus('AI settings saved.');
+}
+
+async function testAiVoice() {
+  const settings = readAiSettings();
+  if (settings.tts.engine === 'kokoro_service') {
+    await saveAiSettings();
+    setAiSettingsStatus('Requesting Kokoro voice test.');
+    const response = await fetch('/api/ai-tts/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: 'Remote Rover AI voice test.',
+        voice: settings.tts.voice,
+        format: settings.tts.format,
+        speed: settings.tts.speed,
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    await audio.play();
+    setAiSettingsStatus('Playing Kokoro voice test.');
+    return;
+  }
+  if (!aiSpeechSupported()) {
+    setAiSettingsStatus('Text to speech is not supported by this browser.');
+    return;
+  }
+  await waitForAiSpeechVoices(settings.tts.voice_name);
+  const utterance = new SpeechSynthesisUtterance('Remote Rover AI voice test.');
+  const voiceName = settings.tts.voice_name;
+  const voice = window.speechSynthesis.getVoices().find((item) => item.name === voiceName);
+  if (voice) utterance.voice = voice;
+  utterance.rate = settings.tts.rate;
+  utterance.pitch = settings.tts.pitch;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+  setAiSettingsStatus('Playing voice test.');
 }
 
 async function saveConnectivity(event) {
@@ -1050,6 +1214,7 @@ async function applyPendingJsonSettings() {
   await Promise.all([
     loadConnectivity().catch((error) => setSetupStatus(error.message)),
     loadVideoSettings().catch((error) => setVideoStatus(error.message)),
+    loadAiSettings().catch((error) => setAiSettingsStatus(error.message)),
     loadLlmSettings().catch((error) => setLlmStatus(error.message)),
   ]);
   setJsonStatus(`Applied sections: ${(result.applied_sections || []).join(', ') || 'none'}.`);
@@ -1076,6 +1241,32 @@ function bindAppearance() {
         ? `Active dark theme: ${window.GCSCommon.themeLabel(theme.darkTheme)}.`
         : `Dark default saved as ${window.GCSCommon.themeLabel(theme.darkTheme)}.`
     );
+  });
+}
+
+function bindAiSettings() {
+  if (!settingsEls.aiTtsEnabled) return;
+  if (aiSpeechSupported() && window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      populateAiVoiceOptions(settingsEls.aiTtsVoice.value);
+    };
+  }
+  settingsEls.saveAiSettings.addEventListener('click', () => {
+    saveAiSettings().catch((error) => setAiSettingsStatus(error.message));
+  });
+  settingsEls.testAiVoice.addEventListener('click', () => {
+    testAiVoice().catch((error) => setAiSettingsStatus(`Voice test failed: ${error.message}`));
+  });
+  settingsEls.aiTtsEnabled.addEventListener('change', () => {
+    if (settingsEls.aiSettingsPill) {
+      settingsEls.aiSettingsPill.textContent = settingsEls.aiTtsEnabled.checked ? 'Voice enabled' : 'Voice disabled';
+      settingsEls.aiSettingsPill.className = `pill ${settingsEls.aiTtsEnabled.checked ? 'ok' : 'warn'}`;
+    }
+  });
+  settingsEls.aiTtsEngine.addEventListener('change', () => {
+    setAiSettingsStatus(settingsEls.aiTtsEngine.value === 'kokoro_service'
+      ? 'Kokoro local service selected. Make sure tts_service is running on the configured URL.'
+      : 'Browser speech selected. Voice quality depends on this browser and operating system.');
   });
 }
 
@@ -1138,6 +1329,7 @@ function initSettings() {
   renderTabs(readSelectedTab());
   bindTabs();
   bindAppearance();
+  bindAiSettings();
   bindLlmSettings();
 
   settingsEls.mqttForm.addEventListener('submit', (event) => {
@@ -1226,6 +1418,9 @@ function initSettings() {
   });
   loadVideoSettings().catch((error) => {
     setVideoStatus(error.message);
+  });
+  loadAiSettings().catch((error) => {
+    setAiSettingsStatus(error.message);
   });
   loadLlmSettings().catch((error) => {
     setLlmStatus(error.message);

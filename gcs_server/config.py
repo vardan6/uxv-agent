@@ -14,6 +14,21 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
     "simulation": {},
     "logging": {},
     "map": {},
+    "ai_settings": {
+        "tts": {
+            "enabled": True,
+            "engine": "kokoro_service",
+            "auto_read": False,
+            "service_url": "http://127.0.0.1:9101",
+            "voice": "af_sky",
+            "format": "wav",
+            "speed": 1.0,
+            "browser_fallback": True,
+            "voice_name": "",
+            "rate": 1.0,
+            "pitch": 1.0,
+        },
+    },
     "llm_providers": [],
     "model_routing": {},
 }
@@ -65,6 +80,11 @@ class AppConfig:
     @property
     def map(self) -> dict[str, Any]:
         return self.raw["map"]
+
+    @property
+    def ai_settings(self) -> dict[str, Any]:
+        settings = self.raw.setdefault("ai_settings", {})
+        return settings if isinstance(settings, dict) else {}
 
     @property
     def llm_providers(self) -> list[dict[str, Any]]:

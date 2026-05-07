@@ -12,8 +12,9 @@ It is organized for two audiences:
 - [Current State](./current-state.md): what is implemented now, what is partially implemented, and the main current limitations
 - [Architecture](./architecture.md): how the simulator, GCS, broker, and shared config fit together
 - [Documentation Status Audit](./documentation-status.md): latest markdown review, implementation status reconciliation, and archive summary
+- [Next Session Handoff](./next-session-handoff.md): continuation notes for the next session, including current AI/RAG direction and dirty-worktree cautions
 - [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
-- [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./ai-agent-rag-implementation-plan.md): planned AI provider settings, AI sessions, LangGraph mission workflow, and RAG use cases
+- [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./ai-agent-rag-implementation-plan.md): implemented AI Chat/session foundation plus planned RAG/source controls, web research/search, LangGraph mission workflow, and rover-agent use cases
 - [Terrain Scene Manifest](./terrain-scene.md): source-of-truth terrain/object manifest, generator, validation, and runtime consumers
 - [Simulation Platform Requirements](./simulation-platform-requironments.md): stable requirements baseline for the next simulator and replay/map/logging work
 - [Simulation Platform Plan](./simulation-platform-plan.md): current implementation and remaining phases for the simulator transition
