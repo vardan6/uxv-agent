@@ -94,6 +94,35 @@ class AIChatService:
             "session": self._store.get_session(session_id, include_messages=False),
         }
 
+    def stream_retry_events(self, config: Any, session_id: str) -> Iterator[str]:
+        session = self._store.get_session(session_id, include_messages=False)
+        if session is None or session.get("archived_at") is not None:
+            raise KeyError("AI session not found")
+
+        messages = self._store.latest_messages(session_id, limit=40)
+        if not messages:
+            raise ValueError("No message is available to retry.")
+        if messages[-1]["role"] == "assistant":
+            self._store.delete_message(messages[-1]["id"])
+            messages = messages[:-1]
+        if not messages or messages[-1]["role"] != "user":
+            raise ValueError("Retry requires the latest remaining message to be from the user.")
+
+        resolved = resolve_provider(
+            config,
+            purpose="general_chat",
+            provider_id=str(session.get("provider_id") or ""),
+            secret_resolver=self._secret_resolver,
+        )
+        provider = resolved.provider
+        yield from self._stream_assistant_events(
+            resolved.model,
+            session_id=session_id,
+            provider_id=str(provider.get("id", "")),
+            model_id=str(provider.get("model_id", "")),
+            messages=messages,
+        )
+
     def stream_message_events(self, config: Any, session_id: str, content: str) -> Iterator[str]:
         clean_content = content.strip()
         if not clean_content:
@@ -125,12 +154,29 @@ class AIChatService:
         yield _json_line({"type": "user_message", "message": user_message})
 
         messages = self._store.latest_messages(session_id, limit=40)
+        yield from self._stream_assistant_events(
+            resolved.model,
+            session_id=session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            messages=messages,
+        )
+
+    def _stream_assistant_events(
+        self,
+        model: Any,
+        *,
+        session_id: str,
+        provider_id: str,
+        model_id: str,
+        messages: list[dict[str, Any]],
+    ) -> Iterator[str]:
         langchain_messages = _to_langchain_messages(messages)
         started = time.perf_counter()
         parts: list[str] = []
         interrupted = False
+        failed = False
         try:
-            model = resolved.model
             stream = getattr(model, "stream", None)
             if callable(stream):
                 for chunk in stream(langchain_messages):
@@ -148,6 +194,9 @@ class AIChatService:
         except GeneratorExit:
             interrupted = True
             raise
+        except Exception:
+            failed = True
+            raise
         finally:
             content_out = "".join(parts).strip()
             if content_out:
@@ -159,9 +208,9 @@ class AIChatService:
                     provider_id=provider_id,
                     model_id=model_id,
                     latency_ms=latency_ms,
-                    meta={"interrupted": interrupted},
+                    meta={"interrupted": interrupted or failed},
                 )
-                if not interrupted:
+                if not interrupted and not failed:
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
 
     def _invoke_and_store(

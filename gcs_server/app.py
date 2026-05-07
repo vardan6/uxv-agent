@@ -775,10 +775,39 @@ def _llm_provider_error_detail(exc: Exception, fallback: str) -> str:
     return fallback
 
 
+def _ai_stream_error_line(detail: str) -> str:
+    return f"{json.dumps({'type': 'error', 'detail': detail}, separators=(',', ':'))}\n"
+
+
+def _llm_stream_error_detail(exc: Exception) -> str:
+    provider_error = _llm_provider_http_exception(exc)
+    if provider_error is not None:
+        return str(provider_error.detail)
+    return str(exc) or "Chat streaming failed."
+
+
+def _stream_ai_events(stream: Any) -> Any:
+    try:
+        yield from stream
+    except (KeyError, ValueError, RuntimeError) as exc:
+        yield _ai_stream_error_line(str(exc))
+    except Exception as exc:
+        yield _ai_stream_error_line(_llm_stream_error_detail(exc))
+
+
 @app.get("/api/ai/sessions")
-async def list_ai_sessions(request: Request, include_archived: bool = False, limit: int = 100) -> dict[str, Any]:
+async def list_ai_sessions(
+    request: Request,
+    include_archived: bool = False,
+    archived_only: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
     runtime = _runtime(request)
-    sessions = runtime.ai_store.list_sessions(limit=limit, include_archived=include_archived)
+    sessions = runtime.ai_store.list_sessions(
+        limit=limit,
+        include_archived=include_archived,
+        archived_only=archived_only,
+    )
     return {"sessions": [_public_ai_session(session) for session in sessions]}
 
 
@@ -888,7 +917,7 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
         if provider_error is not None:
             raise provider_error from exc
         raise
-    return StreamingResponse(stream, media_type="application/x-ndjson")
+    return StreamingResponse(_stream_ai_events(stream), media_type="application/x-ndjson")
 
 
 @app.post("/api/ai/sessions/{session_id}/retry")
@@ -906,6 +935,23 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
             raise provider_error from exc
         raise
     return JSONResponse({"ok": True, **result})
+
+
+@app.post("/api/ai/sessions/{session_id}/retry/stream")
+async def retry_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
+    runtime = _runtime(request)
+    try:
+        stream = _ai_chat_service(runtime).stream_retry_events(runtime.config, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        provider_error = _llm_provider_http_exception(exc)
+        if provider_error is not None:
+            raise provider_error from exc
+        raise
+    return StreamingResponse(_stream_ai_events(stream), media_type="application/x-ndjson")
 
 
 @app.post("/api/settings/export")

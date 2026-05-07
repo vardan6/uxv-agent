@@ -18,6 +18,7 @@ const AI_SIDEBAR_MAX = 560;
 const AI_SHELL_HEIGHT_MIN = 420;
 const AI_SHELL_HEIGHT_MAX = 1100;
 const AI_MOBILE_QUERY = '(max-width: 1100px)';
+const AI_ARCHIVED_SESSION_LIMIT = 500;
 let sessionOpenTimer = 0;
 
 const aiEls = {
@@ -146,7 +147,7 @@ function renderSessionList() {
     const preview = session.last_message || 'No messages yet';
     const isEditing = aiState.editingSessionId === session.id;
     return `
-      <div class="ai-session-row${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.id)}">
+      <div class="ai-session-row${active}" tabindex="0" data-session-id="${escapeHtml(session.id)}" aria-label="Open ${escapeHtml(session.title || 'New chat')}">
         <span class="ai-session-row-main">
           <span class="ai-session-row-title-wrap">
             ${isEditing
@@ -199,7 +200,7 @@ function renderMessages() {
   aiEls.archiveSession.textContent = viewingArchived ? 'Restore' : 'Archive';
   aiEls.archiveSession.title = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
   aiEls.retryResponse.disabled = !aiState.activeSession || aiState.sending || !messages.length || viewingArchived;
-  aiEls.stopMessage.disabled = !aiState.sending;
+  aiEls.stopMessage.disabled = !aiState.sending || !aiState.activeRequestAbortController;
   aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
   aiEls.retryResponse.setAttribute('aria-label', 'Retry the last model response');
   aiEls.messageInput.disabled = aiState.sending || viewingArchived;
@@ -280,6 +281,30 @@ function pushLocalPendingMessages(content) {
   ];
 }
 
+function pushLocalRetryPendingAssistant() {
+  if (!aiState.activeSession) return;
+  const now = Date.now() / 1000;
+  const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  const messages = [...(aiState.activeSession.messages || [])];
+  if (messages[messages.length - 1]?.role === 'assistant') {
+    messages.pop();
+  }
+  aiState.pendingAssistantMessageId = pendingAssistantId;
+  aiState.activeSession.messages = [
+    ...messages,
+    {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+      provider_id: activeProviderId() || generalChatProviderId(),
+      model_id: '',
+      latency_ms: null,
+      meta: { interrupted: false },
+    },
+  ];
+}
+
 function replacePendingUserMessage(serverMessage) {
   if (!aiState.activeSession || !aiState.pendingUserMessageId) return;
   aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
@@ -331,6 +356,39 @@ async function readJsonLinesStream(response, onEvent) {
   }
 }
 
+function handleAiStreamEvent(eventData) {
+  if (eventData.type === 'user_message' && eventData.message) {
+    replacePendingUserMessage(eventData.message);
+  } else if (eventData.type === 'assistant_delta') {
+    appendAssistantDelta(String(eventData.delta || ''));
+  } else if (eventData.type === 'assistant_message' && eventData.message) {
+    replacePendingAssistantMessage(eventData.message);
+  } else if (eventData.type === 'error') {
+    throw new Error(String(eventData.detail || 'Chat streaming failed.'));
+  }
+  renderMessages();
+}
+
+async function streamAiRequest(url, payload, abortController) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+    signal: abortController.signal,
+  });
+  if (!response.ok) {
+    let detail = await response.text();
+    try {
+      const parsed = JSON.parse(detail);
+      detail = parsed.detail || detail;
+    } catch (_) {
+      // Use the raw response body.
+    }
+    throw new Error(detail || `${response.status}`);
+  }
+  await readJsonLinesStream(response, handleAiStreamEvent);
+}
+
 async function deleteSession(sessionId) {
   const session = aiState.sessions.find((item) => item.id === sessionId);
   const title = session?.title || 'this chat';
@@ -352,7 +410,10 @@ async function loadLlmSettings() {
 }
 
 async function loadSessions(selectFirst = false) {
-  const result = await aiFetchJson(`/api/ai/sessions${aiState.showArchived ? '?include_archived=true' : ''}`);
+  const query = aiState.showArchived
+    ? `?include_archived=true&limit=${AI_ARCHIVED_SESSION_LIMIT}`
+    : '';
+  const result = await aiFetchJson(`/api/ai/sessions${query}`);
   aiState.sessions = result.sessions || [];
   renderSessionList();
   if (selectFirst && !aiState.activeSession && filteredSessions().length) {
@@ -463,13 +524,14 @@ async function toggleSessionArchive(sessionId) {
     return;
   }
   await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
-  if (aiState.activeSession?.id === sessionId) {
+  const archivedActiveSession = aiState.activeSession?.id === sessionId;
+  if (archivedActiveSession) {
     aiState.activeSession = null;
+    aiState.showArchived = true;
   }
-  aiState.showArchived = true;
-  await loadSessions(true);
+  await loadSessions(false);
   renderMessages();
-  setAiStatus('Session archived. Switch back to Active chats to return to the main list.', 'ok');
+  setAiStatus('Session archived.', 'ok');
 }
 
 async function setArchiveFilter(showArchived) {
@@ -519,34 +581,11 @@ async function sendMessage(event) {
       pushLocalPendingMessages(content);
       renderMessages();
     }
-    const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-      signal: abortController.signal,
-    });
-    if (!response.ok) {
-      let detail = await response.text();
-      try {
-        const parsed = JSON.parse(detail);
-        detail = parsed.detail || detail;
-      } catch (_) {
-        // Use the raw response body.
-      }
-      throw new Error(detail || `${response.status}`);
-    }
-    await readJsonLinesStream(response, (eventData) => {
-      if (eventData.type === 'user_message' && eventData.message) {
-        replacePendingUserMessage(eventData.message);
-      } else if (eventData.type === 'assistant_delta') {
-        appendAssistantDelta(String(eventData.delta || ''));
-      } else if (eventData.type === 'assistant_message' && eventData.message) {
-        replacePendingAssistantMessage(eventData.message);
-      } else if (eventData.type === 'error') {
-        throw new Error(String(eventData.detail || 'Chat streaming failed.'));
-      }
-      renderMessages();
-    });
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+      { content },
+      abortController,
+    );
     await openSession(sessionId);
     await loadSessions();
     setAiStatus('Ready.', 'ok');
@@ -573,43 +612,64 @@ async function resendMessage(messageId) {
   const message = (aiState.activeSession.messages || []).find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
+  const sessionId = aiState.activeSession.id;
   aiState.sending = true;
+  const abortController = new AbortController();
+  aiState.activeRequestAbortController = abortController;
+  pushLocalPendingMessages(content);
   renderMessages();
   setAiStatus('Resending message.');
   try {
-    const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    await openSession(result.session.id);
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+      { content },
+      abortController,
+    );
+    await openSession(sessionId);
     await loadSessions();
     setAiStatus('Ready.', 'ok');
   } catch (error) {
-    const messageText = error.message;
-    setAiStatus(messageText, 'danger');
-    await openSession(aiState.activeSession.id);
-    setAiStatus(messageText, 'danger');
+    const isAbort = error?.name === 'AbortError';
+    const messageText = isAbort ? 'Response interrupted.' : error.message;
+    setAiStatus(messageText, isAbort ? 'warn' : 'danger');
+    await openSession(sessionId);
+    setAiStatus(messageText, isAbort ? 'warn' : 'danger');
   } finally {
     aiState.sending = false;
+    aiState.activeRequestAbortController = null;
+    clearPendingMessageIds();
     renderMessages();
   }
 }
 
 async function retryResponse() {
   if (!aiState.activeSession || aiState.sending) return;
+  const sessionId = aiState.activeSession.id;
   aiState.sending = true;
+  const abortController = new AbortController();
+  aiState.activeRequestAbortController = abortController;
+  pushLocalRetryPendingAssistant();
   renderMessages();
   setAiStatus('Retrying last model response.');
   try {
-    await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}/retry`, { method: 'POST' });
-    await openSession(aiState.activeSession.id);
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`,
+      {},
+      abortController,
+    );
+    await openSession(sessionId);
     await loadSessions();
     setAiStatus('Ready.', 'ok');
   } catch (error) {
-    setAiStatus(error.message, 'danger');
+    const isAbort = error?.name === 'AbortError';
+    const message = isAbort ? 'Response interrupted.' : error.message;
+    setAiStatus(message, isAbort ? 'warn' : 'danger');
+    await openSession(sessionId);
+    setAiStatus(message, isAbort ? 'warn' : 'danger');
   } finally {
     aiState.sending = false;
+    aiState.activeRequestAbortController = null;
+    clearPendingMessageIds();
     renderMessages();
   }
 }
@@ -619,7 +679,7 @@ function updateComposerState() {
   const hasContent = Boolean(aiEls.messageInput.value.trim());
   aiEls.sendMessage.disabled = aiState.sending || !hasContent || Boolean(aiState.activeSession?.archived_at);
   if (aiEls.stopMessage) {
-    aiEls.stopMessage.disabled = !aiState.sending;
+    aiEls.stopMessage.disabled = !aiState.sending || !aiState.activeRequestAbortController;
   }
 }
 
@@ -808,6 +868,7 @@ function bindAi() {
     queueOpenSession(row.dataset.sessionId);
   });
   aiEls.sessionList.addEventListener('dblclick', (event) => {
+    if (event.target.closest('.ai-session-title-input, [data-action], button')) return;
     const row = event.target.closest('[data-session-id]');
     if (!row) return;
     event.preventDefault();

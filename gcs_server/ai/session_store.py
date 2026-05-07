@@ -34,8 +34,18 @@ class AISessionStore:
     def db_path(self) -> Path:
         return self._db_path
 
-    def list_sessions(self, limit: int = 100, include_archived: bool = False) -> list[dict[str, Any]]:
-        where = "" if include_archived else "WHERE s.archived_at IS NULL"
+    def list_sessions(
+        self,
+        limit: int = 100,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        if archived_only:
+            where = "WHERE s.archived_at IS NOT NULL"
+        elif include_archived:
+            where = ""
+        else:
+            where = "WHERE s.archived_at IS NULL"
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
