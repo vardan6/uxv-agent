@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .provider_registry import resolve_provider
 from .session_store import AISessionStore
@@ -93,6 +94,76 @@ class AIChatService:
             "session": self._store.get_session(session_id, include_messages=False),
         }
 
+    def stream_message_events(self, config: Any, session_id: str, content: str) -> Iterator[str]:
+        clean_content = content.strip()
+        if not clean_content:
+            raise ValueError("message content is required")
+
+        session = self._store.get_session(session_id, include_messages=False)
+        if session is None or session.get("archived_at") is not None:
+            raise KeyError("AI session not found")
+
+        provider_id_override = str(session.get("provider_id") or "")
+        resolved = resolve_provider(
+            config,
+            purpose="general_chat",
+            provider_id=provider_id_override,
+            secret_resolver=self._secret_resolver,
+        )
+        provider = resolved.provider
+        provider_id = str(provider.get("id", ""))
+        model_id = str(provider.get("model_id", ""))
+
+        user_message = self._store.add_message(
+            session_id,
+            role="user",
+            content=clean_content,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
+        self._store.maybe_auto_title(session_id, clean_content)
+        yield _json_line({"type": "user_message", "message": user_message})
+
+        messages = self._store.latest_messages(session_id, limit=40)
+        langchain_messages = _to_langchain_messages(messages)
+        started = time.perf_counter()
+        parts: list[str] = []
+        interrupted = False
+        try:
+            model = resolved.model
+            stream = getattr(model, "stream", None)
+            if callable(stream):
+                for chunk in stream(langchain_messages):
+                    delta = _response_content(chunk)
+                    if not delta:
+                        continue
+                    parts.append(delta)
+                    yield _json_line({"type": "assistant_delta", "delta": delta})
+            else:
+                response = model.invoke(langchain_messages)
+                delta = _response_content(response)
+                if delta:
+                    parts.append(delta)
+                    yield _json_line({"type": "assistant_delta", "delta": delta})
+        except GeneratorExit:
+            interrupted = True
+            raise
+        finally:
+            content_out = "".join(parts).strip()
+            if content_out:
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                assistant_message = self._store.add_message(
+                    session_id,
+                    role="assistant",
+                    content=content_out,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    latency_ms=latency_ms,
+                    meta={"interrupted": interrupted},
+                )
+                if not interrupted:
+                    yield _json_line({"type": "assistant_message", "message": assistant_message})
+
     def _invoke_and_store(
         self,
         model: Any,
@@ -148,3 +219,7 @@ def _response_content(response: Any) -> str:
                 parts.append(item["text"])
         return "\n".join(parts).strip()
     return str(content or "").strip()
+
+
+def _json_line(data: dict[str, Any]) -> str:
+    return f"{json.dumps(data, separators=(',', ':'))}\n"

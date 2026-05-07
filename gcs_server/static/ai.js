@@ -6,6 +6,9 @@ const aiState = {
   sending: false,
   editingSessionId: '',
   showArchived: false,
+  activeRequestAbortController: null,
+  pendingUserMessageId: '',
+  pendingAssistantMessageId: '',
 };
 
 const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
@@ -36,6 +39,7 @@ const aiEls = {
   messageForm: document.getElementById('ai-message-form'),
   messageInput: document.getElementById('ai-message-input'),
   retryResponse: document.getElementById('ai-retry-response'),
+  stopMessage: document.getElementById('ai-stop-message'),
   sendMessage: document.getElementById('ai-send-message'),
   status: document.getElementById('ai-status'),
 };
@@ -150,7 +154,24 @@ function renderSessionList() {
               : `<span class="ai-session-row-title">${escapeHtml(session.title || 'New chat')}</span>`}
             <span class="ai-session-count">${session.message_count || 0}</span>
           </span>
-          <button class="ghost ai-session-delete" type="button" data-action="delete-session" data-session-id="${escapeHtml(session.id)}" title="Delete session" aria-label="Delete session">✕</button>
+          <span class="ai-session-actions">
+            <button
+              class="ghost ai-session-action ai-session-archive"
+              type="button"
+              data-action="toggle-archive-session"
+              data-session-id="${escapeHtml(session.id)}"
+              title="${session.archived_at ? 'Restore session' : 'Archive session'}"
+              aria-label="${session.archived_at ? 'Restore session' : 'Archive session'}"
+            >${session.archived_at ? '↺' : '📥'}</button>
+            <button
+              class="ghost ai-session-action ai-session-delete"
+              type="button"
+              data-action="delete-session"
+              data-session-id="${escapeHtml(session.id)}"
+              title="Delete session"
+              aria-label="Delete session"
+            >✕</button>
+          </span>
         </span>
         <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg</span>
         <span class="ai-session-row-preview">${escapeHtml(preview)}</span>
@@ -170,6 +191,7 @@ function renderSessionList() {
 
 function renderMessages() {
   const messages = aiState.activeSession?.messages || [];
+  const pendingAssistantId = aiState.pendingAssistantMessageId;
   const viewingArchived = Boolean(aiState.activeSession?.archived_at);
   aiEls.sessionTitle.textContent = aiState.activeSession?.title || 'New chat';
   aiEls.renameSession.disabled = !aiState.activeSession;
@@ -177,6 +199,7 @@ function renderMessages() {
   aiEls.archiveSession.textContent = viewingArchived ? 'Restore' : 'Archive';
   aiEls.archiveSession.title = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
   aiEls.retryResponse.disabled = !aiState.activeSession || aiState.sending || !messages.length || viewingArchived;
+  aiEls.stopMessage.disabled = !aiState.sending;
   aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
   aiEls.retryResponse.setAttribute('aria-label', 'Retry the last model response');
   aiEls.messageInput.disabled = aiState.sending || viewingArchived;
@@ -196,8 +219,12 @@ function renderMessages() {
     aiEls.messageList.innerHTML = `<div class="ai-empty-state">${viewingArchived ? 'Archived chat has no messages.' : 'Start a new conversation.'}</div>`;
     return;
   }
-  aiEls.messageList.innerHTML = messages.map((message) => `
-    <article class="ai-message ai-message-${escapeHtml(message.role)}">
+  aiEls.messageList.innerHTML = messages.map((message) => {
+    const isPendingAssistant = message.role === 'assistant'
+      && message.id === pendingAssistantId
+      && !String(message.content || '').trim();
+    return `
+    <article class="ai-message ai-message-${escapeHtml(message.role)}${isPendingAssistant ? ' ai-message-pending' : ''}">
       <div class="ai-message-meta">
         <strong>${message.role === 'assistant' ? `Assistant · ${escapeHtml(providerNameForMessage(message))}` : 'You'}</strong>
         <span class="ai-message-meta-actions">
@@ -205,13 +232,103 @@ function renderMessages() {
           <span>${escapeHtml(formatAiTime(message.created_at))}</span>
         </span>
       </div>
-      <div class="ai-message-body">${escapeHtml(message.content)}</div>
+      <div class="ai-message-body">${isPendingAssistant
+        ? `<span class="ai-thinking" role="status" aria-live="polite" aria-label="Assistant is working">
+            <span class="ai-thinking-core" aria-hidden="true"></span>
+            <span class="ai-thinking-rings" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </span>
+            <span class="ai-thinking-text">Thinking</span>
+          </span>`
+        : escapeHtml(message.content)}</div>
       ${message.role === 'assistant'
         ? `<div class="ai-message-foot">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}</div>`
         : ''}
     </article>
-  `).join('');
+  `;
+  }).join('');
   aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
+}
+
+function pushLocalPendingMessages(content) {
+  if (!aiState.activeSession) return;
+  const now = Date.now() / 1000;
+  const pendingUserId = `pending-user-${crypto.randomUUID()}`;
+  const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  aiState.pendingUserMessageId = pendingUserId;
+  aiState.pendingAssistantMessageId = pendingAssistantId;
+  aiState.activeSession.messages = [
+    ...(aiState.activeSession.messages || []),
+    {
+      id: pendingUserId,
+      role: 'user',
+      content,
+      created_at: now,
+      provider_id: activeProviderId() || generalChatProviderId(),
+      model_id: '',
+    },
+    {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+      provider_id: activeProviderId() || generalChatProviderId(),
+      model_id: '',
+      latency_ms: null,
+      meta: { interrupted: false },
+    },
+  ];
+}
+
+function replacePendingUserMessage(serverMessage) {
+  if (!aiState.activeSession || !aiState.pendingUserMessageId) return;
+  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
+    message.id === aiState.pendingUserMessageId ? serverMessage : message
+  ));
+}
+
+function appendAssistantDelta(delta) {
+  if (!aiState.activeSession || !aiState.pendingAssistantMessageId) return;
+  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
+    message.id === aiState.pendingAssistantMessageId
+      ? { ...message, content: `${message.content || ''}${delta}` }
+      : message
+  ));
+}
+
+function replacePendingAssistantMessage(serverMessage) {
+  if (!aiState.activeSession || !aiState.pendingAssistantMessageId) return;
+  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
+    message.id === aiState.pendingAssistantMessageId ? serverMessage : message
+  ));
+}
+
+function clearPendingMessageIds() {
+  aiState.pendingUserMessageId = '';
+  aiState.pendingAssistantMessageId = '';
+}
+
+async function readJsonLinesStream(response, onEvent) {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      onEvent(JSON.parse(trimmed));
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) {
+    onEvent(JSON.parse(tail));
+  }
 }
 
 async function deleteSession(sessionId) {
@@ -330,8 +447,13 @@ function queueOpenSession(sessionId) {
 
 async function archiveSession() {
   if (!aiState.activeSession) return;
-  const sessionId = aiState.activeSession.id;
-  if (aiState.activeSession.archived_at) {
+  await toggleSessionArchive(aiState.activeSession.id);
+}
+
+async function toggleSessionArchive(sessionId) {
+  const session = aiState.sessions.find((item) => item.id === sessionId);
+  const isArchived = Boolean(session?.archived_at || (aiState.activeSession?.id === sessionId && aiState.activeSession?.archived_at));
+  if (isArchived) {
     await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/restore`, { method: 'POST' });
     aiState.showArchived = false;
     aiState.activeSession = null;
@@ -341,7 +463,9 @@ async function archiveSession() {
     return;
   }
   await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
-  aiState.activeSession = null;
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = null;
+  }
   aiState.showArchived = true;
   await loadSessions(true);
   renderMessages();
@@ -375,8 +499,13 @@ async function sendMessage(event) {
   const content = aiEls.messageInput.value.trim();
   if (!content) return;
   aiState.sending = true;
+  const abortController = new AbortController();
+  aiState.activeRequestAbortController = abortController;
   aiEls.messageInput.value = '';
   resizeComposer();
+  if (aiState.activeSession) {
+    pushLocalPendingMessages(content);
+  }
   renderMessages();
   setAiStatus('Waiting for model response.');
   let sessionId = aiState.activeSession?.id || '';
@@ -385,25 +514,56 @@ async function sendMessage(event) {
       const createdSession = await createSession({ providerId: activeProviderId() });
       sessionId = createdSession.id;
     }
-    const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    if (!aiState.activeSession) {
+      await openSession(sessionId);
+      pushLocalPendingMessages(content);
+      renderMessages();
+    }
+    const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
+      signal: abortController.signal,
     });
-    await openSession(result.session.id);
+    if (!response.ok) {
+      let detail = await response.text();
+      try {
+        const parsed = JSON.parse(detail);
+        detail = parsed.detail || detail;
+      } catch (_) {
+        // Use the raw response body.
+      }
+      throw new Error(detail || `${response.status}`);
+    }
+    await readJsonLinesStream(response, (eventData) => {
+      if (eventData.type === 'user_message' && eventData.message) {
+        replacePendingUserMessage(eventData.message);
+      } else if (eventData.type === 'assistant_delta') {
+        appendAssistantDelta(String(eventData.delta || ''));
+      } else if (eventData.type === 'assistant_message' && eventData.message) {
+        replacePendingAssistantMessage(eventData.message);
+      } else if (eventData.type === 'error') {
+        throw new Error(String(eventData.detail || 'Chat streaming failed.'));
+      }
+      renderMessages();
+    });
+    await openSession(sessionId);
     await loadSessions();
     setAiStatus('Ready.', 'ok');
   } catch (error) {
-    const message = error.message;
-    setAiStatus(message, 'danger');
+    const isAbort = error?.name === 'AbortError';
+    const message = isAbort ? 'Response interrupted.' : error.message;
+    setAiStatus(message, isAbort ? 'warn' : 'danger');
     if (sessionId) {
       await openSession(sessionId);
-      setAiStatus(message, 'danger');
+      setAiStatus(message, isAbort ? 'warn' : 'danger');
     } else {
       renderMessages();
     }
   } finally {
     aiState.sending = false;
+    aiState.activeRequestAbortController = null;
+    clearPendingMessageIds();
     renderMessages();
   }
 }
@@ -458,6 +618,9 @@ function updateComposerState() {
   if (!aiEls.sendMessage) return;
   const hasContent = Boolean(aiEls.messageInput.value.trim());
   aiEls.sendMessage.disabled = aiState.sending || !hasContent || Boolean(aiState.activeSession?.archived_at);
+  if (aiEls.stopMessage) {
+    aiEls.stopMessage.disabled = !aiState.sending;
+  }
 }
 
 function resizeComposer() {
@@ -624,6 +787,13 @@ function bindAi() {
   aiEls.showArchived.addEventListener('click', () => setArchiveFilter(true).catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.sessionSearch.addEventListener('input', renderSessionList);
   aiEls.sessionList.addEventListener('click', (event) => {
+    const archiveButton = event.target.closest('[data-action="toggle-archive-session"]');
+    if (archiveButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSessionArchive(archiveButton.dataset.sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+      return;
+    }
     const removeButton = event.target.closest('[data-action="delete-session"]');
     if (removeButton) {
       event.preventDefault();
@@ -647,6 +817,7 @@ function bindAi() {
   aiEls.sessionList.addEventListener('keydown', (event) => {
     const input = event.target.closest('.ai-session-title-input');
     if (!input) {
+      if (event.target.closest('button')) return;
       const row = event.target.closest('[data-session-id]');
       if (!row || !['Enter', ' '].includes(event.key)) return;
       event.preventDefault();
@@ -685,6 +856,10 @@ function bindAi() {
     resendMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'danger'));
   });
   aiEls.retryResponse.addEventListener('click', () => retryResponse().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.stopMessage.addEventListener('click', () => {
+    if (!aiState.activeRequestAbortController) return;
+    aiState.activeRequestAbortController.abort();
+  });
 }
 
 async function initAi() {

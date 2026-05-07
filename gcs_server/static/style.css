@@ -1993,16 +1993,22 @@ code {
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
-.ai-session-delete {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+.ai-session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-session-action {
+  width: 26px;
+  min-width: 26px;
+  height: 22px;
+  min-height: 22px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   align-self: center;
   line-height: 1;
-  font-size: 0.95rem;
+  font-size: 0.84rem;
 }
 
 .ai-session-title-input {
@@ -2110,6 +2116,9 @@ code {
 .ai-message-assistant {
   justify-self: start;
   width: min(92%, 860px);
+  box-shadow:
+    0 8px 20px color-mix(in srgb, var(--panel-bg) 68%, transparent),
+    0 2px 6px color-mix(in srgb, #000000 16%, transparent);
 }
 
 .ai-message-meta {
@@ -2141,6 +2150,130 @@ code {
 
 .ai-message-foot {
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+.ai-message-pending .ai-message-foot {
+  opacity: 0.8;
+}
+
+.ai-thinking {
+  --thinking-color: color-mix(in srgb, var(--accent) 76%, #2f92ff);
+  --thinking-soft: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 30px;
+}
+
+.ai-thinking-core {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0 24%, var(--thinking-color) 68%);
+  box-shadow:
+    0 0 0 0 color-mix(in srgb, var(--thinking-color) 70%, transparent),
+    0 0 16px color-mix(in srgb, var(--thinking-color) 35%, transparent);
+  animation: ai-thinking-core-pulse 1.2s cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+
+.ai-thinking-rings {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  margin-left: -31px;
+  pointer-events: none;
+}
+
+.ai-thinking-rings > span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1.8px solid color-mix(in srgb, var(--thinking-color) 45%, transparent);
+  transform: scale(0.58);
+  opacity: 0;
+  animation: ai-thinking-ring 1.8s ease-out infinite;
+}
+
+.ai-thinking-rings > span:nth-child(2) {
+  animation-delay: 0.33s;
+}
+
+.ai-thinking-rings > span:nth-child(3) {
+  animation-delay: 0.66s;
+}
+
+.ai-thinking-text {
+  letter-spacing: 0.03em;
+  color: color-mix(in srgb, var(--text) 86%, var(--accent) 14%);
+  position: relative;
+  display: inline-block;
+}
+
+.ai-thinking-text::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -2px;
+  height: 2px;
+  border-radius: 99px;
+  transform-origin: left center;
+  transform: scaleX(0.15);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--thinking-color) 0%, transparent), var(--thinking-color), color-mix(in srgb, var(--thinking-color) 0%, transparent));
+  animation: ai-thinking-underline 1.15s ease-in-out infinite;
+}
+
+@keyframes ai-thinking-core-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--thinking-color) 55%, transparent),
+      0 0 12px color-mix(in srgb, var(--thinking-color) 28%, transparent);
+  }
+  70% {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 12px color-mix(in srgb, var(--thinking-color) 0%, transparent),
+      0 0 18px color-mix(in srgb, var(--thinking-color) 42%, transparent);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--thinking-color) 0%, transparent),
+      0 0 12px color-mix(in srgb, var(--thinking-color) 20%, transparent);
+  }
+}
+
+@keyframes ai-thinking-ring {
+  0% {
+    transform: scale(0.58);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+}
+
+@keyframes ai-thinking-underline {
+  0%,
+  100% {
+    transform: scaleX(0.15);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleX(1);
+    opacity: 0.92;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-thinking-core,
+  .ai-thinking-rings > span,
+  .ai-thinking-text::after {
+    animation: none;
+  }
 }
 
 .ai-composer {

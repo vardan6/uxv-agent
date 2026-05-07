@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -868,6 +868,27 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
             raise provider_error from exc
         raise
     return JSONResponse({"ok": True, **result})
+
+
+@app.post("/api/ai/sessions/{session_id}/messages/stream")
+async def send_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="message payload must be an object")
+    content = str(payload.get("content", ""))
+    try:
+        stream = _ai_chat_service(runtime).stream_message_events(runtime.config, session_id, content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        provider_error = _llm_provider_http_exception(exc)
+        if provider_error is not None:
+            raise provider_error from exc
+        raise
+    return StreamingResponse(stream, media_type="application/x-ndjson")
 
 
 @app.post("/api/ai/sessions/{session_id}/retry")
