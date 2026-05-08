@@ -19,7 +19,13 @@ class AIChatService:
         self._store = store
         self._secret_resolver = secret_resolver
 
-    def send_message(self, config: Any, session_id: str, content: str) -> dict[str, Any]:
+    def send_message(
+        self,
+        config: Any,
+        session_id: str,
+        content: str,
+        context_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         clean_content = content.strip()
         if not clean_content:
             raise ValueError("message content is required")
@@ -54,6 +60,7 @@ class AIChatService:
             provider_id=provider_id,
             model_id=model_id,
             messages=messages,
+            context_snapshot=context_snapshot,
         )
         return {
             "user_message": user_message,
@@ -61,7 +68,12 @@ class AIChatService:
             "session": self._store.get_session(session_id, include_messages=False),
         }
 
-    def retry_last_response(self, config: Any, session_id: str) -> dict[str, Any]:
+    def retry_last_response(
+        self,
+        config: Any,
+        session_id: str,
+        context_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         session = self._store.get_session(session_id, include_messages=False)
         if session is None or session.get("archived_at") is not None:
             raise KeyError("AI session not found")
@@ -88,13 +100,19 @@ class AIChatService:
             provider_id=str(provider.get("id", "")),
             model_id=str(provider.get("model_id", "")),
             messages=messages,
+            context_snapshot=context_snapshot,
         )
         return {
             "assistant_message": assistant_message,
             "session": self._store.get_session(session_id, include_messages=False),
         }
 
-    def stream_retry_events(self, config: Any, session_id: str) -> Iterator[str]:
+    def stream_retry_events(
+        self,
+        config: Any,
+        session_id: str,
+        context_snapshot: dict[str, Any] | None = None,
+    ) -> Iterator[str]:
         session = self._store.get_session(session_id, include_messages=False)
         if session is None or session.get("archived_at") is not None:
             raise KeyError("AI session not found")
@@ -121,9 +139,16 @@ class AIChatService:
             provider_id=str(provider.get("id", "")),
             model_id=str(provider.get("model_id", "")),
             messages=messages,
+            context_snapshot=context_snapshot,
         )
 
-    def stream_message_events(self, config: Any, session_id: str, content: str) -> Iterator[str]:
+    def stream_message_events(
+        self,
+        config: Any,
+        session_id: str,
+        content: str,
+        context_snapshot: dict[str, Any] | None = None,
+    ) -> Iterator[str]:
         clean_content = content.strip()
         if not clean_content:
             raise ValueError("message content is required")
@@ -160,6 +185,7 @@ class AIChatService:
             provider_id=provider_id,
             model_id=model_id,
             messages=messages,
+            context_snapshot=context_snapshot,
         )
 
     def _stream_assistant_events(
@@ -170,8 +196,9 @@ class AIChatService:
         provider_id: str,
         model_id: str,
         messages: list[dict[str, Any]],
+        context_snapshot: dict[str, Any] | None = None,
     ) -> Iterator[str]:
-        langchain_messages = _to_langchain_messages(messages)
+        langchain_messages = _to_langchain_messages(messages, _context_prompt(context_snapshot))
         started = time.perf_counter()
         parts: list[str] = []
         interrupted = False
@@ -208,7 +235,10 @@ class AIChatService:
                     provider_id=provider_id,
                     model_id=model_id,
                     latency_ms=latency_ms,
-                    meta={"interrupted": interrupted or failed},
+                    meta={
+                        "interrupted": interrupted or failed,
+                        **_context_meta(context_snapshot),
+                    },
                 )
                 if not interrupted and not failed:
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
@@ -221,8 +251,9 @@ class AIChatService:
         provider_id: str,
         model_id: str,
         messages: list[dict[str, Any]],
+        context_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        langchain_messages = _to_langchain_messages(messages)
+        langchain_messages = _to_langchain_messages(messages, _context_prompt(context_snapshot))
         started = time.perf_counter()
         response = model.invoke(langchain_messages)
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -234,17 +265,22 @@ class AIChatService:
             provider_id=provider_id,
             model_id=model_id,
             latency_ms=latency_ms,
-            meta={"response_metadata": getattr(response, "response_metadata", {}) or {}},
+            meta={
+                "response_metadata": getattr(response, "response_metadata", {}) or {},
+                **_context_meta(context_snapshot),
+            },
         )
 
 
-def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[Any]:
+def _to_langchain_messages(messages: list[dict[str, Any]], context_prompt: str = "") -> list[Any]:
     try:
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     except ImportError as exc:
         raise RuntimeError("LangChain core is not installed. Install gcs_server/requirements-gcs.txt.") from exc
 
     out: list[Any] = [SystemMessage(content=SYSTEM_PROMPT)]
+    if context_prompt:
+        out.append(SystemMessage(content=context_prompt))
     for message in messages:
         role = message.get("role")
         content = str(message.get("content") or "")
@@ -253,6 +289,19 @@ def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[Any]:
         elif role == "assistant":
             out.append(AIMessage(content=content))
     return out
+
+
+def _context_prompt(context_snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(context_snapshot, dict):
+        return ""
+    return str(context_snapshot.get("prompt") or "")
+
+
+def _context_meta(context_snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(context_snapshot, dict):
+        return {}
+    meta = context_snapshot.get("meta")
+    return meta if isinstance(meta, dict) else {}
 
 
 def _response_content(response: Any) -> str:

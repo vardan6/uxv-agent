@@ -27,6 +27,10 @@ class SecretStore:
             )
             conn.commit()
 
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
     def set_secret(self, secret_ref: str, secret_value: str) -> None:
         ref = str(secret_ref or "").strip()
         value = str(secret_value or "").strip()
@@ -76,3 +80,40 @@ class SecretStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM llm_secrets WHERE secret_ref = ?", (ref,))
             conn.commit()
+
+    def count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM llm_secrets").fetchone()
+        return int(row[0] or 0) if row is not None else 0
+
+    def migrate_from(self, legacy_db_path: Path) -> int:
+        legacy_path = Path(legacy_db_path)
+        if not legacy_path.exists() or legacy_path.resolve() == self._db_path.resolve():
+            return 0
+
+        with sqlite3.connect(legacy_path) as legacy_conn:
+            rows = legacy_conn.execute(
+                "SELECT secret_ref, secret_value FROM llm_secrets"
+            ).fetchall()
+
+        migrated = 0
+        if not rows:
+            return migrated
+
+        with self._connect() as conn:
+            for secret_ref, secret_value in rows:
+                ref = str(secret_ref or "").strip()
+                value = str(secret_value or "").strip()
+                if not ref or not value:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO llm_secrets (secret_ref, secret_value)
+                    VALUES (?, ?)
+                    ON CONFLICT(secret_ref) DO UPDATE SET secret_value=excluded.secret_value
+                    """,
+                    (ref, value),
+                )
+                migrated += 1
+            conn.commit()
+        return migrated

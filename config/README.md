@@ -41,6 +41,7 @@ Before every push, run a quick search for sensitive endpoint values and confirm 
 - GCS reads and persists shared runtime settings in `common.local.json`, falling back to `common.example.json`
 - Simulator and GCS read terrain/map/static-object data from `terrain_scene.v1.json`
 - Simulator GPS telemetry is artificial and derived from `terrain_scene.v1.json` `coordinate_system.georeference`; it is not read from the laptop/browser location
+- AI Chat current-context providers use `terrain_scene.v1.json` through the GCS scene-map service for exact terrain/object facts
 - GCS stores LLM provider records under `llm_providers` and purpose-based model routing under `model_routing`
 - GCS stores AI chat sessions in SQLite at `logging.ai_sessions_db_path`
 - GCS settings JSON export/import can operate on selected sections without clearing missing sections from older files

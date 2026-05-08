@@ -37,6 +37,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = ROOT_DIR / "config" / "common.local.json"
 FALLBACK_SETTINGS_PATH = ROOT_DIR / "config" / "common.example.json"
 
+DEFAULT_GCS_SETTINGS["logging"] = {
+    "replay_db_path": "data/gcs_replay.sqlite3",
+    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
+    "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
+    "auto_start_session": True,
+}
+
 
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(base)

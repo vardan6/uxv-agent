@@ -18,11 +18,13 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 try:
+    from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
+    from ai.context_service import AIContextService
     from ai.chat_service import AIChatService
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
@@ -737,6 +739,18 @@ def _ai_chat_service(runtime: AppRuntime) -> AIChatService:
     return AIChatService(runtime.ai_store, secret_resolver=runtime.secret_store.get_secret)
 
 
+async def _ai_context_snapshot(runtime: AppRuntime, user_message: str = "") -> dict[str, Any]:
+    snapshot = await AIContextService(runtime).build_compact_context(user_message)
+    return {"prompt": snapshot.prompt, "meta": snapshot.meta}
+
+
+def _latest_user_content(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
 async def _run_ai_call(runtime: AppRuntime, func, *args) -> Any:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(runtime.ai_executor, func, *args)
@@ -946,7 +960,15 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
     try:
-        result = await _run_ai_call(runtime, _ai_chat_service(runtime).send_message, runtime.config, session_id, content)
+        context_snapshot = await _ai_context_snapshot(runtime, content)
+        result = await _run_ai_call(
+            runtime,
+            _ai_chat_service(runtime).send_message,
+            runtime.config,
+            session_id,
+            content,
+            context_snapshot,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -967,7 +989,13 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
     try:
-        stream = _ai_chat_service(runtime).stream_message_events(runtime.config, session_id, content)
+        context_snapshot = await _ai_context_snapshot(runtime, content)
+        stream = _ai_chat_service(runtime).stream_message_events(
+            runtime.config,
+            session_id,
+            content,
+            context_snapshot,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -984,7 +1012,17 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
 async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
     try:
-        result = await _run_ai_call(runtime, _ai_chat_service(runtime).retry_last_response, runtime.config, session_id)
+        context_snapshot = await _ai_context_snapshot(
+            runtime,
+            _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+        )
+        result = await _run_ai_call(
+            runtime,
+            _ai_chat_service(runtime).retry_last_response,
+            runtime.config,
+            session_id,
+            context_snapshot,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -1001,7 +1039,15 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
 async def retry_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
     runtime = _runtime(request)
     try:
-        stream = _ai_chat_service(runtime).stream_retry_events(runtime.config, session_id)
+        context_snapshot = await _ai_context_snapshot(
+            runtime,
+            _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+        )
+        stream = _ai_chat_service(runtime).stream_retry_events(
+            runtime.config,
+            session_id,
+            context_snapshot,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:

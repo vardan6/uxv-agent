@@ -213,6 +213,57 @@ class ReplayStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_session_summary(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                  s.session_id,
+                  s.started_at,
+                  s.ended_at,
+                  s.source_node_id,
+                  s.backend_type,
+                  s.backend_version,
+                  s.site_name,
+                  s.recording_origin,
+                  (SELECT COUNT(*) FROM replay_telemetry t WHERE t.session_id = s.session_id) AS telemetry_count,
+                  (SELECT COUNT(*) FROM replay_controls c WHERE c.session_id = s.session_id) AS control_count,
+                  (SELECT COUNT(*) FROM replay_runtime_events e WHERE e.session_id = s.session_id) AS runtime_event_count,
+                  (SELECT MAX(ts) FROM replay_telemetry t WHERE t.session_id = s.session_id) AS last_telemetry_ts,
+                  (SELECT MAX(ts) FROM replay_controls c WHERE c.session_id = s.session_id) AS last_control_ts,
+                  (SELECT MAX(ts) FROM replay_runtime_events e WHERE e.session_id = s.session_id) AS last_event_ts
+                FROM replay_sessions s
+                WHERE s.session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_recent_telemetry(self, seconds: int = 120, limit: int = 20) -> list[dict[str, Any]]:
+        session_id = self._current_session_id
+        if not session_id:
+            return []
+        with self._connect() as conn:
+            latest = conn.execute(
+                "SELECT MAX(ts) AS max_ts FROM replay_telemetry WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            max_ts = float(latest["max_ts"] or 0.0) if latest else 0.0
+            cutoff = max_ts - max(1, int(seconds))
+            rows = conn.execute(
+                """
+                SELECT ts, payload_json FROM replay_telemetry
+                WHERE session_id = ? AND ts >= ?
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                (session_id, cutoff, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {"ts": row["ts"], "payload": json.loads(row["payload_json"])}
+            for row in reversed(rows)
+        ]
+
     def delete_session(self, session_id: str) -> bool:
         if session_id == self._current_session_id:
             raise ValueError("cannot delete the active session")

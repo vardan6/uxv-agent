@@ -14,6 +14,7 @@ It is organized for two audiences:
 - [Documentation Status Audit](./documentation-status.md): latest markdown review, implementation status reconciliation, and archive summary
 - [Next Session Handoff](./next-session-handoff.md): continuation notes for the next session, including current AI/RAG direction and dirty-worktree cautions
 - [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
+- [AI Current Context Layer](./ai-current-context-layer.md): implemented live rover/runtime/map/replay context layer used by AI Chat before RAG
 - [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./ai-agent-rag-implementation-plan.md): implemented AI Chat/session foundation plus planned RAG/source controls, web research/search, LangGraph mission workflow, and rover-agent use cases
 - [Terrain Scene Manifest](./terrain-scene.md): source-of-truth terrain/object manifest, generator, validation, and runtime consumers
 - [Simulation Platform Requirements](./simulation-platform-requironments.md): stable requirements baseline for the next simulator and replay/map/logging work

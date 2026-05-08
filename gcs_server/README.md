@@ -32,6 +32,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - LLM provider settings, provider checks, and purpose-based model routing
 - `/ai` provider-backed General Chat with persistent SQLite sessions
 - Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
+- AI Chat live current-context injection for rover telemetry, runtime state, scene-map facts, replay summaries, and mission placeholder state
 
 ## Current Limitations
 
@@ -41,7 +42,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
-- AI Chat is read-only; rover intent parsing, RAG/source controls, web research/search, LangGraph workflows, and rover-agent command workflows are not implemented yet
+- AI Chat is read-only; the first live current-context layer is implemented, but rover intent parsing, RAG/source controls, web research/search, LangGraph workflows, and rover-agent command workflows are not implemented yet
 
 ## Dependencies
 
@@ -136,6 +137,7 @@ Main modules:
 - `ws.py`: WebSocket connection manager
 - `video.py`: MQTT camera frame decoding helper
 - `ai/provider_registry.py`: configured provider to LangChain model adapter
+- `ai/context_service.py`: live rover/runtime/map/replay current-context providers for AI Chat
 - `ai/chat_service.py`: read-only General Chat orchestration
 - `ai/session_store.py`: SQLite AI session and message storage
 - `ai/secret_store.py`: local stored-secret helper
@@ -192,11 +194,14 @@ Implemented now:
 - OpenAI-compatible providers and Ollama are supported by the current runtime adapter
 - the active provider can come from General Chat routing or a per-session provider override
 - streaming send/retry flows are implemented
+- each AI send/retry call receives compact live context after the system prompt
+- assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
+- current rover state, runtime state, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
 
 Not implemented yet:
 - RAG source controls and document upload
 - web research/search as a chat source
-- rover-state, replay-log, and terrain/object retrieval in chat
+- richer recent-history and mission retrieval in chat
 - structured rover intent parsing
 - LangGraph mission planning and approval checkpoints
 - AI-assisted command staging or execution
@@ -225,7 +230,7 @@ The current bootstrap path is functional:
 
 The next work is:
 - actual `rover-sim-next` backend implementation
-- RAG/web-grounded AI Chat source controls
+- richer current-context providers followed by RAG/web-grounded AI Chat source controls
 - supervised rover intent parsing and mission draft planning
 - live map on the main dashboard
 - simulator-side logging

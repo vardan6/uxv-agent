@@ -28,6 +28,7 @@ except ModuleNotFoundError:
 
 GCS_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = ROOT_DIR / ".runtime"
+LEGACY_SECRET_DB_PATH = RUNTIME_DIR / "secrets" / "llm_secrets.sqlite3"
 
 
 def _resolve_replay_db_path(path: object) -> Path:
@@ -78,8 +79,10 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         db_path=_resolve_replay_db_path(config.logging.get("ai_sessions_db_path", "data/gcs_ai_sessions.sqlite3")),
     )
     secret_store = SecretStore(
-        db_path=RUNTIME_DIR / "secrets" / "llm_secrets.sqlite3",
+        db_path=_resolve_replay_db_path(config.logging.get("llm_secrets_db_path", "data/gcs_llm_secrets.sqlite3")),
     )
+    if secret_store.count() == 0 and LEGACY_SECRET_DB_PATH.exists():
+        secret_store.migrate_from(LEGACY_SECRET_DB_PATH)
     ai_executor = ThreadPoolExecutor(
         max_workers=_ai_worker_count(config.gcs.get("ai_worker_threads", 4)),
         thread_name_prefix="gcs-ai-llm",
