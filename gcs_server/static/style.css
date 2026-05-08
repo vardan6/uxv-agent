@@ -2209,6 +2209,15 @@ code {
   transform: translate(50%, 0);
 }
 
+.ai-message-tts-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-message-tts-btn:disabled::after {
+  display: none;
+}
+
 .ai-message-body {
   font-size: 0.98rem;
   line-height: 1.42;

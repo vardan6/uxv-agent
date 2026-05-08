@@ -14,6 +14,7 @@ const aiState = {
   activeSpeechAudio: null,
   activeSpeechAudioUrl: '',
   activeSpeechAbortController: null,
+  activeSpeechPaused: false,
   aiSettings: {
     tts: {
       enabled: true,
@@ -155,6 +156,7 @@ function cancelAiSpeech() {
   aiState.activeSpeechAudio = null;
   aiState.activeSpeechAudioUrl = '';
   aiState.activeSpeechAbortController = null;
+  aiState.activeSpeechPaused = false;
 }
 
 function aiTtsSettings() {
@@ -194,12 +196,27 @@ function aiCanSpeak() {
   return tts.enabled !== false && (aiTtsUsesService() || aiSpeechSupported());
 }
 
-function aiSpeakerIcon() {
+function aiPlayIcon() {
   return `
     <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M11 5 6.6 8.5H3.8v7h2.8L11 19V5Z"></path>
-      <path d="M15.2 8.8a4.8 4.8 0 0 1 0 6.4"></path>
-      <path d="M18.4 6a9 9 0 0 1 0 12"></path>
+      <path d="M8 6v12l10-6z"></path>
+    </svg>
+  `;
+}
+
+function aiPauseIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M8 6h3v12H8z"></path>
+      <path d="M13 6h3v12h-3z"></path>
+    </svg>
+  `;
+}
+
+function aiStopIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M7 7h10v10H7z"></path>
     </svg>
   `;
 }
@@ -211,7 +228,61 @@ function clearAiSpeechPlayback(messageId) {
   aiState.activeSpeechAudio = null;
   aiState.activeSpeechAudioUrl = '';
   aiState.activeSpeechAbortController = null;
+  aiState.activeSpeechPaused = false;
   renderMessages({ preserveScroll: true });
+}
+
+async function pauseAiSpeech() {
+  if (!aiState.activeSpeechMessageId || aiState.activeSpeechPaused) return;
+  if (aiState.activeSpeechAudio) {
+    aiState.activeSpeechAudio.pause();
+    aiState.activeSpeechPaused = true;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech paused.', 'ok');
+    return;
+  }
+  if (aiSpeechSupported() && window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+    window.speechSynthesis.pause();
+    aiState.activeSpeechPaused = true;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech paused.', 'ok');
+  }
+}
+
+async function resumeAiSpeech() {
+  if (!aiState.activeSpeechMessageId || !aiState.activeSpeechPaused) return;
+  if (aiState.activeSpeechAudio) {
+    await aiState.activeSpeechAudio.play();
+    aiState.activeSpeechPaused = false;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech resumed.', 'ok');
+    return;
+  }
+  if (aiSpeechSupported() && (window.speechSynthesis.paused || aiState.activeSpeechUtterance)) {
+    window.speechSynthesis.resume();
+    aiState.activeSpeechPaused = false;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech resumed.', 'ok');
+  }
+}
+
+function stopAiSpeech() {
+  if (!aiState.activeSpeechMessageId) return;
+  cancelAiSpeech();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Speech stopped.', 'ok');
+}
+
+async function toggleAiSpeech(messageId) {
+  if (aiState.activeSpeechMessageId === messageId) {
+    if (aiState.activeSpeechPaused) {
+      await resumeAiSpeech();
+    } else {
+      await pauseAiSpeech();
+    }
+    return;
+  }
+  await speakAiMessage(messageId);
 }
 
 async function speakAiMessage(messageId) {
@@ -227,14 +298,12 @@ async function speakAiMessage(messageId) {
   const content = String(message?.content || '').trim();
   if (!content) return;
   if (aiState.activeSpeechMessageId === messageId) {
-    cancelAiSpeech();
-    renderMessages({ preserveScroll: true });
-    setAiStatus('Speech stopped.', 'ok');
     return;
   }
 
   cancelAiSpeech();
   aiState.activeSpeechMessageId = messageId;
+  aiState.activeSpeechPaused = false;
   renderMessages({ preserveScroll: true });
   if (aiTtsUsesService()) {
     try {
@@ -304,6 +373,7 @@ async function speakAiMessageWithService(messageId, content) {
   };
   aiState.activeSpeechAudio = audio;
   aiState.activeSpeechAudioUrl = audioUrl;
+  aiState.activeSpeechPaused = false;
   await audio.play();
   renderMessages({ preserveScroll: true });
   setAiStatus('Reading assistant response with Kokoro.', 'ok');
@@ -338,6 +408,7 @@ async function speakAiMessageWithBrowser(messageId, content) {
     }
   };
   aiState.activeSpeechUtterance = utterance;
+  aiState.activeSpeechPaused = false;
   window.speechSynthesis.speak(utterance);
   renderMessages({ preserveScroll: true });
   setAiStatus('Reading assistant response.', 'ok');
@@ -470,7 +541,11 @@ function renderMessages(options = {}) {
       && !isPendingAssistant
       && Boolean(String(message.content || '').trim());
     const isSpeaking = aiState.activeSpeechMessageId === message.id;
-    const speakLabel = isSpeaking ? 'Stop reading this response' : 'Read this response aloud';
+    const isPaused = isSpeaking && aiState.activeSpeechPaused;
+    const toggleLabel = !isSpeaking
+      ? 'Read this response aloud'
+      : (isPaused ? 'Resume reading this response' : 'Pause reading');
+    const stopLabel = 'Stop reading';
     return `
     <article class="ai-message ai-message-${escapeHtml(message.role)}${isPendingAssistant ? ' ai-message-pending' : ''}">
       <div class="ai-message-meta">
@@ -478,15 +553,25 @@ function renderMessages(options = {}) {
         <span class="ai-message-meta-actions">
           ${canSpeak
             ? `<button
-                class="ghost ai-message-speak${isSpeaking ? ' active' : ''}"
+                class="ghost ai-message-speak ai-message-tts-btn${isSpeaking && !isPaused ? ' active' : ''}"
                 type="button"
-                data-message-action="speak"
+                data-message-action="toggle-speech"
                 data-message-id="${escapeHtml(message.id)}"
-                data-tooltip="${escapeHtml(speakLabel)}"
-                title="${escapeHtml(speakLabel)}"
-                aria-label="${escapeHtml(speakLabel)}"
+                data-tooltip="${escapeHtml(toggleLabel)}"
+                title="${escapeHtml(toggleLabel)}"
+                aria-label="${escapeHtml(toggleLabel)}"
                 aria-pressed="${isSpeaking ? 'true' : 'false'}"
-              >${aiSpeakerIcon()}</button>`
+              >${isSpeaking && !isPaused ? aiPauseIcon() : aiPlayIcon()}</button>
+              <button
+                class="ghost ai-message-speak ai-message-tts-btn"
+                type="button"
+                data-message-action="stop-speech"
+                data-message-id="${escapeHtml(message.id)}"
+                data-tooltip="${escapeHtml(stopLabel)}"
+                title="${escapeHtml(stopLabel)}"
+                aria-label="${escapeHtml(stopLabel)}"
+                ${isSpeaking ? '' : 'disabled'}
+              >${aiStopIcon()}</button>`
             : ''}
           <button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>
           <span>${escapeHtml(formatAiTime(message.created_at))}</span>
@@ -1180,8 +1265,12 @@ function bindAi() {
   aiEls.messageList.addEventListener('click', (event) => {
     const action = event.target.closest('[data-message-action]');
     if (!action) return;
-    if (action.dataset.messageAction === 'speak') {
-      speakAiMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'warn'));
+    if (action.dataset.messageAction === 'toggle-speech') {
+      toggleAiSpeech(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'warn'));
+      return;
+    }
+    if (action.dataset.messageAction === 'stop-speech') {
+      stopAiSpeech();
       return;
     }
     if (action.dataset.messageAction === 'resend') {

@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-echo running $0
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="$DIR/.venv/bin/python"
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python scripts/download_kokoro_models.py
+if [ ! -x "$PYTHON_BIN" ]; then
+  echo "TTS venv not found at $DIR/.venv"
+  echo "Create it from this directory:"
+  echo "  python -m venv .venv"
+  echo "  source .venv/bin/activate"
+  echo "  pip install -r requirements.txt"
+  exit 1
+fi
 
-# cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-# source tts_service/.venv/bin/activate
-# python -m uvicorn tts_service.app:app --host 127.0.0.1 --port 9101
+cd "$DIR"
+exec "$PYTHON_BIN" -m uvicorn \
+  --app-dir "$DIR/.." \
+  tts_service.app:app \
+  --host "${REMOTE_ROVER_TTS_HOST:-127.0.0.1}" \
+  --port "${REMOTE_ROVER_TTS_PORT:-9101}"
