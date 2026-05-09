@@ -198,6 +198,7 @@ Implemented now:
 - assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
 - current rover state, runtime state, saved settings, LLM provider/routing summaries, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
 - settings and LLM context are structured current facts, not RAG documents
+- larger map/object/replay/perception details should be retrieved on demand through tools rather than injected into every chat prompt
 - sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values
 
 Not implemented yet:
@@ -232,8 +233,9 @@ The current bootstrap path is functional:
 
 The next work is:
 - actual `rover-sim-next` backend implementation
-- richer current-context providers followed by RAG/web-grounded AI Chat source controls
+- spatial query service extraction and an agent-ready tool registry
 - supervised rover intent parsing and mission draft planning
+- RAG/web-grounded AI Chat source controls
 - live map on the main dashboard
 - simulator-side logging
 - future synchronized recorded video support
