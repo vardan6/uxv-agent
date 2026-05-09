@@ -18,7 +18,11 @@ AGENT_SYSTEM_PROMPT = """You are the read-only AI agent inside Remote Rover GCS.
 Answer operator questions using conversation history plus available tool/context results.
 You may inspect rover state, map summaries, object queries, telemetry, and replay summaries.
 Do not claim to control the rover, publish commands, start missions, or mutate GCS state.
-If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing."""
+If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing.
+If a tool returns {"ok": false, "error": "..."}, report the failure clearly to the operator. Do not invent data to fill the gap."""
+
+AI_CONTEXT_MESSAGE_LIMIT = 40
+AI_AGENT_MAX_TOOL_ITERATIONS = 6
 
 
 @dataclass(slots=True)
@@ -77,7 +81,7 @@ class AIChatService:
             meta={"run_mode": clean_run_mode},
         )
         self._store.maybe_auto_title(session_id, clean_content)
-        messages = self._store.latest_messages(session_id, limit=40)
+        messages = self._store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         assistant_message = self._invoke_and_store(
             resolved.model,
             session_id=session_id,
@@ -105,7 +109,7 @@ class AIChatService:
         if session is None or session.get("archived_at") is not None:
             raise KeyError("AI session not found")
 
-        messages = self._store.latest_messages(session_id, limit=40)
+        messages = self._store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         if not messages:
             raise ValueError("No message is available to retry.")
         if messages[-1]["role"] == "assistant":
@@ -148,7 +152,7 @@ class AIChatService:
         if session is None or session.get("archived_at") is not None:
             raise KeyError("AI session not found")
 
-        messages = self._store.latest_messages(session_id, limit=40)
+        messages = self._store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         if not messages:
             raise ValueError("No message is available to retry.")
         if messages[-1]["role"] == "assistant":
@@ -216,7 +220,7 @@ class AIChatService:
         self._store.maybe_auto_title(session_id, clean_content)
         yield _json_line({"type": "user_message", "message": user_message})
 
-        messages = self._store.latest_messages(session_id, limit=40)
+        messages = self._store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         yield from self._stream_assistant_events(
             resolved.model,
             session_id=session_id,
@@ -280,20 +284,22 @@ class AIChatService:
         )
         started = time.perf_counter()
         parts: list[str] = []
+        last_chunk: Any = None
         interrupted = False
         failed = False
         try:
             stream = getattr(model, "stream", None)
             if callable(stream):
                 for chunk in stream(langchain_messages):
+                    last_chunk = chunk
                     delta = _response_content(chunk)
                     if not delta:
                         continue
                     parts.append(delta)
                     yield _json_line({"type": "assistant_delta", "delta": delta})
             else:
-                response = model.invoke(langchain_messages)
-                delta = _response_content(response)
+                last_chunk = model.invoke(langchain_messages)
+                delta = _response_content(last_chunk)
                 if delta:
                     parts.append(delta)
                     yield _json_line({"type": "assistant_delta", "delta": delta})
@@ -307,6 +313,7 @@ class AIChatService:
             content_out = "".join(parts).strip()
             if content_out:
                 latency_ms = int((time.perf_counter() - started) * 1000)
+                response_metadata = getattr(last_chunk, "response_metadata", {}) or {}
                 assistant_message = self._store.add_message(
                     session_id,
                     role="assistant",
@@ -319,6 +326,7 @@ class AIChatService:
                         "tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
                         "interrupted": interrupted or failed,
+                        "response_metadata": response_metadata,
                         **_context_meta(context_snapshot),
                     },
                 )
@@ -412,11 +420,17 @@ class AIChatService:
 
         tools = self._agent_toolset.build_langchain_tools(
             timezone_name=str((tool_context or {}).get("timezone_name") or "").strip(),
+            context_snapshot=context_snapshot,
         )
         if not tools:
             return None
 
-        bound_model = bind_tools(tools)
+        try:
+            bound_model = bind_tools(tools)
+        except Exception as exc:
+            if _is_tool_calling_unsupported_error(exc):
+                return None
+            raise
         tool_map = {str(tool.name): tool for tool in tools}
         langchain_messages = _to_langchain_messages(
             messages,
@@ -426,8 +440,13 @@ class AIChatService:
         executed_tool_calls: list[dict[str, Any]] = []
         final_response = None
 
-        for _ in range(6):
-            final_response = bound_model.invoke(langchain_messages)
+        for _ in range(AI_AGENT_MAX_TOOL_ITERATIONS):
+            try:
+                final_response = bound_model.invoke(langchain_messages)
+            except Exception as exc:
+                if _is_tool_calling_unsupported_error(exc):
+                    return None
+                raise
             langchain_messages.append(final_response)
             response_tool_calls = getattr(final_response, "tool_calls", None) or []
             if not response_tool_calls:
@@ -592,3 +611,16 @@ def _response_content(response: Any) -> str:
 
 def _json_line(data: dict[str, Any]) -> str:
     return f"{json.dumps(data, separators=(',', ':'))}\n"
+
+
+def _is_tool_calling_unsupported_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return (
+        "does not support tools" in message
+        or "does not support tool calling" in message
+        or "does not support function calling" in message
+        or "tool calling is not supported" in message
+        or "function calling is not supported" in message
+    )

@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 
+_AUTO_TITLE_MAX_CHARS = 54
+
+
 def _json(data: dict[str, Any] | list[Any] | None) -> str:
-    return json.dumps(data or {}, separators=(",", ":"))
+    if data is None:
+        return "{}"
+    return json.dumps(data, separators=(",", ":"))
 
 
 def _load_json(value: str | None) -> dict[str, Any]:
@@ -26,7 +31,6 @@ def _load_json(value: str | None) -> dict[str, Any]:
 class AISessionStore:
     def __init__(self, db_path: str | Path):
         self._db_path = Path(db_path)
-        self._lock = threading.Lock()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -230,24 +234,28 @@ class AISessionStore:
         return True
 
     def maybe_auto_title(self, session_id: str, prompt: str) -> dict[str, Any] | None:
-        session = self.get_session(session_id, include_messages=False)
-        if session is None:
-            return None
-        if session.get("title") and session["title"].lower() != "new chat":
-            return session
         words = " ".join(prompt.strip().split())
         if not words:
-            return session
-        title = words[:54].rstrip()
+            return self.get_session(session_id, include_messages=False)
+        title = words[:_AUTO_TITLE_MAX_CHARS].rstrip()
         if len(words) > len(title):
             title = f"{title}..."
-        return self.update_session(session_id, title=title)
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ai_sessions SET title = ?, updated_at = ? WHERE id = ? AND lower(title) = 'new chat'",
+                (title, time.time(), session_id),
+            )
+            conn.commit()
+        return self.get_session(session_id, include_messages=False)
 
-    def _connect(self) -> sqlite3.Connection:
-        with self._lock:
-            conn = sqlite3.connect(self._db_path)
+    @contextmanager
+    def _connect(self):
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._connect() as conn:

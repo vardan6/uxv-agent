@@ -20,14 +20,14 @@ import uvicorn
 try:
     from gcs_server.ai.agent_tools import ReadOnlyAgentToolset
     from gcs_server.ai.context_service import AIContextService
-    from gcs_server.ai.chat_service import AIChatService
+    from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
     from ai.agent_tools import ReadOnlyAgentToolset
     from ai.context_service import AIContextService
-    from ai.chat_service import AIChatService
+    from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
     from scene_map import get_scene_map_payload
@@ -274,6 +274,16 @@ def _provider_export(provider: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _normalize_context_window(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_capabilities(value: Any) -> list[str]:
     if isinstance(value, str):
         items = [part.strip() for part in value.replace(";", ",").split(",")]
@@ -314,6 +324,7 @@ def _normalize_provider(payload: dict[str, Any], existing: dict[str, Any] | None
         "model_id": model_id,
         "capabilities": _normalize_capabilities(payload.get("capabilities", current.get("capabilities", []))),
         "enabled": bool(payload.get("enabled", current.get("enabled", True))),
+        "context_window": _normalize_context_window(payload.get("context_window", current.get("context_window"))),
         "last_check": current.get("last_check") or {"status": "not_tested"},
     }
     if auth_mode == "env_var" and not normalized["secret_ref"]:
@@ -451,13 +462,27 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
             "voice_name": str(tts.get("voice_name", "") or "").strip(),
             "rate": rate,
             "pitch": pitch,
-        }
+        },
+        "ai_context_budget_chars": _bounded_int(
+            source.get("ai_context_budget_chars", 24000),
+            default=24000,
+            minimum=4000,
+            maximum=200000,
+        ),
     }
 
 
 def _bounded_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
     try:
         number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
     except (TypeError, ValueError):
         number = default
     return max(minimum, min(maximum, number))
@@ -475,6 +500,13 @@ def _bool_setting(value: Any, *, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def _parse_int_field(value: Any, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be an integer") from exc
 
 
 def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -698,7 +730,8 @@ async def delete_llm_provider(provider_id: str, request: Request) -> JSONRespons
 async def check_llm_provider(provider_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
     index, provider = _find_provider(runtime, provider_id)
-    check = _check_provider(runtime, provider)
+    loop = asyncio.get_running_loop()
+    check = await loop.run_in_executor(None, _check_provider, runtime, provider)
     provider["last_check"] = check
     runtime.config.raw["llm_providers"][index] = provider
     save_config(runtime.config)
@@ -724,7 +757,8 @@ async def check_llm_provider_draft(request: Request) -> JSONResponse:
                 }
             )
         draft_secret_override = secret_value
-    check = _check_provider(runtime, provider, secret_override=draft_secret_override)
+    loop = asyncio.get_running_loop()
+    check = await loop.run_in_executor(None, _check_provider, runtime, provider, draft_secret_override)
     provider["last_check"] = check
     return JSONResponse({"ok": check["ok"], "provider": _provider_public(provider, runtime), "check": check})
 
@@ -820,11 +854,13 @@ async def _ai_context_snapshot(
     user_message: str = "",
     session_id: str = "",
     timezone_name: str = "",
+    run_mode: str = "chat",
 ) -> dict[str, Any]:
     snapshot = await AIContextService(runtime).build_compact_context(
         user_message,
         session_id=session_id,
         timezone_name=timezone_name,
+        run_mode=run_mode,
     )
     return {"prompt": snapshot.prompt, "meta": snapshot.meta}
 
@@ -834,6 +870,18 @@ def _latest_user_content(messages: list[dict[str, Any]]) -> str:
         if message.get("role") == "user":
             return str(message.get("content") or "")
     return ""
+
+
+def _latest_user_run_mode(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        meta = message.get("meta")
+        if not isinstance(meta, dict):
+            return "chat"
+        clean = str(meta.get("run_mode") or "chat").strip().lower()
+        return "agent" if clean == "agent" else "chat"
+    return "chat"
 
 
 def _ai_run_mode(payload: dict[str, Any]) -> str:
@@ -1056,7 +1104,13 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
     run_mode = _ai_run_mode(payload)
     timezone_name = _request_timezone_name(request, payload)
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id, timezone_name=timezone_name)
+        context_snapshot = await _ai_context_snapshot(
+            runtime,
+            content,
+            session_id=session_id,
+            timezone_name=timezone_name,
+            run_mode=run_mode,
+        )
         result = await _run_ai_call(
             runtime,
             _ai_chat_service(runtime).send_message,
@@ -1089,7 +1143,13 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
     run_mode = _ai_run_mode(payload)
     timezone_name = _request_timezone_name(request, payload)
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id, timezone_name=timezone_name)
+        context_snapshot = await _ai_context_snapshot(
+            runtime,
+            content,
+            session_id=session_id,
+            timezone_name=timezone_name,
+            run_mode=run_mode,
+        )
         stream = _ai_chat_service(runtime).stream_message_events(
             runtime.config,
             session_id,
@@ -1119,11 +1179,13 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
         payload = {}
     timezone_name = _request_timezone_name(request, payload)
     try:
+        messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         context_snapshot = await _ai_context_snapshot(
             runtime,
-            _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+            _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
+            run_mode=_latest_user_run_mode(messages),
         )
         result = await _run_ai_call(
             runtime,
@@ -1154,11 +1216,13 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
         payload = {}
     timezone_name = _request_timezone_name(request, payload)
     try:
+        messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         context_snapshot = await _ai_context_snapshot(
             runtime,
-            _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+            _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
+            run_mode=_latest_user_run_mode(messages),
         )
         stream = _ai_chat_service(runtime).stream_retry_events(
             runtime.config,
@@ -1287,6 +1351,17 @@ async def save_ai_settings(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "ai_settings": runtime.config.raw["ai_settings"]})
 
 
+def _tts_fetch_sync(service_url: str, service_payload: dict[str, Any]) -> tuple[str, bytes]:
+    request = UrlRequest(
+        service_url,
+        data=json.dumps(service_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "audio/wav"},
+        method="POST",
+    )
+    with urlopen(request, timeout=60) as response:
+        return response.headers.get("Content-Type", "audio/wav"), response.read()
+
+
 @app.post("/api/ai-tts/speech")
 async def create_ai_tts_speech(request: Request) -> Response:
     runtime = _runtime(request)
@@ -1313,16 +1388,12 @@ async def create_ai_tts_speech(request: Request) -> Response:
         "speed": _bounded_float(payload.get("speed", tts["speed"]), default=tts["speed"], minimum=0.5, maximum=2.0),
     }
     service_url = urljoin(str(tts["service_url"]).rstrip("/") + "/", "v1/audio/speech")
-    service_request = UrlRequest(
-        service_url,
-        data=json.dumps(service_payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "audio/wav"},
-        method="POST",
-    )
+    loop = asyncio.get_running_loop()
     try:
-        with urlopen(service_request, timeout=60) as response:
-            content_type = response.headers.get("Content-Type", "audio/wav")
-            return Response(content=response.read(), media_type=content_type)
+        content_type, content = await loop.run_in_executor(
+            None, _tts_fetch_sync, service_url, service_payload
+        )
+        return Response(content=content, media_type=content_type)
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") or f"TTS service returned HTTP {exc.code}"
         raise HTTPException(status_code=502, detail=detail) from exc
@@ -1388,13 +1459,13 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
     updated = dict(current)
     updated.update({
         "broker_host": str(mqtt_payload.get("broker_host", current.get("broker_host", ""))).strip(),
-        "broker_port": int(mqtt_payload.get("broker_port", current.get("broker_port", 1883))),
+        "broker_port": _parse_int_field(mqtt_payload.get("broker_port", current.get("broker_port", 1883)), "broker_port"),
         "topic_prefix": str(mqtt_payload.get("topic_prefix", current.get("topic_prefix", ""))).strip(),
         "client_id": str(mqtt_payload.get("client_id", current.get("client_id", ""))).strip(),
         "control_topic": str(mqtt_payload.get("control_topic", current.get("control_topic", "control/manual"))).strip(),
         "state_topic": str(mqtt_payload.get("state_topic", current.get("state_topic", "telemetry/state"))).strip(),
         "camera_topic": str(mqtt_payload.get("camera_topic", current.get("camera_topic", "camera-feed"))).strip(),
-        "control_hz": int(mqtt_payload.get("control_hz", current.get("control_hz", 20))),
+        "control_hz": _parse_int_field(mqtt_payload.get("control_hz", current.get("control_hz", 20)), "control_hz"),
     })
     if not updated["broker_host"]:
         raise HTTPException(status_code=400, detail="broker_host is required")
@@ -1445,13 +1516,13 @@ async def save_connectivity_to_path(request: Request) -> JSONResponse:
     mqtt_out = dict(existing.get("mqtt", {})) if isinstance(existing.get("mqtt"), dict) else {}
     mqtt_out.update({
         "broker_host": str(mqtt_payload.get("broker_host", "")).strip(),
-        "broker_port": int(mqtt_payload.get("broker_port", 1883)),
+        "broker_port": _parse_int_field(mqtt_payload.get("broker_port", 1883), "broker_port"),
         "topic_prefix": str(mqtt_payload.get("topic_prefix", "")).strip(),
         "client_id": str(mqtt_payload.get("client_id", "")).strip(),
         "control_topic": str(mqtt_payload.get("control_topic", "control/manual")).strip(),
         "state_topic": str(mqtt_payload.get("state_topic", "telemetry/state")).strip(),
         "camera_topic": str(mqtt_payload.get("camera_topic", "camera-feed")).strip(),
-        "control_hz": int(mqtt_payload.get("control_hz", 20)),
+        "control_hz": _parse_int_field(mqtt_payload.get("control_hz", 20), "control_hz"),
     })
     mqtt_out["rover_availability"] = _rover_availability_policy_from_mqtt(mqtt_payload)
     existing["mqtt"] = mqtt_out

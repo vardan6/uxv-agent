@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import math
 import re
@@ -28,6 +30,7 @@ class AIContextService:
         user_message: str = "",
         session_id: str = "",
         timezone_name: str = "",
+        run_mode: str = "chat",
     ) -> AIContextSnapshot:
         providers = [
             "get_current_rover_state",
@@ -37,31 +40,41 @@ class AIContextService:
             "get_current_mission_state",
             "get_scene_map_summary",
         ]
-        rover = await self.get_current_rover_state()
-        runtime = await self.get_runtime_context()
+        # B4: fetch independent async sources in parallel
+        rover, runtime = await asyncio.gather(
+            self.get_current_rover_state(),
+            self.get_runtime_context(),
+        )
         settings = self.get_settings_context()
         llm = self.get_llm_context(session_id=session_id)
         mission = self.get_current_mission_state()
-        scene = self.get_scene_map_summary()
+        # B3: load scene payload once and reuse for all spatial queries
+        scene_payload = self._load_scene_payload()
+        scene = self._get_scene_map_summary_from_payload(scene_payload)
         details: dict[str, Any] = {}
 
         lower = user_message.lower()
-        if "in front" in lower or "ahead" in lower:
-            max_distance, fov = _parse_front_query(lower)
-            details["objects_in_front"] = self.find_objects_in_front(
-                max_distance_m=max_distance,
-                fov_deg=fov,
-                rover_state=rover,
-            )
-            providers.append("find_objects_in_front")
-        if "near" in lower and ("object" in lower or "rover" in lower):
-            radius = _parse_radius_query(lower, default=50.0)
-            details["objects_near_rover"] = self.find_objects_near_rover(radius_m=radius, rover_state=rover)
-            providers.append("find_objects_near_rover")
-        kind = _parse_kind_query(lower)
-        if kind:
-            details["objects_by_kind"] = self.find_objects_by_kind(kind)
-            providers.append("find_objects_by_kind")
+        agent_mode = str(run_mode or "").strip().lower() == "agent"
+        if not agent_mode:
+            if "in front" in lower or "ahead" in lower:
+                max_distance, fov = _parse_front_query(lower)
+                details["objects_in_front"] = self._find_objects_in_front_from_payload(
+                    scene_payload,
+                    max_distance_m=max_distance,
+                    fov_deg=fov,
+                    rover_state=rover,
+                )
+                providers.append("find_objects_in_front")
+            if "near" in lower and ("object" in lower or "rover" in lower):
+                radius = _parse_radius_query(lower, default=50.0)
+                details["objects_near_rover"] = self._find_objects_near_rover_from_payload(
+                    scene_payload, radius_m=radius, rover_state=rover
+                )
+                providers.append("find_objects_near_rover")
+            kind = _parse_kind_query(lower)
+            if kind:
+                details["objects_by_kind"] = self._find_objects_by_kind_from_payload(scene_payload, kind)
+                providers.append("find_objects_by_kind")
         if "recent" in lower or "happened" in lower:
             details["current_replay"] = self.get_current_replay_summary()
             details["recent_telemetry"] = self.get_recent_telemetry(seconds=120, limit=10)
@@ -81,12 +94,29 @@ class AIContextService:
             "scene": scene,
             "details": details,
         }
+        max_chars = max(
+            _CONTEXT_BUDGET_CHARS_MIN,
+            min(
+                _CONTEXT_BUDGET_CHARS_MAX,
+                int((self._runtime.config.ai_settings or {}).get("ai_context_budget_chars", _CONTEXT_BUDGET_CHARS_DEFAULT)),
+            ),
+        )
+        trimmed_context, dropped = _apply_context_budget(context, set(details.keys()), lower, max_chars)
+        # D9: preserve insertion order instead of sorting (sorted() loses always-on vs triggered distinction)
+        seen: dict[str, None] = {}
+        for p in providers:
+            seen[p] = None
         return AIContextSnapshot(
-            prompt=_format_context_block(context),
+            prompt=_format_context_block(trimmed_context, dropped),
             meta={
+                "context_schema_version": 1,
                 "context_snapshot": context,
-                "context_providers": sorted(set(providers)),
+                "context_providers": list(seen),
                 "operator_timezone": str(timezone_name or "").strip(),
+                "run_mode": "agent" if agent_mode else "chat",
+                "budget_chars": max_chars,
+                "estimated_chars": _estimate_chars(trimmed_context),
+                "dropped_sections": dropped,
             },
         )
 
@@ -220,12 +250,17 @@ class AIContextService:
             "last_check": _pick(provider.get("last_check") or {}, ["status", "ok", "checked_at"]),
         }
 
-    def get_scene_map_summary(self) -> dict[str, Any]:
+    def _load_scene_payload(self) -> dict[str, Any] | None:
         backend = str(self._runtime.config.simulation.get("backend") or "3d-env")
         try:
-            scene = get_scene_map_payload(backend=backend, grid_size=32)
-        except ValueError as exc:
-            return {"available": False, "backend": backend, "error": str(exc)}
+            return get_scene_map_payload(backend=backend, grid_size=32)
+        except ValueError:
+            return None
+
+    def _get_scene_map_summary_from_payload(self, scene: dict[str, Any] | None) -> dict[str, Any]:
+        backend = str(self._runtime.config.simulation.get("backend") or "3d-env")
+        if scene is None:
+            return {"available": False, "backend": backend, "error": "scene payload unavailable"}
         kinds: dict[str, int] = {}
         for obj in scene.get("objects", []):
             kind = str(obj.get("kind") or "unknown")
@@ -243,8 +278,12 @@ class AIContextService:
             "site_name": str(self._runtime.config.map.get("site_name", "default-site")),
         }
 
-    def find_objects_in_front(
+    def get_scene_map_summary(self) -> dict[str, Any]:
+        return self._get_scene_map_summary_from_payload(self._load_scene_payload())
+
+    def _find_objects_in_front_from_payload(
         self,
+        scene: dict[str, Any] | None,
         max_distance_m: float = 100.0,
         fov_deg: float = 20.0,
         rover_state: dict[str, Any] | None = None,
@@ -252,8 +291,8 @@ class AIContextService:
         rover = rover_state or {}
         pose = _rover_pose(rover)
         if pose is None:
-            return {"available": False, "reason": "rover pose is unavailable"}
-        objects = self._scene_objects()
+            return {"available": False, "reason": "rover pose or heading is unavailable"}
+        objects = list((scene or {}).get("objects") or [])
         matches = []
         half_fov = max(0.0, float(fov_deg)) / 2.0
         for obj in objects:
@@ -275,8 +314,22 @@ class AIContextService:
             "objects": matches,
         }
 
-    def find_objects_near_rover(
+    def find_objects_in_front(
         self,
+        max_distance_m: float = 100.0,
+        fov_deg: float = 20.0,
+        rover_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._find_objects_in_front_from_payload(
+            self._load_scene_payload(),
+            max_distance_m=max_distance_m,
+            fov_deg=fov_deg,
+            rover_state=rover_state,
+        )
+
+    def _find_objects_near_rover_from_payload(
+        self,
+        scene: dict[str, Any] | None,
         radius_m: float = 50.0,
         rover_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -285,7 +338,7 @@ class AIContextService:
         if pose is None:
             return {"available": False, "reason": "rover pose is unavailable"}
         matches = []
-        for obj in self._scene_objects():
+        for obj in list((scene or {}).get("objects") or []):
             center = obj.get("center") or {}
             distance = math.hypot(
                 float(center.get("x") or 0.0) - pose["x"],
@@ -296,14 +349,26 @@ class AIContextService:
         matches.sort(key=lambda item: item["distance_m"])
         return {"available": True, "query": {"radius_m": radius_m}, "rover_pose": pose, "objects": matches}
 
-    def find_objects_by_kind(self, kind: str) -> dict[str, Any]:
+    def find_objects_near_rover(
+        self,
+        radius_m: float = 50.0,
+        rover_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._find_objects_near_rover_from_payload(
+            self._load_scene_payload(), radius_m=radius_m, rover_state=rover_state
+        )
+
+    def _find_objects_by_kind_from_payload(self, scene: dict[str, Any] | None, kind: str) -> dict[str, Any]:
         clean = kind.strip().lower()
         matches = [
             _object_hit(obj, None, None, None)
-            for obj in self._scene_objects()
+            for obj in list((scene or {}).get("objects") or [])
             if str(obj.get("kind") or "").lower() == clean
         ]
         return {"available": True, "query": {"kind": clean}, "objects": matches}
+
+    def find_objects_by_kind(self, kind: str) -> dict[str, Any]:
+        return self._find_objects_by_kind_from_payload(self._load_scene_payload(), kind)
 
     def get_current_replay_summary(self) -> dict[str, Any]:
         current_id = self._runtime.replay_store.current_session_id
@@ -332,20 +397,14 @@ class AIContextService:
             "summary": "No mission storage or active mission is implemented yet.",
         }
 
-    def _scene_objects(self) -> list[dict[str, Any]]:
-        backend = str(self._runtime.config.simulation.get("backend") or "3d-env")
-        try:
-            return list(get_scene_map_payload(backend=backend, grid_size=32).get("objects") or [])
-        except ValueError:
-            return []
-
-
-def _format_context_block(context: dict[str, Any]) -> str:
-    return (
+def _format_context_block(context: dict[str, Any], dropped: list[str] | None = None) -> str:
+    header = (
         "Live GCS current context. Treat these structured facts as more current than conversation history. "
-        "This chat is read-only and must not publish control commands.\n"
-        f"{json.dumps(context, separators=(',', ':'), sort_keys=True)}"
+        "This chat is read-only and must not publish control commands."
     )
+    if dropped:
+        header += f" Context budget applied; omitted: {', '.join(dropped)}."
+    return f"{header}\n{json.dumps(context, separators=(',', ':'), sort_keys=True)}"
 
 
 def _without_latest_frame(video: dict[str, Any]) -> dict[str, Any]:
@@ -419,14 +478,25 @@ def _age_seconds(ts: Any) -> float | None:
 def _rover_pose(rover: dict[str, Any]) -> dict[str, float] | None:
     pos = rover.get("position") or {}
     try:
-        return {
-            "x": float(pos.get("x")),
-            "y": float(pos.get("y")),
-            "z": float(pos.get("z") or 0.0),
-            "heading_deg": float(rover.get("heading_deg") or 0.0) % 360.0,
-        }
+        x = float(pos["x"])
+        y = float(pos["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    # B5: None heading means unknown — do not silently default to 0° (North),
+    # which would make directional queries return wrong results on stale telemetry.
+    heading_raw = rover.get("heading_deg")
+    if heading_raw is None:
+        return None
+    try:
+        heading = float(heading_raw) % 360.0
     except (TypeError, ValueError):
         return None
+    return {
+        "x": x,
+        "y": y,
+        "z": float(pos.get("z") or 0.0),
+        "heading_deg": heading,
+    }
 
 
 def _angle_delta_deg(target: float, heading: float) -> float:
@@ -472,3 +542,149 @@ def _parse_radius_query(text: str, default: float) -> float:
 def _parse_kind_query(text: str) -> str:
     match = re.search(r"(?:kind|type)\s+([a-z0-9_-]+)", text)
     return match.group(1) if match else ""
+
+
+# ---------------------------------------------------------------------------
+# Context budget helpers
+# ---------------------------------------------------------------------------
+
+_CONTEXT_BUDGET_CHARS_DEFAULT = 24000
+_CONTEXT_BUDGET_CHARS_MIN = 4000
+_CONTEXT_BUDGET_CHARS_MAX = 200000
+
+# Keywords that signal a user message references a specific always-on section.
+# If a section's keywords appear in the message it is protected from phase-1 drops.
+_SETTINGS_KEYWORDS: frozenset[str] = frozenset({
+    "mqtt", "broker", "topic", "config", "settings", "binding", "video",
+    "port", "control_hz", "telemetry_hz", "failsafe", "presence", "client_id",
+    "ingest", "delivery", "key_bind",
+})
+_LLM_KEYWORDS: frozenset[str] = frozenset({
+    "provider", "model", "api", "routing", "llm", "openai", "ollama",
+    "anthropic", "groq", "mistral", "cohere", "openrouter", "gemini",
+    "nvidia", "huggingface", "together", "lm_studio",
+})
+_SCENE_KEYWORDS: frozenset[str] = frozenset({
+    "terrain", "map", "object", "road", "spawn", "scene", "bounds",
+    "obstacle", "landmark", "tree", "rock", "building", "structure",
+    "site", "grid",
+})
+
+
+def _estimate_chars(data: Any) -> int:
+    return len(json.dumps(data, separators=(",", ":")))
+
+
+def _message_references(lower: str, keywords: frozenset[str]) -> bool:
+    return any(kw in lower for kw in keywords)
+
+
+def _trim_objects_list(detail: dict[str, Any], max_objects: int) -> dict[str, Any]:
+    out = dict(detail)
+    objects = out.get("objects")
+    if isinstance(objects, list) and len(objects) > max_objects:
+        out["objects"] = objects[:max_objects]
+        out["trimmed"] = True
+        out["original_count"] = len(objects)
+    return out
+
+
+def _trim_replay_sessions(replay: dict[str, Any], max_sessions: int) -> dict[str, Any]:
+    out = dict(replay)
+    sessions = out.get("sessions")
+    if isinstance(sessions, list) and len(sessions) > max_sessions:
+        out["sessions"] = sessions[:max_sessions]
+        out["trimmed"] = True
+        out["original_count"] = len(sessions)
+    return out
+
+
+def _apply_context_budget(
+    context: dict[str, Any],
+    triggered_detail_keys: set[str],
+    lower: str,
+    max_chars: int,
+) -> tuple[dict[str, Any], list[str]]:
+    """Return (trimmed_context, dropped_section_names).
+
+    Three-phase strategy:
+      Phase 1 — drop non-relevant always-on background sections first.
+      Phase 2 — trim large triggered detail sections (preserve, reduce size).
+      Phase 3 — last resort: drop triggered detail sections.
+    rover, runtime, and mission are never touched.
+    """
+    if _estimate_chars(context) <= max_chars:
+        return context, []
+
+    ctx = copy.deepcopy(context)
+    dropped: list[str] = []
+
+    # Phase 1: drop background sections the message doesn't reference.
+    # Settings/LLM are less useful than scene facts for rover-operation prompts,
+    # so shed them first when the prompt does not explicitly ask for them.
+    for key, keywords in (
+        ("settings", _SETTINGS_KEYWORDS),
+        ("llm", _LLM_KEYWORDS),
+        ("scene", _SCENE_KEYWORDS),
+    ):
+        if _estimate_chars(ctx) <= max_chars:
+            return ctx, dropped
+        if key in ctx and not _message_references(lower, keywords):
+            del ctx[key]
+            dropped.append(key)
+
+    if _estimate_chars(ctx) <= max_chars:
+        return ctx, dropped
+
+    # Phase 2: trim triggered detail sections — reduce size, do not drop
+    details = ctx.get("details")
+    if isinstance(details, dict):
+        # replay_sessions first — typically the largest
+        if "replay_sessions" in details:
+            details["replay_sessions"] = _trim_replay_sessions(details["replay_sessions"], max_sessions=5)
+            if _estimate_chars(ctx) <= max_chars:
+                return ctx, dropped
+
+        # recent_telemetry: first pass 10 → 5
+        if "recent_telemetry" in details:
+            entries = details["recent_telemetry"]
+            if isinstance(entries, list) and len(entries) > 5:
+                details["recent_telemetry"] = entries[:5]
+                if _estimate_chars(ctx) <= max_chars:
+                    return ctx, dropped
+
+        # object query results → top 10 by distance (already sorted)
+        for obj_key in ("objects_in_front", "objects_near_rover", "objects_by_kind"):
+            if obj_key in details:
+                details[obj_key] = _trim_objects_list(details[obj_key], max_objects=10)
+        if _estimate_chars(ctx) <= max_chars:
+            return ctx, dropped
+
+        # recent_telemetry: second pass 5 → 3
+        if "recent_telemetry" in details:
+            entries = details["recent_telemetry"]
+            if isinstance(entries, list) and len(entries) > 3:
+                details["recent_telemetry"] = entries[:3]
+                if _estimate_chars(ctx) <= max_chars:
+                    return ctx, dropped
+
+    # Phase 3: last resort — drop triggered sections entirely
+    details = ctx.get("details")
+    if isinstance(details, dict):
+        for key in (
+            "replay_sessions",
+            "recent_telemetry",
+            "current_replay",
+            "objects_by_kind",
+            "objects_near_rover",
+            "objects_in_front",
+        ):
+            if _estimate_chars(ctx) <= max_chars:
+                break
+            if key in details:
+                del details[key]
+                dropped.append(f"details.{key}")
+        if not details:
+            ctx.pop("details", None)
+
+    return ctx, dropped

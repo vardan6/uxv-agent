@@ -28,6 +28,7 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "rate": 1.0,
             "pitch": 1.0,
         },
+        "ai_context_budget_chars": 24000,
     },
     "llm_providers": [],
     "model_routing": {},

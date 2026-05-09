@@ -45,8 +45,10 @@ def build_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str
     provider_type = str(provider.get("provider_type", "openai_compatible"))
     if provider_type == "ollama":
         return _build_ollama_chat_model(provider)
-    if provider_type in {"anthropic", "cohere"}:
-        raise ValueError(f"{provider_type} chat support will be added with the provider-specific LangChain adapter.")
+    if provider_type == "anthropic":
+        return _build_anthropic_chat_model(provider, secret_resolver=secret_resolver)
+    if provider_type == "cohere":
+        raise ValueError("Cohere chat support requires langchain-cohere. Add it to requirements and implement _build_cohere_chat_model.")
     if provider_type not in OPENAI_COMPATIBLE_PROVIDER_TYPES:
         raise ValueError(f"Unsupported LLM provider type: {provider_type}")
 
@@ -67,6 +69,20 @@ def build_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str
     if not kwargs["model"]:
         raise ValueError("Selected LLM provider has no model_id.")
     return ChatOpenAI(**kwargs)
+
+
+def _build_anthropic_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError as exc:
+        raise RuntimeError("LangChain Anthropic integration is not installed. Run: pip install langchain-anthropic") from exc
+
+    model_id = str(provider.get("model_id") or "").strip()
+    if not model_id:
+        raise ValueError("Selected Anthropic provider has no model_id.")
+
+    api_key = _api_key_for_provider(provider, secret_resolver=secret_resolver)
+    return ChatAnthropic(model=model_id, api_key=api_key, temperature=0.2)
 
 
 def _build_ollama_chat_model(provider: dict[str, Any]) -> Any:
@@ -135,6 +151,4 @@ def _api_key_for_provider(provider: dict[str, Any], *, secret_resolver: Callable
 
 
 def _normalized_base_url(provider_type: str, base_url: str) -> str:
-    if provider_type == "lm_studio":
-        return base_url.rstrip("/")
     return base_url.rstrip("/")

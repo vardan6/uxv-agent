@@ -10,6 +10,7 @@ const aiState = {
   pendingUserMessageId: '',
   pendingAssistantMessageId: '',
   runMode: 'chat',
+  messageListPinnedToBottom: true,
   activeSpeechMessageId: '',
   activeSpeechUtterance: null,
   activeSpeechAudio: null,
@@ -109,6 +110,146 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+let _markdownReady = false;
+
+function ensureMarkdown() {
+  if (_markdownReady || typeof marked === 'undefined') return;
+  _markdownReady = true;
+  marked.use({
+    breaks: true,
+    gfm: true,
+    renderer: {
+      code({ text, lang }) {
+        const language = (lang || '').split(/\s/)[0];
+        const displayLang = language || 'plain';
+        const safeCode = text
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+        return `<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">${displayLang}</span><button class="code-copy-btn" type="button">Copy</button></div><pre><code class="language-${escapeHtml(language || 'plaintext')}">${safeCode}</code></pre></div>`;
+      },
+    },
+  });
+}
+
+const _MARKDOWN_PURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'h1','h2','h3','h4','h5','h6',
+    'p','br','strong','em','b','i','u','s','del','mark',
+    'code','pre','blockquote','hr',
+    'ul','ol','li',
+    'a','img',
+    'table','thead','tbody','tr','th','td',
+    'div','span','button',
+  ],
+  ALLOWED_ATTR: ['href','title','alt','src','class','type','rel','target'],
+  KEEP_CONTENT: true,
+};
+
+function renderMarkdown(content) {
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return escapeHtml(content);
+  }
+  ensureMarkdown();
+  const rawHtml = marked.parse(String(content || ''));
+  return DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+}
+
+function postRenderMessages() {
+  const list = aiEls.messageList;
+  const isStreaming = Boolean(aiState.pendingAssistantMessageId);
+
+  // Syntax highlight only when not streaming (avoids re-running hljs on every delta)
+  if (typeof hljs !== 'undefined' && !isStreaming) {
+    list.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+  }
+
+  // Copy raw markdown button
+  list.querySelectorAll('.ai-message-copy-md').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const md = btn.dataset.md || '';
+      navigator.clipboard.writeText(md).then(() => {
+        btn.innerHTML = aiCheckIcon();
+        btn.dataset.tooltip = 'Copied!';
+        setTimeout(() => {
+          btn.innerHTML = aiCopyIcon();
+          btn.dataset.tooltip = 'Copy markdown';
+        }, 1500);
+      }).catch(() => {});
+    });
+  });
+
+  // Re-attach copy button handlers (DOM is rebuilt each render)
+  list.querySelectorAll('.code-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.code-block-wrapper')?.querySelector('code');
+      if (!code) return;
+      navigator.clipboard.writeText(code.textContent).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+      }).catch(() => {});
+    });
+  });
+}
+
+function fmtTokens(n) {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n >= 10000) return `${Math.round(n / 1000)}K`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+function fmtTokPerSec(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 10) return `${Math.round(n)} tok/s`;
+  return `${n.toFixed(1)} tok/s`;
+}
+
+function messageStats(message) {
+  const meta = message.meta || {};
+  const rm = meta.response_metadata || {};
+  const latencyMs = message.latency_ms;
+
+  // OpenAI-compatible (NIM, vLLM, OpenAI)
+  const usage = rm.token_usage || rm.usage || {};
+  let inputTok = usage.prompt_tokens ?? usage.input_tokens ?? null;
+  let outputTok = usage.completion_tokens ?? usage.output_tokens ?? null;
+
+  // Ollama shape
+  if (inputTok === null && rm.prompt_eval_count != null) inputTok = rm.prompt_eval_count;
+  if (outputTok === null && rm.eval_count != null) outputTok = rm.eval_count;
+
+  // tok/s: prefer Ollama's precise eval_duration (nanoseconds), else wall-clock latency
+  let tokPerSec = null;
+  if (outputTok != null) {
+    if (rm.eval_duration > 0) {
+      tokPerSec = outputTok / (rm.eval_duration / 1e9);
+    } else if (latencyMs > 0) {
+      tokPerSec = outputTok / (latencyMs / 1000);
+    }
+  }
+
+  const finishReason = rm.finish_reason || rm.stop_reason || null;
+  const showFinish = finishReason && finishReason !== 'stop' && finishReason !== 'end_turn';
+
+  // Context window fill — from provider config
+  const provider = providerById(message.provider_id || '');
+  const ctxMax = provider?.context_window || null;
+
+  const parts = [];
+  if (inputTok != null && ctxMax) {
+    const pct = Math.round((inputTok / ctxMax) * 100);
+    parts.push(`ctx ${fmtTokens(inputTok)}/${fmtTokens(ctxMax)} (${pct}%)`);
+  } else if (inputTok != null) {
+    parts.push(`↑${fmtTokens(inputTok)}`);
+  }
+  if (outputTok != null) parts.push(`↓${fmtTokens(outputTok)} tok`);
+  if (tokPerSec != null) parts.push(fmtTokPerSec(tokPerSec));
+  if (showFinish) parts.push(`[${finishReason}]`);
+  return parts.join(' · ');
+}
+
 function formatAiTime(value) {
   if (!value) return '';
   return new Date(value * 1000).toLocaleString([], {
@@ -132,6 +273,10 @@ function activeProviderId() {
 function generalChatProviderId() {
   const rule = aiState.routing?.general_chat || {};
   return rule.primary_provider_id || '';
+}
+
+function currentProvider() {
+  return providerById(activeProviderId() || generalChatProviderId());
 }
 
 function enabledChatProviders() {
@@ -177,13 +322,33 @@ function runModeLabel(runMode) {
   return normalizeRunMode(runMode) === 'agent' ? 'Agent' : 'Chat';
 }
 
+function providerSupportsAgentMode(provider) {
+  if (!provider) return true;
+  const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
+  if (capabilities.includes('tool_calling') || capabilities.includes('planner')) {
+    return true;
+  }
+  return String(provider.provider_type || '').trim().toLowerCase() !== 'ollama';
+}
+
 function renderRunModeToggle() {
+  const provider = currentProvider();
   const runMode = currentRunMode();
+  const agentSupported = providerSupportsAgentMode(provider);
   aiEls.runModeButtons.forEach((button) => {
-    const active = normalizeRunMode(button.dataset.runMode) === runMode;
+    const buttonRunMode = normalizeRunMode(button.dataset.runMode);
+    const active = buttonRunMode === runMode;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    button.disabled = aiState.sending || Boolean(aiState.activeSession?.archived_at);
+    button.disabled = aiState.sending
+      || Boolean(aiState.activeSession?.archived_at);
+    if (buttonRunMode === 'agent') {
+      const title = agentSupported
+        ? 'Use read-only rover tools when the provider supports tool calling'
+        : 'This provider may fall back to plain agent chat without tool calls';
+      button.title = title;
+      button.setAttribute('aria-label', title);
+    }
   });
 }
 
@@ -271,6 +436,23 @@ function aiStopIcon() {
   return `
     <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M7 7h10v10H7z"></path>
+    </svg>
+  `;
+}
+
+function aiCopyIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="9" y="2" width="10" height="14" rx="2"/>
+      <path d="M5 6H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/>
+    </svg>
+  `;
+}
+
+function aiCheckIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M20 6 9 17l-5-5"/>
     </svg>
   `;
 }
@@ -554,9 +736,21 @@ function renderSessionList() {
   }
 }
 
+function isMessageListNearBottom(threshold = 40) {
+  if (!aiEls.messageList) return true;
+  const { scrollTop, scrollHeight, clientHeight } = aiEls.messageList;
+  return (scrollHeight - clientHeight - scrollTop) <= threshold;
+}
+
+function updateMessageListScrollIntent() {
+  aiState.messageListPinnedToBottom = isMessageListNearBottom();
+}
+
 function renderMessages(options = {}) {
   const preserveScroll = Boolean(options.preserveScroll);
-  const previousScrollTop = preserveScroll ? aiEls.messageList.scrollTop : 0;
+  const forceScrollBottom = Boolean(options.forceScrollBottom);
+  const previousScrollTop = aiEls.messageList.scrollTop;
+  const shouldStickToBottom = forceScrollBottom || (!preserveScroll && aiState.messageListPinnedToBottom);
   const messages = aiState.activeSession?.messages || [];
   const pendingAssistantId = aiState.pendingAssistantMessageId;
   const viewingArchived = Boolean(aiState.activeSession?.archived_at);
@@ -569,7 +763,7 @@ function renderMessages(options = {}) {
   aiEls.stopMessage.disabled = !aiState.sending || !aiState.activeRequestAbortController;
   aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
   aiEls.retryResponse.setAttribute('aria-label', 'Retry the last model response');
-  aiEls.messageInput.disabled = aiState.sending || viewingArchived;
+  aiEls.messageInput.disabled = viewingArchived;
   aiEls.messageInput.placeholder = viewingArchived
     ? 'Restore this archived chat to continue messaging'
     : (currentRunMode() === 'agent' ? 'Ask the read-only rover agent' : 'Ask the configured General Chat provider');
@@ -629,6 +823,18 @@ function renderMessages(options = {}) {
                 ${isSpeaking ? '' : 'disabled'}
               >${aiStopIcon()}</button>`
             : ''}
+          ${message.role === 'assistant' && !isPendingAssistant && String(message.content || '').trim()
+            ? `<button
+                class="ghost ai-message-copy-md"
+                type="button"
+                data-message-action="copy-md"
+                data-message-id="${escapeHtml(message.id)}"
+                data-md="${escapeHtml(message.content)}"
+                data-tooltip="Copy markdown"
+                title="Copy markdown"
+                aria-label="Copy markdown"
+              >${aiCopyIcon()}</button>`
+            : ''}
           <button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>
           <span>${escapeHtml(formatAiTime(message.created_at))}</span>
         </span>
@@ -641,14 +847,21 @@ function renderMessages(options = {}) {
             </span>
             <span class="ai-thinking-text">Thinking</span>
           </span>`
-        : escapeHtml(message.content)}</div>
+        : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}</div>
       ${message.role === 'assistant'
-        ? `<div class="ai-message-foot">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}</div>`
+        ? (() => {
+            const stats = messageStats(message);
+            return `<div class="ai-message-foot">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}${stats ? ` · ${escapeHtml(stats)}` : ''}</div>`;
+          })()
         : ''}
     </article>
   `;
   }).join('');
-  aiEls.messageList.scrollTop = preserveScroll ? previousScrollTop : aiEls.messageList.scrollHeight;
+  postRenderMessages();
+  aiEls.messageList.scrollTop = shouldStickToBottom
+    ? aiEls.messageList.scrollHeight
+    : previousScrollTop;
+  updateMessageListScrollIntent();
 }
 
 function pushLocalPendingMessages(content, runMode = currentRunMode()) {
@@ -857,8 +1070,9 @@ async function openSession(sessionId) {
   const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
   aiState.activeSession = result.session;
   aiState.runMode = sessionModeToRunMode(result.session);
+  aiState.messageListPinnedToBottom = true;
   renderSessionList();
-  renderMessages();
+  renderMessages({ forceScrollBottom: true });
   setAiStatus('Ready.', 'ok');
 }
 
@@ -961,12 +1175,18 @@ async function updateSessionProvider() {
     body: JSON.stringify({ provider_id: providerId }),
   });
   aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  if (currentRunMode() === 'agent' && !providerSupportsAgentMode(currentProvider())) {
+    setAiStatus('Selected provider may answer in agent mode without tool calls.', 'warn');
+  }
   await loadSessions();
   renderMessages();
 }
 
 async function updateSessionRunMode(runMode) {
   aiState.runMode = normalizeRunMode(runMode);
+  if (aiState.runMode === 'agent' && !providerSupportsAgentMode(currentProvider())) {
+    setAiStatus('Selected provider may answer in agent mode without tool calls.', 'warn');
+  }
   renderRunModeToggle();
   renderMessages({ preserveScroll: true });
   if (!aiState.activeSession) return;
@@ -1030,6 +1250,7 @@ async function sendMessage(event) {
     aiState.activeRequestAbortController = null;
     clearPendingMessageIds();
     renderMessages();
+    aiEls.messageInput.focus();
   }
 }
 
@@ -1038,7 +1259,7 @@ async function resendMessage(messageId) {
   const message = (aiState.activeSession.messages || []).find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
-  const runMode = messageRunMode(message);
+  const runMode = currentRunMode();
   const sessionId = aiState.activeSession.id;
   aiState.sending = true;
   const abortController = new AbortController();
@@ -1341,6 +1562,7 @@ function bindAi() {
     resizeComposer();
     updateComposerState();
   });
+  aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
     const action = event.target.closest('[data-message-action]');
     if (!action) return;

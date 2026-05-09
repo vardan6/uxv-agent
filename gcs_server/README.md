@@ -30,9 +30,11 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Replay scene map loaded from `config/terrain_scene.v1.json`
 - Theme controls with persisted mode + light/dark theme variants
 - LLM provider settings, provider checks, and purpose-based model routing
-- `/ai` provider-backed General Chat with persistent SQLite sessions
+- `/ai` provider-backed Chat and read-only Agent modes with persistent SQLite sessions
 - Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
 - AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
+- Chat/Agent composer mode toggle
+- Read-only Agent mode tools for current rover state, scene summary, front/near/by-kind object queries, mission state, and replay analytics
 
 ## Current Limitations
 
@@ -42,7 +44,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
-- AI Chat is read-only; the first live current-context layer is implemented, but rover intent parsing, RAG/source controls, web research/search, LangGraph workflows, and rover-agent command workflows are not implemented yet
+- AI Chat and Agent mode are read-only; the first live current-context layer and read-only agent tools are implemented, but rover intent parsing, RAG/source controls, web research/search, LangGraph workflows, and rover-agent command workflows are not implemented yet
 
 ## Dependencies
 
@@ -138,7 +140,7 @@ Main modules:
 - `video.py`: MQTT camera frame decoding helper
 - `ai/provider_registry.py`: configured provider to LangChain model adapter
 - `ai/context_service.py`: live rover/runtime/settings/LLM/map/replay current-context providers for AI Chat
-- `ai/chat_service.py`: read-only General Chat orchestration
+- `ai/chat_service.py`: read-only Chat/Agent orchestration
 - `ai/session_store.py`: SQLite AI session and message storage
 - `ai/secret_store.py`: local stored-secret helper
 - `static/`: browser UI assets
@@ -188,7 +190,7 @@ Not implemented yet:
 ## AI Chat Model
 
 Implemented now:
-- `/ai` provides read-only General Chat for configured providers
+- `/ai` provides read-only Chat/Agent modes for configured providers
 - AI sessions and messages persist to SQLite
 - chat calls go through the project LangChain provider adapter layer
 - OpenAI-compatible providers and Ollama are supported by the current runtime adapter
@@ -197,11 +199,15 @@ Implemented now:
 - each AI send/retry call receives compact live context after the system prompt
 - assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
 - current rover state, runtime state, saved settings, LLM provider/routing summaries, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
+- Agent mode exposes synchronous read-only tools for current rover state, scene summary, object queries in front/near/by kind, mission state, and replay analytics
+- Agent tools close over the request's prebuilt context snapshot so they do not await runtime state inside LangChain's synchronous tool loop
 - settings and LLM context are structured current facts, not RAG documents
 - larger map/object/replay/perception details should be retrieved on demand through tools rather than injected into every chat prompt
 - sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values
 
 Not implemented yet:
+- runtime progress events during agent tool iterations
+- dedicated `SpatialQueryService` and permissioned `ToolRegistry`
 - RAG source controls and document upload
 - web research/search as a chat source
 - richer recent-history and mission retrieval in chat
@@ -233,7 +239,7 @@ The current bootstrap path is functional:
 
 The next work is:
 - actual `rover-sim-next` backend implementation
-- spatial query service extraction and an agent-ready tool registry
+- agent tool progress events, spatial query service extraction, and an agent-ready permissioned tool registry
 - supervised rover intent parsing and mission draft planning
 - RAG/web-grounded AI Chat source controls
 - live map on the main dashboard

@@ -65,6 +65,7 @@ const settingsEls = {
   llmSecretValue: document.getElementById('llm-secret-value'),
   llmBaseUrl: document.getElementById('llm-base-url'),
   llmModelId: document.getElementById('llm-model-id'),
+  llmContextWindow: document.getElementById('llm-context-window'),
   llmCapabilities: document.getElementById('llm-capabilities'),
   llmEnabled: document.getElementById('llm-enabled'),
   llmCheckDraft: document.getElementById('llm-check-draft'),
@@ -832,6 +833,7 @@ function readProviderForm() {
     base_url: settingsEls.llmBaseUrl.value.trim(),
     model_id: settingsEls.llmModelId.value.trim(),
     capabilities: settingsEls.llmCapabilities.value.split(',').map((item) => item.trim()).filter(Boolean),
+    context_window: settingsEls.llmContextWindow.value ? parseInt(settingsEls.llmContextWindow.value, 10) : null,
     enabled: settingsEls.llmEnabled.checked,
   };
   if (authMode === 'stored_secret') {
@@ -861,6 +863,7 @@ function fillProviderForm(provider = {}) {
   settingsEls.llmBaseUrl.value = provider.base_url || '';
   settingsEls.llmModelId.value = provider.model_id || '';
   settingsEls.llmCapabilities.value = Array.isArray(provider.capabilities) ? provider.capabilities.join(', ') : '';
+  settingsEls.llmContextWindow.value = provider.context_window || '';
   settingsEls.llmEnabled.checked = provider.enabled !== false;
   if (settingsEls.llmFormModePill) {
     settingsEls.llmFormModePill.textContent = provider.id ? 'Editing selected provider' : 'New provider';
