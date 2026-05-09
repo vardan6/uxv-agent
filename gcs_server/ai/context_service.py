@@ -23,7 +23,12 @@ class AIContextService:
     def __init__(self, runtime: Any):
         self._runtime = runtime
 
-    async def build_compact_context(self, user_message: str = "", session_id: str = "") -> AIContextSnapshot:
+    async def build_compact_context(
+        self,
+        user_message: str = "",
+        session_id: str = "",
+        timezone_name: str = "",
+    ) -> AIContextSnapshot:
         providers = [
             "get_current_rover_state",
             "get_runtime_context",
@@ -61,6 +66,10 @@ class AIContextService:
             details["current_replay"] = self.get_current_replay_summary()
             details["recent_telemetry"] = self.get_recent_telemetry(seconds=120, limit=10)
             providers.extend(["get_current_replay_summary", "get_recent_telemetry"])
+        replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name)
+        if replay_context.get("available"):
+            details["replay_sessions"] = replay_context
+            providers.append("get_replay_session_context")
 
         context = {
             "generated_at": time.time(),
@@ -77,6 +86,7 @@ class AIContextService:
             meta={
                 "context_snapshot": context,
                 "context_providers": sorted(set(providers)),
+                "operator_timezone": str(timezone_name or "").strip(),
             },
         )
 
@@ -304,6 +314,16 @@ class AIContextService:
 
     def get_recent_telemetry(self, seconds: int = 120, limit: int = 20) -> list[dict[str, Any]]:
         return self._runtime.replay_store.get_recent_telemetry(seconds=seconds, limit=limit)
+
+    def get_replay_session_context(self, user_message: str, *, timezone_name: str = "") -> dict[str, Any]:
+        analytics = getattr(self._runtime, "replay_analytics", None)
+        if analytics is None:
+            return {"available": False}
+        return analytics.build_ai_replay_context(
+            user_message,
+            active_session_id=self._runtime.replay_store.current_session_id,
+            timezone_name=timezone_name,
+        )
 
     def get_current_mission_state(self) -> dict[str, Any]:
         return {

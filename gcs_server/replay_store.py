@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -107,28 +108,33 @@ class ReplayStore:
         gps = payload.get("gps") or {}
         orientation = payload.get("orientation") or {}
         speed = payload.get("speed") or {}
+        validity = payload.get("validity") or {}
         ts = float(payload.get("timestamp") or time.time())
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO replay_telemetry (
                   session_id, ts, payload_json, position_x, position_y, position_z,
-                  gps_lat, gps_lon, gps_alt, heading_deg, speed_m_s, speed_km_h
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  gps_lat, gps_lon, gps_alt, heading_deg, speed_m_s, speed_km_h,
+                  has_position, has_gps, position_frame
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
                     ts,
                     _json(payload),
-                    float(pos.get("x") or 0.0),
-                    float(pos.get("y") or 0.0),
-                    float(pos.get("z") or 0.0),
-                    float(gps.get("lat") or 0.0),
-                    float(gps.get("lon") or 0.0),
-                    float(gps.get("alt") or 0.0),
-                    float(orientation.get("heading_deg") or 0.0),
-                    float(speed.get("m_s") or 0.0),
-                    float(speed.get("km_h") or 0.0),
+                    _optional_float(pos.get("x")) if validity.get("has_position") else None,
+                    _optional_float(pos.get("y")) if validity.get("has_position") else None,
+                    _optional_float(pos.get("z")) if validity.get("has_position") else None,
+                    _optional_float(gps.get("lat")) if validity.get("has_gps") else None,
+                    _optional_float(gps.get("lon")) if validity.get("has_gps") else None,
+                    _optional_float(gps.get("alt")) if validity.get("has_gps") else None,
+                    _optional_float(orientation.get("heading_deg")) if validity.get("has_heading") else None,
+                    _optional_float(speed.get("m_s")) if validity.get("has_speed") else None,
+                    _optional_float(speed.get("km_h")) if validity.get("has_speed") else None,
+                    1 if validity.get("has_position") else 0,
+                    1 if validity.get("has_gps") else 0,
+                    str(payload.get("position_frame") or "unknown"),
                 ),
             )
             conn.commit()
@@ -181,10 +187,27 @@ class ReplayStore:
             )
             conn.commit()
 
-    def list_sessions(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_sessions(
+        self,
+        limit: int = 100,
+        *,
+        started_at_from: float | None = None,
+        started_at_to: float | None = None,
+        order: str = "desc",
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if started_at_from is not None:
+            clauses.append("s.started_at >= ?")
+            params.append(float(started_at_from))
+        if started_at_to is not None:
+            clauses.append("s.started_at < ?")
+            params.append(float(started_at_to))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order_sql = "ASC" if str(order).strip().lower() == "asc" else "DESC"
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                   s.session_id,
                   s.started_at,
@@ -198,10 +221,11 @@ class ReplayStore:
                   (SELECT COUNT(*) FROM replay_controls c WHERE c.session_id = s.session_id) AS control_count,
                   (SELECT COUNT(*) FROM replay_runtime_events e WHERE e.session_id = s.session_id) AS runtime_event_count
                 FROM replay_sessions s
-                ORDER BY s.started_at DESC
+                {where}
+                ORDER BY s.started_at {order_sql}
                 LIMIT ?
                 """,
-                (max(1, int(limit)),),
+                (*params, max(1, int(limit))),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -331,6 +355,127 @@ class ReplayStore:
             ],
         }
 
+    def list_telemetry_samples(self, session_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        query = """
+            SELECT ts, payload_json, position_x, position_y, position_z, gps_lat, gps_lon, gps_alt,
+                   heading_deg, speed_m_s, speed_km_h, has_position, has_gps, position_frame
+            FROM replay_telemetry
+            WHERE session_id = ?
+            ORDER BY ts ASC
+        """
+        params: list[Any] = [session_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "ts": row["ts"],
+                "payload": json.loads(row["payload_json"]),
+                "position": _row_position(row),
+                "gps": _row_gps(row),
+                "heading_deg": row["heading_deg"],
+                "speed_m_s": row["speed_m_s"],
+                "speed_km_h": row["speed_km_h"],
+                "has_position": bool(row["has_position"]),
+                "has_gps": bool(row["has_gps"]),
+                "position_frame": row["position_frame"] or "unknown",
+            }
+            for row in rows
+        ]
+
+    def list_session_events(
+        self,
+        session_id: str,
+        *,
+        event_type: str = "",
+        text: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if event_type.strip():
+            clauses.append("event_type = ?")
+            params.append(event_type.strip())
+        if text.strip():
+            pattern = f"%{text.strip().lower()}%"
+            clauses.append("(LOWER(event_type) LIKE ? OR LOWER(payload_json) LIKE ?)")
+            params.extend([pattern, pattern])
+        query = f"""
+            SELECT ts, level, event_type, payload_json
+            FROM replay_runtime_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "ts": row["ts"],
+                "level": row["level"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in reversed(rows)
+        ]
+
+    def save_session_metrics(self, session_id: str, metrics: dict[str, Any]) -> None:
+        now = time.time()
+        metrics_payload = dict(metrics)
+        metrics_payload["computed_at"] = now
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO replay_session_metrics (
+                  session_id, computed_at, telemetry_sample_count, position_sample_count,
+                  duration_s, path_length_m, net_displacement_m, max_distance_from_start_m,
+                  max_speed_m_s, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                  computed_at = excluded.computed_at,
+                  telemetry_sample_count = excluded.telemetry_sample_count,
+                  position_sample_count = excluded.position_sample_count,
+                  duration_s = excluded.duration_s,
+                  path_length_m = excluded.path_length_m,
+                  net_displacement_m = excluded.net_displacement_m,
+                  max_distance_from_start_m = excluded.max_distance_from_start_m,
+                  max_speed_m_s = excluded.max_speed_m_s,
+                  metrics_json = excluded.metrics_json
+                """,
+                (
+                    session_id,
+                    now,
+                    metrics.get("telemetry_sample_count"),
+                    metrics.get("position_sample_count"),
+                    metrics.get("duration_s"),
+                    metrics.get("path_length_m"),
+                    metrics.get("net_displacement_m"),
+                    metrics.get("max_distance_from_start_m"),
+                    metrics.get("max_speed_m_s"),
+                    _json(metrics_payload),
+                ),
+            )
+            conn.commit()
+
+    def get_cached_session_metrics(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM replay_session_metrics WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["metrics_json"]) if row["metrics_json"] else {}
+        if isinstance(payload, dict):
+            if payload.get("computed_at") in {None, ""}:
+                payload["computed_at"] = row["computed_at"]
+            payload.setdefault("session_id", session_id)
+            return payload
+        return None
+
     def _connect(self) -> sqlite3.Connection:
         with self._lock:
             conn = sqlite3.connect(self._db_path)
@@ -368,6 +513,9 @@ class ReplayStore:
                   heading_deg REAL,
                   speed_m_s REAL,
                   speed_km_h REAL,
+                  has_position INTEGER NOT NULL DEFAULT 0,
+                  has_gps INTEGER NOT NULL DEFAULT 0,
+                  position_frame TEXT NOT NULL DEFAULT 'unknown',
                   FOREIGN KEY(session_id) REFERENCES replay_sessions(session_id)
                 );
                 CREATE TABLE IF NOT EXISTS replay_controls (
@@ -397,10 +545,138 @@ class ReplayStore:
                   metadata_json TEXT NOT NULL,
                   FOREIGN KEY(session_id) REFERENCES replay_sessions(session_id)
                 );
+                CREATE TABLE IF NOT EXISTS replay_session_metrics (
+                  session_id TEXT PRIMARY KEY,
+                  computed_at REAL NOT NULL,
+                  telemetry_sample_count INTEGER,
+                  position_sample_count INTEGER,
+                  duration_s REAL,
+                  path_length_m REAL,
+                  net_displacement_m REAL,
+                  max_distance_from_start_m REAL,
+                  max_speed_m_s REAL,
+                  metrics_json TEXT NOT NULL DEFAULT '{}',
+                  FOREIGN KEY(session_id) REFERENCES replay_sessions(session_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_replay_telemetry_session_ts ON replay_telemetry(session_id, ts);
                 CREATE INDEX IF NOT EXISTS idx_replay_controls_session_ts ON replay_controls(session_id, ts);
                 CREATE INDEX IF NOT EXISTS idx_replay_runtime_events_session_ts ON replay_runtime_events(session_id, ts);
                 CREATE INDEX IF NOT EXISTS idx_replay_media_refs_session_pts ON replay_media_refs(session_id, pts);
+                CREATE INDEX IF NOT EXISTS idx_replay_session_metrics_computed_at ON replay_session_metrics(computed_at DESC);
                 """
             )
+            self._ensure_column(conn, "replay_telemetry", "has_position", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "replay_telemetry", "has_gps", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "replay_telemetry", "position_frame", "TEXT NOT NULL DEFAULT 'unknown'")
+            self._backfill_telemetry_validity(conn)
             conn.commit()
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column in columns:
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _backfill_telemetry_validity(conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT id, payload_json, position_x, position_y, position_z, gps_lat, gps_lon, gps_alt,
+                   heading_deg, speed_m_s, speed_km_h, has_position, has_gps, position_frame
+            FROM replay_telemetry
+            WHERE position_frame = 'unknown' AND has_position = 0 AND has_gps = 0
+            """
+        ).fetchall()
+        updates: list[tuple[Any, ...]] = []
+        for row in rows:
+            payload = _load_json_value(row["payload_json"])
+            validity = payload.get("validity") if isinstance(payload.get("validity"), dict) else {}
+            position = payload.get("position") if isinstance(payload.get("position"), dict) else {}
+            gps = payload.get("gps") if isinstance(payload.get("gps"), dict) else {}
+            orientation = payload.get("orientation") if isinstance(payload.get("orientation"), dict) else {}
+            speed = payload.get("speed") if isinstance(payload.get("speed"), dict) else {}
+
+            has_position = bool(validity.get("has_position")) or (
+                _optional_float(position.get("x")) is not None and _optional_float(position.get("y")) is not None
+            )
+            has_gps = bool(validity.get("has_gps")) or (
+                _optional_float(gps.get("lat")) is not None and _optional_float(gps.get("lon")) is not None
+            )
+            heading = row["heading_deg"] if row["heading_deg"] is not None else _optional_float(orientation.get("heading_deg"))
+            speed_m_s = row["speed_m_s"] if row["speed_m_s"] is not None else _optional_float(speed.get("m_s"))
+            speed_km_h = row["speed_km_h"] if row["speed_km_h"] is not None else _optional_float(speed.get("km_h"))
+            position_frame = "local_xy" if has_position else ("gps_wgs84" if has_gps else "unknown")
+            updates.append(
+                (
+                    _optional_float(position.get("x")) if has_position else row["position_x"],
+                    _optional_float(position.get("y")) if has_position else row["position_y"],
+                    _optional_float(position.get("z")) if has_position else row["position_z"],
+                    _optional_float(gps.get("lat")) if has_gps else row["gps_lat"],
+                    _optional_float(gps.get("lon")) if has_gps else row["gps_lon"],
+                    _optional_float(gps.get("alt")) if has_gps else row["gps_alt"],
+                    heading,
+                    speed_m_s,
+                    speed_km_h,
+                    1 if has_position else 0,
+                    1 if has_gps else 0,
+                    position_frame,
+                    row["id"],
+                )
+            )
+        if not updates:
+            return
+        conn.executemany(
+            """
+            UPDATE replay_telemetry
+            SET position_x = ?, position_y = ?, position_z = ?,
+                gps_lat = ?, gps_lon = ?, gps_alt = ?,
+                heading_deg = ?, speed_m_s = ?, speed_km_h = ?,
+                has_position = ?, has_gps = ?, position_frame = ?
+            WHERE id = ?
+            """,
+            updates,
+        )
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return float(value)
+    return None
+
+
+def _load_json_value(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _row_position(row: sqlite3.Row) -> dict[str, Any] | None:
+    if not bool(row["has_position"]):
+        return None
+    if row["position_x"] is None or row["position_y"] is None:
+        return None
+    return {
+        "x": float(row["position_x"]),
+        "y": float(row["position_y"]),
+        "z": float(row["position_z"] or 0.0),
+    }
+
+
+def _row_gps(row: sqlite3.Row) -> dict[str, Any] | None:
+    if not bool(row["has_gps"]):
+        return None
+    if row["gps_lat"] is None or row["gps_lon"] is None:
+        return None
+    return {
+        "lat": float(row["gps_lat"]),
+        "lon": float(row["gps_lon"]),
+        "alt": float(row["gps_alt"] or 0.0),
+    }

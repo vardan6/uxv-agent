@@ -18,12 +18,14 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 try:
+    from gcs_server.ai.agent_tools import ReadOnlyAgentToolset
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
+    from ai.agent_tools import ReadOnlyAgentToolset
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService
     from config import load_config, save_config
@@ -59,6 +61,12 @@ ROUTING_PURPOSES = {
     "reporter": "Reporter",
     "embeddings": "Embeddings",
     "vision_object_description": "Vision / Object Description",
+}
+
+DEFAULT_ROVER_AVAILABILITY_POLICY = {
+    "connected_threshold_seconds": 2,
+    "unavailable_threshold_seconds": 60,
+    "rollover_on_reconnect": True,
 }
 
 
@@ -134,6 +142,7 @@ def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
 
 
 def _connectivity_payload(config) -> dict[str, Any]:
+    rover_availability = _rover_availability_policy(config)
     return {
         "mqtt": {
             "broker_host": config.mqtt.get("broker_host", ""),
@@ -144,6 +153,7 @@ def _connectivity_payload(config) -> dict[str, Any]:
             "state_topic": config.mqtt.get("state_topic", "telemetry/state"),
             "camera_topic": config.mqtt.get("camera_topic", "camera-feed"),
             "control_hz": int(config.mqtt.get("control_hz", 20)),
+            "rover_availability": rover_availability,
         },
         "simulation": {
             "backend": str(config.simulation.get("backend", "3d-env")) or "3d-env",
@@ -164,6 +174,34 @@ def _resolve_backend_config_path(path_text: str) -> Path:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="path must stay inside the config directory") from exc
     return resolved
+
+
+def _rover_availability_policy_from_mqtt(mqtt: dict[str, Any] | None) -> dict[str, Any]:
+    raw_policy = mqtt.get("rover_availability", {}) if isinstance(mqtt, dict) else {}
+    policy = raw_policy if isinstance(raw_policy, dict) else {}
+    connected = policy.get("connected_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["connected_threshold_seconds"])
+    unavailable = policy.get("unavailable_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["unavailable_threshold_seconds"])
+    rollover = policy.get("rollover_on_reconnect", DEFAULT_ROVER_AVAILABILITY_POLICY["rollover_on_reconnect"])
+    try:
+        connected_value = max(0, int(connected))
+    except (TypeError, ValueError):
+        connected_value = DEFAULT_ROVER_AVAILABILITY_POLICY["connected_threshold_seconds"]
+    try:
+        unavailable_value = max(1, int(unavailable))
+    except (TypeError, ValueError):
+        unavailable_value = DEFAULT_ROVER_AVAILABILITY_POLICY["unavailable_threshold_seconds"]
+    if unavailable_value < connected_value:
+        unavailable_value = connected_value
+    return {
+        "connected_threshold_seconds": connected_value,
+        "unavailable_threshold_seconds": unavailable_value,
+        "rollover_on_reconnect": bool(rollover),
+    }
+
+
+def _rover_availability_policy(config) -> dict[str, Any]:
+    mqtt = config.mqtt if hasattr(config, "mqtt") else {}
+    return _rover_availability_policy_from_mqtt(mqtt if isinstance(mqtt, dict) else {})
 
 
 def _load_existing_json_dict(path: Path) -> dict[str, Any]:
@@ -568,6 +606,7 @@ async def snapshot(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     data = await runtime.state_store.snapshot()
     data["simulation"] = runtime.config.simulation
+    data["rover_availability"] = _rover_availability_policy(runtime.config)
     return data
 
 
@@ -761,11 +800,32 @@ def _public_ai_session(session: dict[str, Any], include_messages: bool = False) 
 
 
 def _ai_chat_service(runtime: AppRuntime) -> AIChatService:
-    return AIChatService(runtime.ai_store, secret_resolver=runtime.secret_store.get_secret)
+    return AIChatService(
+        runtime.ai_store,
+        secret_resolver=runtime.secret_store.get_secret,
+        agent_toolset=ReadOnlyAgentToolset(runtime),
+    )
 
 
-async def _ai_context_snapshot(runtime: AppRuntime, user_message: str = "", session_id: str = "") -> dict[str, Any]:
-    snapshot = await AIContextService(runtime).build_compact_context(user_message, session_id=session_id)
+def _request_timezone_name(request: Request, payload: dict[str, Any] | None = None) -> str:
+    if isinstance(payload, dict):
+        clean = str(payload.get("timezone", "")).strip()
+        if clean:
+            return clean
+    return str(request.headers.get("x-operator-timezone", "")).strip()
+
+
+async def _ai_context_snapshot(
+    runtime: AppRuntime,
+    user_message: str = "",
+    session_id: str = "",
+    timezone_name: str = "",
+) -> dict[str, Any]:
+    snapshot = await AIContextService(runtime).build_compact_context(
+        user_message,
+        session_id=session_id,
+        timezone_name=timezone_name,
+    )
     return {"prompt": snapshot.prompt, "meta": snapshot.meta}
 
 
@@ -774,6 +834,15 @@ def _latest_user_content(messages: list[dict[str, Any]]) -> str:
         if message.get("role") == "user":
             return str(message.get("content") or "")
     return ""
+
+
+def _ai_run_mode(payload: dict[str, Any]) -> str:
+    clean = str(payload.get("run_mode", "chat")).strip().lower()
+    if clean in {"", "chat", "general_chat"}:
+        return "chat"
+    if clean == "agent":
+        return "agent"
+    raise HTTPException(status_code=400, detail="run_mode must be chat or agent")
 
 
 async def _run_ai_call(runtime: AppRuntime, func, *args) -> Any:
@@ -984,8 +1053,10 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
+    run_mode = _ai_run_mode(payload)
+    timezone_name = _request_timezone_name(request, payload)
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id)
+        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id, timezone_name=timezone_name)
         result = await _run_ai_call(
             runtime,
             _ai_chat_service(runtime).send_message,
@@ -993,6 +1064,8 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
             session_id,
             content,
             context_snapshot,
+            run_mode,
+            {"timezone_name": timezone_name},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1013,13 +1086,17 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
+    run_mode = _ai_run_mode(payload)
+    timezone_name = _request_timezone_name(request, payload)
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id)
+        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id, timezone_name=timezone_name)
         stream = _ai_chat_service(runtime).stream_message_events(
             runtime.config,
             session_id,
             content,
             context_snapshot,
+            run_mode,
+            {"timezone_name": timezone_name},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1037,10 +1114,16 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
 async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
     try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    timezone_name = _request_timezone_name(request, payload)
+    try:
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
             session_id=session_id,
+            timezone_name=timezone_name,
         )
         result = await _run_ai_call(
             runtime,
@@ -1048,6 +1131,7 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
             runtime.config,
             session_id,
             context_snapshot,
+            {"timezone_name": timezone_name},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1065,15 +1149,22 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
 async def retry_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
     runtime = _runtime(request)
     try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    timezone_name = _request_timezone_name(request, payload)
+    try:
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
             session_id=session_id,
+            timezone_name=timezone_name,
         )
         stream = _ai_chat_service(runtime).stream_retry_events(
             runtime.config,
             session_id,
             context_snapshot,
+            {"timezone_name": timezone_name},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1294,7 +1385,8 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="mqtt object is required")
 
     current = dict(runtime.config.mqtt)
-    updated = {
+    updated = dict(current)
+    updated.update({
         "broker_host": str(mqtt_payload.get("broker_host", current.get("broker_host", ""))).strip(),
         "broker_port": int(mqtt_payload.get("broker_port", current.get("broker_port", 1883))),
         "topic_prefix": str(mqtt_payload.get("topic_prefix", current.get("topic_prefix", ""))).strip(),
@@ -1303,13 +1395,14 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         "state_topic": str(mqtt_payload.get("state_topic", current.get("state_topic", "telemetry/state"))).strip(),
         "camera_topic": str(mqtt_payload.get("camera_topic", current.get("camera_topic", "camera-feed"))).strip(),
         "control_hz": int(mqtt_payload.get("control_hz", current.get("control_hz", 20))),
-    }
+    })
     if not updated["broker_host"]:
         raise HTTPException(status_code=400, detail="broker_host is required")
     if updated["broker_port"] <= 0:
         raise HTTPException(status_code=400, detail="broker_port must be positive")
     if updated["control_hz"] <= 0:
         raise HTTPException(status_code=400, detail="control_hz must be positive")
+    updated["rover_availability"] = _rover_availability_policy_from_mqtt(updated)
 
     runtime.config.raw.setdefault("mqtt", {}).update(updated)
     save_config(runtime.config)
@@ -1360,6 +1453,7 @@ async def save_connectivity_to_path(request: Request) -> JSONResponse:
         "camera_topic": str(mqtt_payload.get("camera_topic", "camera-feed")).strip(),
         "control_hz": int(mqtt_payload.get("control_hz", 20)),
     })
+    mqtt_out["rover_availability"] = _rover_availability_policy_from_mqtt(mqtt_payload)
     existing["mqtt"] = mqtt_out
 
     simulation_out = dict(existing.get("simulation", {})) if isinstance(existing.get("simulation"), dict) else {}
@@ -1381,10 +1475,21 @@ async def save_connectivity_to_path(request: Request) -> JSONResponse:
 
 
 @app.get("/api/replay/sessions")
-async def replay_sessions(request: Request, limit: int = 100) -> dict[str, Any]:
+async def replay_sessions(
+    request: Request,
+    limit: int = 100,
+    started_at_from: float | None = None,
+    started_at_to: float | None = None,
+    order: str = "desc",
+) -> dict[str, Any]:
     runtime = _runtime(request)
     return {
-        "sessions": runtime.replay_store.list_sessions(limit=limit),
+        "sessions": runtime.replay_analytics.list_sessions(
+            limit=limit,
+            started_at_from=started_at_from,
+            started_at_to=started_at_to,
+            order=order,
+        ),
         "current_session_id": runtime.replay_store.current_session_id,
     }
 
@@ -1408,6 +1513,105 @@ async def replay_session_detail(session_id: str, request: Request, limit: int = 
         "session": session,
         "timeline": runtime.replay_store.get_session_timeline(session_id, limit=limit),
     }
+
+
+@app.get("/api/replay/sessions/{session_id}/summary")
+async def replay_session_summary(session_id: str, request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    summary = runtime.replay_analytics.get_session_summary(session_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session": summary}
+
+
+@app.get("/api/replay/sessions/{session_id}/metrics")
+async def replay_session_metrics(session_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:
+    runtime = _runtime(request)
+    metrics = runtime.replay_analytics.get_session_metrics(session_id, refresh=refresh)
+    if metrics is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"metrics": metrics}
+
+
+@app.get("/api/replay/sessions/{session_id}/path")
+async def replay_session_path(
+    session_id: str,
+    request: Request,
+    downsample: int = 1,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    path = runtime.replay_analytics.get_session_path(session_id, downsample=downsample, limit=limit)
+    if path is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return path
+
+
+@app.get("/api/replay/sessions/{session_id}/events/search")
+async def replay_session_events_search(
+    session_id: str,
+    request: Request,
+    event_type: str = "",
+    text: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    result = runtime.replay_analytics.search_session_events(
+        session_id,
+        event_type=event_type,
+        text=text,
+        limit=limit,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return result
+
+
+@app.post("/api/replay/sessions/compare")
+async def replay_sessions_compare(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    session_ids = payload.get("session_ids", [])
+    if not isinstance(session_ids, list):
+        raise HTTPException(status_code=400, detail="session_ids must be a list")
+    clean_ids = [str(item).strip() for item in session_ids if str(item).strip()]
+    return runtime.replay_analytics.compare_sessions(clean_ids)
+
+
+@app.post("/api/replay/sessions/resolve")
+async def replay_sessions_resolve(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    selector = payload.get("selector", payload.get("query", ""))
+    timezone_name = _request_timezone_name(request, payload)
+    return runtime.replay_analytics.resolve_sessions(
+        selector,
+        timezone_name=timezone_name,
+        active_session_id=runtime.replay_store.current_session_id,
+    )
+
+
+@app.post("/api/replay/sessions/aggregate")
+async def replay_sessions_aggregate(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    selector = payload.get("selector", payload.get("query"))
+    session_ids = payload.get("session_ids", [])
+    if session_ids is not None and not isinstance(session_ids, list):
+        raise HTTPException(status_code=400, detail="session_ids must be a list")
+    timezone_name = _request_timezone_name(request, payload)
+    return runtime.replay_analytics.aggregate_sessions(
+        session_ids=[str(item).strip() for item in session_ids if str(item).strip()] if isinstance(session_ids, list) else None,
+        selector=selector,
+        timezone_name=timezone_name,
+        active_session_id=runtime.replay_store.current_session_id,
+    )
 
 
 @app.delete("/api/replay/sessions/{session_id}")
@@ -1484,6 +1688,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await runtime.mqtt_runtime.publish_presence_snapshot()
     snapshot = await runtime.state_store.snapshot()
     snapshot["simulation"] = runtime.config.simulation
+    snapshot["rover_availability"] = _rover_availability_policy(runtime.config)
     await runtime.ws_manager.send(client_id, {
         "type": "snapshot",
         "client_id": client_id,

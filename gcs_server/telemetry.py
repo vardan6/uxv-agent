@@ -10,6 +10,10 @@ def _num(value: Any, default: float = 0.0) -> float:
     return float(default)
 
 
+def _has_numeric(source: dict[str, Any], key: str) -> bool:
+    return isinstance(source, dict) and isinstance(source.get(key), (int, float))
+
+
 def normalize_telemetry(payload: dict[str, Any] | None, backend_type: str) -> dict[str, Any]:
     raw = copy.deepcopy(payload or {})
     position = raw.get("position") or {}
@@ -51,7 +55,14 @@ def normalize_telemetry(payload: dict[str, Any] | None, backend_type: str) -> di
             "temperature_c": _num(power.get("temperature_c")),
         },
         "georeference": copy.deepcopy(georeference),
+        "validity": {
+            "has_position": _has_numeric(position, "x") and _has_numeric(position, "y"),
+            "has_gps": _has_numeric(gps, "lat") and _has_numeric(gps, "lon"),
+            "has_heading": _has_numeric(orientation, "heading_deg"),
+            "has_speed": _has_numeric(speed, "m_s") or _has_numeric(speed, "km_h"),
+        },
     }
+    normalized["position_frame"] = "local_xy" if normalized["validity"]["has_position"] else ("gps_wgs84" if normalized["validity"]["has_gps"] else "unknown")
     normalized["map_pose"] = {
         "lat": normalized["gps"]["lat"],
         "lon": normalized["gps"]["lon"],

@@ -2182,6 +2182,21 @@ code {
   gap: 12px;
 }
 
+.ai-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .ai-message-meta-actions {
   display: inline-flex;
   align-items: center;
@@ -2413,6 +2428,28 @@ code {
 .ai-composer-actions {
   align-items: center;
   gap: 14px;
+}
+
+.ai-run-mode-toggle {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
+}
+
+.ai-run-mode-toggle button {
+  min-height: 34px;
+  padding-inline: 12px;
+  border-radius: 7px;
+}
+
+.ai-run-mode-toggle button.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  color: var(--text);
 }
 
 .ai-composer-actions .status-banner {
@@ -2651,6 +2688,10 @@ code {
   }
 
   .ai-composer-actions .inline-actions {
+    width: 100%;
+  }
+
+  .ai-run-mode-toggle {
     width: 100%;
   }
 

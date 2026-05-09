@@ -10,6 +10,7 @@ try:
     from gcs_server.config import AppConfig, ROOT_DIR
     from gcs_server.control import ControlService
     from gcs_server.mqtt_service import MQTTRuntime
+    from gcs_server.replay_analytics import ReplayAnalyticsService
     from gcs_server.replay_store import ReplayStore
     from gcs_server.state import LocalStateBackend
     from gcs_server.telemetry import normalize_telemetry
@@ -20,6 +21,7 @@ except ModuleNotFoundError:
     from config import AppConfig, ROOT_DIR
     from control import ControlService
     from mqtt_service import MQTTRuntime
+    from replay_analytics import ReplayAnalyticsService
     from replay_store import ReplayStore
     from state import LocalStateBackend
     from telemetry import normalize_telemetry
@@ -53,6 +55,7 @@ class AppRuntime:
     mqtt_runtime: MQTTRuntime
     control_service: ControlService
     replay_store: ReplayStore
+    replay_analytics: ReplayAnalyticsService
     ai_store: AISessionStore
     secret_store: SecretStore
     ai_executor: ThreadPoolExecutor
@@ -78,6 +81,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     ai_store = AISessionStore(
         db_path=_resolve_replay_db_path(config.logging.get("ai_sessions_db_path", "data/gcs_ai_sessions.sqlite3")),
     )
+    replay_analytics = ReplayAnalyticsService(replay_store)
     secret_store = SecretStore(
         db_path=_resolve_replay_db_path(config.logging.get("llm_secrets_db_path", "data/gcs_llm_secrets.sqlite3")),
     )
@@ -117,6 +121,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         mqtt_runtime=mqtt_runtime,
         control_service=control_service,
         replay_store=replay_store,
+        replay_analytics=replay_analytics,
         ai_store=ai_store,
         secret_store=secret_store,
         ai_executor=ai_executor,

@@ -25,6 +25,7 @@ def _topic_join(prefix: str, leaf: str) -> str:
 
 logger = logging.getLogger(__name__)
 PRESENCE_PUBLISH_INTERVAL_S = 30.0
+DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS = 60.0
 
 
 class MQTTRuntime:
@@ -183,8 +184,23 @@ class MQTTRuntime:
             self._schedule(self._handle_camera(frame))
 
     async def _handle_telemetry(self, payload: dict[str, Any]) -> None:
+        previous_snapshot = await self._state_store.snapshot()
+        previous_broker = previous_snapshot.get("broker") or {}
+        now_ts = time.time()
+        previous_last_telemetry_ts = float(previous_broker.get("last_telemetry_ts") or 0.0)
+        telemetry_gap_s = self._telemetry_gap_seconds(previous_last_telemetry_ts, now_ts)
         normalized = self._telemetry_normalizer(payload, self._backend_resolver())
         await self._state_store.set_telemetry(normalized)
+        if self._should_rollover_on_reconnect(telemetry_gap_s) and self._replay_store is not None:
+            session_id = self._replay_store.rollover_session(reason="rover_available")
+            self._replay_store.log_runtime_event(
+                "rover_became_available",
+                {
+                    "session_id": session_id,
+                    "telemetry_gap_s": telemetry_gap_s,
+                    "unavailable_threshold_s": self._unavailable_threshold_seconds(),
+                },
+            )
         if self._replay_store is not None:
             self._replay_store.log_telemetry(normalized)
         snapshot = await self._state_store.snapshot()
@@ -247,3 +263,27 @@ class MQTTRuntime:
             "browser_count": int(browser_count),
             "active_controller_id": active_controller_id,
         }
+
+    @staticmethod
+    def _telemetry_gap_seconds(previous_last_telemetry_ts: float, now_ts: float) -> float:
+        if previous_last_telemetry_ts <= 0:
+            return 0.0
+        return max(0.0, now_ts - previous_last_telemetry_ts)
+
+    def _rover_availability_policy(self) -> dict[str, Any]:
+        policy = self._cfg.get("rover_availability")
+        return policy if isinstance(policy, dict) else {}
+
+    def _unavailable_threshold_seconds(self) -> float:
+        policy = self._rover_availability_policy()
+        value = policy.get("unavailable_threshold_seconds", DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS)
+        try:
+            return max(1.0, float(value))
+        except (TypeError, ValueError):
+            return DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS
+
+    def _should_rollover_on_reconnect(self, telemetry_gap_s: float) -> bool:
+        policy = self._rover_availability_policy()
+        if not bool(policy.get("rollover_on_reconnect", True)):
+            return False
+        return telemetry_gap_s >= self._unavailable_threshold_seconds()

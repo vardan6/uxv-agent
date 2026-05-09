@@ -101,12 +101,29 @@ function replayDistance(a, b) {
 }
 
 async function replayFetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, withReplayTimezone(options));
   if (!response.ok) {
     const body = await response.text();
     throw new Error(body || `${response.status}`);
   }
   return response.json();
+}
+
+function replayTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withReplayTimezone(options = {}) {
+  const timezone = replayTimezone();
+  const headers = new Headers(options.headers || {});
+  if (timezone) {
+    headers.set('X-Operator-Timezone', timezone);
+  }
+  return { ...options, headers };
 }
 
 function latLngFromScenePoint(point) {

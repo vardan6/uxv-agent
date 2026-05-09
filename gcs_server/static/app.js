@@ -7,6 +7,10 @@ const state = {
   lastTelemetryTs: 0,
   latestTelemetry: {},
   simulation: {},
+  roverAvailability: {
+    connectedThresholdSeconds: 2,
+    unavailableThresholdSeconds: 60,
+  },
   themeMode: 'system',
   lightTheme: 'vscode-light',
   darkTheme: 'vscode-dark',
@@ -54,8 +58,6 @@ const THEME_MODES = new Set(['system', 'light', 'dark']);
 const LIGHT_THEMES = new Set(['vscode-light', 'quiet-light', 'cool-light', 'sandstone-light']);
 const DARK_THEMES = new Set(['vscode-dark', 'graphite-dark', 'midnight-dark', 'deep-forest-dark']);
 const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-const ROVER_CONNECTED_THRESHOLD_SECONDS = 2;
-const ROVER_WARNING_THRESHOLD_SECONDS = 60;
 
 if (els.clientId) {
   els.clientId.textContent = state.clientId;
@@ -214,15 +216,31 @@ function renderRoverIndicator() {
     return;
   }
   const ageSeconds = Math.max(0, Math.floor((Date.now() - (state.lastTelemetryTs * 1000)) / 1000));
-  if (ageSeconds < ROVER_CONNECTED_THRESHOLD_SECONDS) {
+  const connectedThreshold = state.roverAvailability.connectedThresholdSeconds;
+  const unavailableThreshold = state.roverAvailability.unavailableThresholdSeconds;
+  if (ageSeconds < connectedThreshold) {
     setPillState(els.roverPill, 'Connected', 'ok');
     return;
   }
-  if (ageSeconds < ROVER_WARNING_THRESHOLD_SECONDS) {
+  if (ageSeconds < unavailableThreshold) {
     setPillState(els.roverPill, `${ageSeconds}s delayed`, 'warn');
     return;
   }
   setPillState(els.roverPill, 'Unavailable', 'danger');
+}
+
+function updateRoverAvailabilityPolicy(policy = {}) {
+  const connectedRaw = Number.parseInt(policy.connected_threshold_seconds, 10);
+  const unavailableRaw = Number.parseInt(policy.unavailable_threshold_seconds, 10);
+  const connectedThreshold = Number.isFinite(connectedRaw) ? Math.max(0, connectedRaw) : 2;
+  let unavailableThreshold = Number.isFinite(unavailableRaw) ? Math.max(1, unavailableRaw) : 60;
+  if (unavailableThreshold < connectedThreshold) {
+    unavailableThreshold = connectedThreshold;
+  }
+  state.roverAvailability = {
+    connectedThresholdSeconds: connectedThreshold,
+    unavailableThresholdSeconds: unavailableThreshold,
+  };
 }
 
 function updateBrokerPill(broker = {}) {
@@ -635,6 +653,7 @@ function initDashboard() {
 async function loadSnapshot() {
   const response = await fetch('/api/snapshot');
   const snapshot = await response.json();
+  updateRoverAvailabilityPolicy(snapshot.rover_availability || {});
   updateBrokerPill(snapshot.broker);
   updateController(snapshot.controller);
   updateTelemetry(snapshot.telemetry);
@@ -657,6 +676,7 @@ function connectSocket() {
   state.socket.addEventListener('message', (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'snapshot') {
+      updateRoverAvailabilityPolicy(msg.data.rover_availability || {});
       updateBrokerPill(msg.data.broker);
       updateController(msg.data.controller);
       updateTelemetry(msg.data.telemetry);

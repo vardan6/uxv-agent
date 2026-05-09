@@ -9,6 +9,7 @@ const aiState = {
   activeRequestAbortController: null,
   pendingUserMessageId: '',
   pendingAssistantMessageId: '',
+  runMode: 'chat',
   activeSpeechMessageId: '',
   activeSpeechUtterance: null,
   activeSpeechAudio: null,
@@ -64,10 +65,11 @@ const aiEls = {
   stopMessage: document.getElementById('ai-stop-message'),
   sendMessage: document.getElementById('ai-send-message'),
   status: document.getElementById('ai-status'),
+  runModeButtons: document.querySelectorAll('[data-run-mode]'),
 };
 
 async function aiFetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, withAiTimezone(options));
   if (!response.ok) {
     let detail = await response.text();
     try {
@@ -79,6 +81,23 @@ async function aiFetchJson(url, options = {}) {
     throw new Error(detail || `${response.status}`);
   }
   return response.json();
+}
+
+function operatorTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withAiTimezone(options = {}) {
+  const timezone = operatorTimezone();
+  const headers = new Headers(options.headers || {});
+  if (timezone) {
+    headers.set('X-Operator-Timezone', timezone);
+  }
+  return { ...options, headers };
 }
 
 function escapeHtml(value) {
@@ -131,6 +150,41 @@ function providerById(providerId) {
 function providerNameForMessage(message) {
   const provider = providerById(message.provider_id || '');
   return provider?.display_name || message.provider_id || 'Unknown provider';
+}
+
+function normalizeRunMode(value) {
+  const clean = String(value || '').trim().toLowerCase();
+  return clean === 'agent' ? 'agent' : 'chat';
+}
+
+function sessionModeToRunMode(session) {
+  return normalizeRunMode(session?.mode);
+}
+
+function runModeToSessionMode(runMode) {
+  return normalizeRunMode(runMode) === 'agent' ? 'agent' : 'general_chat';
+}
+
+function currentRunMode() {
+  return normalizeRunMode(aiState.runMode);
+}
+
+function messageRunMode(message) {
+  return normalizeRunMode(message?.meta?.run_mode);
+}
+
+function runModeLabel(runMode) {
+  return normalizeRunMode(runMode) === 'agent' ? 'Agent' : 'Chat';
+}
+
+function renderRunModeToggle() {
+  const runMode = currentRunMode();
+  aiEls.runModeButtons.forEach((button) => {
+    const active = normalizeRunMode(button.dataset.runMode) === runMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.disabled = aiState.sending || Boolean(aiState.activeSession?.archived_at);
+  });
 }
 
 function aiSpeechSupported() {
@@ -518,10 +572,11 @@ function renderMessages(options = {}) {
   aiEls.messageInput.disabled = aiState.sending || viewingArchived;
   aiEls.messageInput.placeholder = viewingArchived
     ? 'Restore this archived chat to continue messaging'
-    : 'Ask the configured General Chat provider';
+    : (currentRunMode() === 'agent' ? 'Ask the read-only rover agent' : 'Ask the configured General Chat provider');
   aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
   aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
   renderProviderSelect();
+  renderRunModeToggle();
   updateComposerState();
 
   if (!aiState.activeSession) {
@@ -536,6 +591,7 @@ function renderMessages(options = {}) {
     const isPendingAssistant = message.role === 'assistant'
       && message.id === pendingAssistantId
       && !String(message.content || '').trim();
+    const mode = messageRunMode(message);
     const canSpeak = aiCanSpeak()
       && message.role === 'assistant'
       && !isPendingAssistant
@@ -549,7 +605,7 @@ function renderMessages(options = {}) {
     return `
     <article class="ai-message ai-message-${escapeHtml(message.role)}${isPendingAssistant ? ' ai-message-pending' : ''}">
       <div class="ai-message-meta">
-        <strong>${message.role === 'assistant' ? `Assistant · ${escapeHtml(providerNameForMessage(message))}` : 'You'}</strong>
+        <strong>${message.role === 'assistant' ? `Assistant · ${escapeHtml(providerNameForMessage(message))}` : 'You'} <span class="ai-mode-chip">${escapeHtml(runModeLabel(mode))}</span></strong>
         <span class="ai-message-meta-actions">
           ${canSpeak
             ? `<button
@@ -595,7 +651,7 @@ function renderMessages(options = {}) {
   aiEls.messageList.scrollTop = preserveScroll ? previousScrollTop : aiEls.messageList.scrollHeight;
 }
 
-function pushLocalPendingMessages(content) {
+function pushLocalPendingMessages(content, runMode = currentRunMode()) {
   if (!aiState.activeSession) return;
   const now = Date.now() / 1000;
   const pendingUserId = `pending-user-${crypto.randomUUID()}`;
@@ -611,6 +667,7 @@ function pushLocalPendingMessages(content) {
       created_at: now,
       provider_id: activeProviderId() || generalChatProviderId(),
       model_id: '',
+      meta: { run_mode: normalizeRunMode(runMode) },
     },
     {
       id: pendingAssistantId,
@@ -620,7 +677,7 @@ function pushLocalPendingMessages(content) {
       provider_id: activeProviderId() || generalChatProviderId(),
       model_id: '',
       latency_ms: null,
-      meta: { interrupted: false },
+      meta: { interrupted: false, run_mode: normalizeRunMode(runMode) },
     },
   ];
 }
@@ -633,6 +690,7 @@ function pushLocalRetryPendingAssistant() {
   if (messages[messages.length - 1]?.role === 'assistant') {
     messages.pop();
   }
+  const runMode = messageRunMode(messages[messages.length - 1]);
   aiState.pendingAssistantMessageId = pendingAssistantId;
   aiState.activeSession.messages = [
     ...messages,
@@ -644,7 +702,7 @@ function pushLocalRetryPendingAssistant() {
       provider_id: activeProviderId() || generalChatProviderId(),
       model_id: '',
       latency_ms: null,
-      meta: { interrupted: false },
+      meta: { interrupted: false, run_mode: runMode },
     },
   ];
 }
@@ -721,12 +779,12 @@ function handleAiStreamEvent(eventData) {
 }
 
 async function streamAiRequest(url, payload, abortController) {
-  const response = await fetch(url, {
+  const response = await fetch(url, withAiTimezone({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
     signal: abortController.signal,
-  });
+  }));
   if (!response.ok) {
     let detail = await response.text();
     try {
@@ -783,7 +841,7 @@ async function createSession(options = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       title,
-      mode: 'general_chat',
+      mode: runModeToSessionMode(currentRunMode()),
       provider_id: providerId || undefined,
     }),
   });
@@ -798,6 +856,7 @@ async function openSession(sessionId) {
   const includeArchived = Boolean(session?.archived_at);
   const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
   aiState.activeSession = result.session;
+  aiState.runMode = sessionModeToRunMode(result.session);
   renderSessionList();
   renderMessages();
   setAiStatus('Ready.', 'ok');
@@ -906,21 +965,37 @@ async function updateSessionProvider() {
   renderMessages();
 }
 
+async function updateSessionRunMode(runMode) {
+  aiState.runMode = normalizeRunMode(runMode);
+  renderRunModeToggle();
+  renderMessages({ preserveScroll: true });
+  if (!aiState.activeSession) return;
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: runModeToSessionMode(aiState.runMode) }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  await loadSessions();
+  renderMessages({ preserveScroll: true });
+}
+
 async function sendMessage(event) {
   event.preventDefault();
   if (aiState.sending) return;
   const content = aiEls.messageInput.value.trim();
   if (!content) return;
+  const runMode = currentRunMode();
   aiState.sending = true;
   const abortController = new AbortController();
   aiState.activeRequestAbortController = abortController;
   aiEls.messageInput.value = '';
   resizeComposer();
   if (aiState.activeSession) {
-    pushLocalPendingMessages(content);
+    pushLocalPendingMessages(content, runMode);
   }
   renderMessages();
-  setAiStatus('Waiting for model response.');
+  setAiStatus(runMode === 'agent' ? 'Agent is checking rover context.' : 'Waiting for model response.');
   let sessionId = aiState.activeSession?.id || '';
   try {
     if (!sessionId) {
@@ -929,12 +1004,12 @@ async function sendMessage(event) {
     }
     if (!aiState.activeSession) {
       await openSession(sessionId);
-      pushLocalPendingMessages(content);
+      pushLocalPendingMessages(content, runMode);
       renderMessages();
     }
     await streamAiRequest(
       `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-      { content },
+      { content, run_mode: runMode },
       abortController,
     );
     await openSession(sessionId);
@@ -963,17 +1038,18 @@ async function resendMessage(messageId) {
   const message = (aiState.activeSession.messages || []).find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
+  const runMode = messageRunMode(message);
   const sessionId = aiState.activeSession.id;
   aiState.sending = true;
   const abortController = new AbortController();
   aiState.activeRequestAbortController = abortController;
-  pushLocalPendingMessages(content);
+  pushLocalPendingMessages(content, runMode);
   renderMessages();
   setAiStatus('Resending message.');
   try {
     await streamAiRequest(
       `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-      { content },
+      { content, run_mode: runMode },
       abortController,
     );
     await openSession(sessionId);
@@ -1256,6 +1332,9 @@ function bindAi() {
   aiEls.renameSession.addEventListener('click', () => renameSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.archiveSession.addEventListener('click', () => archiveSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.providerSelect.addEventListener('change', () => updateSessionProvider().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.runModeButtons.forEach((button) => {
+    button.addEventListener('click', () => updateSessionRunMode(button.dataset.runMode).catch((error) => setAiStatus(error.message, 'danger')));
+  });
   aiEls.messageForm.addEventListener('submit', sendMessage);
   aiEls.messageInput.addEventListener('keydown', handleComposerKeydown);
   aiEls.messageInput.addEventListener('input', () => {
