@@ -98,6 +98,8 @@ def _redact_secret_text(value: Any) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
+    if _repair_stored_secret_refs(config):
+        save_config(config)
     runtime = await build_runtime(config)
     app.state.runtime = runtime
     await runtime.control_service.start()
@@ -200,11 +202,34 @@ def _provider_public(provider: dict[str, Any], runtime: AppRuntime | None = None
     return out
 
 
+def _repair_stored_secret_refs(config: Any) -> bool:
+    providers = config.raw.get("llm_providers", [])
+    if not isinstance(providers, list):
+        return False
+    changed = False
+    for index, provider in enumerate(providers):
+        if not isinstance(provider, dict):
+            continue
+        auth_mode = str(provider.get("auth_mode", "")).strip()
+        if auth_mode != "stored_secret":
+            continue
+        try:
+            normalized = _normalize_provider(provider, provider)
+        except HTTPException:
+            continue
+        if normalized != provider:
+            providers[index] = normalized
+            changed = True
+    return changed
+
+
 def _provider_export(provider: dict[str, Any]) -> dict[str, Any]:
     out = dict(provider)
-    out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
-    if str(out.get("auth_mode", "")).strip() == "stored_secret":
-        out["secret_ref"] = ""
+    auth_mode = str(out.get("auth_mode", "")).strip()
+    if auth_mode == "stored_secret":
+        out["secret_ref"] = _sanitize_stored_secret_ref(out.get("secret_ref", ""))
+    else:
+        out["secret_ref"] = _sanitize_secret_ref(out.get("secret_ref", ""))
     out["has_secret"] = False
     out.pop("last_check", None)
     out.pop("secret_value", None)
@@ -739,8 +764,8 @@ def _ai_chat_service(runtime: AppRuntime) -> AIChatService:
     return AIChatService(runtime.ai_store, secret_resolver=runtime.secret_store.get_secret)
 
 
-async def _ai_context_snapshot(runtime: AppRuntime, user_message: str = "") -> dict[str, Any]:
-    snapshot = await AIContextService(runtime).build_compact_context(user_message)
+async def _ai_context_snapshot(runtime: AppRuntime, user_message: str = "", session_id: str = "") -> dict[str, Any]:
+    snapshot = await AIContextService(runtime).build_compact_context(user_message, session_id=session_id)
     return {"prompt": snapshot.prompt, "meta": snapshot.meta}
 
 
@@ -960,7 +985,7 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content)
+        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id)
         result = await _run_ai_call(
             runtime,
             _ai_chat_service(runtime).send_message,
@@ -989,7 +1014,7 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
         raise HTTPException(status_code=400, detail="message payload must be an object")
     content = str(payload.get("content", ""))
     try:
-        context_snapshot = await _ai_context_snapshot(runtime, content)
+        context_snapshot = await _ai_context_snapshot(runtime, content, session_id=session_id)
         stream = _ai_chat_service(runtime).stream_message_events(
             runtime.config,
             session_id,
@@ -1015,6 +1040,7 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+            session_id=session_id,
         )
         result = await _run_ai_call(
             runtime,
@@ -1042,6 +1068,7 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _latest_user_content(runtime.ai_store.latest_messages(session_id, limit=40)),
+            session_id=session_id,
         )
         stream = _ai_chat_service(runtime).stream_retry_events(
             runtime.config,

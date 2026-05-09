@@ -17,7 +17,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Config-backed simulator backend identity: `3d-env` or `rover-sim-next`
 - Controller lock: one active browser controls, others observe
 - Focus-driven browser control activation
-- Keyboard control via arrow keys and `W/A/S/D`
+- Config-backed keyboard control via arrow keys and `W/A/S/D` defaults
 - On-screen control buttons with immediate active-state feedback
 - Configurable video pipeline modes
 - MQTT camera-frame ingest and WebSocket MJPEG-style browser delivery
@@ -32,7 +32,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - LLM provider settings, provider checks, and purpose-based model routing
 - `/ai` provider-backed General Chat with persistent SQLite sessions
 - Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
-- AI Chat live current-context injection for rover telemetry, runtime state, scene-map facts, replay summaries, and mission placeholder state
+- AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
 
 ## Current Limitations
 
@@ -137,7 +137,7 @@ Main modules:
 - `ws.py`: WebSocket connection manager
 - `video.py`: MQTT camera frame decoding helper
 - `ai/provider_registry.py`: configured provider to LangChain model adapter
-- `ai/context_service.py`: live rover/runtime/map/replay current-context providers for AI Chat
+- `ai/context_service.py`: live rover/runtime/settings/LLM/map/replay current-context providers for AI Chat
 - `ai/chat_service.py`: read-only General Chat orchestration
 - `ai/session_store.py`: SQLite AI session and message storage
 - `ai/secret_store.py`: local stored-secret helper
@@ -196,7 +196,9 @@ Implemented now:
 - streaming send/retry flows are implemented
 - each AI send/retry call receives compact live context after the system prompt
 - assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
-- current rover state, runtime state, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
+- current rover state, runtime state, saved settings, LLM provider/routing summaries, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
+- settings and LLM context are structured current facts, not RAG documents
+- sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values
 
 Not implemented yet:
 - RAG source controls and document upload

@@ -224,6 +224,7 @@ let llmProviders = [];
 let modelRouting = {};
 let editingFallbackPurpose = null;
 let pendingJsonImport = null;
+let llmProviderSort = { key: 'display_name', direction: 'asc' };
 
 function setSetupStatus(text) {
   if (settingsEls.setupStatus) settingsEls.setupStatus.textContent = text;
@@ -894,36 +895,77 @@ function renderProviderList() {
     settingsEls.llmProviderList.innerHTML = '<p class="settings-note">No LLM providers configured yet.</p>';
     return;
   }
-  settingsEls.llmProviderList.innerHTML = llmProviders.map((provider) => {
+  const rows = llmProviders.map((provider) => {
     const check = provider.last_check || { status: 'not_tested' };
-    const tone = statusTone(check.status);
-    const capabilities = (provider.capabilities || []).map((capability) => `<span class="llm-chip">${escapeHtml(capability)}</span>`).join('');
+    const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
     const authSummary = provider.auth_mode === 'stored_secret'
       ? (provider.has_secret ? 'stored secret configured' : 'stored secret missing')
       : provider.auth_mode === 'env_var'
         ? `env: ${provider.secret_ref || 'missing'}`
         : 'no auth';
+    return { provider, check, capabilities, authSummary };
+  });
+  const direction = llmProviderSort.direction === 'desc' ? -1 : 1;
+  rows.sort((left, right) => compareProviderRows(left, right, llmProviderSort.key) * direction);
+  settingsEls.llmProviderList.innerHTML = `
+    <table class="llm-provider-table">
+      <thead>
+        <tr>
+          ${renderProviderSortHeader('Name', 'display_name')}
+          ${renderProviderSortHeader('Type', 'provider_type')}
+          ${renderProviderSortHeader('Model', 'model_id')}
+          ${renderProviderSortHeader('Auth', 'auth_summary')}
+          ${renderProviderSortHeader('Capabilities', 'capabilities')}
+          ${renderProviderSortHeader('Enabled', 'enabled')}
+          ${renderProviderSortHeader('Status', 'status')}
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(({ provider, check, capabilities, authSummary }) => {
+    const tone = statusTone(check.status);
+    const capabilitiesMarkup = capabilities.map((capability) => `<span class="llm-chip">${escapeHtml(capability)}</span>`).join('');
     return `
-      <div class="llm-provider-row" data-provider-id="${escapeHtml(provider.id)}">
-        <div class="llm-provider-title">
-          <strong>${escapeHtml(provider.display_name)}</strong>
-          <div class="llm-provider-meta"><span class="llm-chip">${escapeHtml(provider.provider_type)}</span></div>
-        </div>
-        <div class="llm-provider-meta">
-          <span class="llm-chip">${escapeHtml(provider.model_id || 'no model id')}</span>
-          <span class="llm-chip">${escapeHtml(authSummary)}</span>
-          ${capabilities}
-        </div>
-        <span class="pill ${tone}">${escapeHtml(check.status || 'not_tested')}</span>
-        <div class="llm-actions">
-          <button type="button" class="ghost llm-action-icon" data-llm-action="check" title="Check provider" aria-label="Check provider"><span aria-hidden="true">✓</span></button>
-          <button type="button" class="ghost llm-action-icon" data-llm-action="edit" title="Edit provider" aria-label="Edit provider"><span aria-hidden="true">✎</span></button>
-          <button type="button" class="ghost llm-action-icon" data-llm-action="toggle" title="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}" aria-label="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}"><span aria-hidden="true">${provider.enabled === false ? '⏻' : '⏼'}</span></button>
-          <button type="button" class="ghost llm-action-icon llm-action-danger" data-llm-action="delete" title="Delete provider" aria-label="Delete provider"><span aria-hidden="true">🗑</span></button>
-        </div>
-      </div>
+      <tr class="llm-provider-row" data-provider-id="${escapeHtml(provider.id)}">
+        <td><strong>${escapeHtml(provider.display_name)}</strong></td>
+        <td><span class="llm-chip">${escapeHtml(provider.provider_type)}</span></td>
+        <td><span class="llm-chip">${escapeHtml(provider.model_id || 'no model id')}</span></td>
+        <td><span class="llm-chip">${escapeHtml(authSummary)}</span></td>
+        <td><div class="llm-provider-meta">${capabilitiesMarkup || '<span class="llm-chip">none</span>'}</div></td>
+        <td><span class="pill ${provider.enabled === false ? 'warn' : 'ok'}">${provider.enabled === false ? 'disabled' : 'enabled'}</span></td>
+        <td><span class="pill ${tone}">${escapeHtml(check.status || 'not_tested')}</span></td>
+        <td>
+          <div class="llm-actions">
+            <button type="button" class="ghost llm-action-icon" data-llm-action="check" title="Check provider" aria-label="Check provider"><span aria-hidden="true">✓</span></button>
+            <button type="button" class="ghost llm-action-icon" data-llm-action="edit" title="Edit provider" aria-label="Edit provider"><span aria-hidden="true">✎</span></button>
+            <button type="button" class="ghost llm-action-icon" data-llm-action="toggle" title="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}" aria-label="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}"><span aria-hidden="true">${provider.enabled === false ? '⏻' : '⏼'}</span></button>
+            <button type="button" class="ghost llm-action-icon llm-action-danger" data-llm-action="delete" title="Delete provider" aria-label="Delete provider"><span aria-hidden="true">🗑</span></button>
+          </div>
+        </td>
+      </tr>
     `;
-  }).join('');
+  }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderProviderSortHeader(label, key) {
+  const active = llmProviderSort.key === key;
+  const arrow = active ? (llmProviderSort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th><button type="button" class="llm-sort-button${active ? ' is-active' : ''}" data-llm-sort="${escapeHtml(key)}" aria-label="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</button></th>`;
+}
+
+function providerSortText(value) {
+  return String(value || '').toLowerCase();
+}
+
+function compareProviderRows(left, right, key) {
+  if (key === 'enabled') return Number(left.provider.enabled === false) - Number(right.provider.enabled === false);
+  if (key === 'status') return providerSortText(left.check.status).localeCompare(providerSortText(right.check.status));
+  if (key === 'auth_summary') return providerSortText(left.authSummary).localeCompare(providerSortText(right.authSummary));
+  if (key === 'capabilities') return providerSortText(left.capabilities.join(',')).localeCompare(providerSortText(right.capabilities.join(',')));
+  return providerSortText(left.provider[key]).localeCompare(providerSortText(right.provider[key]));
 }
 
 function ensureRoutingDefaults() {
@@ -1069,6 +1111,17 @@ async function checkDraftProvider() {
 }
 
 async function handleProviderListClick(event) {
+  const sortButton = event.target.closest('button[data-llm-sort]');
+  if (sortButton) {
+    const key = sortButton.dataset.llmSort;
+    if (llmProviderSort.key === key) {
+      llmProviderSort.direction = llmProviderSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+      llmProviderSort = { key, direction: 'asc' };
+    }
+    renderProviderList();
+    return;
+  }
   const button = event.target.closest('button[data-llm-action]');
   if (!button) return;
   const row = button.closest('[data-provider-id]');

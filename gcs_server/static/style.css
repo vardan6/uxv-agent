@@ -1570,14 +1570,55 @@ body[data-page="settings"] .page-lede {
 }
 
 .llm-provider-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(240px, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--panel-strong) 62%, transparent);
+  display: table-row;
+}
+
+.llm-provider-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.llm-provider-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  font-size: 0.84rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.llm-provider-table tbody td {
+  padding: 10px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  vertical-align: middle;
+}
+
+.llm-provider-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--panel-strong) 52%, transparent);
+}
+
+.llm-sort-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.llm-sort-button.is-active {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.llm-provider-row {
+  background: color-mix(in srgb, var(--panel-strong) 44%, transparent);
 }
 
 .llm-provider-title {
@@ -2522,12 +2563,19 @@ code {
   }
 
   .llm-template-row,
-  .llm-provider-row,
   .llm-routing-row,
   .llm-fallback-editor-row,
   .llm-fallback-add-row,
   .json-scope-grid {
     grid-template-columns: 1fr;
+  }
+
+  .llm-provider-list {
+    overflow: auto;
+  }
+
+  .llm-provider-table {
+    min-width: 900px;
   }
 
   .ai-chat-actions {

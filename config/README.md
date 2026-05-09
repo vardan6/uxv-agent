@@ -45,11 +45,41 @@ Before every push, run a quick search for sensitive endpoint values and confirm 
 - GCS stores LLM provider records under `llm_providers` and purpose-based model routing under `model_routing`
 - GCS stores AI chat sessions in SQLite at `logging.ai_sessions_db_path`
 - GCS settings JSON export/import can operate on selected sections without clearing missing sections from older files
+- GCS dashboard keyboard controls read `key_bindings` from shared config
+- AI Chat current-context providers include safe settings and LLM summaries from shared config so chat can answer questions about broker settings, topics, key bindings, video mode, simulator identity, and configured models
+
+## Key Bindings
+
+Browser keyboard control bindings live in the top-level `key_bindings` object.
+
+Example:
+
+```json
+{
+  "key_bindings": {
+    "forward": ["arrow_up", "w"],
+    "backward": ["arrow_down", "s"],
+    "left": ["arrow_left", "a"],
+    "right": ["arrow_right", "d"],
+    "camera_toggle": ["v"]
+  }
+}
+```
+
+The GCS dashboard reads these bindings at startup.
+The same values are included in AI Chat current context.
+
+This means an operator can ask AI Chat questions such as "what key moves forward?" and get an answer from the same config source used by the dashboard.
+
+Future input devices such as USB joysticks should use the same principle: store device/action mappings in config and have runtime/UI code consume config instead of hard-coded bindings.
 
 ## LLM Provider Secrets
 
 LLM provider settings should use `secret_ref` values that name environment variables.
 Tracked config and exported JSON intended for commit must not contain raw API key values.
+
+AI Chat current context may include safe provider metadata such as provider ID, display name, provider type, model ID, enabled state, capabilities, auth mode, and whether a stored secret exists.
+It must not include raw API keys, stored secret values, or environment-variable values.
 
 Example:
 

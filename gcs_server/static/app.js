@@ -61,7 +61,7 @@ if (els.clientId) {
   els.clientId.textContent = state.clientId;
 }
 
-const KEY_TO_CONTROL = {
+const DEFAULT_KEY_TO_CONTROL = {
   ArrowUp: 'forward',
   ArrowDown: 'backward',
   ArrowLeft: 'left',
@@ -71,6 +71,7 @@ const KEY_TO_CONTROL = {
   a: 'left',
   d: 'right',
 };
+let keyToControl = { ...DEFAULT_KEY_TO_CONTROL };
 
 function setStatus(text) {
   if (!els.statusBanner) return;
@@ -502,7 +503,7 @@ function bindControlButtons() {
 
 function bindKeyboard() {
   window.addEventListener('keydown', (event) => {
-    const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
+    const key = controlForKeyboardEvent(event);
     if (!key) return;
     if (!canControlLocally()) return;
     if (state.buttons[key]) return;
@@ -512,7 +513,7 @@ function bindKeyboard() {
     event.preventDefault();
   });
   window.addEventListener('keyup', (event) => {
-    const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
+    const key = controlForKeyboardEvent(event);
     if (!key) return;
     if (!canControlLocally()) return;
     state.buttons[key] = false;
@@ -523,6 +524,52 @@ function bindKeyboard() {
   window.addEventListener('focus', syncBrowserControlState);
   window.addEventListener('blur', syncBrowserControlState);
   document.addEventListener('visibilitychange', syncBrowserControlState);
+}
+
+function normalizeConfiguredKey(value) {
+  const raw = String(value || '').trim();
+  const normalized = raw.toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_');
+  const specialKeys = {
+    arrow_up: 'ArrowUp',
+    arrow_down: 'ArrowDown',
+    arrow_left: 'ArrowLeft',
+    arrow_right: 'ArrowRight',
+    space: ' ',
+    escape: 'Escape',
+    esc: 'Escape',
+  };
+  if (specialKeys[normalized]) return specialKeys[normalized];
+  if (raw.length === 1) return raw.toLowerCase();
+  return raw;
+}
+
+function keyMapFromBindings(bindings) {
+  if (!bindings || typeof bindings !== 'object') return { ...DEFAULT_KEY_TO_CONTROL };
+  const next = {};
+  Object.entries(bindings).forEach(([control, keys]) => {
+    if (!Object.prototype.hasOwnProperty.call(state.buttons, control)) return;
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    keyList.forEach((configuredKey) => {
+      const key = normalizeConfiguredKey(configuredKey);
+      if (key) next[key] = control;
+    });
+  });
+  return Object.keys(next).length ? next : { ...DEFAULT_KEY_TO_CONTROL };
+}
+
+function controlForKeyboardEvent(event) {
+  return keyToControl[event.key] || keyToControl[event.key.toLowerCase?.()];
+}
+
+async function loadControlConfig() {
+  try {
+    const response = await fetch('/api/config');
+    const config = await response.json();
+    keyToControl = keyMapFromBindings(config.key_bindings);
+  } catch (error) {
+    keyToControl = { ...DEFAULT_KEY_TO_CONTROL };
+    setStatus(`Using default key bindings; config load failed: ${error.message}`);
+  }
 }
 
 async function postJson(url, payload) {
@@ -568,6 +615,7 @@ function initDashboard() {
   window.setInterval(renderTelemetryLastReceived, 1000);
   bindControlButtons();
   bindKeyboard();
+  void loadControlConfig();
   if (themeMedia) {
     const onThemeChange = () => {
       if (state.themeMode !== 'system') return;

@@ -23,15 +23,19 @@ class AIContextService:
     def __init__(self, runtime: Any):
         self._runtime = runtime
 
-    async def build_compact_context(self, user_message: str = "") -> AIContextSnapshot:
+    async def build_compact_context(self, user_message: str = "", session_id: str = "") -> AIContextSnapshot:
         providers = [
             "get_current_rover_state",
             "get_runtime_context",
+            "get_settings_context",
+            "get_llm_context",
             "get_current_mission_state",
             "get_scene_map_summary",
         ]
         rover = await self.get_current_rover_state()
         runtime = await self.get_runtime_context()
+        settings = self.get_settings_context()
+        llm = self.get_llm_context(session_id=session_id)
         mission = self.get_current_mission_state()
         scene = self.get_scene_map_summary()
         details: dict[str, Any] = {}
@@ -62,6 +66,8 @@ class AIContextService:
             "generated_at": time.time(),
             "rover": rover,
             "runtime": runtime,
+            "settings": settings,
+            "llm": llm,
             "mission": mission,
             "scene": scene,
             "details": details,
@@ -103,6 +109,105 @@ class AIContextService:
             "simulation": dict(self._runtime.config.simulation),
             "map": dict(self._runtime.config.map),
             "replay_session_id": self._runtime.replay_store.current_session_id,
+        }
+
+    def get_settings_context(self) -> dict[str, Any]:
+        config = self._runtime.config
+        return {
+            "settings_path": str(config.settings_path),
+            "mqtt": _pick(
+                config.mqtt,
+                [
+                    "broker_host",
+                    "broker_port",
+                    "topic_prefix",
+                    "client_id",
+                    "control_topic",
+                    "state_topic",
+                    "camera_topic",
+                    "control_hz",
+                    "telemetry_hz",
+                    "telemetry_policy",
+                    "gcs_presence_topic",
+                    "gcs_presence_timeout_ms",
+                    "failsafe_timeout_ms",
+                    "control_mode",
+                    "digital_throttle_step",
+                    "digital_steer_step",
+                    "video_endpoint",
+                ],
+            ),
+            "key_bindings": _safe_mapping(config.key_bindings),
+            "video": _pick(config.video, ["enabled", "ingest_mode", "delivery_mode"]),
+            "gcs": _pick(config.gcs, ["host", "port", "state_backend", "controller_lock_backend", "telemetry_stale_ms"]),
+            "simulation": _pick(config.simulation, ["backend", "backend_version", "available_backends"]),
+            "map": _pick(config.map, ["site_name", "default_center_lat", "default_center_lon", "default_zoom"]),
+            "ai_settings": {
+                "tts": _pick(
+                    (config.ai_settings.get("tts") or {}) if isinstance(config.ai_settings, dict) else {},
+                    ["enabled", "engine", "auto_read", "service_url", "voice", "format", "speed", "browser_fallback", "voice_name", "rate", "pitch"],
+                )
+            },
+        }
+
+    def get_llm_context(self, session_id: str = "") -> dict[str, Any]:
+        config = self._runtime.config
+        providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+        routing = config.model_routing if isinstance(config.model_routing, dict) else {}
+        session = self._ai_session(session_id)
+        session_provider_id = str((session or {}).get("provider_id") or "").strip()
+        resolved_provider, resolved_source, resolution_note = _resolve_chat_provider(
+            providers,
+            routing,
+            session_provider_id=session_provider_id,
+        )
+        return {
+            "session": {
+                "id": session_id,
+                "provider_id": session_provider_id,
+                "has_provider_override": bool(session_provider_id),
+            },
+            "model_routing": _safe_mapping(routing),
+            "general_chat_route": _safe_mapping(routing.get("general_chat") or {}),
+            "active_chat_provider": self._safe_llm_provider(resolved_provider) if resolved_provider else None,
+            "active_chat_provider_source": resolved_source,
+            "active_chat_provider_note": resolution_note,
+            "providers": [self._safe_llm_provider(provider) for provider in providers],
+        }
+
+    def _ai_session(self, session_id: str) -> dict[str, Any] | None:
+        clean = str(session_id or "").strip()
+        if not clean or not hasattr(self._runtime, "ai_store"):
+            return None
+        try:
+            return self._runtime.ai_store.get_session(clean, include_messages=False)
+        except Exception:
+            return None
+
+    def _safe_llm_provider(self, provider: dict[str, Any]) -> dict[str, Any]:
+        auth_mode = str(provider.get("auth_mode", "env_var"))
+        secret_ref = str(provider.get("secret_ref", "")).strip()
+        has_stored_secret = False
+        if auth_mode == "stored_secret" and secret_ref and hasattr(self._runtime, "secret_store"):
+            try:
+                has_stored_secret = bool(self._runtime.secret_store.has_secret(secret_ref))
+            except Exception:
+                has_stored_secret = False
+        return {
+            "id": provider.get("id", ""),
+            "display_name": provider.get("display_name", ""),
+            "provider_type": provider.get("provider_type", ""),
+            "model_id": provider.get("model_id", ""),
+            "base_url": provider.get("base_url", ""),
+            "enabled": provider.get("enabled", True),
+            "capabilities": list(provider.get("capabilities") or []),
+            "auth_mode": auth_mode,
+            "auth": {
+                "uses_secret": auth_mode in {"env_var", "stored_secret"},
+                "secret_ref_configured": bool(secret_ref),
+                "has_stored_secret": has_stored_secret,
+            },
+            "last_check": _pick(provider.get("last_check") or {}, ["status", "ok", "checked_at"]),
         }
 
     def get_scene_map_summary(self) -> dict[str, Any]:
@@ -233,6 +338,52 @@ def _without_latest_frame(video: dict[str, Any]) -> dict[str, Any]:
             if key not in {"data", "payload", "jpeg"}
         }
     return out
+
+
+def _pick(source: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    return {key: source.get(key) for key in keys if key in source}
+
+
+def _safe_mapping(source: Any) -> dict[str, Any]:
+    return dict(source) if isinstance(source, dict) else {}
+
+
+def _resolve_chat_provider(
+    providers: list[dict[str, Any]],
+    routing: dict[str, Any],
+    *,
+    session_provider_id: str = "",
+) -> tuple[dict[str, Any] | None, str, str]:
+    if session_provider_id:
+        provider = _find_provider(providers, session_provider_id)
+        if provider is None:
+            return None, "session_override", "session provider override was not found"
+        if not provider.get("enabled", True):
+            return provider, "session_override", "session provider override is disabled"
+        return provider, "session_override", ""
+
+    rule = routing.get("general_chat", {}) if isinstance(routing, dict) else {}
+    if isinstance(rule, dict):
+        candidate_ids = [
+            str(rule.get("primary_provider_id", "")).strip(),
+            *[str(item).strip() for item in rule.get("fallback_provider_ids", []) if str(item).strip()],
+        ]
+        for provider_id in candidate_ids:
+            provider = _find_provider(providers, provider_id)
+            if provider and provider.get("enabled", True):
+                return provider, "general_chat_route", ""
+
+    provider = next((item for item in providers if item.get("enabled", True)), None)
+    return provider, "first_enabled_provider" if provider else "none", "" if provider else "no enabled provider is configured"
+
+
+def _find_provider(providers: list[dict[str, Any]], provider_id: str) -> dict[str, Any] | None:
+    clean = str(provider_id or "").strip()
+    if not clean:
+        return None
+    return next((provider for provider in providers if str(provider.get("id")) == clean), None)
 
 
 def _age_seconds(ts: Any) -> float | None:
