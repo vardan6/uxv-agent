@@ -1,61 +1,111 @@
 # Remote Rover Documentation
 
-This directory is the main documentation set for the `remote-rover` workspace.
+This directory is the source of truth for Remote Rover documentation. Docs are organized by audience and purpose.
 
-It is organized for two audiences:
-- non-technical readers who need to understand what the project does, what is already working, and what is planned next
-- technical readers who need architecture, runtime contracts, operational notes, and subproject details
+The repo is a remote robot operations stack with a Panda3D rover simulator (`3d-env/`), a FastAPI + browser Ground Control Station (`gcs_server/`), shared MQTT + config, and an AI workbench. The successor simulator (`rover-sim-next/`) is scaffolded but not yet runnable.
 
-## Start Here
+## Living Status
 
-- [Project Overview](./project-overview.md): high-level explanation of the project, intended use, and current demo story
-- [Current State](./current-state.md): what is implemented now, what is partially implemented, and the main current limitations
-- [Architecture](./architecture.md): how the simulator, GCS, broker, and shared config fit together
-- [Documentation Status Audit](./documentation-status.md): latest markdown review, implementation status reconciliation, and archive summary
-- [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
-- [AI Current Context Layer](./ai-current-context-layer.md): implemented live rover/runtime/settings/LLM/map/replay context layer, spatial query service, tool registry, and read-only Agent tools
-- [AI Spatial Tools And Agent Plan](./ai-spatial-agent-tools-plan.md): spatial query service, permissioned tool registry, intent parsing, mission-draft planning, and perception data shape design reference
-- [AI Agent Workbench Detailed Plan](./ai-agent-workbench-detailed-plan.md): historical planning rationale for schema migrations, spatial services, tool registry, intent parsing, mission drafts, approval state, and first LangGraph checkpoint (Milestones A–F now complete)
-- [Rover Intents And Intent Test](./gcs_server/intent-and-intent-test.md): what rover intents are, why the AI page has an `Intent Test` mode, how it differs from Chat/Agent/Workbench, and what safety boundary it provides
-- [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./ai-agent-rag-implementation-plan.md): implemented AI Chat/session foundation plus planned RAG/source controls, web research/search, LangGraph mission workflow, and rover-agent use cases
-- [Terrain Scene Manifest](./terrain-scene.md): source-of-truth terrain/object manifest, generator, validation, and runtime consumers
-- [Simulation Platform Requirements](./simulation-platform-requironments.md): stable requirements baseline for the next simulator and replay/map/logging work
-- [Simulation Platform Plan](./simulation-platform-plan.md): current implementation and remaining phases for the simulator transition
-- [rover-sim-next Phase 1 Checklist](./rover-sim-next-phase-1-checklist.md): concrete first implementation checklist by file and module for the successor simulator
-- [Run And Config Guide](./operations/run-and-config.md): how to run the simulator and GCS, and where runtime configuration lives
+| Doc | Purpose |
+|---|---|
+| [current-state.md](./current-state.md) | What is implemented today, what is partial, what is missing |
+| [implementation-roadmap.md](./implementation-roadmap.md) | Prioritized forward plan |
 
-## Subproject Documents
+## Product (User Perspective)
 
-- [3D Simulator Docs](./3d-env/README.md): simulator purpose, features, controls, telemetry publishing policy, and technical structure
-- [GCS Server Docs](./gcs_server/README.md): Ground Control Station purpose, browser workflow, MQTT integration, and technical structure
-- [GCS Intent Parsing Docs](./gcs_server/intent-and-intent-test.md): operator and engineering reference for structured rover intents and the `/ai` `Intent Test` mode
-- [GCS Workbench Mode Docs](./gcs_server/workbench-mode.md): purpose, lifecycle, API flow, examples, and troubleshooting for the `/ai` Workbench mode
-- [GCS LLM Capability Matrix](./gcs_server/llm-provider-agentic-capability-matrix.md): provider/model capability mapping and tool-calling fit for Agent mode
-- [rover-sim-next Scaffold](../rover-sim-next/README.md): current successor-simulator scaffold and intended ROS 2 + Gazebo direction
+What the project is, what users see, what the system must do.
 
-## Existing Historical Documents
+| Doc | Purpose |
+|---|---|
+| [product/vision.md](./product/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
+| [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
+| [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: Chat, Agent, Intent Test, Workbench modes |
+| [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
+| [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Product-level requirements for the AI agent layer, safety boundaries, use cases |
 
-Older planning and phase documents are still kept in the repository for historical traceability, but they should not be treated as the main source of truth for the current system.
+## Technical (Implementation)
 
-Historical references:
-- `3d-env/phase1-3D-Simulator.md`
-- `3d-env/initial-hl-design.md`
-- `3d-env/mqtt-plan-canonical-2026-04-05_00-58-36.md`
-- `docs/archive/root/PROJECT_REVIEW_AND_CURRENT_STATE.md`
-- `docs/archive/root/remote_rover_architecture_and_implementation_plan.md`
-- `docs/archive/root/REPO_STATUS_BEFORE_PUSH.md`
+How the system is built.
 
-Archive index:
-- [Archive README](./archive/README.md)
+### Cross-cutting
 
-For presentation, onboarding, and current engineering status, use this `docs/` directory first.
+| Doc | Purpose |
+|---|---|
+| [technical/architecture.md](./technical/architecture.md) | Components, data flows, MQTT contract, runtime boundaries |
 
+### GCS Server
 
-  Active AI docs (as of 2026-05-11):
-  - ai-agent-rag-implementation-plan.md — master plan
-  - ai-agent-workbench-detailed-plan.md — milestones A–F historical planning (complete)
-  - ai-agent-workbench-next-session-plan-2026-05-10.md — implementation guide (Phases 1–3 done; Phase 4 next)
-  - ai-current-context-layer.md — context layer reference
-  - ai-langgraph-agent-design-plan-2026-05-10.md — LangGraph design
-  - ai-spatial-agent-tools-plan.md — spatial tools reference
-  - ai-replay-session-access-plan.md — replay AI design + status
+| Doc | Purpose |
+|---|---|
+| [technical/gcs/overview.md](./technical/gcs/overview.md) | What the GCS does today; main files |
+| [technical/gcs/api-and-runtime.md](./technical/gcs/api-and-runtime.md) | HTTP/WebSocket routes, runtime model |
+| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and Intent Test mode |
+| [technical/gcs/workbench-mode.md](./technical/gcs/workbench-mode.md) | Workbench graph stages, endpoints, interrupt types, troubleshooting |
+| [technical/gcs/llm-capability-matrix.md](./technical/gcs/llm-capability-matrix.md) | Configured providers and tool-calling fit |
+| [technical/gcs/regressions.md](./technical/gcs/regressions.md) | Behavioral regressions to avoid |
+
+### Simulator
+
+| Doc | Purpose |
+|---|---|
+| [technical/simulator/overview.md](./technical/simulator/overview.md) | 3D simulator purpose, features, controls |
+| [technical/simulator/technical-details.md](./technical/simulator/technical-details.md) | Simulator runtime structure |
+| [technical/simulator/terrain-scene.md](./technical/simulator/terrain-scene.md) | Source-of-truth terrain/object manifest |
+| [technical/simulator/platform-plan.md](./technical/simulator/platform-plan.md) | Simulator transition plan |
+| [technical/simulator/rover-sim-next-phase-1.md](./technical/simulator/rover-sim-next-phase-1.md) | Concrete first implementation checklist for the successor simulator |
+
+### AI
+
+| Doc | Purpose |
+|---|---|
+| [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
+| [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
+| [technical/ai/langgraph-design.md](./technical/ai/langgraph-design.md) | LangGraph-based AI agent architecture |
+| [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
+
+## Decisions (ADRs)
+
+Non-obvious architectural choices and the reasoning behind them.
+
+| ADR | Title |
+|---|---|
+| [0001](./decisions/0001-no-retained-current-state-topic.md) | No Retained MQTT Current-State Topic |
+| [0002](./decisions/0002-two-approval-model.md) | Two-Approval Model: Workbench Approval ≠ Execution Approval |
+| [0003](./decisions/0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
+| [0004](./decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Workbench Checkpointer: MemorySaver For Now |
+
+## Operations
+
+| Doc | Purpose |
+|---|---|
+| [operations/run-and-config.md](./operations/run-and-config.md) | How to run the simulator and GCS, where runtime config lives |
+
+## Reference
+
+| Doc | Purpose |
+|---|---|
+| [glossary.md](./glossary.md) | Shared vocabulary across the project |
+| [STYLE.md](./STYLE.md) | Documentation style and conventions for future updates |
+
+## Archive
+
+Older planning, completed feature plans, code review session output, and superseded docs are kept under [archive/](./archive/) for historical traceability. They should not be treated as the current source of truth.
+
+## Recommended Reading Order
+
+For a general or product-focused audience:
+
+1. [product/vision.md](./product/vision.md)
+2. [current-state.md](./current-state.md)
+3. [product/operator-experience.md](./product/operator-experience.md)
+4. [product/ai-experience.md](./product/ai-experience.md)
+5. [implementation-roadmap.md](./implementation-roadmap.md)
+
+For technical readers:
+
+1. [technical/architecture.md](./technical/architecture.md)
+2. [technical/gcs/overview.md](./technical/gcs/overview.md)
+3. [technical/ai/context-layer.md](./technical/ai/context-layer.md)
+4. [technical/ai/langgraph-design.md](./technical/ai/langgraph-design.md)
+5. [decisions/](./decisions/) — read all ADRs
+6. [operations/run-and-config.md](./operations/run-and-config.md)

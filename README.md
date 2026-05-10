@@ -23,19 +23,19 @@ Main documentation entry point:
 - [Documentation Portal](./docs/README.md)
 
 Recommended reading order:
-- [Project Overview](./docs/project-overview.md)
+- [Vision](./docs/product/vision.md)
 - [Current State](./docs/current-state.md)
-- [Architecture](./docs/architecture.md)
-- [AI Current Context Layer](./docs/ai-current-context-layer.md)
-- [AI Spatial Tools And Agent Plan](./docs/ai-spatial-agent-tools-plan.md)
+- [Architecture](./docs/technical/architecture.md)
+- [AI Current Context Layer](./docs/technical/ai/context-layer.md)
+- [AI Spatial Tools And Agent Plan](./docs/technical/ai/spatial-tools.md)
 - [Implementation Roadmap](./docs/implementation-roadmap.md)
-- [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./docs/ai-agent-rag-implementation-plan.md)
+- [LangGraph Agent Design](./docs/technical/ai/langgraph-design.md)
 - [Run And Config Guide](./docs/operations/run-and-config.md)
 
 Subproject documentation:
-- [3D Simulator Docs](./docs/3d-env/README.md)
-- [GCS Server Docs](./docs/gcs_server/README.md)
-- [Terrain Scene Manifest](./docs/terrain-scene.md)
+- [3D Simulator Docs](./docs/technical/simulator/overview.md)
+- [GCS Server Docs](./docs/technical/gcs/overview.md)
+- [Terrain Scene Manifest](./docs/technical/simulator/terrain-scene.md)
 
 ## Repository Layout
 

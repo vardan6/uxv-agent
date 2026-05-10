@@ -110,7 +110,7 @@ python3 tools/validate_terrain_scene.py
 ```
 
 More detail:
-- `docs/terrain-scene.md`
+- `docs/technical/simulator/terrain-scene.md`
 
 ## First-Time Setup
 
