@@ -1,0 +1,2296 @@
+const aiState = {
+  sessions: [],
+  providers: [],
+  routing: {},
+  activeSession: null,
+  editingSessionId: '',
+  showArchived: false,
+  runMode: 'chat',
+  messageListPinnedToBottom: true,
+  activeSpeechMessageId: '',
+  activeSpeechUtterance: null,
+  activeSpeechAudio: null,
+  activeSpeechAudioUrl: '',
+  activeSpeechAbortController: null,
+  activeSpeechPaused: false,
+  aiSettings: {
+    tts: {
+      enabled: true,
+      engine: 'kokoro_service',
+      auto_read: false,
+      service_url: 'http://127.0.0.1:9101',
+      voice: 'af_sky',
+      format: 'wav',
+      speed: 1,
+      browser_fallback: true,
+      voice_name: '',
+      rate: 1,
+      pitch: 1,
+    },
+  },
+};
+
+const AI_SOURCE_CONTROL_META = {
+  project_docs: {
+    label: 'Project docs',
+    description: 'Planned RAG source for internal docs and design notes.',
+  },
+  mission_history: {
+    label: 'Mission history',
+    description: 'Use stored mission drafts and approval records.',
+  },
+  replay_reports: {
+    label: 'Replay reports',
+    description: 'Allow replay summaries and analytics tools.',
+  },
+  ai_chat_history: {
+    label: 'AI chat history',
+    description: 'Future bounded retrieval from AI session history.',
+  },
+  settings_config: {
+    label: 'Settings/config',
+    description: 'Use compact settings context and future section lookups.',
+  },
+  sensor_context: {
+    label: 'Sensor context',
+    description: 'Placeholder for future perception and sampled sensor retrieval.',
+  },
+  web_research: {
+    label: 'Web research',
+    description: 'Planned external research source. Not active yet.',
+  },
+};
+
+// Per-session live state — keyed by session ID.
+// Each entry tracks: messages (including in-progress pending), sending flag,
+// abort controller, and pending message IDs. This allows multiple sessions to
+// stream concurrently and independently, so switching sessions does not
+// interrupt or corrupt an in-flight response.
+const _sessionLive = new Map();
+
+function liveStateFor(sessionId) {
+  if (!_sessionLive.has(sessionId)) {
+    _sessionLive.set(sessionId, {
+      messages: [],
+      sending: false,
+      pendingUserMessageId: '',
+      pendingAssistantMessageId: '',
+      abortController: null,
+      // Phase 2: workbench interrupt/resume state
+      pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
+      workbenchThreadId: '',
+    });
+  }
+  return _sessionLive.get(sessionId);
+}
+
+function isSending() {
+  const id = aiState.activeSession?.id;
+  return id ? liveStateFor(id).sending : false;
+}
+
+function activeAbortController() {
+  const id = aiState.activeSession?.id;
+  return id ? liveStateFor(id).abortController : null;
+}
+
+const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
+const AI_LAYOUT_HEIGHT_KEY = 'gcs-ai-chat-shell-height';
+const AI_SIDEBAR_MIN = 240;
+const AI_SIDEBAR_MAX = 560;
+const AI_SHELL_HEIGHT_MIN = 420;
+const AI_SHELL_HEIGHT_MAX = 1100;
+const AI_MOBILE_QUERY = '(max-width: 1100px)';
+const AI_ARCHIVED_SESSION_LIMIT = 500;
+let sessionOpenTimer = 0;
+
+const aiEls = {
+  shell: document.querySelector('.ai-chat-shell'),
+  newSession: document.getElementById('ai-new-session'),
+  showActive: document.getElementById('ai-show-active'),
+  showArchived: document.getElementById('ai-show-archived'),
+  layoutResizer: document.getElementById('ai-layout-resizer'),
+  heightResizer: document.getElementById('ai-height-resizer'),
+  sessionSearch: document.getElementById('ai-session-search'),
+  sessionList: document.getElementById('ai-session-list'),
+  sessionTitle: document.getElementById('ai-session-title'),
+  providerSelect: document.getElementById('ai-provider-select'),
+  providerPill: document.getElementById('ai-provider-pill'),
+  statusPill: document.getElementById('ai-status-pill'),
+  sourceControls: document.getElementById('ai-source-controls'),
+  renameSession: document.getElementById('ai-rename-session'),
+  archiveSession: document.getElementById('ai-archive-session'),
+  messageList: document.getElementById('ai-message-list'),
+  messageForm: document.getElementById('ai-message-form'),
+  messageInput: document.getElementById('ai-message-input'),
+  retryResponse: document.getElementById('ai-retry-response'),
+  stopMessage: document.getElementById('ai-stop-message'),
+  sendMessage: document.getElementById('ai-send-message'),
+  status: document.getElementById('ai-status'),
+  runModeButtons: document.querySelectorAll('[data-run-mode]'),
+};
+
+async function aiFetchJson(url, options = {}) {
+  const response = await fetch(url, withAiTimezone(options));
+  if (!response.ok) {
+    let detail = await response.text();
+    try {
+      const parsed = JSON.parse(detail);
+      detail = parsed.detail || detail;
+    } catch (_) {
+      // Use the raw response body.
+    }
+    throw new Error(detail || `${response.status}`);
+  }
+  return response.json();
+}
+
+function operatorTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withAiTimezone(options = {}) {
+  const timezone = operatorTimezone();
+  const headers = new Headers(options.headers || {});
+  if (timezone) {
+    headers.set('X-Operator-Timezone', timezone);
+  }
+  return { ...options, headers };
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function normalizeSourceControls(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  Object.keys(AI_SOURCE_CONTROL_META).forEach((key) => {
+    if (key === 'project_docs' || key === 'mission_history' || key === 'replay_reports') {
+      out[key] = source[key] !== false;
+    } else {
+      out[key] = Boolean(source[key]);
+    }
+  });
+  return out;
+}
+
+let _markdownReady = false;
+
+function ensureMarkdown() {
+  if (_markdownReady || typeof marked === 'undefined') return;
+  _markdownReady = true;
+  marked.use({
+    breaks: true,
+    gfm: true,
+    renderer: {
+      code({ text, lang }) {
+        const language = (lang || '').split(/\s/)[0];
+        const displayLang = language || 'plain';
+        const safeCode = text
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+        return `<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">${displayLang}</span><button class="code-copy-btn" type="button">Copy</button></div><pre><code class="language-${escapeHtml(language || 'plaintext')}">${safeCode}</code></pre></div>`;
+      },
+    },
+  });
+}
+
+const _MARKDOWN_PURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'h1','h2','h3','h4','h5','h6',
+    'p','br','strong','em','b','i','u','s','del','mark',
+    'code','pre','blockquote','hr',
+    'ul','ol','li',
+    'a','img',
+    'table','thead','tbody','tr','th','td',
+    'div','span','button',
+  ],
+  ALLOWED_ATTR: ['href','title','alt','src','class','type','rel','target'],
+  KEEP_CONTENT: true,
+};
+
+function renderMarkdown(content) {
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return escapeHtml(content);
+  }
+  ensureMarkdown();
+  const rawHtml = marked.parse(String(content || ''));
+  return DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+}
+
+function postRenderMessages() {
+  const list = aiEls.messageList;
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const isStreaming = Boolean(activeLive?.pendingAssistantMessageId);
+
+  // Syntax highlight only when not streaming (avoids re-running hljs on every delta)
+  if (typeof hljs !== 'undefined' && !isStreaming) {
+    list.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+  }
+
+  // Copy raw markdown button
+  list.querySelectorAll('.ai-message-copy-md').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const md = btn.dataset.md || '';
+      navigator.clipboard.writeText(md).then(() => {
+        btn.innerHTML = aiCheckIcon();
+        btn.dataset.tooltip = 'Copied!';
+        setTimeout(() => {
+          btn.innerHTML = aiCopyIcon();
+          btn.dataset.tooltip = 'Copy markdown';
+        }, 1500);
+      }).catch(() => {});
+    });
+  });
+
+  // Re-attach copy button handlers (DOM is rebuilt each render)
+  list.querySelectorAll('.code-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.code-block-wrapper')?.querySelector('code');
+      if (!code) return;
+      navigator.clipboard.writeText(code.textContent).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+      }).catch(() => {});
+    });
+  });
+}
+
+function fmtTokens(n) {
+  const value = Number(n);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value >= 10000) return `${Math.round(value / 1000)}K`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+function fmtTokPerSec(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 10) return `${Math.round(n)} tok/s`;
+  return `${n.toFixed(1)} tok/s`;
+}
+
+function messageStats(message) {
+  const meta = message.meta || {};
+  const rm = meta.response_metadata || {};
+  const latencyMs = message.latency_ms;
+
+  // OpenAI-compatible (NIM, vLLM, OpenAI) + LangChain usage_metadata
+  const usage = meta.usage_metadata || rm.usage_metadata || rm.token_usage || rm.usage || {};
+  let inputTok = usage.prompt_tokens ?? usage.input_tokens ?? usage.input_token_details?.total_tokens ?? null;
+  let outputTok = usage.completion_tokens ?? usage.output_tokens ?? usage.output_token_details?.total_tokens ?? null;
+  const totalTok = usage.total_tokens ?? null;
+  if (inputTok == null) inputTok = usage.input_tokens ?? usage.prompt_tokens ?? null;
+  if (outputTok == null) outputTok = usage.output_tokens ?? usage.completion_tokens ?? null;
+
+  // Ollama shape
+  if (inputTok === null && rm.prompt_eval_count != null) inputTok = rm.prompt_eval_count;
+  if (outputTok === null && rm.eval_count != null) outputTok = rm.eval_count;
+
+  // tok/s: prefer Ollama's precise eval_duration (nanoseconds), else wall-clock latency
+  let tokPerSec = null;
+  if (outputTok != null) {
+    if (rm.eval_duration > 0) {
+      tokPerSec = outputTok / (rm.eval_duration / 1e9);
+    } else if (latencyMs > 0) {
+      tokPerSec = outputTok / (latencyMs / 1000);
+    }
+  }
+
+  const finishReason = rm.finish_reason || rm.stop_reason || null;
+  const showFinish = finishReason && finishReason !== 'stop' && finishReason !== 'end_turn';
+
+  // Context window fill — from provider config
+  const provider = providerById(message.provider_id || '');
+  const ctxMax = provider?.context_window || null;
+
+  const parts = [];
+  if (inputTok != null && ctxMax) {
+    const pct = Math.round((Number(inputTok) / Number(ctxMax)) * 100);
+    parts.push(`ctx ${fmtTokens(inputTok)}/${fmtTokens(ctxMax)} (${pct}%)`);
+  } else if (inputTok != null) {
+    parts.push(`↑${fmtTokens(inputTok)}`);
+  }
+  if (outputTok != null) parts.push(`↓${fmtTokens(outputTok)} tok`);
+  else if (inputTok == null && totalTok != null) parts.push(`tok ${fmtTokens(totalTok)}`);
+  if (tokPerSec != null) parts.push(fmtTokPerSec(tokPerSec));
+  if (showFinish) parts.push(`[${finishReason}]`);
+  return parts.join(' · ');
+}
+
+function agentToolCalls(message) {
+  const meta = message.meta || {};
+  if (Array.isArray(meta.agent_tool_progress) && meta.agent_tool_progress.length) {
+    return meta.agent_tool_progress;
+  }
+  if (Array.isArray(meta.tool_calls) && meta.tool_calls.length) {
+    return meta.tool_calls.map((call) => ({ ...call, status: 'complete' }));
+  }
+  return [];
+}
+
+function summarizeAgentToolResult(result) {
+  if (result == null) return '';
+  if (typeof result !== 'object') return String(result);
+  if (result.ok === false && result.error) return `error: ${result.error}`;
+  if (Array.isArray(result)) return `${result.length} item${result.length === 1 ? '' : 's'}`;
+  if (Array.isArray(result.objects)) return `${result.objects.length} object${result.objects.length === 1 ? '' : 's'}`;
+  if (Array.isArray(result.sessions)) return `${result.sessions.length} session${result.sessions.length === 1 ? '' : 's'}`;
+  if (typeof result.available === 'boolean' && !result.available) return result.reason || result.error || 'unavailable';
+  const keys = Object.keys(result).filter((key) => result[key] != null);
+  return keys.slice(0, 4).join(', ');
+}
+
+function renderAgentToolPanel(message) {
+  const calls = agentToolCalls(message);
+  if (!calls.length) return '';
+  const rows = calls.map((call) => {
+    const status = call.status || (call.result !== undefined ? 'complete' : 'running');
+    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
+    const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
+    return `
+      <li class="ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
+        <span class="ai-agent-tool-dot" aria-hidden="true"></span>
+        <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
+        <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
+      </li>
+    `;
+  }).join('');
+  return `
+    <div class="ai-agent-tools" aria-label="Agent tool activity">
+      <div class="ai-agent-tools-title">Agent tool activity</div>
+      <ul>${rows}</ul>
+    </div>
+  `;
+}
+
+function renderIntentPanel(message) {
+  const meta = message?.meta || {};
+  const intent = meta.intent;
+  if (!intent) return '';
+
+  const intentType = escapeHtml(intent.intent_type || 'unknown');
+  const summary = escapeHtml(intent.summary || '');
+  const confidence = Number.isFinite(intent.confidence) ? `${Math.round(intent.confidence * 100)}%` : '—';
+  const requiresMotion = intent.requires_rover_motion ? 'Yes — operator approval required' : 'No';
+
+  const target = intent.target || {};
+  const targetParts = [
+    target.description ? `"${escapeHtml(String(target.description))}"` : null,
+    target.kind ? `kind: ${escapeHtml(String(target.kind))}` : null,
+    target.side ? `side: ${escapeHtml(String(target.side))}` : null,
+    target.max_distance_m != null ? `max ${escapeHtml(String(target.max_distance_m))} m` : null,
+  ].filter(Boolean).join(' · ');
+
+  const missing = Array.isArray(intent.missing_information) && intent.missing_information.length
+    ? `<div class="ai-intent-row"><span class="ai-intent-label">Missing</span><span class="ai-intent-value ai-intent-warn">${intent.missing_information.map((s) => escapeHtml(String(s))).join(', ')}</span></div>`
+    : '';
+
+  const parseErrors = Array.isArray(meta.parse_errors) && meta.parse_errors.length
+    ? `<div class="ai-intent-row"><span class="ai-intent-label">Parse errors</span><span class="ai-intent-value ai-intent-warn">${meta.parse_errors.map((s) => escapeHtml(String(s))).join('; ')}</span></div>`
+    : '';
+
+  const resolution = meta.target_resolution || {};
+  let candidateRows = '';
+  if (Array.isArray(resolution.candidates) && resolution.candidates.length) {
+    const items = resolution.candidates.slice(0, 5).map((c) => {
+      const label = escapeHtml(c.label || c.kind || c.id || 'object');
+      const dist = Number.isFinite(c.distance_m) ? ` · ${c.distance_m} m` : '';
+      const side = c.side ? ` · ${escapeHtml(c.side)}` : '';
+      const selected = c === resolution.selected ? ' ✓' : '';
+      return `<li>${label}${dist}${side}${selected}</li>`;
+    }).join('');
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Candidates</span><ul class="ai-intent-candidates">${items}</ul></div>`;
+  } else if (resolution.available === false) {
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Rover pose or scene unavailable</span></div>`;
+  } else if (resolution.needs_clarification) {
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Needs clarification</span></div>`;
+  }
+
+  return `
+    <div class="ai-intent-panel" aria-label="Parsed rover intent">
+      <div class="ai-intent-title">Rover intent</div>
+      <div class="ai-intent-row"><span class="ai-intent-label">Type</span><span class="ai-intent-value">${intentType}</span></div>
+      ${summary ? `<div class="ai-intent-row"><span class="ai-intent-label">Summary</span><span class="ai-intent-value">${summary}</span></div>` : ''}
+      <div class="ai-intent-row"><span class="ai-intent-label">Confidence</span><span class="ai-intent-value">${confidence}</span></div>
+      <div class="ai-intent-row"><span class="ai-intent-label">Requires motion</span><span class="ai-intent-value">${requiresMotion}</span></div>
+      ${targetParts ? `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value">${targetParts}</span></div>` : ''}
+      ${candidateRows}
+      ${missing}
+      ${parseErrors}
+    </div>
+  `;
+}
+
+function renderRetrievalPanel(message) {
+  const meta = message?.meta || {};
+  const request = meta.retrieval_request || {};
+  const sources = Array.isArray(meta.retrieved_sources) ? meta.retrieved_sources : [];
+  if (!sources.length) return '';
+
+  const enabled = Array.isArray(request.enabled_sources) ? request.enabled_sources : [];
+  const scope = String(request.request_scope || '');
+  const rows = sources.map((source) => {
+    const label = AI_SOURCE_CONTROL_META[source.source]?.label || source.source || 'source';
+    const status = source.status || 'planned';
+    const requested = source.requested ? '<span class="ai-retrieval-pill">lazy</span>' : '';
+    const note = source.note ? `<div class="ai-retrieval-note">${escapeHtml(String(source.note))}</div>` : '';
+    return `
+      <li class="ai-retrieval-row">
+        <div class="ai-retrieval-row-top">
+          <span class="ai-retrieval-name">${escapeHtml(label)}</span>
+          <span class="ai-retrieval-status">${escapeHtml(status)}</span>
+          ${requested}
+        </div>
+        ${note}
+      </li>
+    `;
+  }).join('');
+
+  return `
+    <div class="ai-retrieval-panel" aria-label="Retrieval surfaces">
+      <div class="ai-retrieval-title">Retrieval surfaces</div>
+      <div class="ai-retrieval-meta">
+        ${scope ? `<span>scope: ${escapeHtml(scope)}</span>` : ''}
+        ${enabled.length ? `<span>enabled: ${escapeHtml(enabled.join(', '))}</span>` : ''}
+      </div>
+      <ul class="ai-retrieval-list">${rows}</ul>
+    </div>
+  `;
+}
+
+function renderSourceControls() {
+  if (!aiEls.sourceControls) return;
+  const session = aiState.activeSession;
+  const sourceControls = normalizeSourceControls(session?.source_controls);
+  const disabled = !session || Boolean(session.archived_at) || isSending();
+  const sourceKeys = Object.keys(AI_SOURCE_CONTROL_META);
+  const enabledCount = sourceKeys.filter((key) => sourceControls[key]).length;
+  const items = sourceKeys.map((key) => {
+    const meta = AI_SOURCE_CONTROL_META[key];
+    return `
+      <label class="ai-source-control-item">
+        <input
+          type="checkbox"
+          data-source-control="${escapeHtml(key)}"
+          ${sourceControls[key] ? 'checked' : ''}
+          ${disabled ? 'disabled' : ''}
+        >
+        <span class="ai-source-control-copy">
+          <strong>${escapeHtml(meta.label)}</strong>
+          <span>${escapeHtml(meta.description)}</span>
+        </span>
+      </label>
+    `;
+  }).join('');
+  aiEls.sourceControls.innerHTML = `
+    <div class="ai-source-controls-head">
+      <div>
+        <p class="section-kicker">Phase 4</p>
+        <h3>Source Controls</h3>
+      </div>
+      <span class="pill">${enabledCount}/${sourceKeys.length} enabled</span>
+    </div>
+    <p class="ai-source-controls-note">
+      These toggles are stored per session and now flow into chat, agent, and workbench retrieval scaffolding. Unwired sources remain visible as planned surfaces for testing.
+    </p>
+    <div class="ai-source-controls-grid">${items}</div>
+  `;
+}
+
+async function sendIntentTestRequest(sessionId, content, abortController) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/intent-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Operator-Timezone': timezone },
+    body: JSON.stringify({ content, timezone }),
+    signal: abortController.signal,
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `Intent test failed (${response.status})`);
+  }
+  const result = await response.json();
+  const live = liveStateFor(sessionId);
+  if (Array.isArray(result.user_message) || result.user_message) {
+    const msgs = live.messages.filter((m) => !m.id?.startsWith('pending-'));
+    if (result.user_message) msgs.push(result.user_message);
+    if (result.assistant_message) msgs.push(result.assistant_message);
+    live.messages = msgs;
+  }
+}
+
+// ── Workbench streaming and approval ──────────────────────────────────────────
+
+function handleWorkbenchStreamEvent(sessionId, eventData) {
+  const live = liveStateFor(sessionId);
+  if (eventData.type === 'graph_run_start') {
+    live.workbenchThreadId = eventData.thread_id || '';
+    setAiStatus('Workbench planning graph started.');
+  } else if (eventData.type === 'graph_resume_start') {
+    setAiStatus(`Submitting ${eventData.decision || 'decision'}...`);
+  } else if (eventData.type === 'graph_node_result') {
+    const node = String(eventData.node || '').replace(/_/g, ' ');
+    setAiStatus(`Workbench: ${node}...`);
+  } else if (eventData.type === 'graph_retrieval_result') {
+    updatePendingRetrievalState(
+      sessionId,
+      eventData.retrieval_request || {},
+      eventData.retrieved_sources || [],
+      eventData.retrieval_citations || [],
+    );
+  } else if (eventData.type === 'mission_draft_created') {
+    setAiStatus(`Draft created (${eventData.draft_id || '?'}). Awaiting approval.`);
+  } else if (eventData.type === 'mission_draft_decision') {
+    const status = eventData.approval_status || '';
+    setAiStatus(`Draft ${status}.`, status === 'approved' ? 'ok' : 'warn');
+  } else if (eventData.type === 'graph_interrupt') {
+    live.pendingInterrupt = {
+      threadId: eventData.thread_id || live.workbenchThreadId || '',
+      approvalPayload: eventData.interrupt_value || {},
+    };
+    // Remove the spinner pending message — graph is paused, not running
+    live.messages = live.messages.filter((m) => m.id !== live.pendingAssistantMessageId);
+    live.pendingAssistantMessageId = '';
+    const interruptType = (eventData.interrupt_value || {}).type || '';
+    setAiStatus(
+      interruptType === 'clarification_request'
+        ? 'Clarification needed before planning can continue.'
+        : 'Mission draft awaiting your approval.',
+      'warn',
+    );
+    if (aiState.activeSession?.id === sessionId) renderMessages();
+  } else if (eventData.type === 'graph_run_error') {
+    throw new Error(String(eventData.error || 'Workbench graph error'));
+  } else if (eventData.type === 'graph_run_end') {
+    live.pendingInterrupt = null;
+    setAiStatus('Workbench graph complete.', 'ok');
+  }
+  if (aiState.activeSession?.id === sessionId) renderMessages();
+}
+
+async function sendWorkbenchRequest(sessionId, content, abortController) {
+  const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/stream`;
+  const response = await fetch(url, withAiTimezone({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+    signal: abortController.signal,
+  }));
+  if (!response.ok) {
+    let detail = await response.text();
+    try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
+    throw new Error(detail || `${response.status}`);
+  }
+  await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+}
+
+async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
+  const live = liveStateFor(sessionId);
+  live.pendingInterrupt = null;
+  live.sending = true;
+  const abortController = new AbortController();
+  live.abortController = abortController;
+  renderMessages();
+  setAiStatus(`Submitting ${decision}...`);
+  try {
+    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/thread/${encodeURIComponent(threadId)}/resume`;
+    const response = await fetch(url, withAiTimezone({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, note: note || '' }),
+      signal: abortController.signal,
+    }));
+    if (!response.ok) {
+      let detail = await response.text();
+      try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
+      throw new Error(detail || `${response.status}`);
+    }
+    await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    setAiStatus('Ready.', 'ok');
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    setAiStatus(isAbort ? 'Interrupted.' : (error.message || 'Approval failed.'), isAbort ? 'warn' : 'danger');
+  } finally {
+    clearSessionLiveState(sessionId);
+    renderMessages();
+  }
+}
+
+function renderWorkbenchApprovalCard(sessionId, interrupt) {
+  const payload = interrupt.approvalPayload || {};
+  if (payload.type === 'clarification_request') {
+    return renderClarificationCard(sessionId, interrupt);
+  }
+  const threadId = interrupt.threadId || '';
+  const safeThreadId = escapeHtml(threadId);
+  const goal = escapeHtml(String(payload.goal || payload.summary || ''));
+  const draftId = escapeHtml(String(payload.draft_id || ''));
+  const risks = Array.isArray(payload.risks) ? payload.risks : [];
+  const riskItems = risks.length
+    ? `<ul class="ai-approval-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
+    : '';
+  return `
+    <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
+      <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
+      ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
+      ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
+      ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
+      <div class="ai-approval-note-row">
+        <label class="ai-approval-note-label" for="ai-approval-note-input">Note (optional)</label>
+        <input type="text" id="ai-approval-note-input" class="ai-approval-note-input" placeholder="Reason for approval or rejection…" />
+      </div>
+      <div class="ai-approval-actions">
+        <button class="ai-approval-btn ai-approval-approve" type="button"
+          data-approval-action="approve"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Approve</button>
+        <button class="ai-approval-btn ai-approval-reject" type="button"
+          data-approval-action="reject"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Reject</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderClarificationCard(sessionId, interrupt) {
+  const payload = interrupt.approvalPayload || {};
+  const threadId = interrupt.threadId || '';
+  const safeThreadId = escapeHtml(threadId);
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const intentSummary = escapeHtml(String(payload.intent_summary || ''));
+  const questionItems = questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('');
+  return `
+    <div class="ai-approval-card ai-clarification-card" role="region" aria-label="Clarification needed">
+      <div class="ai-approval-title">Clarification Needed</div>
+      ${intentSummary ? `<div class="ai-approval-row"><span class="ai-approval-label">Request</span><span class="ai-approval-value">${intentSummary}</span></div>` : ''}
+      ${questionItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Missing</span><ul class="ai-approval-risks ai-clarification-questions">${questionItems}</ul></div>` : ''}
+      <div class="ai-approval-note-row">
+        <label class="ai-approval-note-label" for="ai-clarification-input">Your answer</label>
+        <textarea id="ai-clarification-input" class="ai-approval-note-input ai-clarification-input" rows="2" placeholder="Provide the missing information…"></textarea>
+      </div>
+      <div class="ai-approval-actions">
+        <button class="ai-approval-btn ai-approval-approve" type="button"
+          data-clarification-action="continue"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Continue</button>
+        <button class="ai-approval-btn ai-approval-reject" type="button"
+          data-clarification-action="cancel"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+function formatAiTime(value) {
+  if (!value) return '';
+  return new Date(value * 1000).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function setAiStatus(text, level = 'warn') {
+  aiEls.status.textContent = text;
+  aiEls.statusPill.textContent = text;
+  aiEls.statusPill.className = `pill ${level}`;
+}
+
+function activeProviderId() {
+  return aiState.activeSession?.provider_id || aiEls.providerSelect.value || '';
+}
+
+function generalChatProviderId() {
+  const rule = aiState.routing?.general_chat || {};
+  return rule.primary_provider_id || '';
+}
+
+function currentProvider() {
+  return providerById(activeProviderId() || generalChatProviderId());
+}
+
+function enabledChatProviders() {
+  return aiState.providers.filter((provider) => provider.enabled !== false && (provider.capabilities || []).includes('chat'));
+}
+
+function providerLabel(provider) {
+  if (!provider) return 'Routing default';
+  return `${provider.display_name || provider.id} (${provider.model_id || 'no model'})`;
+}
+
+function providerById(providerId) {
+  return aiState.providers.find((provider) => provider.id === providerId);
+}
+
+function providerNameForMessage(message) {
+  const provider = providerById(message.provider_id || '');
+  return provider?.display_name || message.provider_id || 'Unknown provider';
+}
+
+function normalizeRunMode(value) {
+  const clean = String(value || '').trim().toLowerCase();
+  if (clean === 'agent') return 'agent';
+  if (clean === 'intent' || clean === 'rover_intent_test') return 'intent';
+  if (clean === 'workbench') return 'workbench';
+  return 'chat';
+}
+
+function sessionModeToRunMode(session) {
+  return normalizeRunMode(session?.mode);
+}
+
+function runModeToSessionMode(runMode) {
+  const mode = normalizeRunMode(runMode);
+  if (mode === 'agent') return 'agent';
+  if (mode === 'intent') return 'rover_intent_test';
+  if (mode === 'workbench') return 'workbench';
+  return 'general_chat';
+}
+
+function currentRunMode() {
+  return normalizeRunMode(aiState.runMode);
+}
+
+function messageRunMode(message) {
+  return normalizeRunMode(message?.meta?.run_mode);
+}
+
+function runModeLabel(runMode) {
+  const mode = normalizeRunMode(runMode);
+  if (mode === 'agent') return 'Agent';
+  if (mode === 'intent') return 'Intent Test';
+  if (mode === 'workbench') return 'Workbench';
+  return 'Chat';
+}
+
+function providerSupportsAgentMode(provider) {
+  if (!provider) return true;
+  const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
+  if (capabilities.includes('tool_calling') || capabilities.includes('planner')) {
+    return true;
+  }
+  return String(provider.provider_type || '').trim().toLowerCase() !== 'ollama';
+}
+
+function providerToolsSupportLabel(provider) {
+  if (!provider) return 'Tools: unknown';
+  return providerSupportsAgentMode(provider) ? 'Tools: supported' : 'Tools: not supported';
+}
+
+function renderRunModeToggle() {
+  const provider = currentProvider();
+  const runMode = currentRunMode();
+  const agentSupported = providerSupportsAgentMode(provider);
+  aiEls.runModeButtons.forEach((button) => {
+    const buttonRunMode = normalizeRunMode(button.dataset.runMode);
+    const active = buttonRunMode === runMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.disabled = isSending() || Boolean(aiState.activeSession?.archived_at);
+    if (buttonRunMode === 'agent') {
+      const title = agentSupported
+        ? 'Use read-only rover tools when the provider supports tool calling'
+        : 'This provider may fall back to plain agent chat without tool calls';
+      button.title = title;
+      button.setAttribute('aria-label', title);
+    }
+  });
+}
+
+function aiSpeechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function cancelAiSpeech() {
+  if (aiSpeechSupported()) {
+    window.speechSynthesis.cancel();
+  }
+  if (aiState.activeSpeechAbortController) {
+    aiState.activeSpeechAbortController.abort();
+  }
+  if (aiState.activeSpeechAudio) {
+    aiState.activeSpeechAudio.pause();
+    aiState.activeSpeechAudio.src = '';
+  }
+  if (aiState.activeSpeechAudioUrl) {
+    URL.revokeObjectURL(aiState.activeSpeechAudioUrl);
+  }
+  aiState.activeSpeechMessageId = '';
+  aiState.activeSpeechUtterance = null;
+  aiState.activeSpeechAudio = null;
+  aiState.activeSpeechAudioUrl = '';
+  aiState.activeSpeechAbortController = null;
+  aiState.activeSpeechPaused = false;
+}
+
+function aiTtsSettings() {
+  return aiState.aiSettings?.tts || {};
+}
+
+function resolveAiSpeechVoice(voiceName) {
+  if (!voiceName || !aiSpeechSupported()) return null;
+  return window.speechSynthesis.getVoices().find((voice) => voice.name === voiceName) || null;
+}
+
+function waitForAiSpeechVoices(voiceName) {
+  if (!voiceName || !aiSpeechSupported() || window.speechSynthesis.getVoices().length) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timeoutId);
+      window.speechSynthesis.removeEventListener?.('voiceschanged', finish);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(finish, 800);
+    if (window.speechSynthesis.addEventListener) {
+      window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
+    } else if (window.speechSynthesis.onvoiceschanged === null) {
+      window.speechSynthesis.onvoiceschanged = finish;
+    }
+  });
+}
+
+function aiTtsUsesService() {
+  return aiTtsSettings().engine === 'kokoro_service';
+}
+
+function aiCanSpeak() {
+  const tts = aiTtsSettings();
+  return tts.enabled !== false && (aiTtsUsesService() || aiSpeechSupported());
+}
+
+function aiPlayIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M8 6v12l10-6z"></path>
+    </svg>
+  `;
+}
+
+function aiPauseIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M8 6h3v12H8z"></path>
+      <path d="M13 6h3v12h-3z"></path>
+    </svg>
+  `;
+}
+
+function aiStopIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M7 7h10v10H7z"></path>
+    </svg>
+  `;
+}
+
+function aiCopyIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="9" y="2" width="10" height="14" rx="2"/>
+      <path d="M5 6H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/>
+    </svg>
+  `;
+}
+
+function aiCheckIcon() {
+  return `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+  `;
+}
+
+function clearAiSpeechPlayback(messageId) {
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  aiState.activeSpeechMessageId = '';
+  aiState.activeSpeechUtterance = null;
+  aiState.activeSpeechAudio = null;
+  aiState.activeSpeechAudioUrl = '';
+  aiState.activeSpeechAbortController = null;
+  aiState.activeSpeechPaused = false;
+  renderMessages({ preserveScroll: true });
+}
+
+async function pauseAiSpeech() {
+  if (!aiState.activeSpeechMessageId || aiState.activeSpeechPaused) return;
+  if (aiState.activeSpeechAudio) {
+    aiState.activeSpeechAudio.pause();
+    aiState.activeSpeechPaused = true;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech paused.', 'ok');
+    return;
+  }
+  if (aiSpeechSupported() && window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+    window.speechSynthesis.pause();
+    aiState.activeSpeechPaused = true;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech paused.', 'ok');
+  }
+}
+
+async function resumeAiSpeech() {
+  if (!aiState.activeSpeechMessageId || !aiState.activeSpeechPaused) return;
+  if (aiState.activeSpeechAudio) {
+    await aiState.activeSpeechAudio.play();
+    aiState.activeSpeechPaused = false;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech resumed.', 'ok');
+    return;
+  }
+  if (aiSpeechSupported() && (window.speechSynthesis.paused || aiState.activeSpeechUtterance)) {
+    window.speechSynthesis.resume();
+    aiState.activeSpeechPaused = false;
+    renderMessages({ preserveScroll: true });
+    setAiStatus('Speech resumed.', 'ok');
+  }
+}
+
+function stopAiSpeech() {
+  if (!aiState.activeSpeechMessageId) return;
+  cancelAiSpeech();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Speech stopped.', 'ok');
+}
+
+async function toggleAiSpeech(messageId) {
+  if (aiState.activeSpeechMessageId === messageId) {
+    if (aiState.activeSpeechPaused) {
+      await resumeAiSpeech();
+    } else {
+      await pauseAiSpeech();
+    }
+    return;
+  }
+  await speakAiMessage(messageId);
+}
+
+async function speakAiMessage(messageId) {
+  if (aiTtsSettings().enabled === false) {
+    setAiStatus('Text to speech is disabled in AI Settings.', 'warn');
+    return;
+  }
+  if (!aiCanSpeak()) {
+    setAiStatus('Text to speech is not supported by this browser.', 'warn');
+    return;
+  }
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const message = (activeLive?.messages || []).find((item) => item.id === messageId);
+  const content = String(message?.content || '').trim();
+  if (!content) return;
+  if (aiState.activeSpeechMessageId === messageId) {
+    return;
+  }
+
+  cancelAiSpeech();
+  aiState.activeSpeechMessageId = messageId;
+  aiState.activeSpeechPaused = false;
+  renderMessages({ preserveScroll: true });
+  if (aiTtsUsesService()) {
+    try {
+      await speakAiMessageWithService(messageId, content);
+      return;
+    } catch (error) {
+      aiState.activeSpeechAbortController = null;
+      if (error?.name === 'AbortError') return;
+      if (aiState.activeSpeechAudio) {
+        aiState.activeSpeechAudio.pause();
+        aiState.activeSpeechAudio.src = '';
+      }
+      if (aiState.activeSpeechAudioUrl) {
+        URL.revokeObjectURL(aiState.activeSpeechAudioUrl);
+      }
+      aiState.activeSpeechAudio = null;
+      aiState.activeSpeechAudioUrl = '';
+      if (!aiTtsSettings().browser_fallback) {
+        clearAiSpeechPlayback(messageId);
+        setAiStatus(`Kokoro speech failed: ${error.message}`, 'warn');
+        return;
+      }
+      setAiStatus('Kokoro speech failed. Falling back to browser voice.', 'warn');
+    }
+  }
+  await speakAiMessageWithBrowser(messageId, content);
+}
+
+async function speakAiMessageWithService(messageId, content) {
+  const tts = aiTtsSettings();
+  const abortController = new AbortController();
+  aiState.activeSpeechAbortController = abortController;
+  setAiStatus('Requesting Kokoro voice audio.', 'ok');
+  const response = await fetch('/api/ai-tts/speech', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      input: content,
+      voice: tts.voice || 'af_sky',
+      format: tts.format || 'wav',
+      speed: Number.isFinite(Number(tts.speed)) ? Number(tts.speed) : 1,
+    }),
+    signal: abortController.signal,
+  });
+  aiState.activeSpeechAbortController = null;
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const blob = await response.blob();
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const audioUrl = URL.createObjectURL(blob);
+  const audio = new Audio(audioUrl);
+  audio.onended = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      cancelAiSpeech();
+      renderMessages({ preserveScroll: true });
+    }
+  };
+  audio.onerror = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      cancelAiSpeech();
+      renderMessages({ preserveScroll: true });
+      setAiStatus('Speech playback failed.', 'warn');
+    }
+  };
+  aiState.activeSpeechAudio = audio;
+  aiState.activeSpeechAudioUrl = audioUrl;
+  aiState.activeSpeechPaused = false;
+  await audio.play();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Reading assistant response with Kokoro.', 'ok');
+}
+
+async function speakAiMessageWithBrowser(messageId, content) {
+  if (!aiSpeechSupported()) {
+    setAiStatus('Text to speech is not supported by this browser.', 'warn');
+    return;
+  }
+  const tts = aiTtsSettings();
+  await waitForAiSpeechVoices(String(tts.voice_name || ''));
+  if (aiState.activeSpeechMessageId !== messageId) return;
+  const utterance = new SpeechSynthesisUtterance(content);
+  const voice = resolveAiSpeechVoice(String(tts.voice_name || ''));
+  if (voice) utterance.voice = voice;
+  utterance.rate = Number.isFinite(Number(tts.rate)) ? Number(tts.rate) : 1;
+  utterance.pitch = Number.isFinite(Number(tts.pitch)) ? Number(tts.pitch) : 1;
+  utterance.onend = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      aiState.activeSpeechMessageId = '';
+      aiState.activeSpeechUtterance = null;
+      renderMessages({ preserveScroll: true });
+    }
+  };
+  utterance.onerror = () => {
+    if (aiState.activeSpeechMessageId === messageId) {
+      aiState.activeSpeechMessageId = '';
+      aiState.activeSpeechUtterance = null;
+      renderMessages({ preserveScroll: true });
+      setAiStatus('Speech playback failed.', 'warn');
+    }
+  };
+  aiState.activeSpeechUtterance = utterance;
+  aiState.activeSpeechPaused = false;
+  window.speechSynthesis.speak(utterance);
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Reading assistant response.', 'ok');
+}
+
+async function loadAiSettings() {
+  const result = await aiFetchJson('/api/ai-settings');
+  aiState.aiSettings = result.ai_settings || aiState.aiSettings;
+  if (aiTtsSettings().enabled === false) {
+    cancelAiSpeech();
+  }
+}
+
+function renderProviderSelect() {
+  const selectedProviderId = aiState.activeSession?.provider_id || '';
+  const defaultProvider = providerById(generalChatProviderId());
+  const providers = enabledChatProviders();
+  aiEls.providerSelect.innerHTML = [
+    `<option value="">Routing default${defaultProvider ? `: ${escapeHtml(defaultProvider.display_name)}` : ''}</option>`,
+    ...providers.map((provider) => (
+      `<option value="${escapeHtml(provider.id)}"${provider.id === selectedProviderId ? ' selected' : ''}>${escapeHtml(providerLabel(provider))}</option>`
+    )),
+  ].join('');
+  const active = selectedProviderId ? providerById(selectedProviderId) : defaultProvider;
+  const toolsLabel = currentRunMode() === 'agent' ? ` · ${providerToolsSupportLabel(active)}` : '';
+  aiEls.providerPill.textContent = `Provider: ${providerLabel(active)}${toolsLabel}`;
+}
+
+function filteredSessions() {
+  const query = aiEls.sessionSearch.value.trim().toLowerCase();
+  const visibleSessions = aiState.sessions.filter((session) => Boolean(session.archived_at) === aiState.showArchived);
+  if (!query) return visibleSessions;
+  return visibleSessions.filter((session) => {
+    const haystack = `${session.title || ''} ${session.last_message || ''}`.toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function renderSessionList() {
+  const sessions = filteredSessions();
+  if (!sessions.length) {
+    aiEls.sessionList.innerHTML = `<p class="status-banner ai-session-empty">No ${aiState.showArchived ? 'archived ' : ''}sessions found.</p>`;
+    return;
+  }
+  aiEls.sessionList.innerHTML = sessions.map((session) => {
+    const active = aiState.activeSession?.id === session.id ? ' active' : '';
+    const preview = session.last_message || 'No messages yet';
+    const isEditing = aiState.editingSessionId === session.id;
+    return `
+      <div class="ai-session-row${active}" tabindex="0" data-session-id="${escapeHtml(session.id)}" aria-label="Open ${escapeHtml(session.title || 'New chat')}">
+        <span class="ai-session-row-main">
+          <span class="ai-session-row-title-wrap">
+            ${isEditing
+              ? `<input class="ai-session-title-input" type="text" value="${escapeHtml(session.title || 'New chat')}" autocomplete="off" aria-label="Session name">`
+              : `<span class="ai-session-row-title">${escapeHtml(session.title || 'New chat')}</span>`}
+            <span class="ai-session-count">${session.message_count || 0}</span>
+          </span>
+          <span class="ai-session-actions">
+            <button
+              class="ghost ai-session-action ai-session-archive"
+              type="button"
+              data-action="toggle-archive-session"
+              data-session-id="${escapeHtml(session.id)}"
+              title="${session.archived_at ? 'Restore session' : 'Archive session'}"
+              aria-label="${session.archived_at ? 'Restore session' : 'Archive session'}"
+            >${session.archived_at ? '↺' : '📥'}</button>
+            <button
+              class="ghost ai-session-action ai-session-delete"
+              type="button"
+              data-action="delete-session"
+              data-session-id="${escapeHtml(session.id)}"
+              title="Delete session"
+              aria-label="Delete session"
+            >✕</button>
+          </span>
+        </span>
+        <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg</span>
+        <span class="ai-session-row-preview">${escapeHtml(preview)}</span>
+      </div>
+    `;
+  }).join('');
+  if (aiState.editingSessionId) {
+    const row = Array.from(aiEls.sessionList.querySelectorAll('[data-session-id]'))
+      .find((item) => item.dataset.sessionId === aiState.editingSessionId);
+    const input = row?.querySelector('.ai-session-title-input');
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+}
+
+function isMessageListNearBottom(threshold = 40) {
+  if (!aiEls.messageList) return true;
+  const { scrollTop, scrollHeight, clientHeight } = aiEls.messageList;
+  return (scrollHeight - clientHeight - scrollTop) <= threshold;
+}
+
+function updateMessageListScrollIntent() {
+  aiState.messageListPinnedToBottom = isMessageListNearBottom();
+}
+
+function renderMessages(options = {}) {
+  const preserveScroll = Boolean(options.preserveScroll);
+  const forceScrollBottom = Boolean(options.forceScrollBottom);
+  const previousScrollTop = aiEls.messageList.scrollTop;
+  const shouldStickToBottom = forceScrollBottom || (!preserveScroll && aiState.messageListPinnedToBottom);
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const messages = activeLive?.messages || [];
+  const pendingAssistantId = activeLive?.pendingAssistantMessageId || '';
+  const sending = Boolean(activeLive?.sending);
+  const viewingArchived = Boolean(aiState.activeSession?.archived_at);
+  aiEls.sessionTitle.textContent = aiState.activeSession?.title || 'New chat';
+  aiEls.renameSession.disabled = !aiState.activeSession;
+  aiEls.archiveSession.disabled = !aiState.activeSession;
+  aiEls.archiveSession.textContent = viewingArchived ? 'Restore' : 'Archive';
+  aiEls.archiveSession.title = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
+  aiEls.retryResponse.disabled = !aiState.activeSession || sending || !messages.length || viewingArchived;
+  aiEls.stopMessage.disabled = !sending || !activeLive?.abortController;
+  aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
+  aiEls.retryResponse.setAttribute('aria-label', 'Retry the last model response');
+  aiEls.messageInput.disabled = viewingArchived;
+  aiEls.messageInput.placeholder = viewingArchived
+    ? 'Restore this archived chat to continue messaging'
+    : currentRunMode() === 'agent'
+      ? 'Ask the read-only rover agent'
+      : currentRunMode() === 'intent'
+        ? 'Describe a rover task to parse into structured intent (non-executing)'
+        : currentRunMode() === 'workbench'
+          ? 'Describe a rover mission to plan (workbench mode — requires operator approval)'
+          : 'Ask the configured General Chat provider';
+  aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
+  aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
+  renderProviderSelect();
+  renderRunModeToggle();
+  updateComposerState();
+  renderSourceControls();
+
+  if (!aiState.activeSession) {
+    aiEls.messageList.innerHTML = `<div class="ai-empty-state">${aiState.showArchived ? 'Open an archived chat to review it, or switch back to Active chats.' : 'Type a message to start a new chat.'}</div>`;
+    return;
+  }
+  if (!messages.length) {
+    aiEls.messageList.innerHTML = `<div class="ai-empty-state">${viewingArchived ? 'Archived chat has no messages.' : 'Start a new conversation.'}</div>`;
+    return;
+  }
+  const pendingInterrupt = activeLive?.pendingInterrupt || null;
+  const sessionIdForApproval = aiState.activeSession?.id || '';
+
+  aiEls.messageList.innerHTML = messages.map((message) => {
+    const isPendingAssistant = message.role === 'assistant'
+      && message.id === pendingAssistantId
+      && !String(message.content || '').trim();
+    const mode = messageRunMode(message);
+    const canSpeak = aiCanSpeak()
+      && message.role === 'assistant'
+      && !isPendingAssistant
+      && Boolean(String(message.content || '').trim());
+    const isSpeaking = aiState.activeSpeechMessageId === message.id;
+    const isPaused = isSpeaking && aiState.activeSpeechPaused;
+    const toggleLabel = !isSpeaking
+      ? 'Read this response aloud'
+      : (isPaused ? 'Resume reading this response' : 'Pause reading');
+    const stopLabel = 'Stop reading';
+    return `
+    <article class="ai-message ai-message-${escapeHtml(message.role)}${isPendingAssistant ? ' ai-message-pending' : ''}">
+      <div class="ai-message-meta">
+        <strong>${message.role === 'assistant' ? `Assistant · ${escapeHtml(providerNameForMessage(message))}` : 'You'} <span class="ai-mode-chip">${escapeHtml(runModeLabel(mode))}</span></strong>
+        <span class="ai-message-meta-actions">
+          ${canSpeak
+            ? `<button
+                class="ghost ai-message-speak ai-message-tts-btn${isSpeaking && !isPaused ? ' active' : ''}"
+                type="button"
+                data-message-action="toggle-speech"
+                data-message-id="${escapeHtml(message.id)}"
+                data-tooltip="${escapeHtml(toggleLabel)}"
+                title="${escapeHtml(toggleLabel)}"
+                aria-label="${escapeHtml(toggleLabel)}"
+                aria-pressed="${isSpeaking ? 'true' : 'false'}"
+              >${isSpeaking && !isPaused ? aiPauseIcon() : aiPlayIcon()}</button>
+              <button
+                class="ghost ai-message-speak ai-message-tts-btn"
+                type="button"
+                data-message-action="stop-speech"
+                data-message-id="${escapeHtml(message.id)}"
+                data-tooltip="${escapeHtml(stopLabel)}"
+                title="${escapeHtml(stopLabel)}"
+                aria-label="${escapeHtml(stopLabel)}"
+                ${isSpeaking ? '' : 'disabled'}
+              >${aiStopIcon()}</button>`
+            : ''}
+          ${message.role === 'assistant' && !isPendingAssistant && String(message.content || '').trim()
+            ? `<button
+                class="ghost ai-message-copy-md"
+                type="button"
+                data-message-action="copy-md"
+                data-message-id="${escapeHtml(message.id)}"
+                data-md="${escapeHtml(message.content)}"
+                data-tooltip="Copy markdown"
+                title="Copy markdown"
+                aria-label="Copy markdown"
+              >${aiCopyIcon()}</button>`
+            : ''}
+          <button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>
+          <span>${escapeHtml(formatAiTime(message.created_at))}</span>
+        </span>
+      </div>
+      <div class="ai-message-body">${isPendingAssistant
+        ? `<span class="ai-thinking" role="status" aria-live="polite" aria-label="Assistant is working">
+            <span class="ai-thinking-core" aria-hidden="true"></span>
+            <span class="ai-thinking-rings" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </span>
+            <span class="ai-thinking-text">Thinking</span>
+          </span>`
+        : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}
+        ${message.role === 'assistant' ? renderAgentToolPanel(message) : ''}
+        ${message.role === 'assistant' ? renderRetrievalPanel(message) : ''}
+        ${message.role === 'assistant' && messageRunMode(message) === 'intent' ? renderIntentPanel(message) : ''}</div>
+      ${message.role === 'assistant'
+        ? (() => {
+            const stats = messageStats(message);
+            return `<div class="ai-message-foot">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}${stats ? ` · ${escapeHtml(stats)}` : ''}</div>`;
+          })()
+        : ''}
+    </article>
+  `;
+  }).join('') + (pendingInterrupt ? renderWorkbenchApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
+  postRenderMessages();
+  aiEls.messageList.scrollTop = shouldStickToBottom
+    ? aiEls.messageList.scrollHeight
+    : previousScrollTop;
+  updateMessageListScrollIntent();
+}
+
+function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
+  const live = liveStateFor(sessionId);
+  const now = Date.now() / 1000;
+  const pendingUserId = `pending-user-${crypto.randomUUID()}`;
+  const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  live.pendingUserMessageId = pendingUserId;
+  live.pendingAssistantMessageId = pendingAssistantId;
+  const providerId = aiState.activeSession?.id === sessionId
+    ? (activeProviderId() || generalChatProviderId())
+    : generalChatProviderId();
+  live.messages = [
+    ...live.messages,
+    {
+      id: pendingUserId,
+      role: 'user',
+      content,
+      created_at: now,
+      provider_id: providerId,
+      model_id: '',
+      meta: { run_mode: normalizeRunMode(runMode) },
+    },
+    {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+      provider_id: providerId,
+      model_id: '',
+      latency_ms: null,
+      meta: { interrupted: false, run_mode: normalizeRunMode(runMode) },
+    },
+  ];
+}
+
+function pushLocalRetryPendingAssistant(sessionId) {
+  const live = liveStateFor(sessionId);
+  const now = Date.now() / 1000;
+  const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  const messages = [...live.messages];
+  if (messages[messages.length - 1]?.role === 'assistant') {
+    messages.pop();
+  }
+  const runMode = messageRunMode(messages[messages.length - 1]);
+  live.pendingAssistantMessageId = pendingAssistantId;
+  live.messages = [
+    ...messages,
+    {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+      provider_id: activeProviderId() || generalChatProviderId(),
+      model_id: '',
+      latency_ms: null,
+      meta: { interrupted: false, run_mode: runMode },
+    },
+  ];
+}
+
+function replacePendingUserMessage(sessionId, serverMessage) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingUserMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingUserMessageId ? serverMessage : message
+  ));
+}
+
+function appendAssistantDelta(sessionId, delta) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingAssistantMessageId
+      ? { ...message, content: `${message.content || ''}${delta}` }
+      : message
+  ));
+}
+
+function replacePendingAssistantMessage(sessionId, serverMessage) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingAssistantMessageId ? serverMessage : message
+  ));
+}
+
+function updatePendingAgentToolCall(sessionId, toolCall, status) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId || !toolCall) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    const progress = Array.isArray(meta.agent_tool_progress) ? [...meta.agent_tool_progress] : [];
+    const id = String(toolCall.id || `${toolCall.name || 'tool'}-${progress.length}`);
+    const index = progress.findIndex((item) => String(item.id || '') === id);
+    const nextCall = {
+      ...(index >= 0 ? progress[index] : {}),
+      ...toolCall,
+      id,
+      status,
+    };
+    if (index >= 0) progress[index] = nextCall;
+    else progress.push(nextCall);
+    meta.agent_tool_progress = progress;
+    return { ...message, meta };
+  });
+}
+
+function updatePendingRetrievalState(sessionId, retrievalRequest, retrievedSources, retrievalCitations) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    if (retrievalRequest && typeof retrievalRequest === 'object') meta.retrieval_request = retrievalRequest;
+    if (Array.isArray(retrievedSources)) meta.retrieved_sources = retrievedSources;
+    if (Array.isArray(retrievalCitations)) meta.retrieval_citations = retrievalCitations;
+    return { ...message, meta };
+  });
+}
+
+function clearSessionLiveState(sessionId) {
+  const live = liveStateFor(sessionId);
+  live.sending = false;
+  live.abortController = null;
+  live.pendingUserMessageId = '';
+  live.pendingAssistantMessageId = '';
+}
+
+async function readJsonLinesStream(response, onEvent) {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      onEvent(JSON.parse(trimmed));
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) {
+    onEvent(JSON.parse(tail));
+  }
+}
+
+function handleAiStreamEvent(sessionId, eventData) {
+  let autoSpeakMessageId = '';
+  if (eventData.type === 'user_message' && eventData.message) {
+    replacePendingUserMessage(sessionId, eventData.message);
+  } else if (eventData.type === 'assistant_delta') {
+    appendAssistantDelta(sessionId, String(eventData.delta || ''));
+  } else if (eventData.type === 'assistant_message' && eventData.message) {
+    replacePendingAssistantMessage(sessionId, eventData.message);
+    if (aiState.activeSession?.id === sessionId && aiTtsSettings().enabled !== false && aiTtsSettings().auto_read) {
+      autoSpeakMessageId = eventData.message.id;
+    }
+  } else if (eventData.type === 'agent_tool_start') {
+    updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'running');
+  } else if (eventData.type === 'agent_tool_result') {
+    updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
+  } else if (eventData.type === 'graph_retrieval_result') {
+    updatePendingRetrievalState(
+      sessionId,
+      eventData.retrieval_request || {},
+      eventData.retrieved_sources || [],
+      eventData.retrieval_citations || [],
+    );
+  } else if (eventData.type === 'error') {
+    throw new Error(String(eventData.detail || 'Chat streaming failed.'));
+  }
+  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI
+  if (aiState.activeSession?.id === sessionId) {
+    renderMessages();
+  }
+  if (autoSpeakMessageId) {
+    speakAiMessage(autoSpeakMessageId).catch((error) => setAiStatus(error.message, 'warn'));
+  }
+}
+
+async function streamAiRequest(url, payload, abortController, sessionId) {
+  const response = await fetch(url, withAiTimezone({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+    signal: abortController.signal,
+  }));
+  if (!response.ok) {
+    let detail = await response.text();
+    try {
+      const parsed = JSON.parse(detail);
+      detail = parsed.detail || detail;
+    } catch (_) {
+      // Use the raw response body.
+    }
+    throw new Error(detail || `${response.status}`);
+  }
+  await readJsonLinesStream(response, (event) => handleAiStreamEvent(sessionId, event));
+}
+
+async function deleteSession(sessionId) {
+  const session = aiState.sessions.find((item) => item.id === sessionId);
+  const title = session?.title || 'this chat';
+  if (!window.confirm(`Delete "${title}" permanently? This cannot be undone.`)) return;
+  await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/purge`, { method: 'DELETE' });
+  _sessionLive.delete(sessionId);
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = null;
+  }
+  await loadSessions(true);
+  renderMessages();
+  setAiStatus('Session deleted.', 'ok');
+}
+
+async function loadLlmSettings() {
+  const result = await aiFetchJson('/api/llm-settings');
+  aiState.providers = result.providers || [];
+  aiState.routing = result.routing || {};
+  renderProviderSelect();
+}
+
+async function loadSessions(selectFirst = false) {
+  const query = aiState.showArchived
+    ? `?include_archived=true&limit=${AI_ARCHIVED_SESSION_LIMIT}`
+    : '';
+  const result = await aiFetchJson(`/api/ai/sessions${query}`);
+  aiState.sessions = result.sessions || [];
+  renderSessionList();
+  if (selectFirst && !aiState.activeSession && filteredSessions().length) {
+    await openSession(filteredSessions()[0].id);
+  }
+}
+
+async function createSession(options = {}) {
+  const { title = 'New chat', providerId = '' } = options;
+  if (aiState.showArchived) {
+    aiState.showArchived = false;
+  }
+  setAiStatus('Creating session.');
+  const result = await aiFetchJson('/api/ai/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      mode: runModeToSessionMode(currentRunMode()),
+      provider_id: providerId || undefined,
+      source_controls: normalizeSourceControls(aiState.activeSession?.source_controls),
+    }),
+  });
+  await loadSessions();
+  await openSession(result.session.id);
+  setAiStatus('Ready.', 'ok');
+  return result.session;
+}
+
+async function openSession(sessionId) {
+  const session = aiState.sessions.find((item) => item.id === sessionId);
+  const includeArchived = Boolean(session?.archived_at);
+  const live = liveStateFor(sessionId);
+
+  if (live.sending) {
+    // Session is actively streaming in the background — switch the view to it without reloading
+    // messages from server (the in-progress stream owns the messages array right now).
+    aiState.activeSession = session || aiState.activeSession;
+    aiState.runMode = sessionModeToRunMode(session);
+    aiState.messageListPinnedToBottom = true;
+    renderSessionList();
+    renderMessages({ forceScrollBottom: true });
+    setAiStatus('Response in progress…', 'ok');
+    return;
+  }
+
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
+  aiState.activeSession = result.session;
+  // Initialise (or refresh) the live state from the server's message list.
+  live.messages = [...(result.session.messages || [])];
+  aiState.runMode = sessionModeToRunMode(result.session);
+  aiState.messageListPinnedToBottom = true;
+  renderSessionList();
+  renderMessages({ forceScrollBottom: true });
+  setAiStatus('Ready.', 'ok');
+}
+
+// Fetch a session's latest data from the server and update its live state and
+// (if it is the currently viewed session) also update aiState.activeSession.
+// Called after a stream finishes — including for background sessions.
+async function refreshSessionLive(sessionId) {
+  const listSession = aiState.sessions.find((s) => s.id === sessionId);
+  const includeArchived = Boolean(listSession?.archived_at);
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
+  const live = liveStateFor(sessionId);
+  live.messages = [...(result.session.messages || [])];
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = result.session;
+    renderMessages({ forceScrollBottom: true });
+  }
+  return result.session;
+}
+
+async function renameSession() {
+  if (!aiState.activeSession) return;
+  const title = window.prompt('Session name', aiState.activeSession.title || 'New chat');
+  if (title === null) return;
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  await loadSessions();
+  renderMessages();
+}
+
+async function saveSessionTitle(sessionId, title) {
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  }
+  aiState.editingSessionId = '';
+  await loadSessions();
+  renderMessages();
+}
+
+function startSessionTitleEdit(sessionId) {
+  if (sessionOpenTimer) {
+    window.clearTimeout(sessionOpenTimer);
+    sessionOpenTimer = 0;
+  }
+  aiState.editingSessionId = sessionId;
+  renderSessionList();
+}
+
+function cancelSessionTitleEdit() {
+  aiState.editingSessionId = '';
+  renderSessionList();
+}
+
+function queueOpenSession(sessionId) {
+  if (sessionOpenTimer) {
+    window.clearTimeout(sessionOpenTimer);
+  }
+  sessionOpenTimer = window.setTimeout(() => {
+    sessionOpenTimer = 0;
+    if (aiState.editingSessionId) return;
+    if (aiState.activeSession?.id === sessionId) return;
+    openSession(sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+  }, 220);
+}
+
+async function archiveSession() {
+  if (!aiState.activeSession) return;
+  await toggleSessionArchive(aiState.activeSession.id);
+}
+
+async function toggleSessionArchive(sessionId) {
+  const session = aiState.sessions.find((item) => item.id === sessionId);
+  const isArchived = Boolean(session?.archived_at || (aiState.activeSession?.id === sessionId && aiState.activeSession?.archived_at));
+  if (isArchived) {
+    await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/restore`, { method: 'POST' });
+    aiState.showArchived = false;
+    aiState.activeSession = null;
+    _sessionLive.delete(sessionId);
+    await loadSessions();
+    await openSession(sessionId);
+    setAiStatus('Session restored.', 'ok');
+    return;
+  }
+  await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  const archivedActiveSession = aiState.activeSession?.id === sessionId;
+  if (archivedActiveSession) {
+    aiState.activeSession = null;
+    aiState.showArchived = true;
+  }
+  _sessionLive.delete(sessionId);
+  await loadSessions(false);
+  renderMessages();
+  setAiStatus('Session archived.', 'ok');
+}
+
+async function setArchiveFilter(showArchived) {
+  aiState.showArchived = showArchived;
+  if (!showArchived || !aiState.activeSession?.archived_at) {
+    aiState.activeSession = null;
+  }
+  renderMessages();
+  await loadSessions(true);
+  setAiStatus(showArchived ? 'Viewing archived chats.' : 'Viewing active chats.', 'ok');
+}
+
+async function updateSessionProvider() {
+  if (!aiState.activeSession) return;
+  const providerId = aiEls.providerSelect.value;
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_id: providerId }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  if (currentRunMode() === 'agent' && !providerSupportsAgentMode(currentProvider())) {
+    setAiStatus('Selected provider may answer in agent mode without tool calls.', 'warn');
+  }
+  await loadSessions();
+  renderMessages();
+}
+
+async function updateSessionRunMode(runMode) {
+  aiState.runMode = normalizeRunMode(runMode);
+  if (aiState.runMode === 'agent' && !providerSupportsAgentMode(currentProvider())) {
+    setAiStatus('Selected provider may answer in agent mode without tool calls.', 'warn');
+  }
+  renderRunModeToggle();
+  renderMessages({ preserveScroll: true });
+  if (!aiState.activeSession) return;
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: runModeToSessionMode(aiState.runMode) }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  await loadSessions();
+  renderMessages({ preserveScroll: true });
+}
+
+async function updateSessionSourceControl(key, enabled) {
+  if (!aiState.activeSession) return;
+  const nextSourceControls = normalizeSourceControls(aiState.activeSession.source_controls);
+  nextSourceControls[key] = Boolean(enabled);
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_controls: nextSourceControls }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  await loadSessions();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Source controls updated.', 'ok');
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+  // Per-session guard: only block sending if THIS session is already streaming.
+  const activeId = aiState.activeSession?.id || '';
+  if (activeId && liveStateFor(activeId).sending) return;
+  const content = aiEls.messageInput.value.trim();
+  if (!content) return;
+  const runMode = currentRunMode();
+
+  aiEls.messageInput.value = '';
+  resizeComposer();
+
+  let sessionId = activeId;
+  const abortController = new AbortController();
+
+  if (sessionId) {
+    const live = liveStateFor(sessionId);
+    live.sending = true;
+    live.abortController = abortController;
+    pushLocalPendingMessages(sessionId, content, runMode);
+  }
+  renderMessages();
+  setAiStatus(
+    runMode === 'agent' ? 'Agent is checking rover context.'
+    : runMode === 'intent' ? 'Parsing rover intent...'
+    : runMode === 'workbench' ? 'Workbench graph starting...'
+    : 'Waiting for model response.'
+  );
+
+  try {
+    if (!sessionId) {
+      const createdSession = await createSession({ providerId: activeProviderId() });
+      sessionId = createdSession.id;
+      // createSession calls openSession internally, so activeSession is now set.
+      const live = liveStateFor(sessionId);
+      live.sending = true;
+      live.abortController = abortController;
+    }
+    if (!aiState.activeSession) {
+      await openSession(sessionId);
+      const live = liveStateFor(sessionId);
+      live.sending = true;
+      live.abortController = abortController;
+      pushLocalPendingMessages(sessionId, content, runMode);
+      renderMessages();
+    }
+    if (runMode === 'intent') {
+      await sendIntentTestRequest(sessionId, content, abortController);
+    } else if (runMode === 'workbench') {
+      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else {
+      await streamAiRequest(
+        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+        { content, run_mode: runMode },
+        abortController,
+        sessionId,
+      );
+    }
+    // Refresh from server and update live state (works even if user switched away).
+    // Skip refresh if workbench is suspended at interrupt (pendingInterrupt is set).
+    if (!liveStateFor(sessionId).pendingInterrupt) {
+      await refreshSessionLive(sessionId);
+      await loadSessions();
+    }
+    if (aiState.activeSession?.id === sessionId && !liveStateFor(sessionId).pendingInterrupt) {
+      setAiStatus('Ready.', 'ok');
+    }
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    const message = isAbort ? 'Response interrupted.' : error.message;
+    if (aiState.activeSession?.id === sessionId) {
+      setAiStatus(message, isAbort ? 'warn' : 'danger');
+    }
+    if (sessionId) {
+      await refreshSessionLive(sessionId).catch(() => {});
+      await loadSessions().catch(() => {});
+      if (aiState.activeSession?.id === sessionId) {
+        setAiStatus(message, isAbort ? 'warn' : 'danger');
+      }
+    } else {
+      renderMessages();
+    }
+  } finally {
+    if (sessionId) {
+      clearSessionLiveState(sessionId);
+    }
+    renderMessages();
+    aiEls.messageInput.focus();
+  }
+}
+
+async function resendMessage(messageId) {
+  const sessionId = aiState.activeSession?.id;
+  if (!sessionId || liveStateFor(sessionId).sending) return;
+  const live = liveStateFor(sessionId);
+  const message = live.messages.find((item) => item.id === messageId);
+  const content = String(message?.content || '').trim();
+  if (!content) return;
+  const runMode = currentRunMode();
+  live.sending = true;
+  const abortController = new AbortController();
+  live.abortController = abortController;
+  pushLocalPendingMessages(sessionId, content, runMode);
+  renderMessages();
+  setAiStatus('Resending message.');
+  try {
+    if (runMode === 'intent') {
+      await sendIntentTestRequest(sessionId, content, abortController);
+    } else if (runMode === 'workbench') {
+      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else {
+      await streamAiRequest(
+        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+        { content, run_mode: runMode },
+        abortController,
+        sessionId,
+      );
+    }
+    // Workbench sessions can pause at interrupt() waiting for operator input.
+    if (!liveStateFor(sessionId).pendingInterrupt) {
+      await refreshSessionLive(sessionId);
+      await loadSessions();
+      if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
+    }
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    const messageText = isAbort ? 'Response interrupted.' : error.message;
+    if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
+    await refreshSessionLive(sessionId).catch(() => {});
+    await loadSessions().catch(() => {});
+    if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
+  } finally {
+    clearSessionLiveState(sessionId);
+    renderMessages();
+  }
+}
+
+async function retryResponse() {
+  const sessionId = aiState.activeSession?.id;
+  if (!sessionId || liveStateFor(sessionId).sending) return;
+  const live = liveStateFor(sessionId);
+  live.sending = true;
+  const abortController = new AbortController();
+  live.abortController = abortController;
+  pushLocalRetryPendingAssistant(sessionId);
+  renderMessages();
+  setAiStatus('Retrying last model response.');
+  try {
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`,
+      {},
+      abortController,
+      sessionId,
+    );
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    const message = isAbort ? 'Response interrupted.' : error.message;
+    if (aiState.activeSession?.id === sessionId) setAiStatus(message, isAbort ? 'warn' : 'danger');
+    await refreshSessionLive(sessionId).catch(() => {});
+    await loadSessions().catch(() => {});
+    if (aiState.activeSession?.id === sessionId) setAiStatus(message, isAbort ? 'warn' : 'danger');
+  } finally {
+    clearSessionLiveState(sessionId);
+    renderMessages();
+  }
+}
+
+function updateComposerState() {
+  if (!aiEls.sendMessage) return;
+  const hasContent = Boolean(aiEls.messageInput.value.trim());
+  aiEls.sendMessage.disabled = isSending() || !hasContent || Boolean(aiState.activeSession?.archived_at);
+  if (aiEls.stopMessage) {
+    aiEls.stopMessage.disabled = !isSending() || !activeAbortController();
+  }
+}
+
+function resizeComposer() {
+  if (!aiEls.messageInput) return;
+  aiEls.messageInput.style.height = 'auto';
+  aiEls.messageInput.style.height = `${Math.min(aiEls.messageInput.scrollHeight, 220)}px`;
+}
+
+function handleComposerKeydown(event) {
+  if (event.isComposing) return;
+  if (event.key !== 'Enter') return;
+  if (event.shiftKey) return;
+  event.preventDefault();
+  if (!aiEls.sendMessage.disabled) {
+    aiEls.messageForm.requestSubmit();
+  }
+}
+
+function clampSidebarWidth(value) {
+  return Math.max(AI_SIDEBAR_MIN, Math.min(AI_SIDEBAR_MAX, Number(value) || 340));
+}
+
+function setSidebarWidth(width, persist = true) {
+  const nextWidth = clampSidebarWidth(width);
+  aiEls.shell?.style.setProperty('--ai-sidebar-width', `${nextWidth}px`);
+  aiEls.layoutResizer?.setAttribute('aria-valuenow', String(nextWidth));
+  if (persist) {
+    try {
+      window.localStorage.setItem(AI_LAYOUT_WIDTH_KEY, String(nextWidth));
+    } catch (_) {
+      // Layout resizing still works for the current page when storage is unavailable.
+    }
+  }
+}
+
+function restoreSidebarWidth() {
+  let storedWidth = 340;
+  try {
+    storedWidth = window.localStorage.getItem(AI_LAYOUT_WIDTH_KEY) || storedWidth;
+  } catch (_) {
+    // Keep the default width.
+  }
+  setSidebarWidth(storedWidth, false);
+}
+
+function updateSidebarWidthFromPointer(event) {
+  if (!aiEls.shell) return;
+  const shellRect = aiEls.shell.getBoundingClientRect();
+  const nextWidth = event.clientX - shellRect.left;
+  setSidebarWidth(nextWidth);
+}
+
+function bindLayoutResizer() {
+  if (!aiEls.layoutResizer || !aiEls.shell) return;
+  restoreSidebarWidth();
+  aiEls.layoutResizer.addEventListener('pointerdown', (event) => {
+    if (window.matchMedia(AI_MOBILE_QUERY).matches) return;
+    event.preventDefault();
+    aiEls.layoutResizer.setPointerCapture(event.pointerId);
+    aiEls.shell.classList.add('is-resizing');
+    updateSidebarWidthFromPointer(event);
+  });
+  aiEls.layoutResizer.addEventListener('pointermove', (event) => {
+    if (!aiEls.layoutResizer.hasPointerCapture(event.pointerId)) return;
+    updateSidebarWidthFromPointer(event);
+  });
+  aiEls.layoutResizer.addEventListener('pointerup', (event) => {
+    if (aiEls.layoutResizer.hasPointerCapture(event.pointerId)) {
+      aiEls.layoutResizer.releasePointerCapture(event.pointerId);
+    }
+    aiEls.shell.classList.remove('is-resizing');
+  });
+  aiEls.layoutResizer.addEventListener('pointercancel', () => {
+    aiEls.shell.classList.remove('is-resizing');
+  });
+  aiEls.layoutResizer.addEventListener('lostpointercapture', () => {
+    aiEls.shell.classList.remove('is-resizing');
+  });
+  aiEls.layoutResizer.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const currentWidth = Number(aiEls.layoutResizer.getAttribute('aria-valuenow')) || 340;
+    if (event.key === 'Home') setSidebarWidth(AI_SIDEBAR_MIN);
+    else if (event.key === 'End') setSidebarWidth(AI_SIDEBAR_MAX);
+    else setSidebarWidth(currentWidth + (event.key === 'ArrowRight' ? 24 : -24));
+  });
+}
+
+function clampShellHeight(value) {
+  return Math.max(AI_SHELL_HEIGHT_MIN, Math.min(AI_SHELL_HEIGHT_MAX, Number(value) || 680));
+}
+
+function setShellHeight(height, persist = true) {
+  const nextHeight = clampShellHeight(height);
+  aiEls.shell?.style.setProperty('--ai-shell-height', `${nextHeight}px`);
+  aiEls.heightResizer?.setAttribute('aria-valuenow', String(nextHeight));
+  if (persist) {
+    try {
+      window.localStorage.setItem(AI_LAYOUT_HEIGHT_KEY, String(nextHeight));
+    } catch (_) {
+      // Height resizing still works for the current page when storage is unavailable.
+    }
+  }
+}
+
+function restoreShellHeight() {
+  let storedHeight = 680;
+  try {
+    storedHeight = window.localStorage.getItem(AI_LAYOUT_HEIGHT_KEY) || storedHeight;
+  } catch (_) {
+    // Keep the default height.
+  }
+  setShellHeight(storedHeight, false);
+}
+
+function updateShellHeightFromPointer(event) {
+  if (!aiEls.shell) return;
+  const shellRect = aiEls.shell.getBoundingClientRect();
+  const nextHeight = event.clientY - shellRect.top;
+  setShellHeight(nextHeight);
+}
+
+function bindHeightResizer() {
+  if (!aiEls.heightResizer || !aiEls.shell) return;
+  restoreShellHeight();
+  aiEls.heightResizer.addEventListener('pointerdown', (event) => {
+    if (window.matchMedia(AI_MOBILE_QUERY).matches) return;
+    event.preventDefault();
+    aiEls.heightResizer.setPointerCapture(event.pointerId);
+    aiEls.shell.classList.add('is-height-resizing');
+    updateShellHeightFromPointer(event);
+  });
+  aiEls.heightResizer.addEventListener('pointermove', (event) => {
+    if (!aiEls.heightResizer.hasPointerCapture(event.pointerId)) return;
+    updateShellHeightFromPointer(event);
+  });
+  aiEls.heightResizer.addEventListener('pointerup', (event) => {
+    if (aiEls.heightResizer.hasPointerCapture(event.pointerId)) {
+      aiEls.heightResizer.releasePointerCapture(event.pointerId);
+    }
+    aiEls.shell.classList.remove('is-height-resizing');
+  });
+  aiEls.heightResizer.addEventListener('pointercancel', () => {
+    aiEls.shell.classList.remove('is-height-resizing');
+  });
+  aiEls.heightResizer.addEventListener('lostpointercapture', () => {
+    aiEls.shell.classList.remove('is-height-resizing');
+  });
+  aiEls.heightResizer.addEventListener('keydown', (event) => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const currentHeight = Number(aiEls.heightResizer.getAttribute('aria-valuenow')) || 680;
+    if (event.key === 'Home') setShellHeight(AI_SHELL_HEIGHT_MIN);
+    else if (event.key === 'End') setShellHeight(AI_SHELL_HEIGHT_MAX);
+    else setShellHeight(currentHeight + (event.key === 'ArrowDown' ? 32 : -32));
+  });
+}
+
+function bindAi() {
+  bindLayoutResizer();
+  bindHeightResizer();
+  aiEls.newSession.addEventListener('click', () => createSession().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.showActive.addEventListener('click', () => setArchiveFilter(false).catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.showArchived.addEventListener('click', () => setArchiveFilter(true).catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.sessionSearch.addEventListener('input', renderSessionList);
+  aiEls.sessionList.addEventListener('click', (event) => {
+    const archiveButton = event.target.closest('[data-action="toggle-archive-session"]');
+    if (archiveButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSessionArchive(archiveButton.dataset.sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+      return;
+    }
+    const removeButton = event.target.closest('[data-action="delete-session"]');
+    if (removeButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteSession(removeButton.dataset.sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+      return;
+    }
+    if (event.target.closest('.ai-session-title-input')) return;
+    if (event.detail > 1) return;
+    const row = event.target.closest('[data-session-id]');
+    if (!row) return;
+    queueOpenSession(row.dataset.sessionId);
+  });
+  aiEls.sessionList.addEventListener('dblclick', (event) => {
+    if (event.target.closest('.ai-session-title-input, [data-action], button')) return;
+    const row = event.target.closest('[data-session-id]');
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    startSessionTitleEdit(row.dataset.sessionId);
+  });
+  aiEls.sessionList.addEventListener('keydown', (event) => {
+    const input = event.target.closest('.ai-session-title-input');
+    if (!input) {
+      if (event.target.closest('button')) return;
+      const row = event.target.closest('[data-session-id]');
+      if (!row || !['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      openSession(row.dataset.sessionId).catch((error) => setAiStatus(error.message, 'danger'));
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const row = input.closest('[data-session-id]');
+      if (aiState.editingSessionId !== row.dataset.sessionId) return;
+      saveSessionTitle(row.dataset.sessionId, input.value).catch((error) => setAiStatus(error.message, 'danger'));
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelSessionTitleEdit();
+    }
+  });
+  aiEls.sessionList.addEventListener('focusout', (event) => {
+    const input = event.target.closest('.ai-session-title-input');
+    if (!input) return;
+    const row = input.closest('[data-session-id]');
+    if (aiState.editingSessionId !== row.dataset.sessionId) return;
+    saveSessionTitle(row.dataset.sessionId, input.value).catch((error) => setAiStatus(error.message, 'danger'));
+  });
+  aiEls.renameSession.addEventListener('click', () => renameSession().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.archiveSession.addEventListener('click', () => archiveSession().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.providerSelect.addEventListener('change', () => updateSessionProvider().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.sourceControls?.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-source-control]');
+    if (!input) return;
+    updateSessionSourceControl(input.dataset.sourceControl, input.checked)
+      .catch((error) => setAiStatus(error.message, 'danger'));
+  });
+  aiEls.runModeButtons.forEach((button) => {
+    button.addEventListener('click', () => updateSessionRunMode(button.dataset.runMode).catch((error) => setAiStatus(error.message, 'danger')));
+  });
+  aiEls.messageForm.addEventListener('submit', sendMessage);
+  aiEls.messageInput.addEventListener('keydown', handleComposerKeydown);
+  aiEls.messageInput.addEventListener('input', () => {
+    resizeComposer();
+    updateComposerState();
+  });
+  aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
+  aiEls.messageList.addEventListener('click', (event) => {
+    // Workbench clarification card buttons
+    const clarificationBtn = event.target.closest('[data-clarification-action]');
+    if (clarificationBtn) {
+      const action = clarificationBtn.dataset.clarificationAction;
+      const threadId = clarificationBtn.dataset.threadId || '';
+      const sid = clarificationBtn.dataset.sessionId || '';
+      const answerInput = document.getElementById('ai-clarification-input');
+      const answer = answerInput ? answerInput.value.trim() : '';
+      if (sid && threadId) {
+        resumeWorkbenchApproval(sid, threadId, action, answer)
+          .catch((err) => setAiStatus(err.message || 'Clarification failed.', 'danger'));
+      }
+      return;
+    }
+
+    // Workbench approval card buttons
+    const approvalBtn = event.target.closest('[data-approval-action]');
+    if (approvalBtn) {
+      const decision = approvalBtn.dataset.approvalAction;
+      const threadId = approvalBtn.dataset.threadId || '';
+      const sid = approvalBtn.dataset.sessionId || '';
+      const noteInput = document.getElementById('ai-approval-note-input');
+      const note = noteInput ? noteInput.value.trim() : '';
+      if (sid && threadId && (decision === 'approve' || decision === 'reject')) {
+        resumeWorkbenchApproval(sid, threadId, decision, note)
+          .catch((err) => setAiStatus(err.message || 'Approval failed.', 'danger'));
+      }
+      return;
+    }
+
+    const action = event.target.closest('[data-message-action]');
+    if (!action) return;
+    if (action.dataset.messageAction === 'toggle-speech') {
+      toggleAiSpeech(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'warn'));
+      return;
+    }
+    if (action.dataset.messageAction === 'stop-speech') {
+      stopAiSpeech();
+      return;
+    }
+    if (action.dataset.messageAction === 'resend') {
+      resendMessage(action.dataset.messageId).catch((error) => setAiStatus(error.message, 'danger'));
+    }
+  });
+  aiEls.retryResponse.addEventListener('click', () => retryResponse().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.stopMessage.addEventListener('click', () => {
+    activeAbortController()?.abort();
+  });
+  window.addEventListener('beforeunload', cancelAiSpeech);
+}
+
+async function initAi() {
+  window.GCSCommon?.initShell({
+    page: 'ai',
+    title: 'AI Chat',
+    subtitle: 'Provider-backed chat sessions for testing configured LLMs.',
+  });
+  const intro = document.querySelector('[data-page-intro]');
+  if (intro && !intro.querySelector('.ai-intro-grid')) {
+    intro.innerHTML = `
+      <div class="ai-intro-grid">
+        <div class="ai-intro-main">
+          <p class="page-kicker">AI Chat</p>
+          <h2>AI Chat</h2>
+          <p class="page-lede">
+            AI Chat is a provider-routed conversation workspace for configured language models. Each session preserves model selection, message history, and response metadata, while requests are dispatched through a unified backend chat runtime that supports OpenAI-compatible providers and local Ollama models.
+          </p>
+          <p class="page-lede">
+            Under the hood, the service resolves the active provider, applies the provider-specific adapter, and records timing and model details alongside each assistant response. The interface is scoped to conversational workflows, with storage and routing handled inside this GCS instance.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+  bindAi();
+  await loadAiSettings().catch((error) => setAiStatus(error.message, 'warn'));
+  renderMessages();
+  await loadLlmSettings();
+  await loadSessions(true);
+  renderMessages();
+}
+
+initAi().catch((error) => {
+  setAiStatus(error.message, 'danger');
+});

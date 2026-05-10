@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+CONTROLLER_STALE_SECONDS = 15.0
+
 
 @dataclass(slots=True)
 class BrokerSnapshot:
@@ -79,6 +81,13 @@ class LocalStateBackend:
     async def try_claim_controller(self, client_id: str) -> bool:
         async with self._lock:
             now = time.time()
+            active_client_id = self._controller["active_client_id"]
+            if (
+                active_client_id is not None
+                and active_client_id != client_id
+                and not self._controller_is_stale_locked(now)
+            ):
+                return False
             self._controller["active_client_id"] = client_id
             self._controller["last_input_ts"] = now
             return True
@@ -119,3 +128,7 @@ class LocalStateBackend:
             "telemetry_stale": telemetry_age is None or telemetry_age > stale_after_s,
             "camera_stale": camera_age is None or camera_age > stale_after_s,
         }
+
+    def _controller_is_stale_locked(self, now: float) -> bool:
+        last_input_ts = float(self._controller.get("last_input_ts") or 0.0)
+        return last_input_ts <= 0.0 or (now - last_input_ts) >= CONTROLLER_STALE_SECONDS

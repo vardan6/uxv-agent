@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>Remote Rover Replay</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/static/style.css?v=terrain-map-20260427h">
+    <link rel="stylesheet" href="/static/style.css?v=replay-layout-20260509d">
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -124,6 +124,16 @@
             </article>
           </div>
         </section>
+        <div
+          id="replay-height-divider"
+          class="replay-height-divider"
+          role="separator"
+          aria-label="Resize replay area height"
+          tabindex="0"
+        >
+          <span class="replay-height-divider-line" aria-hidden="true"></span>
+          <span class="replay-height-divider-handle" aria-hidden="true"></span>
+        </div>
 
         <section class="grid replay-bottom-grid">
           <article class="panel replay-telemetry-panel">
@@ -158,6 +168,6 @@
       crossorigin=""
     ></script>
     <script src="/static/common.js" defer></script>
-    <script src="/static/replay.js?v=terrain-map-20260427h" defer></script>
+    <script src="/static/replay.js?v=replay-layout-20260509d" defer></script>
   </body>
 </html>

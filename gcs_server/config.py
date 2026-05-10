@@ -14,6 +14,22 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
     "simulation": {},
     "logging": {},
     "map": {},
+    "ai_settings": {
+        "tts": {
+            "enabled": True,
+            "engine": "kokoro_service",
+            "auto_read": False,
+            "service_url": "http://127.0.0.1:9101",
+            "voice": "af_sky",
+            "format": "wav",
+            "speed": 1.0,
+            "browser_fallback": True,
+            "voice_name": "",
+            "rate": 1.0,
+            "pitch": 1.0,
+        },
+        "ai_context_budget_chars": 24000,
+    },
     "llm_providers": [],
     "model_routing": {},
 }
@@ -21,6 +37,13 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = ROOT_DIR / "config" / "common.local.json"
 FALLBACK_SETTINGS_PATH = ROOT_DIR / "config" / "common.example.json"
+
+DEFAULT_GCS_SETTINGS["logging"] = {
+    "replay_db_path": "data/gcs_replay.sqlite3",
+    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
+    "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
+    "auto_start_session": True,
+}
 
 
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -67,13 +90,18 @@ class AppConfig:
         return self.raw["map"]
 
     @property
+    def ai_settings(self) -> dict[str, Any]:
+        settings = self.raw.get("ai_settings", {})
+        return settings if isinstance(settings, dict) else {}
+
+    @property
     def llm_providers(self) -> list[dict[str, Any]]:
-        providers = self.raw.setdefault("llm_providers", [])
+        providers = self.raw.get("llm_providers", [])
         return providers if isinstance(providers, list) else []
 
     @property
     def model_routing(self) -> dict[str, Any]:
-        routing = self.raw.setdefault("model_routing", {})
+        routing = self.raw.get("model_routing", {})
         return routing if isinstance(routing, dict) else {}
 
 

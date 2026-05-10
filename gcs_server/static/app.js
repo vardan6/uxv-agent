@@ -7,6 +7,10 @@ const state = {
   lastTelemetryTs: 0,
   latestTelemetry: {},
   simulation: {},
+  roverAvailability: {
+    connectedThresholdSeconds: 2,
+    unavailableThresholdSeconds: 60,
+  },
   themeMode: 'system',
   lightTheme: 'vscode-light',
   darkTheme: 'vscode-dark',
@@ -54,14 +58,12 @@ const THEME_MODES = new Set(['system', 'light', 'dark']);
 const LIGHT_THEMES = new Set(['vscode-light', 'quiet-light', 'cool-light', 'sandstone-light']);
 const DARK_THEMES = new Set(['vscode-dark', 'graphite-dark', 'midnight-dark', 'deep-forest-dark']);
 const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-const ROVER_CONNECTED_THRESHOLD_SECONDS = 2;
-const ROVER_WARNING_THRESHOLD_SECONDS = 60;
 
 if (els.clientId) {
   els.clientId.textContent = state.clientId;
 }
 
-const KEY_TO_CONTROL = {
+const DEFAULT_KEY_TO_CONTROL = {
   ArrowUp: 'forward',
   ArrowDown: 'backward',
   ArrowLeft: 'left',
@@ -71,6 +73,7 @@ const KEY_TO_CONTROL = {
   a: 'left',
   d: 'right',
 };
+let keyToControl = { ...DEFAULT_KEY_TO_CONTROL };
 
 function setStatus(text) {
   if (!els.statusBanner) return;
@@ -213,15 +216,31 @@ function renderRoverIndicator() {
     return;
   }
   const ageSeconds = Math.max(0, Math.floor((Date.now() - (state.lastTelemetryTs * 1000)) / 1000));
-  if (ageSeconds < ROVER_CONNECTED_THRESHOLD_SECONDS) {
+  const connectedThreshold = state.roverAvailability.connectedThresholdSeconds;
+  const unavailableThreshold = state.roverAvailability.unavailableThresholdSeconds;
+  if (ageSeconds < connectedThreshold) {
     setPillState(els.roverPill, 'Connected', 'ok');
     return;
   }
-  if (ageSeconds < ROVER_WARNING_THRESHOLD_SECONDS) {
+  if (ageSeconds < unavailableThreshold) {
     setPillState(els.roverPill, `${ageSeconds}s delayed`, 'warn');
     return;
   }
   setPillState(els.roverPill, 'Unavailable', 'danger');
+}
+
+function updateRoverAvailabilityPolicy(policy = {}) {
+  const connectedRaw = Number.parseInt(policy.connected_threshold_seconds, 10);
+  const unavailableRaw = Number.parseInt(policy.unavailable_threshold_seconds, 10);
+  const connectedThreshold = Number.isFinite(connectedRaw) ? Math.max(0, connectedRaw) : 2;
+  let unavailableThreshold = Number.isFinite(unavailableRaw) ? Math.max(1, unavailableRaw) : 60;
+  if (unavailableThreshold < connectedThreshold) {
+    unavailableThreshold = connectedThreshold;
+  }
+  state.roverAvailability = {
+    connectedThresholdSeconds: connectedThreshold,
+    unavailableThresholdSeconds: unavailableThreshold,
+  };
 }
 
 function updateBrokerPill(broker = {}) {
@@ -438,11 +457,14 @@ async function setControlEnabled(enabled) {
     const result = await postJson(`/api/controller/${action}`, { client_id: state.clientId });
     state.controlActivationPending = false;
     updateController(result.controller || {});
-    setStatus(
-      enabled
-        ? 'Browser control active while this dashboard remains focused.'
-        : 'Browser control inactive while this dashboard is unfocused.'
-    );
+    if (enabled && result.ok === false) {
+      state.browserControlActive = false;
+      setStatus('Browser control is already held by another dashboard.');
+      return;
+    }
+    setStatus(enabled
+      ? 'Browser control active while this dashboard remains focused.'
+      : 'Browser control inactive while this dashboard is unfocused.');
   } catch (error) {
     state.controlActivationPending = false;
     state.browserControlActive = !!(state.controller?.active_client_id === state.clientId);
@@ -502,7 +524,7 @@ function bindControlButtons() {
 
 function bindKeyboard() {
   window.addEventListener('keydown', (event) => {
-    const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
+    const key = controlForKeyboardEvent(event);
     if (!key) return;
     if (!canControlLocally()) return;
     if (state.buttons[key]) return;
@@ -512,7 +534,7 @@ function bindKeyboard() {
     event.preventDefault();
   });
   window.addEventListener('keyup', (event) => {
-    const key = KEY_TO_CONTROL[event.key] || KEY_TO_CONTROL[event.key.toLowerCase?.()];
+    const key = controlForKeyboardEvent(event);
     if (!key) return;
     if (!canControlLocally()) return;
     state.buttons[key] = false;
@@ -523,6 +545,52 @@ function bindKeyboard() {
   window.addEventListener('focus', syncBrowserControlState);
   window.addEventListener('blur', syncBrowserControlState);
   document.addEventListener('visibilitychange', syncBrowserControlState);
+}
+
+function normalizeConfiguredKey(value) {
+  const raw = String(value || '').trim();
+  const normalized = raw.toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_');
+  const specialKeys = {
+    arrow_up: 'ArrowUp',
+    arrow_down: 'ArrowDown',
+    arrow_left: 'ArrowLeft',
+    arrow_right: 'ArrowRight',
+    space: ' ',
+    escape: 'Escape',
+    esc: 'Escape',
+  };
+  if (specialKeys[normalized]) return specialKeys[normalized];
+  if (raw.length === 1) return raw.toLowerCase();
+  return raw;
+}
+
+function keyMapFromBindings(bindings) {
+  if (!bindings || typeof bindings !== 'object') return { ...DEFAULT_KEY_TO_CONTROL };
+  const next = {};
+  Object.entries(bindings).forEach(([control, keys]) => {
+    if (!Object.prototype.hasOwnProperty.call(state.buttons, control)) return;
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    keyList.forEach((configuredKey) => {
+      const key = normalizeConfiguredKey(configuredKey);
+      if (key) next[key] = control;
+    });
+  });
+  return Object.keys(next).length ? next : { ...DEFAULT_KEY_TO_CONTROL };
+}
+
+function controlForKeyboardEvent(event) {
+  return keyToControl[event.key] || keyToControl[event.key.toLowerCase?.()];
+}
+
+async function loadControlConfig() {
+  try {
+    const response = await fetch('/api/config');
+    const config = await response.json();
+    keyToControl = keyMapFromBindings(config.key_bindings);
+  } catch (error) {
+    keyToControl = { ...DEFAULT_KEY_TO_CONTROL };
+    setStatus(`Using default key bindings; config load failed: ${error.message}`);
+  }
 }
 
 async function postJson(url, payload) {
@@ -568,6 +636,7 @@ function initDashboard() {
   window.setInterval(renderTelemetryLastReceived, 1000);
   bindControlButtons();
   bindKeyboard();
+  void loadControlConfig();
   if (themeMedia) {
     const onThemeChange = () => {
       if (state.themeMode !== 'system') return;
@@ -587,6 +656,7 @@ function initDashboard() {
 async function loadSnapshot() {
   const response = await fetch('/api/snapshot');
   const snapshot = await response.json();
+  updateRoverAvailabilityPolicy(snapshot.rover_availability || {});
   updateBrokerPill(snapshot.broker);
   updateController(snapshot.controller);
   updateTelemetry(snapshot.telemetry);
@@ -609,6 +679,7 @@ function connectSocket() {
   state.socket.addEventListener('message', (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'snapshot') {
+      updateRoverAvailabilityPolicy(msg.data.rover_availability || {});
       updateBrokerPill(msg.data.broker);
       updateController(msg.data.controller);
       updateTelemetry(msg.data.telemetry);

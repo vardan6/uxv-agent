@@ -3,3 +3,8 @@ uvicorn
 paho-mqtt
 wsproto
 websockets
+langchain
+langchain-openai
+langchain-ollama
+langchain-community
+langgraph

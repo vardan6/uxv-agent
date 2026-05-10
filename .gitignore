@@ -21,3 +21,8 @@ imgui.ini
 config/common.local.json
 
 gcs_server/data/
+.runtime/
+tts_service/models/*
+!tts_service/models/.gitkeep
+tts-services-edit/models/*
+!tts-services-edit/models/.gitkeep

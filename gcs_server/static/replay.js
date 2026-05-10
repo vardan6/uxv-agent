@@ -42,6 +42,12 @@ const replayEls = {
   splitPane: document.getElementById('replay-split-pane'),
   replayShell: document.querySelector('.replay-shell'),
   splitDivider: document.getElementById('replay-split-divider'),
+  heightDivider: document.getElementById('replay-height-divider'),
+  replayMain: document.querySelector('.replay-main'),
+  replaySidebar: document.querySelector('.replay-sidebar'),
+  replayMapPanel: document.querySelector('.replay-map-panel'),
+  replayControlsPanel: document.querySelector('.replay-controls-panel'),
+  replayMap: document.getElementById('replay-map'),
   sessionList: document.getElementById('session-list'),
   currentSessionPill: document.getElementById('current-session-pill'),
   loadedSessionPill: document.getElementById('loaded-session-pill'),
@@ -80,9 +86,13 @@ const replayEls = {
 };
 
 const REPLAY_SPLIT_STORAGE_KEY = 'gcs-replay-sidebar-width';
+const REPLAY_HEIGHT_STORAGE_KEY = 'gcs-replay-pane-height';
 const REPLAY_SPLIT_MIN = 260;
 const REPLAY_SPLIT_MAX_FRACTION = 0.42;
 const REPLAY_PATH_FIT_PADDING = [64, 64];
+const REPLAY_PANE_MIN_HEIGHT = 560;
+const REPLAY_PANE_MAX_HEIGHT = 1600;
+const REPLAY_PANE_BOTTOM_GUTTER = 24;
 
 function isDesktopReplayLayout() {
   return window.matchMedia('(min-width: 1101px)').matches;
@@ -101,12 +111,29 @@ function replayDistance(a, b) {
 }
 
 async function replayFetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, withReplayTimezone(options));
   if (!response.ok) {
     const body = await response.text();
     throw new Error(body || `${response.status}`);
   }
   return response.json();
+}
+
+function replayTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withReplayTimezone(options = {}) {
+  const timezone = replayTimezone();
+  const headers = new Headers(options.headers || {});
+  if (timezone) {
+    headers.set('X-Operator-Timezone', timezone);
+  }
+  return { ...options, headers };
 }
 
 function latLngFromScenePoint(point) {
@@ -365,6 +392,76 @@ function invalidateReplayMap() {
   });
 }
 
+function replayPx(value) {
+  const px = Number.parseFloat(value || '');
+  return Number.isFinite(px) ? px : 0;
+}
+
+function clampReplayPaneHeight(rawHeight) {
+  return Math.max(REPLAY_PANE_MIN_HEIGHT, Math.min(Math.round(rawHeight), REPLAY_PANE_MAX_HEIGHT));
+}
+
+function loadReplayPaneHeight() {
+  try {
+    const stored = Number(window.localStorage.getItem(REPLAY_HEIGHT_STORAGE_KEY));
+    if (Number.isFinite(stored) && stored >= REPLAY_PANE_MIN_HEIGHT) {
+      return stored;
+    }
+  } catch (_) {
+    // Ignore storage failures.
+  }
+  return null;
+}
+
+function preferredReplayPaneHeight() {
+  if (!replayEls.splitPane) {
+    return clampReplayPaneHeight(760);
+  }
+  const top = replayEls.splitPane.getBoundingClientRect().top;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const availableHeight = Math.round(viewportHeight - top - REPLAY_PANE_BOTTOM_GUTTER);
+  return clampReplayPaneHeight(availableHeight || 760);
+}
+
+function setReplayPaneHeight(height, persist = true) {
+  if (!replayEls.splitPane || !isDesktopReplayLayout()) {
+    replayEls.splitPane?.style.removeProperty('--replay-pane-height');
+    return;
+  }
+  const safeHeight = clampReplayPaneHeight(height);
+  replayEls.splitPane.style.setProperty('--replay-pane-height', `${safeHeight}px`);
+  if (persist) {
+    try {
+      window.localStorage.setItem(REPLAY_HEIGHT_STORAGE_KEY, String(safeHeight));
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+}
+
+function clearReplayPaneHeightOverride() {
+  try {
+    window.localStorage.removeItem(REPLAY_HEIGHT_STORAGE_KEY);
+  } catch (_) {
+    // Ignore storage failures.
+  }
+}
+
+function syncReplayPaneHeight(forceAuto = false) {
+  if (!replayEls.splitPane) return;
+  if (!isDesktopReplayLayout()) {
+    replayEls.splitPane.style.removeProperty('--replay-pane-height');
+    return;
+  }
+
+  if (forceAuto) {
+    clearReplayPaneHeightOverride();
+  }
+  const manualHeight = forceAuto ? null : loadReplayPaneHeight();
+  const paneHeight = manualHeight ?? preferredReplayPaneHeight();
+  setReplayPaneHeight(paneHeight, false);
+}
+
 function clampReplaySidebarWidth(rawWidth) {
   if (!replayEls.splitPane) return REPLAY_SPLIT_MIN;
   const paneWidth = replayEls.splitPane.getBoundingClientRect().width;
@@ -404,9 +501,11 @@ function loadReplaySidebarWidth() {
 function syncReplaySplitLayout() {
   if (!replayEls.splitPane) return;
   if (!isDesktopReplayLayout()) {
+    replayEls.splitPane.style.removeProperty('--replay-pane-height');
     replayEls.splitPane.style.removeProperty('--replay-sidebar-width');
     return;
   }
+  syncReplayPaneHeight();
   setReplaySidebarWidth(loadReplaySidebarWidth(), false);
   invalidateReplayMap();
 }
@@ -440,6 +539,53 @@ function bindReplaySplitResize() {
 
   window.addEventListener('resize', syncReplaySplitLayout);
   syncReplaySplitLayout();
+}
+
+function bindReplayHeightResize() {
+  if (!replayEls.heightDivider || !replayEls.splitPane || !replayEls.replayShell) return;
+
+  replayEls.heightDivider.addEventListener('dblclick', () => {
+    syncReplayPaneHeight(true);
+    invalidateReplayMap();
+  });
+
+  replayEls.heightDivider.addEventListener('pointerdown', (event) => {
+    if (!isDesktopReplayLayout()) return;
+    event.preventDefault();
+    const bounds = replayEls.splitPane.getBoundingClientRect();
+    const originTop = bounds.top;
+
+    const onMove = (moveEvent) => {
+      const nextHeight = moveEvent.clientY - originTop;
+      setReplayPaneHeight(nextHeight);
+      invalidateReplayMap();
+    };
+
+    const onStop = () => {
+      replayEls.replayShell.classList.remove('is-height-resizing');
+      replayEls.heightDivider.releasePointerCapture?.(event.pointerId);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onStop);
+      window.removeEventListener('pointercancel', onStop);
+      invalidateReplayMap();
+    };
+
+    replayEls.replayShell.classList.add('is-height-resizing');
+    replayEls.heightDivider.setPointerCapture?.(event.pointerId);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onStop);
+    window.addEventListener('pointercancel', onStop);
+  });
+}
+
+function bindReplayPaneResize() {
+  if (!replayEls.splitPane || typeof window.ResizeObserver !== 'function') return;
+  const observer = new ResizeObserver(() => {
+    syncReplayPaneHeight();
+    invalidateReplayMap();
+  });
+  replayEls.replayShell && observer.observe(replayEls.replayShell);
+  replayEls.replayMain && observer.observe(replayEls.replayMain);
 }
 
 function ensureMap(mode = 'geo') {
@@ -1243,6 +1389,8 @@ async function initReplay() {
     });
   }
   bindReplaySplitResize();
+  bindReplayHeightResize();
+  bindReplayPaneResize();
   bindReplayActions();
   syncMapControls();
   await loadSceneMap();

@@ -22,6 +22,9 @@ const settingsEls = {
   stateTopic: document.getElementById('state-topic'),
   cameraTopic: document.getElementById('camera-topic'),
   controlHz: document.getElementById('control-hz'),
+  roverConnectedThreshold: document.getElementById('rover-connected-threshold'),
+  roverUnavailableThreshold: document.getElementById('rover-unavailable-threshold'),
+  roverRolloverOnReconnect: document.getElementById('rover-rollover-on-reconnect'),
   simulationBackend: document.getElementById('simulation-backend-select'),
   reload: document.getElementById('reload-config'),
   ingestMode: document.getElementById('ingest-mode'),
@@ -34,6 +37,20 @@ const settingsEls = {
   lightThemeSelect: document.getElementById('light-theme-select'),
   darkThemeSelect: document.getElementById('dark-theme-select'),
   appearanceStatus: document.getElementById('appearance-status'),
+  aiTtsEnabled: document.getElementById('ai-tts-enabled'),
+  aiTtsAutoRead: document.getElementById('ai-tts-auto-read'),
+  aiTtsEngine: document.getElementById('ai-tts-engine'),
+  aiTtsServiceUrl: document.getElementById('ai-tts-service-url'),
+  aiTtsServiceVoice: document.getElementById('ai-tts-service-voice'),
+  aiTtsServiceSpeed: document.getElementById('ai-tts-service-speed'),
+  aiTtsBrowserFallback: document.getElementById('ai-tts-browser-fallback'),
+  aiTtsVoice: document.getElementById('ai-tts-voice'),
+  aiTtsRate: document.getElementById('ai-tts-rate'),
+  aiTtsPitch: document.getElementById('ai-tts-pitch'),
+  aiSettingsPill: document.getElementById('ai-settings-pill'),
+  aiSettingsStatus: document.getElementById('ai-settings-status'),
+  saveAiSettings: document.getElementById('save-ai-settings'),
+  testAiVoice: document.getElementById('test-ai-voice'),
   llmProviderForm: document.getElementById('llm-provider-form'),
   llmProviderId: document.getElementById('llm-provider-id'),
   llmFormModePill: document.getElementById('llm-form-mode-pill'),
@@ -42,9 +59,13 @@ const settingsEls = {
   llmDisplayName: document.getElementById('llm-display-name'),
   llmProviderType: document.getElementById('llm-provider-type'),
   llmAuthMode: document.getElementById('llm-auth-mode'),
+  llmSecretRefLabel: document.getElementById('llm-secret-ref-label'),
   llmSecretRef: document.getElementById('llm-secret-ref'),
+  llmSecretValueRow: document.getElementById('llm-secret-value-row'),
+  llmSecretValue: document.getElementById('llm-secret-value'),
   llmBaseUrl: document.getElementById('llm-base-url'),
   llmModelId: document.getElementById('llm-model-id'),
+  llmContextWindow: document.getElementById('llm-context-window'),
   llmCapabilities: document.getElementById('llm-capabilities'),
   llmEnabled: document.getElementById('llm-enabled'),
   llmCheckDraft: document.getElementById('llm-check-draft'),
@@ -52,6 +73,7 @@ const settingsEls = {
   llmCancelEdit: document.getElementById('llm-cancel-edit'),
   llmProviderStatus: document.getElementById('llm-provider-status'),
   llmRegistryPill: document.getElementById('llm-registry-pill'),
+  llmAddExampleProviders: document.getElementById('llm-add-example-providers'),
   llmProviderList: document.getElementById('llm-provider-list'),
   llmRoutingList: document.getElementById('llm-routing-list'),
   saveModelRouting: document.getElementById('save-model-routing'),
@@ -64,57 +86,57 @@ const settingsEls = {
 
 const LLM_TEMPLATES = {
   openrouter: {
-    display_name: 'OpenRouter Model',
+    display_name: 'OpenRouter Claude Sonnet',
     provider_type: 'openrouter',
     auth_mode: 'env_var',
     secret_ref: 'OPENROUTER_API_KEY',
     base_url: 'https://openrouter.ai/api/v1',
-    model_id: '',
+    model_id: 'anthropic/claude-sonnet-4.5',
     capabilities: ['chat', 'reasoning'],
   },
   nvidia_nim: {
-    display_name: 'NVIDIA NIM Model',
+    display_name: 'NVIDIA NIM GLM',
     provider_type: 'nvidia_nim',
     auth_mode: 'env_var',
     secret_ref: 'NVIDIA_API_KEY',
     base_url: 'https://integrate.api.nvidia.com/v1',
-    model_id: '',
+    model_id: 'z-ai/glm4.7',
     capabilities: ['chat', 'planner', 'tool_calling'],
   },
   openai: {
-    display_name: 'OpenAI API Model',
+    display_name: 'OpenAI GPT',
     provider_type: 'openai',
     auth_mode: 'env_var',
     secret_ref: 'OPENAI_API_KEY',
     base_url: 'https://api.openai.com/v1',
-    model_id: '',
+    model_id: 'gpt-5.2',
     capabilities: ['chat', 'reasoning'],
   },
   anthropic: {
-    display_name: 'Anthropic Claude API',
+    display_name: 'Anthropic Claude Sonnet',
     provider_type: 'anthropic',
     auth_mode: 'env_var',
     secret_ref: 'ANTHROPIC_API_KEY',
     base_url: 'https://api.anthropic.com/v1',
-    model_id: '',
+    model_id: 'claude-sonnet-4-5',
     capabilities: ['chat', 'reasoning'],
   },
   google_gemini: {
-    display_name: 'Google Gemini API',
+    display_name: 'Google Gemini Flash',
     provider_type: 'google_gemini',
     auth_mode: 'env_var',
-    secret_ref: 'GOOGLE_API_KEY',
+    secret_ref: 'GEMINI_API_KEY',
     base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    model_id: '',
+    model_id: 'gemini-2.5-flash',
     capabilities: ['chat', 'vision'],
   },
   ollama: {
-    display_name: 'Local Ollama',
+    display_name: 'Ollama Local Llama',
     provider_type: 'ollama',
     auth_mode: 'none',
     secret_ref: '',
     base_url: 'http://localhost:11434',
-    model_id: 'llama3.1:8b',
+    model_id: 'llama3:latest',
     capabilities: ['chat'],
   },
   lm_studio: {
@@ -123,64 +145,66 @@ const LLM_TEMPLATES = {
     auth_mode: 'none',
     secret_ref: '',
     base_url: 'http://localhost:1234/v1',
-    model_id: '',
+    model_id: 'local-model',
     capabilities: ['chat'],
   },
   mistral: {
-    display_name: 'Mistral API',
+    display_name: 'Mistral Large',
     provider_type: 'mistral',
     auth_mode: 'env_var',
     secret_ref: 'MISTRAL_API_KEY',
     base_url: 'https://api.mistral.ai/v1',
-    model_id: '',
-    capabilities: ['chat'],
+    model_id: 'mistral-large-latest',
+    capabilities: ['chat', 'reasoning'],
   },
   cohere: {
-    display_name: 'Cohere API',
+    display_name: 'Cohere Command A',
     provider_type: 'cohere',
     auth_mode: 'env_var',
     secret_ref: 'COHERE_API_KEY',
     base_url: 'https://api.cohere.com/v2',
-    model_id: '',
+    model_id: 'command-a-03-2025',
     capabilities: ['chat', 'embeddings'],
   },
   together: {
-    display_name: 'Together AI',
+    display_name: 'Together GPT OSS',
     provider_type: 'together',
     auth_mode: 'env_var',
     secret_ref: 'TOGETHER_API_KEY',
     base_url: 'https://api.together.xyz/v1',
-    model_id: '',
-    capabilities: ['chat'],
+    model_id: 'openai/gpt-oss-20b',
+    capabilities: ['chat', 'reasoning'],
   },
   groq: {
-    display_name: 'Groq',
+    display_name: 'Groq GPT OSS',
     provider_type: 'groq',
     auth_mode: 'env_var',
     secret_ref: 'GROQ_API_KEY',
     base_url: 'https://api.groq.com/openai/v1',
-    model_id: '',
-    capabilities: ['chat'],
+    model_id: 'openai/gpt-oss-20b',
+    capabilities: ['chat', 'reasoning'],
   },
   huggingface: {
-    display_name: 'Hugging Face Inference',
+    display_name: 'Hugging Face Router GPT OSS',
     provider_type: 'huggingface',
     auth_mode: 'env_var',
     secret_ref: 'HF_TOKEN',
     base_url: 'https://router.huggingface.co/v1',
-    model_id: '',
-    capabilities: ['chat'],
+    model_id: 'openai/gpt-oss-120b',
+    capabilities: ['chat', 'reasoning'],
   },
   openai_compatible: {
     display_name: 'Custom OpenAI-compatible',
     provider_type: 'openai_compatible',
     auth_mode: 'env_var',
-    secret_ref: '',
-    base_url: '',
-    model_id: '',
+    secret_ref: 'OPENAI_COMPATIBLE_API_KEY',
+    base_url: 'https://example-openai-compatible.local/v1',
+    model_id: 'custom-model-id',
     capabilities: ['chat'],
   },
 };
+
+const EXAMPLE_PROVIDER_ORDER = Object.keys(LLM_TEMPLATES);
 
 const ROUTING_LABELS = {
   general_chat: 'General Chat',
@@ -195,6 +219,7 @@ const JSON_SECTION_LABELS = {
   connectivity: 'Connectivity',
   video: 'Video',
   appearance: 'Appearance',
+  ai_settings: 'AI Settings',
   llm_providers: 'LLM Providers',
   model_routing: 'Model Routing',
 };
@@ -203,6 +228,7 @@ let llmProviders = [];
 let modelRouting = {};
 let editingFallbackPurpose = null;
 let pendingJsonImport = null;
+let llmProviderSort = { key: 'display_name', direction: 'asc' };
 
 function setSetupStatus(text) {
   if (settingsEls.setupStatus) settingsEls.setupStatus.textContent = text;
@@ -218,6 +244,10 @@ function setVideoStatus(text) {
 
 function setAppearanceStatus(text) {
   if (settingsEls.appearanceStatus) settingsEls.appearanceStatus.textContent = text;
+}
+
+function setAiSettingsStatus(text) {
+  if (settingsEls.aiSettingsStatus) settingsEls.aiSettingsStatus.textContent = text;
 }
 
 function setLlmStatus(text) {
@@ -269,6 +299,14 @@ function updateVideoPill(video = {}) {
 }
 
 function fillForm(mqtt = {}, simulation = {}) {
+  const roverAvailability = (mqtt.rover_availability && typeof mqtt.rover_availability === 'object')
+    ? mqtt.rover_availability
+    : {};
+  const connectedThresholdRaw = Number.parseInt(roverAvailability.connected_threshold_seconds, 10);
+  const unavailableThresholdRaw = Number.parseInt(roverAvailability.unavailable_threshold_seconds, 10);
+  const connectedThreshold = Number.isFinite(connectedThresholdRaw) ? Math.max(0, connectedThresholdRaw) : 2;
+  let unavailableThreshold = Number.isFinite(unavailableThresholdRaw) ? Math.max(1, unavailableThresholdRaw) : 60;
+  if (unavailableThreshold < connectedThreshold) unavailableThreshold = connectedThreshold;
   settingsEls.brokerHost.value = mqtt.broker_host || '';
   settingsEls.brokerPort.value = mqtt.broker_port ?? 1883;
   settingsEls.topicPrefix.value = mqtt.topic_prefix || '';
@@ -277,10 +315,18 @@ function fillForm(mqtt = {}, simulation = {}) {
   settingsEls.stateTopic.value = mqtt.state_topic || 'telemetry/state';
   settingsEls.cameraTopic.value = mqtt.camera_topic || 'camera-feed';
   settingsEls.controlHz.value = mqtt.control_hz ?? 20;
+  settingsEls.roverConnectedThreshold.value = connectedThreshold;
+  settingsEls.roverUnavailableThreshold.value = unavailableThreshold;
+  settingsEls.roverRolloverOnReconnect.checked = roverAvailability.rollover_on_reconnect !== false;
   settingsEls.simulationBackend.value = simulation.backend || '3d-env';
 }
 
 function readConnectivityFromForm() {
+  const connectedThresholdRaw = Number.parseInt(settingsEls.roverConnectedThreshold.value, 10);
+  const unavailableThresholdRaw = Number.parseInt(settingsEls.roverUnavailableThreshold.value, 10);
+  const connectedThreshold = Number.isFinite(connectedThresholdRaw) ? Math.max(0, connectedThresholdRaw) : 2;
+  let unavailableThreshold = Number.isFinite(unavailableThresholdRaw) ? Math.max(1, unavailableThresholdRaw) : 60;
+  if (unavailableThreshold < connectedThreshold) unavailableThreshold = connectedThreshold;
   return {
     mqtt: {
       broker_host: settingsEls.brokerHost.value.trim(),
@@ -291,6 +337,11 @@ function readConnectivityFromForm() {
       state_topic: settingsEls.stateTopic.value.trim(),
       camera_topic: settingsEls.cameraTopic.value.trim(),
       control_hz: Number.parseInt(settingsEls.controlHz.value, 10),
+      rover_availability: {
+        connected_threshold_seconds: connectedThreshold,
+        unavailable_threshold_seconds: unavailableThreshold,
+        rollover_on_reconnect: settingsEls.roverRolloverOnReconnect.checked,
+      },
     },
     simulation: {
       backend: settingsEls.simulationBackend.value,
@@ -328,7 +379,7 @@ function syncThemeControls() {
 function readSelectedTab() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  return ['connectivity', 'video', 'appearance', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
+  return ['connectivity', 'video', 'appearance', 'ai-settings', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
 }
 
 function renderTabs(tab) {
@@ -374,6 +425,151 @@ async function loadVideoSettings() {
   const snapshot = await readJson('/api/snapshot');
   fillVideoSettings(snapshot.video || {});
   setVideoStatus(`Current delivery path: ${(snapshot.video?.ingest_mode || 'mqtt_frames')} -> ${(snapshot.video?.delivery_mode || 'websocket_mjpeg')}.`);
+}
+
+function aiSpeechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number.parseFloat(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
+function populateAiVoiceOptions(selectedVoiceName = '') {
+  if (!settingsEls.aiTtsVoice) return;
+  const voices = aiSpeechSupported() ? window.speechSynthesis.getVoices() : [];
+  const options = ['<option value="">Browser default voice</option>'];
+  const hasSelectedVoice = selectedVoiceName && voices.some((voice) => voice.name === selectedVoiceName);
+  for (const voice of voices) {
+    const label = `${voice.name} (${voice.lang || 'unknown'})${voice.default ? ' default' : ''}`;
+    options.push(`<option value="${escapeHtml(voice.name)}"${voice.name === selectedVoiceName ? ' selected' : ''}>${escapeHtml(label)}</option>`);
+  }
+  if (selectedVoiceName && !hasSelectedVoice) {
+    options.push(`<option value="${escapeHtml(selectedVoiceName)}" selected>${escapeHtml(`${selectedVoiceName} (saved voice)`)}</option>`);
+  }
+  settingsEls.aiTtsVoice.innerHTML = options.join('');
+  settingsEls.aiTtsVoice.value = selectedVoiceName || '';
+}
+
+function waitForAiSpeechVoices(voiceName) {
+  if (!voiceName || !aiSpeechSupported() || window.speechSynthesis.getVoices().length) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timeoutId);
+      window.speechSynthesis.removeEventListener?.('voiceschanged', finish);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(finish, 800);
+    if (window.speechSynthesis.addEventListener) {
+      window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
+    } else if (window.speechSynthesis.onvoiceschanged === null) {
+      window.speechSynthesis.onvoiceschanged = finish;
+    }
+  });
+}
+
+function fillAiSettings(settings = {}) {
+  const tts = settings.tts || {};
+  settingsEls.aiTtsEnabled.checked = tts.enabled !== false;
+  settingsEls.aiTtsAutoRead.checked = Boolean(tts.auto_read);
+  settingsEls.aiTtsEngine.value = tts.engine === 'kokoro_service' ? 'kokoro_service' : 'browser';
+  settingsEls.aiTtsServiceUrl.value = tts.service_url || 'http://127.0.0.1:9101';
+  settingsEls.aiTtsServiceVoice.value = tts.voice || 'af_sky';
+  settingsEls.aiTtsServiceSpeed.value = String(clampNumber(tts.speed, 1, 0.5, 2));
+  settingsEls.aiTtsBrowserFallback.checked = tts.browser_fallback !== false;
+  settingsEls.aiTtsRate.value = String(clampNumber(tts.rate, 1, 0.5, 2));
+  settingsEls.aiTtsPitch.value = String(clampNumber(tts.pitch, 1, 0, 2));
+  populateAiVoiceOptions(String(tts.voice_name || ''));
+  if (settingsEls.aiSettingsPill) {
+    settingsEls.aiSettingsPill.textContent = settingsEls.aiTtsEnabled.checked
+      ? `Voice: ${settingsEls.aiTtsEngine.value === 'kokoro_service' ? 'Kokoro' : 'Browser'}`
+      : 'Voice disabled';
+    settingsEls.aiSettingsPill.className = `pill ${settingsEls.aiTtsEnabled.checked ? 'ok' : 'warn'}`;
+  }
+}
+
+function readAiSettings() {
+  return {
+    tts: {
+      enabled: settingsEls.aiTtsEnabled.checked,
+      engine: settingsEls.aiTtsEngine.value,
+      auto_read: settingsEls.aiTtsAutoRead.checked,
+      service_url: settingsEls.aiTtsServiceUrl.value.trim() || 'http://127.0.0.1:9101',
+      voice: settingsEls.aiTtsServiceVoice.value.trim() || 'af_sky',
+      format: 'wav',
+      speed: clampNumber(settingsEls.aiTtsServiceSpeed.value, 1, 0.5, 2),
+      browser_fallback: settingsEls.aiTtsBrowserFallback.checked,
+      voice_name: settingsEls.aiTtsVoice.value,
+      rate: clampNumber(settingsEls.aiTtsRate.value, 1, 0.5, 2),
+      pitch: clampNumber(settingsEls.aiTtsPitch.value, 1, 0, 2),
+    },
+  };
+}
+
+async function loadAiSettings() {
+  if (!settingsEls.aiTtsEnabled) return;
+  setAiSettingsStatus('Loading AI settings.');
+  const result = await readJson('/api/ai-settings');
+  fillAiSettings(result.ai_settings || {});
+  setAiSettingsStatus(aiSpeechSupported()
+    ? 'AI voice settings loaded.'
+    : 'This browser does not expose text-to-speech voices.');
+}
+
+async function saveAiSettings() {
+  setAiSettingsStatus('Saving AI settings.');
+  const result = await readJson('/api/ai-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ai_settings: readAiSettings() }),
+  });
+  fillAiSettings(result.ai_settings || {});
+  setAiSettingsStatus('AI settings saved.');
+}
+
+async function testAiVoice() {
+  const settings = readAiSettings();
+  if (settings.tts.engine === 'kokoro_service') {
+    await saveAiSettings();
+    setAiSettingsStatus('Requesting Kokoro voice test.');
+    const response = await fetch('/api/ai-tts/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: 'Remote Rover AI voice test.',
+        voice: settings.tts.voice,
+        format: settings.tts.format,
+        speed: settings.tts.speed,
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    await audio.play();
+    setAiSettingsStatus('Playing Kokoro voice test.');
+    return;
+  }
+  if (!aiSpeechSupported()) {
+    setAiSettingsStatus('Text to speech is not supported by this browser.');
+    return;
+  }
+  await waitForAiSpeechVoices(settings.tts.voice_name);
+  const utterance = new SpeechSynthesisUtterance('Remote Rover AI voice test.');
+  const voiceName = settings.tts.voice_name;
+  const voice = window.speechSynthesis.getVoices().find((item) => item.name === voiceName);
+  if (voice) utterance.voice = voice;
+  utterance.rate = settings.tts.rate;
+  utterance.pitch = settings.tts.pitch;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+  setAiSettingsStatus('Playing voice test.');
 }
 
 async function saveConnectivity(event) {
@@ -627,33 +823,53 @@ function providerOptions(selectedId = '', category = '') {
 }
 
 function readProviderForm() {
-  return {
+  const authMode = settingsEls.llmAuthMode.value;
+  const payload = {
     id: settingsEls.llmProviderId.value || undefined,
     display_name: settingsEls.llmDisplayName.value.trim(),
     provider_type: settingsEls.llmProviderType.value,
-    auth_mode: settingsEls.llmAuthMode.value,
+    auth_mode: authMode,
     secret_ref: normalizeSecretRef(settingsEls.llmSecretRef.value),
     base_url: settingsEls.llmBaseUrl.value.trim(),
     model_id: settingsEls.llmModelId.value.trim(),
     capabilities: settingsEls.llmCapabilities.value.split(',').map((item) => item.trim()).filter(Boolean),
+    context_window: settingsEls.llmContextWindow.value ? parseInt(settingsEls.llmContextWindow.value, 10) : null,
     enabled: settingsEls.llmEnabled.checked,
   };
+  if (authMode === 'stored_secret') {
+    payload.secret_ref = settingsEls.llmSecretRef.value.trim();
+    const secretValue = settingsEls.llmSecretValue.value.trim();
+    if (secretValue) payload.secret_value = secretValue;
+  }
+  if (authMode === 'none') payload.secret_ref = '';
+  return payload;
+}
+
+function templateKeyForProvider(provider = {}) {
+  const providerType = String(provider.provider_type || '').trim();
+  if (!providerType) return 'openrouter';
+  const exactKey = Object.keys(LLM_TEMPLATES).find((key) => LLM_TEMPLATES[key]?.provider_type === providerType);
+  return exactKey || 'openai_compatible';
 }
 
 function fillProviderForm(provider = {}) {
   settingsEls.llmProviderId.value = provider.id || '';
+  settingsEls.llmProviderTemplate.value = templateKeyForProvider(provider);
   settingsEls.llmDisplayName.value = provider.display_name || '';
   settingsEls.llmProviderType.value = provider.provider_type || 'openai_compatible';
   settingsEls.llmAuthMode.value = provider.auth_mode || 'env_var';
   settingsEls.llmSecretRef.value = provider.secret_ref || '';
+  settingsEls.llmSecretValue.value = '';
   settingsEls.llmBaseUrl.value = provider.base_url || '';
   settingsEls.llmModelId.value = provider.model_id || '';
   settingsEls.llmCapabilities.value = Array.isArray(provider.capabilities) ? provider.capabilities.join(', ') : '';
+  settingsEls.llmContextWindow.value = provider.context_window || '';
   settingsEls.llmEnabled.checked = provider.enabled !== false;
   if (settingsEls.llmFormModePill) {
     settingsEls.llmFormModePill.textContent = provider.id ? 'Editing selected provider' : 'New provider';
     settingsEls.llmFormModePill.className = provider.id ? 'pill warn' : 'pill';
   }
+  updateProviderAuthFields();
 }
 
 function applyProviderTemplate() {
@@ -666,6 +882,38 @@ function clearProviderForm() {
   fillProviderForm({ ...LLM_TEMPLATES.openrouter, enabled: true });
 }
 
+function scrollToProviderEditor() {
+  const form = settingsEls.llmProviderForm;
+  if (!form) return;
+  const panel = form.closest('.llm-settings-panel') || form;
+  const headerHeight = document.querySelector('.app-header')?.getBoundingClientRect().height || 0;
+  const top = window.scrollY + panel.getBoundingClientRect().top - headerHeight - 12;
+  window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+}
+
+function updateProviderAuthFields() {
+  const authMode = settingsEls.llmAuthMode.value;
+  if (authMode === 'env_var') {
+    settingsEls.llmSecretRefLabel.textContent = 'Secret / Env Var';
+    settingsEls.llmSecretRef.placeholder = 'OPENROUTER_API_KEY';
+    settingsEls.llmSecretRef.disabled = false;
+    settingsEls.llmSecretValueRow.hidden = true;
+    return;
+  }
+  if (authMode === 'stored_secret') {
+    settingsEls.llmSecretRefLabel.textContent = 'Stored Secret Reference';
+    settingsEls.llmSecretRef.placeholder = 'secret://provider-...';
+    settingsEls.llmSecretRef.disabled = false;
+    settingsEls.llmSecretValueRow.hidden = false;
+    return;
+  }
+  settingsEls.llmSecretRefLabel.textContent = 'Secret / Env Var';
+  settingsEls.llmSecretRef.placeholder = '';
+  settingsEls.llmSecretRef.value = '';
+  settingsEls.llmSecretRef.disabled = true;
+  settingsEls.llmSecretValueRow.hidden = true;
+}
+
 function renderProviderList() {
   if (!settingsEls.llmProviderList) return;
   const enabledCount = llmProviders.filter((provider) => provider.enabled !== false).length;
@@ -674,29 +922,77 @@ function renderProviderList() {
     settingsEls.llmProviderList.innerHTML = '<p class="settings-note">No LLM providers configured yet.</p>';
     return;
   }
-  settingsEls.llmProviderList.innerHTML = llmProviders.map((provider) => {
+  const rows = llmProviders.map((provider) => {
     const check = provider.last_check || { status: 'not_tested' };
+    const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
+    const authSummary = provider.auth_mode === 'stored_secret'
+      ? (provider.has_secret ? 'stored secret configured' : 'stored secret missing')
+      : provider.auth_mode === 'env_var'
+        ? `env: ${provider.secret_ref || 'missing'}`
+        : 'no auth';
+    return { provider, check, capabilities, authSummary };
+  });
+  const direction = llmProviderSort.direction === 'desc' ? -1 : 1;
+  rows.sort((left, right) => compareProviderRows(left, right, llmProviderSort.key) * direction);
+  settingsEls.llmProviderList.innerHTML = `
+    <table class="llm-provider-table">
+      <thead>
+        <tr>
+          ${renderProviderSortHeader('Name', 'display_name')}
+          ${renderProviderSortHeader('Type', 'provider_type')}
+          ${renderProviderSortHeader('Model', 'model_id')}
+          ${renderProviderSortHeader('Auth', 'auth_summary')}
+          ${renderProviderSortHeader('Capabilities', 'capabilities')}
+          ${renderProviderSortHeader('Enabled', 'enabled')}
+          ${renderProviderSortHeader('Status', 'status')}
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(({ provider, check, capabilities, authSummary }) => {
     const tone = statusTone(check.status);
-    const capabilities = (provider.capabilities || []).map((capability) => `<span class="llm-chip">${escapeHtml(capability)}</span>`).join('');
+    const capabilitiesMarkup = capabilities.map((capability) => `<span class="llm-chip">${escapeHtml(capability)}</span>`).join('');
     return `
-      <div class="llm-provider-row" data-provider-id="${escapeHtml(provider.id)}">
-        <div class="llm-provider-title">
-          <strong>${escapeHtml(provider.display_name)}</strong>
-          <div class="llm-provider-meta"><span class="llm-chip">${escapeHtml(provider.provider_type)}</span></div>
-        </div>
-        <div class="llm-provider-meta">
-          <span class="llm-chip">${escapeHtml(provider.model_id || 'no model id')}</span>
-          ${capabilities}
-        </div>
-        <span class="pill ${tone}">${escapeHtml(check.status || 'not_tested')}</span>
-        <div class="llm-actions">
-          <button type="button" class="ghost" data-llm-action="check">Check</button>
-          <button type="button" class="ghost" data-llm-action="edit">Edit</button>
-          <button type="button" class="ghost" data-llm-action="toggle">${provider.enabled === false ? 'Enable' : 'Disable'}</button>
-        </div>
-      </div>
+      <tr class="llm-provider-row" data-provider-id="${escapeHtml(provider.id)}">
+        <td><strong>${escapeHtml(provider.display_name)}</strong></td>
+        <td><span class="llm-chip">${escapeHtml(provider.provider_type)}</span></td>
+        <td><span class="llm-chip">${escapeHtml(provider.model_id || 'no model id')}</span></td>
+        <td><span class="llm-chip">${escapeHtml(authSummary)}</span></td>
+        <td><div class="llm-provider-meta">${capabilitiesMarkup || '<span class="llm-chip">none</span>'}</div></td>
+        <td><span class="pill ${provider.enabled === false ? 'warn' : 'ok'}">${provider.enabled === false ? 'disabled' : 'enabled'}</span></td>
+        <td><span class="pill ${tone}">${escapeHtml(check.status || 'not_tested')}</span></td>
+        <td>
+          <div class="llm-actions">
+            <button type="button" class="ghost llm-action-icon" data-llm-action="check" title="Check provider" aria-label="Check provider"><span aria-hidden="true">✓</span></button>
+            <button type="button" class="ghost llm-action-icon" data-llm-action="edit" title="Edit provider" aria-label="Edit provider"><span aria-hidden="true">✎</span></button>
+            <button type="button" class="ghost llm-action-icon" data-llm-action="toggle" title="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}" aria-label="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}"><span aria-hidden="true">${provider.enabled === false ? '⏻' : '⏼'}</span></button>
+            <button type="button" class="ghost llm-action-icon llm-action-danger" data-llm-action="delete" title="Delete provider" aria-label="Delete provider"><span aria-hidden="true">🗑</span></button>
+          </div>
+        </td>
+      </tr>
     `;
-  }).join('');
+  }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderProviderSortHeader(label, key) {
+  const active = llmProviderSort.key === key;
+  const arrow = active ? (llmProviderSort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th><button type="button" class="llm-sort-button${active ? ' is-active' : ''}" data-llm-sort="${escapeHtml(key)}" aria-label="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</button></th>`;
+}
+
+function providerSortText(value) {
+  return String(value || '').toLowerCase();
+}
+
+function compareProviderRows(left, right, key) {
+  if (key === 'enabled') return Number(left.provider.enabled === false) - Number(right.provider.enabled === false);
+  if (key === 'status') return providerSortText(left.check.status).localeCompare(providerSortText(right.check.status));
+  if (key === 'auth_summary') return providerSortText(left.authSummary).localeCompare(providerSortText(right.authSummary));
+  if (key === 'capabilities') return providerSortText(left.capabilities.join(',')).localeCompare(providerSortText(right.capabilities.join(',')));
+  return providerSortText(left.provider[key]).localeCompare(providerSortText(right.provider[key]));
 }
 
 function ensureRoutingDefaults() {
@@ -786,9 +1082,48 @@ async function saveProvider(event) {
   if (index >= 0) llmProviders[index] = result.provider;
   else llmProviders.push(result.provider);
   fillProviderForm(result.provider);
+  settingsEls.llmSecretValue.value = '';
   renderProviderList();
   renderRoutingList();
   setLlmStatus(`Saved provider: ${result.provider.display_name}.`);
+}
+
+function hasProviderType(providerType) {
+  return llmProviders.some((provider) => provider.provider_type === providerType);
+}
+
+async function addMissingExampleProviders() {
+  const missingTemplateKeys = EXAMPLE_PROVIDER_ORDER.filter((key) => {
+    const template = LLM_TEMPLATES[key];
+    return template && !hasProviderType(template.provider_type);
+  });
+  if (!missingTemplateKeys.length) {
+    setLlmStatus('All provider example rows already exist.');
+    return;
+  }
+
+  settingsEls.llmAddExampleProviders.disabled = true;
+  setLlmStatus(`Adding ${missingTemplateKeys.length} missing provider example(s).`);
+  try {
+    for (const key of missingTemplateKeys) {
+      const template = LLM_TEMPLATES[key];
+      const result = await readJson('/api/llm-providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...template,
+          display_name: `${template.display_name} Example`,
+          enabled: false,
+        }),
+      });
+      llmProviders.push(result.provider);
+    }
+    renderProviderList();
+    renderRoutingList();
+    setLlmStatus(`Added ${missingTemplateKeys.length} editable provider example(s). Examples are disabled until you edit and enable them.`);
+  } finally {
+    settingsEls.llmAddExampleProviders.disabled = false;
+  }
 }
 
 async function checkDraftProvider() {
@@ -798,10 +1133,22 @@ async function checkDraftProvider() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(readProviderForm()),
   });
+  settingsEls.llmSecretValue.value = '';
   setLlmStatus(`Draft check: ${result.check.status}. ${result.check.message || ''}`);
 }
 
 async function handleProviderListClick(event) {
+  const sortButton = event.target.closest('button[data-llm-sort]');
+  if (sortButton) {
+    const key = sortButton.dataset.llmSort;
+    if (llmProviderSort.key === key) {
+      llmProviderSort.direction = llmProviderSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+      llmProviderSort = { key, direction: 'asc' };
+    }
+    renderProviderList();
+    return;
+  }
   const button = event.target.closest('button[data-llm-action]');
   if (!button) return;
   const row = button.closest('[data-provider-id]');
@@ -810,6 +1157,9 @@ async function handleProviderListClick(event) {
   const action = button.dataset.llmAction;
   if (action === 'edit') {
     fillProviderForm(provider);
+    scrollToProviderEditor();
+    settingsEls.llmDisplayName?.focus();
+    settingsEls.llmDisplayName?.select();
     setLlmStatus(`Editing provider: ${provider.display_name}.`);
   } else if (action === 'toggle') {
     const updated = { ...provider, enabled: provider.enabled === false };
@@ -828,6 +1178,14 @@ async function handleProviderListClick(event) {
     llmProviders = llmProviders.map((item) => item.id === provider.id ? result.provider : item);
     renderProviderList();
     setLlmStatus(`Provider check: ${result.check.status}. ${result.check.message || ''}`);
+  } else if (action === 'delete') {
+    if (!window.confirm(`Delete provider "${provider.display_name}"?`)) return;
+    await readJson(`/api/llm-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' });
+    llmProviders = llmProviders.filter((item) => item.id !== provider.id);
+    if (settingsEls.llmProviderId.value === provider.id) clearProviderForm();
+    renderProviderList();
+    renderRoutingList();
+    setLlmStatus(`Deleted provider: ${provider.display_name}.`);
   }
 }
 
@@ -936,6 +1294,7 @@ async function applyPendingJsonSettings() {
   await Promise.all([
     loadConnectivity().catch((error) => setSetupStatus(error.message)),
     loadVideoSettings().catch((error) => setVideoStatus(error.message)),
+    loadAiSettings().catch((error) => setAiSettingsStatus(error.message)),
     loadLlmSettings().catch((error) => setLlmStatus(error.message)),
   ]);
   setJsonStatus(`Applied sections: ${(result.applied_sections || []).join(', ') || 'none'}.`);
@@ -965,8 +1324,35 @@ function bindAppearance() {
   });
 }
 
+function bindAiSettings() {
+  if (!settingsEls.aiTtsEnabled) return;
+  if (aiSpeechSupported() && window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      populateAiVoiceOptions(settingsEls.aiTtsVoice.value);
+    };
+  }
+  settingsEls.saveAiSettings.addEventListener('click', () => {
+    saveAiSettings().catch((error) => setAiSettingsStatus(error.message));
+  });
+  settingsEls.testAiVoice.addEventListener('click', () => {
+    testAiVoice().catch((error) => setAiSettingsStatus(`Voice test failed: ${error.message}`));
+  });
+  settingsEls.aiTtsEnabled.addEventListener('change', () => {
+    if (settingsEls.aiSettingsPill) {
+      settingsEls.aiSettingsPill.textContent = settingsEls.aiTtsEnabled.checked ? 'Voice enabled' : 'Voice disabled';
+      settingsEls.aiSettingsPill.className = `pill ${settingsEls.aiTtsEnabled.checked ? 'ok' : 'warn'}`;
+    }
+  });
+  settingsEls.aiTtsEngine.addEventListener('change', () => {
+    setAiSettingsStatus(settingsEls.aiTtsEngine.value === 'kokoro_service'
+      ? 'Kokoro local service selected. Make sure tts_service is running on the configured URL.'
+      : 'Browser speech selected. Voice quality depends on this browser and operating system.');
+  });
+}
+
 function bindLlmSettings() {
   if (!settingsEls.llmProviderForm) return;
+  settingsEls.llmAuthMode.addEventListener('change', updateProviderAuthFields);
   settingsEls.llmProviderForm.addEventListener('submit', (event) => {
     saveProvider(event).catch((error) => setLlmStatus(error.message));
   });
@@ -978,6 +1364,9 @@ function bindLlmSettings() {
   settingsEls.llmCancelEdit.addEventListener('click', () => {
     clearProviderForm();
     setLlmStatus('Edit cancelled.');
+  });
+  settingsEls.llmAddExampleProviders.addEventListener('click', () => {
+    addMissingExampleProviders().catch((error) => setLlmStatus(error.message));
   });
   settingsEls.llmCheckDraft.addEventListener('click', () => {
     checkDraftProvider().catch((error) => setLlmStatus(error.message));
@@ -1020,6 +1409,7 @@ function initSettings() {
   renderTabs(readSelectedTab());
   bindTabs();
   bindAppearance();
+  bindAiSettings();
   bindLlmSettings();
 
   settingsEls.mqttForm.addEventListener('submit', (event) => {
@@ -1108,6 +1498,9 @@ function initSettings() {
   });
   loadVideoSettings().catch((error) => {
     setVideoStatus(error.message);
+  });
+  loadAiSettings().catch((error) => {
+    setAiSettingsStatus(error.message);
   });
   loadLlmSettings().catch((error) => {
     setLlmStatus(error.message);
