@@ -12,6 +12,24 @@ from .migrations import apply_ai_store_migrations
 
 
 _AUTO_TITLE_MAX_CHARS = 54
+_SOURCE_CONTROL_KEYS = (
+    "project_docs",
+    "mission_history",
+    "replay_reports",
+    "ai_chat_history",
+    "settings_config",
+    "sensor_context",
+    "web_research",
+)
+_DEFAULT_SOURCE_CONTROLS = {
+    "project_docs": True,
+    "mission_history": True,
+    "replay_reports": True,
+    "ai_chat_history": False,
+    "settings_config": False,
+    "sensor_context": False,
+    "web_research": False,
+}
 
 
 def _json(data: dict[str, Any] | list[Any] | None) -> str:
@@ -28,6 +46,27 @@ def _load_json(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def default_source_controls() -> dict[str, bool]:
+    return dict(_DEFAULT_SOURCE_CONTROLS)
+
+
+def normalize_source_controls(value: Any) -> dict[str, bool]:
+    source = value if isinstance(value, dict) else {}
+    out = default_source_controls()
+    for key in _SOURCE_CONTROL_KEYS:
+        if key in source:
+            out[key] = bool(source[key])
+    return out
+
+
+def _session_meta(meta: dict[str, Any] | None = None, source_controls: Any = None) -> dict[str, Any]:
+    out = dict(meta) if isinstance(meta, dict) else {}
+    out["source_controls"] = normalize_source_controls(
+        source_controls if source_controls is not None else out.get("source_controls")
+    )
+    return out
 
 
 class AISessionStore:
@@ -60,6 +99,7 @@ class AISessionStore:
                   s.title,
                   s.mode,
                   s.provider_id,
+                  s.meta_json,
                   s.created_at,
                   s.updated_at,
                   s.archived_at,
@@ -72,7 +112,7 @@ class AISessionStore:
                 """,
                 (max(1, int(limit)),),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._session_dict(row) for row in rows]
 
     def create_session(
         self,
@@ -80,17 +120,28 @@ class AISessionStore:
         title: str = "New chat",
         mode: str = "general_chat",
         provider_id: str = "",
+        source_controls: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session_id = f"ai-session-{uuid.uuid4().hex[:12]}"
         now = time.time()
         clean_title = title.strip() or "New chat"
+        session_meta = _session_meta(meta, source_controls)
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO ai_sessions (id, title, mode, provider_id, created_at, updated_at, archived_at)
-                VALUES (?, ?, ?, ?, ?, ?, NULL)
+                INSERT INTO ai_sessions (id, title, mode, provider_id, created_at, updated_at, archived_at, meta_json)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
                 """,
-                (session_id, clean_title, mode.strip() or "general_chat", provider_id.strip(), now, now),
+                (
+                    session_id,
+                    clean_title,
+                    mode.strip() or "general_chat",
+                    provider_id.strip(),
+                    now,
+                    now,
+                    _json(session_meta),
+                ),
             )
             conn.commit()
         return self.get_session(session_id, include_messages=False) or {}
@@ -103,7 +154,7 @@ class AISessionStore:
             ).fetchone()
             if row is None:
                 return None
-            session = dict(row)
+            session = self._session_dict(row)
             if include_messages:
                 messages = conn.execute(
                     """
@@ -123,6 +174,8 @@ class AISessionStore:
         title: str | None = None,
         provider_id: str | None = None,
         mode: str | None = None,
+        source_controls: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         current = self.get_session(session_id, include_messages=False)
         if current is None:
@@ -130,14 +183,20 @@ class AISessionStore:
         next_title = current["title"] if title is None else (title.strip() or current["title"])
         next_provider_id = current["provider_id"] if provider_id is None else provider_id.strip()
         next_mode = current["mode"] if mode is None else (mode.strip() or current["mode"])
+        next_meta = dict(current.get("meta") or {})
+        if isinstance(meta, dict):
+            next_meta.update(meta)
+        if source_controls is not None:
+            next_meta["source_controls"] = normalize_source_controls(source_controls)
+        next_meta = _session_meta(next_meta)
         with self._connect() as conn:
             conn.execute(
                 """
                 UPDATE ai_sessions
-                SET title = ?, provider_id = ?, mode = ?, updated_at = ?
+                SET title = ?, provider_id = ?, mode = ?, updated_at = ?, meta_json = ?
                 WHERE id = ?
                 """,
-                (next_title, next_provider_id, next_mode, time.time(), session_id),
+                (next_title, next_provider_id, next_mode, time.time(), _json(next_meta), session_id),
             )
             conn.commit()
         return self.get_session(session_id, include_messages=False)
@@ -271,7 +330,8 @@ class AISessionStore:
                   provider_id TEXT NOT NULL DEFAULT '',
                   created_at REAL NOT NULL,
                   updated_at REAL NOT NULL,
-                  archived_at REAL
+                  archived_at REAL,
+                  meta_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS ai_messages (
                   id TEXT PRIMARY KEY,
@@ -296,4 +356,11 @@ class AISessionStore:
     def _message_dict(row: sqlite3.Row) -> dict[str, Any]:
         out = dict(row)
         out["meta"] = _load_json(out.pop("meta_json", "{}"))
+        return out
+
+    @staticmethod
+    def _session_dict(row: sqlite3.Row) -> dict[str, Any]:
+        out = dict(row)
+        out["meta"] = _load_json(out.pop("meta_json", "{}"))
+        out["source_controls"] = normalize_source_controls((out.get("meta") or {}).get("source_controls"))
         return out

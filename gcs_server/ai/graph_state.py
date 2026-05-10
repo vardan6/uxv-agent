@@ -38,6 +38,7 @@ class WorkbenchGraphState(TypedDict, total=False):
     intent_errors: list
 
     # ── Retrieval layer — Phase 4 ─────────────────────────────────────────────
+    classified_scope: str
     retrieval_request: dict
     retrieved_sources: list
     retrieval_citations: list

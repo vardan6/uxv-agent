@@ -36,7 +36,14 @@ try:
     from gcs_server.ai.intent_service import IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
+    from gcs_server.ai.retrieval import (
+        build_loaded_data_refs,
+        build_retrieval_citations,
+        build_retrieved_sources,
+        normalize_retrieval_request,
+    )
     from gcs_server.ai.tool_registry import ToolRegistry
+    from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
@@ -48,7 +55,14 @@ except ModuleNotFoundError:
     from ai.intent_service import IntentService
     from ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from ai.provider_registry import evict_model_cache, resolve_intent_provider
+    from ai.retrieval import (
+        build_loaded_data_refs,
+        build_retrieval_citations,
+        build_retrieved_sources,
+        normalize_retrieval_request,
+    )
     from ai.tool_registry import ToolRegistry
+    from ai.session_store import normalize_source_controls
     from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
@@ -692,7 +706,9 @@ async def snapshot(request: Request) -> dict[str, Any]:
 @app.get("/api/config")
 async def get_config(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
-    return runtime.config.raw
+    return {
+        "key_bindings": runtime.config.key_bindings,
+    }
 
 
 @app.get("/api/llm-providers")
@@ -880,6 +896,7 @@ def _public_ai_session(session: dict[str, Any], include_messages: bool = False) 
     out = dict(session)
     if not include_messages:
         out.pop("messages", None)
+    out["source_controls"] = normalize_source_controls(out.get("source_controls"))
     return out
 
 
@@ -902,13 +919,51 @@ async def _ai_context_snapshot(
     timezone_name: str = "",
     run_mode: str = "chat",
 ) -> dict[str, Any]:
+    session = runtime.ai_store.get_session(session_id, include_messages=False) if session_id else None
+    source_controls = normalize_source_controls((session or {}).get("source_controls"))
     snapshot = await AIContextService(runtime).build_compact_context(
         user_message,
         session_id=session_id,
         timezone_name=timezone_name,
         run_mode=run_mode,
+        source_controls=source_controls,
     )
-    return {"prompt": snapshot.prompt, "meta": snapshot.meta}
+    full_ctx = snapshot.meta.get("context_snapshot") if isinstance(snapshot.meta, dict) else {}
+    details = (full_ctx or {}).get("details") if isinstance(full_ctx, dict) else {}
+    replay_summary = details.get("current_replay") if isinstance(details, dict) else {}
+    settings_summary = (full_ctx or {}).get("settings") if isinstance(full_ctx, dict) else {}
+    rover_state = (full_ctx or {}).get("rover") if isinstance(full_ctx, dict) else {}
+    runtime_summary = (full_ctx or {}).get("runtime") if isinstance(full_ctx, dict) else {}
+    retrieval_request = normalize_retrieval_request(
+        {"source_controls": source_controls},
+        user_prompt=user_message,
+        session_id=session_id,
+    )
+    sensor_summary = {
+        "telemetry_fresh": (rover_state or {}).get("telemetry_fresh"),
+        "camera_fresh": (rover_state or {}).get("camera_fresh"),
+        "video_delivery": (runtime_summary or {}).get("video"),
+    }
+    retrieved_sources = build_retrieved_sources(
+        retrieval_request=retrieval_request,
+        session_id=session_id,
+        replay_summary=replay_summary if isinstance(replay_summary, dict) else {},
+        settings_summary=settings_summary if isinstance(settings_summary, dict) else {},
+        sensor_summary=sensor_summary,
+    )
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=session_id,
+        replay_summary=replay_summary if isinstance(replay_summary, dict) else {},
+        settings_summary=settings_summary if isinstance(settings_summary, dict) else {},
+        sensor_summary=sensor_summary,
+    )
+    meta = dict(snapshot.meta)
+    meta["retrieval_request"] = retrieval_request
+    meta["retrieved_sources"] = retrieved_sources
+    meta["loaded_data_refs"] = loaded_data_refs
+    meta["retrieval_citations"] = build_retrieval_citations(retrieved_sources, loaded_data_refs)
+    return {"prompt": snapshot.prompt, "meta": meta}
 
 
 def _latest_user_content(messages: list[dict[str, Any]]) -> str:
@@ -1031,10 +1086,10 @@ def _llm_provider_error_detail(exc: Exception, fallback: str) -> str:
         for key in ("detail", "message", "error"):
             value = body.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
+                return _redact_secret_text(value.strip())
             if isinstance(value, dict) and isinstance(value.get("message"), str):
-                return value["message"].strip()
-    return fallback
+                return _redact_secret_text(value["message"].strip())
+    return _redact_secret_text(fallback)
 
 
 def _ai_stream_error_line(detail: str) -> str:
@@ -1083,6 +1138,7 @@ async def create_ai_session(request: Request) -> JSONResponse:
         title=str(payload.get("title", "New chat")),
         mode=str(payload.get("mode", "general_chat")),
         provider_id=str(payload.get("provider_id", "")),
+        source_controls=payload.get("source_controls"),
     )
     return JSONResponse({"ok": True, "session": _public_ai_session(session)})
 
@@ -1109,6 +1165,7 @@ async def update_ai_session(session_id: str, request: Request) -> JSONResponse:
         title=str(payload["title"]) if "title" in payload else None,
         provider_id=str(payload["provider_id"]) if "provider_id" in payload else None,
         mode=str(payload["mode"]) if "mode" in payload else None,
+        source_controls=payload["source_controls"] if "source_controls" in payload else None,
     )
     if session is None:
         raise HTTPException(status_code=404, detail="AI session not found")
@@ -1545,6 +1602,7 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
                 user_prompt=content,
                 operator_timezone=timezone_name,
                 session_mode=str(session.get("mode", "workbench")),
+                source_controls=session.get("source_controls"),
             ):
                 yield line
         except Exception as exc:
@@ -1560,8 +1618,8 @@ async def resume_workbench_session(
     """Resume a workbench graph suspended at an interrupt() approval gate.
 
     Request body:
-        decision  (str, required)   — "approve" or "reject"
-        note      (str, optional)   — operator note attached to the approval/rejection
+        decision  (str, required)   — "approve", "reject", "continue", or "cancel"
+        note      (str, optional)   — operator note attached to the approval/rejection/clarification
 
     Response: NDJSON stream continuing from the interrupted node:
         graph_resume_start, graph_node_result, mission_draft_decision, graph_run_end
@@ -1574,8 +1632,8 @@ async def resume_workbench_session(
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
 
     decision = str(payload.get("decision", "")).strip().lower()
-    if decision not in ("approve", "reject"):
-        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'")
+    if decision not in ("approve", "reject", "continue", "cancel"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve', 'reject', 'continue', or 'cancel'")
     note = str(payload.get("note", "") or "")
 
     session = _runtime(request).ai_store.get_session(session_id, include_messages=False)

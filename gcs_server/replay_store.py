@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import threading
 import time
@@ -12,6 +13,14 @@ from typing import Any
 
 def _json(data: dict[str, Any] | list[Any] | None) -> str:
     return json.dumps(data or {}, separators=(",", ":"))
+
+
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ALLOWED_SCHEMA_COLUMNS = {
+    ("replay_telemetry", "has_position"): "INTEGER NOT NULL DEFAULT 0",
+    ("replay_telemetry", "has_gps"): "INTEGER NOT NULL DEFAULT 0",
+    ("replay_telemetry", "position_frame"): "TEXT NOT NULL DEFAULT 'unknown'",
+}
 
 
 class ReplayStore:
@@ -399,8 +408,10 @@ class ReplayStore:
             clauses.append("event_type = ?")
             params.append(event_type.strip())
         if text.strip():
-            pattern = f"%{text.strip().lower()}%"
-            clauses.append("(LOWER(event_type) LIKE ? OR LOWER(payload_json) LIKE ?)")
+            pattern = f"%{_escape_like_pattern(text.strip().lower())}%"
+            clauses.append(
+                "(LOWER(event_type) LIKE ? ESCAPE '\\' OR LOWER(payload_json) LIKE ? ESCAPE '\\')"
+            )
             params.extend([pattern, pattern])
         query = f"""
             SELECT ts, level, event_type, payload_json
@@ -573,6 +584,11 @@ class ReplayStore:
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        expected_definition = _ALLOWED_SCHEMA_COLUMNS.get((table, column))
+        if expected_definition != definition:
+            raise ValueError(f"unsupported schema migration target: {table}.{column}")
+        if not _is_safe_sql_identifier(table) or not _is_safe_sql_identifier(column):
+            raise ValueError(f"unsafe schema identifier: {table}.{column}")
         columns = {
             row["name"]
             for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -646,6 +662,14 @@ def _optional_float(value: Any) -> float | None:
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     return None
+
+
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _is_safe_sql_identifier(value: str) -> bool:
+    return bool(_SQL_IDENTIFIER_RE.fullmatch(value))
 
 
 def _load_json_value(value: Any) -> dict[str, Any]:

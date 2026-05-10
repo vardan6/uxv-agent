@@ -30,6 +30,37 @@ const aiState = {
   },
 };
 
+const AI_SOURCE_CONTROL_META = {
+  project_docs: {
+    label: 'Project docs',
+    description: 'Planned RAG source for internal docs and design notes.',
+  },
+  mission_history: {
+    label: 'Mission history',
+    description: 'Use stored mission drafts and approval records.',
+  },
+  replay_reports: {
+    label: 'Replay reports',
+    description: 'Allow replay summaries and analytics tools.',
+  },
+  ai_chat_history: {
+    label: 'AI chat history',
+    description: 'Future bounded retrieval from AI session history.',
+  },
+  settings_config: {
+    label: 'Settings/config',
+    description: 'Use compact settings context and future section lookups.',
+  },
+  sensor_context: {
+    label: 'Sensor context',
+    description: 'Placeholder for future perception and sampled sensor retrieval.',
+  },
+  web_research: {
+    label: 'Web research',
+    description: 'Planned external research source. Not active yet.',
+  },
+};
+
 // Per-session live state — keyed by session ID.
 // Each entry tracks: messages (including in-progress pending), sending flag,
 // abort controller, and pending message IDs. This allows multiple sessions to
@@ -86,6 +117,7 @@ const aiEls = {
   providerSelect: document.getElementById('ai-provider-select'),
   providerPill: document.getElementById('ai-provider-pill'),
   statusPill: document.getElementById('ai-status-pill'),
+  sourceControls: document.getElementById('ai-source-controls'),
   renameSession: document.getElementById('ai-rename-session'),
   archiveSession: document.getElementById('ai-archive-session'),
   messageList: document.getElementById('ai-message-list'),
@@ -137,6 +169,19 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function normalizeSourceControls(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  Object.keys(AI_SOURCE_CONTROL_META).forEach((key) => {
+    if (key === 'project_docs' || key === 'mission_history' || key === 'replay_reports') {
+      out[key] = source[key] !== false;
+    } else {
+      out[key] = Boolean(source[key]);
+    }
+  });
+  return out;
 }
 
 let _markdownReady = false;
@@ -389,6 +434,82 @@ function renderIntentPanel(message) {
   `;
 }
 
+function renderRetrievalPanel(message) {
+  const meta = message?.meta || {};
+  const request = meta.retrieval_request || {};
+  const sources = Array.isArray(meta.retrieved_sources) ? meta.retrieved_sources : [];
+  if (!sources.length) return '';
+
+  const enabled = Array.isArray(request.enabled_sources) ? request.enabled_sources : [];
+  const scope = String(request.request_scope || '');
+  const rows = sources.map((source) => {
+    const label = AI_SOURCE_CONTROL_META[source.source]?.label || source.source || 'source';
+    const status = source.status || 'planned';
+    const requested = source.requested ? '<span class="ai-retrieval-pill">lazy</span>' : '';
+    const note = source.note ? `<div class="ai-retrieval-note">${escapeHtml(String(source.note))}</div>` : '';
+    return `
+      <li class="ai-retrieval-row">
+        <div class="ai-retrieval-row-top">
+          <span class="ai-retrieval-name">${escapeHtml(label)}</span>
+          <span class="ai-retrieval-status">${escapeHtml(status)}</span>
+          ${requested}
+        </div>
+        ${note}
+      </li>
+    `;
+  }).join('');
+
+  return `
+    <div class="ai-retrieval-panel" aria-label="Retrieval surfaces">
+      <div class="ai-retrieval-title">Retrieval surfaces</div>
+      <div class="ai-retrieval-meta">
+        ${scope ? `<span>scope: ${escapeHtml(scope)}</span>` : ''}
+        ${enabled.length ? `<span>enabled: ${escapeHtml(enabled.join(', '))}</span>` : ''}
+      </div>
+      <ul class="ai-retrieval-list">${rows}</ul>
+    </div>
+  `;
+}
+
+function renderSourceControls() {
+  if (!aiEls.sourceControls) return;
+  const session = aiState.activeSession;
+  const sourceControls = normalizeSourceControls(session?.source_controls);
+  const disabled = !session || Boolean(session.archived_at) || isSending();
+  const sourceKeys = Object.keys(AI_SOURCE_CONTROL_META);
+  const enabledCount = sourceKeys.filter((key) => sourceControls[key]).length;
+  const items = sourceKeys.map((key) => {
+    const meta = AI_SOURCE_CONTROL_META[key];
+    return `
+      <label class="ai-source-control-item">
+        <input
+          type="checkbox"
+          data-source-control="${escapeHtml(key)}"
+          ${sourceControls[key] ? 'checked' : ''}
+          ${disabled ? 'disabled' : ''}
+        >
+        <span class="ai-source-control-copy">
+          <strong>${escapeHtml(meta.label)}</strong>
+          <span>${escapeHtml(meta.description)}</span>
+        </span>
+      </label>
+    `;
+  }).join('');
+  aiEls.sourceControls.innerHTML = `
+    <div class="ai-source-controls-head">
+      <div>
+        <p class="section-kicker">Phase 4</p>
+        <h3>Source Controls</h3>
+      </div>
+      <span class="pill">${enabledCount}/${sourceKeys.length} enabled</span>
+    </div>
+    <p class="ai-source-controls-note">
+      These toggles are stored per session and now flow into chat, agent, and workbench retrieval scaffolding. Unwired sources remain visible as planned surfaces for testing.
+    </p>
+    <div class="ai-source-controls-grid">${items}</div>
+  `;
+}
+
 async function sendIntentTestRequest(sessionId, content, abortController) {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
   const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/intent-test`, {
@@ -423,6 +544,13 @@ function handleWorkbenchStreamEvent(sessionId, eventData) {
   } else if (eventData.type === 'graph_node_result') {
     const node = String(eventData.node || '').replace(/_/g, ' ');
     setAiStatus(`Workbench: ${node}...`);
+  } else if (eventData.type === 'graph_retrieval_result') {
+    updatePendingRetrievalState(
+      sessionId,
+      eventData.retrieval_request || {},
+      eventData.retrieved_sources || [],
+      eventData.retrieval_citations || [],
+    );
   } else if (eventData.type === 'mission_draft_created') {
     setAiStatus(`Draft created (${eventData.draft_id || '?'}). Awaiting approval.`);
   } else if (eventData.type === 'mission_draft_decision') {
@@ -1117,6 +1245,7 @@ function renderMessages(options = {}) {
   renderProviderSelect();
   renderRunModeToggle();
   updateComposerState();
+  renderSourceControls();
 
   if (!aiState.activeSession) {
     aiEls.messageList.innerHTML = `<div class="ai-empty-state">${aiState.showArchived ? 'Open an archived chat to review it, or switch back to Active chats.' : 'Type a message to start a new chat.'}</div>`;
@@ -1197,6 +1326,7 @@ function renderMessages(options = {}) {
           </span>`
         : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}
         ${message.role === 'assistant' ? renderAgentToolPanel(message) : ''}
+        ${message.role === 'assistant' ? renderRetrievalPanel(message) : ''}
         ${message.role === 'assistant' && messageRunMode(message) === 'intent' ? renderIntentPanel(message) : ''}</div>
       ${message.role === 'assistant'
         ? (() => {
@@ -1321,6 +1451,19 @@ function updatePendingAgentToolCall(sessionId, toolCall, status) {
   });
 }
 
+function updatePendingRetrievalState(sessionId, retrievalRequest, retrievedSources, retrievalCitations) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    if (retrievalRequest && typeof retrievalRequest === 'object') meta.retrieval_request = retrievalRequest;
+    if (Array.isArray(retrievedSources)) meta.retrieved_sources = retrievedSources;
+    if (Array.isArray(retrievalCitations)) meta.retrieval_citations = retrievalCitations;
+    return { ...message, meta };
+  });
+}
+
 function clearSessionLiveState(sessionId) {
   const live = liveStateFor(sessionId);
   live.sending = false;
@@ -1367,6 +1510,13 @@ function handleAiStreamEvent(sessionId, eventData) {
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'running');
   } else if (eventData.type === 'agent_tool_result') {
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
+  } else if (eventData.type === 'graph_retrieval_result') {
+    updatePendingRetrievalState(
+      sessionId,
+      eventData.retrieval_request || {},
+      eventData.retrieved_sources || [],
+      eventData.retrieval_citations || [],
+    );
   } else if (eventData.type === 'error') {
     throw new Error(String(eventData.detail || 'Chat streaming failed.'));
   }
@@ -1445,6 +1595,7 @@ async function createSession(options = {}) {
       title,
       mode: runModeToSessionMode(currentRunMode()),
       provider_id: providerId || undefined,
+      source_controls: normalizeSourceControls(aiState.activeSession?.source_controls),
     }),
   });
   await loadSessions();
@@ -1623,6 +1774,21 @@ async function updateSessionRunMode(runMode) {
   aiState.activeSession = { ...aiState.activeSession, ...result.session };
   await loadSessions();
   renderMessages({ preserveScroll: true });
+}
+
+async function updateSessionSourceControl(key, enabled) {
+  if (!aiState.activeSession) return;
+  const nextSourceControls = normalizeSourceControls(aiState.activeSession.source_controls);
+  nextSourceControls[key] = Boolean(enabled);
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(aiState.activeSession.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_controls: nextSourceControls }),
+  });
+  aiState.activeSession = { ...aiState.activeSession, ...result.session };
+  await loadSessions();
+  renderMessages({ preserveScroll: true });
+  setAiStatus('Source controls updated.', 'ok');
 }
 
 async function sendMessage(event) {
@@ -2026,6 +2192,12 @@ function bindAi() {
   aiEls.renameSession.addEventListener('click', () => renameSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.archiveSession.addEventListener('click', () => archiveSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.providerSelect.addEventListener('change', () => updateSessionProvider().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.sourceControls?.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-source-control]');
+    if (!input) return;
+    updateSessionSourceControl(input.dataset.sourceControl, input.checked)
+      .catch((error) => setAiStatus(error.message, 'danger'));
+  });
   aiEls.runModeButtons.forEach((button) => {
     button.addEventListener('click', () => updateSessionRunMode(button.dataset.runMode).catch((error) => setAiStatus(error.message, 'danger')));
   });

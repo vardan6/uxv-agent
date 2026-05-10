@@ -12,12 +12,10 @@ It is organized for two audiences:
 - [Current State](./current-state.md): what is implemented now, what is partially implemented, and the main current limitations
 - [Architecture](./architecture.md): how the simulator, GCS, broker, and shared config fit together
 - [Documentation Status Audit](./documentation-status.md): latest markdown review, implementation status reconciliation, and archive summary
-- [Next Session Handoff](./next-session-handoff.md): continuation notes for the next session, including current AI/RAG direction and dirty-worktree cautions
 - [Implementation Roadmap](./implementation-roadmap.md): recommended forward plan, grouped by priority
-- [AI Review and Fix Status](./ai-review-and-fix-status.md): full code and plan review (2026-05-09) — 30 issues catalogued, 21 fixed or resolved, 9 remaining, with a latest-fix-pass summary
-- [AI Current Context Layer](./ai-current-context-layer.md): implemented live rover/runtime/settings/LLM/map/replay context layer and first read-only agent tools used by AI Chat/Agent before RAG
-- [AI Spatial Tools And Agent Plan](./ai-spatial-agent-tools-plan.md): next implementation slice for compact context, current interim read-only agent tools, reusable spatial services, permissioned tool registry, perception data shape, and mission-draft planning
-- [AI Agent Workbench Detailed Plan](./ai-agent-workbench-detailed-plan.md): detailed in-between plan for schema migrations, spatial services, tool registry, intent parsing, mission drafts, approval state, and first LangGraph checkpoint before any rover execution
+- [AI Current Context Layer](./ai-current-context-layer.md): implemented live rover/runtime/settings/LLM/map/replay context layer, spatial query service, tool registry, and read-only Agent tools
+- [AI Spatial Tools And Agent Plan](./ai-spatial-agent-tools-plan.md): spatial query service, permissioned tool registry, intent parsing, mission-draft planning, and perception data shape design reference
+- [AI Agent Workbench Detailed Plan](./ai-agent-workbench-detailed-plan.md): historical planning rationale for schema migrations, spatial services, tool registry, intent parsing, mission drafts, approval state, and first LangGraph checkpoint (Milestones A–F now complete)
 - [Rover Intents And Intent Test](./gcs_server/intent-and-intent-test.md): what rover intents are, why the AI page has an `Intent Test` mode, how it differs from Chat/Agent/Workbench, and what safety boundary it provides
 - [AI Agent, LLM Provider, LangGraph, And RAG Implementation Plan](./ai-agent-rag-implementation-plan.md): implemented AI Chat/session foundation plus planned RAG/source controls, web research/search, LangGraph mission workflow, and rover-agent use cases
 - [Terrain Scene Manifest](./terrain-scene.md): source-of-truth terrain/object manifest, generator, validation, and runtime consumers
@@ -53,12 +51,11 @@ Archive index:
 For presentation, onboarding, and current engineering status, use this `docs/` directory first.
 
 
-  Active AI docs remaining (8 files, clean) as of 2026_05_10:
+  Active AI docs (as of 2026-05-11):
   - ai-agent-rag-implementation-plan.md — master plan
-  - ai-agent-workbench-detailed-plan.md — milestones A–G design
-  - ai-agent-workbench-next-session-plan-2026-05-10.md — implementation guide
+  - ai-agent-workbench-detailed-plan.md — milestones A–F historical planning (complete)
+  - ai-agent-workbench-next-session-plan-2026-05-10.md — implementation guide (Phases 1–3 done; Phase 4 next)
   - ai-current-context-layer.md — context layer reference
   - ai-langgraph-agent-design-plan-2026-05-10.md — LangGraph design
-  - ai-review-and-fix-status.md — 7 remaining issues
   - ai-spatial-agent-tools-plan.md — spatial tools reference
   - ai-replay-session-access-plan.md — replay AI design + status

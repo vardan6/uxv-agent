@@ -267,6 +267,12 @@ The next work is:
 - simulator-side logging
 - future synchronized recorded video support
 
+## Implementation Stage Policy
+
+- Do not create or expand tests during the current implementation stage unless tests are explicitly requested.
+- Prefer spending effort on implementation work, bug fixes, and documentation.
+- When relevant, note that tests were intentionally skipped under the current stage policy.
+
 ## Repository Note
 
 `gcs_server/` is tracked under the parent `remote-rover/` repository root.

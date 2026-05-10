@@ -457,11 +457,14 @@ async function setControlEnabled(enabled) {
     const result = await postJson(`/api/controller/${action}`, { client_id: state.clientId });
     state.controlActivationPending = false;
     updateController(result.controller || {});
-    setStatus(
-      enabled
-        ? 'Browser control active while this dashboard remains focused.'
-        : 'Browser control inactive while this dashboard is unfocused.'
-    );
+    if (enabled && result.ok === false) {
+      state.browserControlActive = false;
+      setStatus('Browser control is already held by another dashboard.');
+      return;
+    }
+    setStatus(enabled
+      ? 'Browser control active while this dashboard remains focused.'
+      : 'Browser control inactive while this dashboard is unfocused.');
   } catch (error) {
     state.controlActivationPending = false;
     state.browserControlActive = !!(state.controller?.active_client_id === state.clientId);

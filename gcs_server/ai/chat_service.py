@@ -277,7 +277,7 @@ class AIChatService:
                         },
                     )
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
-                return
+                    return
         langchain_messages = _to_langchain_messages(
             messages,
             _prompt_for_mode(context_snapshot, clean_run_mode, prompt_tool_calls),
@@ -320,7 +320,7 @@ class AIChatService:
             raise
         finally:
             content_out = "".join(parts).strip()
-            if content_out:
+            if content_out and not failed:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 response_metadata = stream_response_metadata or (getattr(last_chunk, "response_metadata", {}) or {})
                 usage_metadata = stream_usage_metadata or _usage_metadata(last_chunk)
@@ -610,6 +610,9 @@ class AIChatService:
             timezone_name=timezone_name,
             permissions=set(DEFAULT_PERMISSIONS),
         )
+        allowed_names = _allowed_agent_tool_names(context_snapshot)
+        if allowed_names is not None:
+            tools = [tool for tool in tools if str(getattr(tool, "name", "")) in allowed_names]
         if not tools:
             return None
 
@@ -709,6 +712,8 @@ def _tool_calls(context_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]
     providers = meta.get("context_providers")
     if not isinstance(snapshot, dict) or not isinstance(providers, list):
         return []
+    source_controls = meta.get("retrieval_request", {}).get("source_controls") if isinstance(meta.get("retrieval_request"), dict) else {}
+    allow_replay = source_controls.get("replay_reports", True) if isinstance(source_controls, dict) else True
 
     details = snapshot.get("details") if isinstance(snapshot.get("details"), dict) else {}
     calls: list[dict[str, Any]] = []
@@ -718,9 +723,9 @@ def _tool_calls(context_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]
         "find_objects_in_front": details.get("objects_in_front"),
         "find_objects_near_rover": details.get("objects_near_rover"),
         "find_objects_by_kind": details.get("objects_by_kind"),
-        "get_current_replay_summary": details.get("current_replay"),
-        "get_recent_telemetry": details.get("recent_telemetry"),
-        "get_replay_session_context": details.get("replay_sessions"),
+        "get_current_replay_summary": details.get("current_replay") if allow_replay else None,
+        "get_recent_telemetry": details.get("recent_telemetry") if allow_replay else None,
+        "get_replay_session_context": details.get("replay_sessions") if allow_replay else None,
     }
     for name in providers:
         result = provider_to_result.get(str(name))
@@ -738,6 +743,39 @@ def _agent_permissions(run_mode: str) -> dict[str, Any]:
         "may_start_missions": False,
         "may_mutate_state": False,
     }
+
+
+def _allowed_agent_tool_names(context_snapshot: dict[str, Any] | None) -> set[str] | None:
+    meta = _context_meta(context_snapshot)
+    retrieval_request = meta.get("retrieval_request")
+    source_controls = retrieval_request.get("source_controls") if isinstance(retrieval_request, dict) else {}
+    if not isinstance(source_controls, dict):
+        return None
+    allowed = {
+        "get_current_rover_state",
+        "get_scene_summary",
+        "query_objects_in_front",
+        "query_objects_near",
+        "query_objects_by_kind",
+        "query_objects_to_left",
+        "query_objects_to_right",
+        "query_nearest_objects",
+        "resolve_spatial_target",
+        "get_current_mission_state",
+    }
+    if source_controls.get("replay_reports", True):
+        allowed.update({
+            "get_current_replay_summary",
+            "get_recent_telemetry",
+            "resolve_replay_sessions",
+            "get_replay_session_summary",
+            "get_replay_session_metrics",
+            "get_replay_session_path",
+            "search_replay_session_events",
+            "compare_replay_sessions",
+            "aggregate_replay_sessions",
+        })
+    return allowed
 
 
 def _context_prompt(context_snapshot: dict[str, Any] | None) -> str:

@@ -53,11 +53,25 @@ try:
     from gcs_server.ai.graph_state import WorkbenchGraphState
     from gcs_server.ai.mission_draft_service import validate_draft_payload
     from gcs_server.ai.provider_registry import resolve_intent_provider, resolve_provider
+    from gcs_server.ai.retrieval import (
+        build_loaded_data_refs,
+        build_retrieval_citations,
+        build_retrieved_sources,
+        normalize_retrieval_request,
+    )
+    from gcs_server.ai.session_store import normalize_source_controls
 except ModuleNotFoundError:
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.graph_state import WorkbenchGraphState
     from ai.mission_draft_service import validate_draft_payload
     from ai.provider_registry import resolve_intent_provider, resolve_provider
+    from ai.retrieval import (
+        build_loaded_data_refs,
+        build_retrieval_citations,
+        build_retrieved_sources,
+        normalize_retrieval_request,
+    )
+    from ai.session_store import normalize_source_controls
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -226,6 +240,28 @@ def _parse_draft_json(text: str) -> dict:
         return {}
 
 
+def _normalize_retrieval_request(value: Any, *, user_prompt: str = "", session_id: str = "") -> dict[str, Any]:
+    return normalize_retrieval_request(value, user_prompt=user_prompt, session_id=session_id)
+
+
+def _build_retrieved_sources(state: WorkbenchGraphState) -> list[dict[str, Any]]:
+    return build_retrieved_sources(
+        retrieval_request=_normalize_retrieval_request(
+            state.get("retrieval_request") or {},
+            user_prompt=str(state.get("user_prompt") or ""),
+            session_id=str(state.get("session_id") or ""),
+        ),
+        session_id=str(state.get("session_id", "") or ""),
+        replay_summary=state.get("replay_summary") or {},
+        settings_summary=state.get("settings_summary") or {},
+        sensor_summary={
+            "telemetry_fresh": ((state.get("rover_state") or {}).get("telemetry_fresh")),
+            "camera_fresh": ((state.get("rover_state") or {}).get("camera_fresh")),
+            "video_delivery": ((state.get("runtime_summary") or {}).get("video")),
+        },
+    )
+
+
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
 def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
@@ -264,7 +300,11 @@ def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
 
     return {
         "source_message_id": source_message_id,
-        "classified_scope": "rover_task",
+        "retrieval_request": _normalize_retrieval_request(
+            state.get("retrieval_request") or {},
+            user_prompt=user_prompt,
+            session_id=session_id,
+        ),
         "node_trace": [_node_entry("capture_request", fatal_errors=sum(1 for e in errors if e.get("severity") == "fatal"))],
         "errors": errors,
     }
@@ -279,6 +319,7 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
             session_id=state.get("session_id", ""),
             timezone_name=state.get("operator_timezone", ""),
             run_mode="agent",
+            source_controls=normalize_source_controls((state.get("retrieval_request") or {}).get("source_controls")),
         )
     except Exception as exc:
         return {
@@ -296,6 +337,33 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
     compact_meta = {k: v for k, v in snapshot.meta.items() if k != "context_snapshot"}
     compact_meta["context_text"] = snapshot.prompt
 
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    sensor_summary = {
+        "telemetry_fresh": ((full_ctx.get("rover") or {}).get("telemetry_fresh")),
+        "camera_fresh": ((full_ctx.get("rover") or {}).get("camera_fresh")),
+        "video_delivery": ((full_ctx.get("runtime") or {}).get("video")),
+    }
+    retrieved_sources = _build_retrieved_sources({
+        **state,
+        "retrieval_request": retrieval_request,
+        "replay_summary": (full_ctx.get("details") or {}).get("current_replay") or {},
+        "settings_summary": full_ctx.get("settings") or {},
+        "rover_state": full_ctx.get("rover") or {},
+        "runtime_summary": full_ctx.get("runtime") or {},
+    })
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=(full_ctx.get("details") or {}).get("current_replay") or {},
+        settings_summary=full_ctx.get("settings") or {},
+        sensor_summary=sensor_summary,
+    )
+    retrieval_citations = build_retrieval_citations(retrieved_sources, loaded_data_refs)
+
     return {
         "context_metadata": compact_meta,
         "data_access_manifest": _build_data_access_manifest(rt),
@@ -305,7 +373,120 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
         "replay_summary": (full_ctx.get("details") or {}).get("current_replay") or {},
         "settings_summary": full_ctx.get("settings") or {},
         "llm_summary": full_ctx.get("llm") or {},
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": retrieval_citations,
+        "loaded_data_refs": loaded_data_refs,
         "node_trace": [_node_entry("retrieve_current_context", ok=True)],
+    }
+
+
+def classify_request_scope(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    return {
+        "classified_scope": str(retrieval_request.get("request_scope") or "rover_task"),
+        "retrieval_request": retrieval_request,
+        "node_trace": [_node_entry(
+            "classify_request_scope",
+            scope=str(retrieval_request.get("request_scope") or "rover_task"),
+            lazy_branches=len(retrieval_request.get("lazy_branches") or []),
+        )],
+    }
+
+
+def retrieve_replay_context(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    retrieved_sources = _build_retrieved_sources(state)
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=state.get("replay_summary") or {},
+        settings_summary=state.get("settings_summary") or {},
+    )
+    return {
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": build_retrieval_citations(retrieved_sources, loaded_data_refs),
+        "loaded_data_refs": loaded_data_refs,
+        "node_trace": [_node_entry("retrieve_replay_context", available=bool(state.get("replay_summary") or {}))],
+    }
+
+
+def retrieve_application_memory(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    retrieved_sources = _build_retrieved_sources(state)
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=state.get("replay_summary") or {},
+        settings_summary=state.get("settings_summary") or {},
+    )
+    return {
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": build_retrieval_citations(retrieved_sources, loaded_data_refs),
+        "loaded_data_refs": loaded_data_refs,
+        "node_trace": [_node_entry("retrieve_application_memory", session_id=str(state.get("session_id") or ""))],
+    }
+
+
+def retrieve_settings_context(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    retrieved_sources = _build_retrieved_sources(state)
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=state.get("replay_summary") or {},
+        settings_summary=state.get("settings_summary") or {},
+    )
+    return {
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": build_retrieval_citations(retrieved_sources, loaded_data_refs),
+        "loaded_data_refs": loaded_data_refs,
+        "node_trace": [_node_entry("retrieve_settings_context", available=bool(state.get("settings_summary") or {}))],
+    }
+
+
+def retrieve_sensor_context(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    retrieved_sources = _build_retrieved_sources(state)
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=state.get("replay_summary") or {},
+        settings_summary=state.get("settings_summary") or {},
+        sensor_summary={
+            "telemetry_fresh": ((state.get("rover_state") or {}).get("telemetry_fresh")),
+            "camera_fresh": ((state.get("rover_state") or {}).get("camera_fresh")),
+        },
+    )
+    return {
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": build_retrieval_citations(retrieved_sources, loaded_data_refs),
+        "loaded_data_refs": loaded_data_refs,
+        "node_trace": [_node_entry("retrieve_sensor_context", available=bool(state.get("rover_state") or {}))],
     }
 
 
@@ -555,6 +736,12 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     approval_status = state.get("approval_status", "")
     validation = state.get("validation") or {}
     errors = state.get("errors") or []
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(session_id or ""),
+    )
+    retrieved_sources = state.get("retrieved_sources") or []
 
     intent_type = intent.get("intent_type", "unknown")
 
@@ -593,14 +780,14 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     clarification_response = state.get("clarification_response") or {}
     if clarification_response.get("cancelled") and not draft_id:
         parts.append("Mission planning cancelled during clarification.")
-        candidates = state.get("target_candidates") or []
-        if candidates:
-            parts.append(f"Resolved {len(candidates)} spatial target candidate(s).")
-    else:
+    elif not draft_id and intent_type in _PLANNING_INTENT_TYPES:
         parts.append("Could not generate a mission draft for this request.")
         fatal = [e for e in errors if e.get("severity") in ("error", "fatal")]
         if fatal:
             parts.append(f"Reason: {fatal[-1].get('message', 'unknown error')}.")
+    if retrieved_sources:
+        enabled = retrieval_request.get("enabled_sources") or []
+        parts.append(f"Enabled source controls: {', '.join(str(item) for item in enabled)}.")
 
     content = " ".join(parts)
     meta = {
@@ -610,6 +797,10 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
         "tool_trace": state.get("tool_trace") or [],
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": state.get("retrieval_citations") or [],
+        "loaded_data_refs": state.get("loaded_data_refs") or [],
         "node_count": len(state.get("node_trace") or []),
     }
     if session_id and content:
@@ -661,6 +852,59 @@ def _route_after_capture(state: WorkbenchGraphState) -> str:
     if any(e.get("severity") == "fatal" for e in errors):
         return "finalize_error"
     return "retrieve_current_context"
+
+
+def _route_after_scope(state: WorkbenchGraphState) -> str:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    lazy_branches = retrieval_request.get("lazy_branches") or []
+    for branch in (
+        "retrieve_replay_context",
+        "retrieve_application_memory",
+        "retrieve_settings_context",
+        "retrieve_sensor_context",
+    ):
+        if branch in lazy_branches:
+            return branch
+    return "parse_intent"
+
+
+def _route_after_lazy_branch(state: WorkbenchGraphState, current_branch: str) -> str:
+    retrieval_request = _normalize_retrieval_request(
+        state.get("retrieval_request") or {},
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    lazy_branches = retrieval_request.get("lazy_branches") or []
+    ordered = [
+        "retrieve_replay_context",
+        "retrieve_application_memory",
+        "retrieve_settings_context",
+        "retrieve_sensor_context",
+    ]
+    try:
+        start = ordered.index(current_branch) + 1
+    except ValueError:
+        start = 0
+    for branch in ordered[start:]:
+        if branch in lazy_branches:
+            return branch
+    return "parse_intent"
+
+
+def _route_after_replay_branch(state: WorkbenchGraphState) -> str:
+    return _route_after_lazy_branch(state, "retrieve_replay_context")
+
+
+def _route_after_memory_branch(state: WorkbenchGraphState) -> str:
+    return _route_after_lazy_branch(state, "retrieve_application_memory")
+
+
+def _route_after_settings_branch(state: WorkbenchGraphState) -> str:
+    return _route_after_lazy_branch(state, "retrieve_settings_context")
 
 
 # ── Phase 2 nodes ─────────────────────────────────────────────────────────────
@@ -852,6 +1096,11 @@ def build_workbench_graph(checkpointer: Any = None):
 
     graph.add_node("capture_request", capture_request)
     graph.add_node("retrieve_current_context", retrieve_current_context)
+    graph.add_node("classify_request_scope", classify_request_scope)
+    graph.add_node("retrieve_replay_context", retrieve_replay_context)
+    graph.add_node("retrieve_application_memory", retrieve_application_memory)
+    graph.add_node("retrieve_settings_context", retrieve_settings_context)
+    graph.add_node("retrieve_sensor_context", retrieve_sensor_context)
     graph.add_node("parse_intent", parse_intent)
     graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("resolve_target", resolve_target)
@@ -870,7 +1119,46 @@ def build_workbench_graph(checkpointer: Any = None):
         _route_after_capture,
         {"retrieve_current_context": "retrieve_current_context", "finalize_error": "finalize_error"},
     )
-    graph.add_edge("retrieve_current_context", "parse_intent")
+    graph.add_edge("retrieve_current_context", "classify_request_scope")
+    graph.add_conditional_edges(
+        "classify_request_scope",
+        _route_after_scope,
+        {
+            "retrieve_replay_context": "retrieve_replay_context",
+            "retrieve_application_memory": "retrieve_application_memory",
+            "retrieve_settings_context": "retrieve_settings_context",
+            "retrieve_sensor_context": "retrieve_sensor_context",
+            "parse_intent": "parse_intent",
+        },
+    )
+    graph.add_conditional_edges(
+        "retrieve_replay_context",
+        _route_after_replay_branch,
+        {
+            "retrieve_application_memory": "retrieve_application_memory",
+            "retrieve_settings_context": "retrieve_settings_context",
+            "retrieve_sensor_context": "retrieve_sensor_context",
+            "parse_intent": "parse_intent",
+        },
+    )
+    graph.add_conditional_edges(
+        "retrieve_application_memory",
+        _route_after_memory_branch,
+        {
+            "retrieve_settings_context": "retrieve_settings_context",
+            "retrieve_sensor_context": "retrieve_sensor_context",
+            "parse_intent": "parse_intent",
+        },
+    )
+    graph.add_conditional_edges(
+        "retrieve_settings_context",
+        _route_after_settings_branch,
+        {
+            "retrieve_sensor_context": "retrieve_sensor_context",
+            "parse_intent": "parse_intent",
+        },
+    )
+    graph.add_edge("retrieve_sensor_context", "parse_intent")
     graph.add_conditional_edges(
         "parse_intent",
         _route_after_intent,
@@ -977,6 +1265,14 @@ async def _emit_chunk_events(
                 "validation": update["validation"],
                 "ts": time.time(),
             })
+        if update.get("retrieved_sources") is not None:
+            yield _json_line({
+                "type": "graph_retrieval_result",
+                "retrieval_request": update.get("retrieval_request", current_state.get("retrieval_request", {})),
+                "retrieved_sources": update.get("retrieved_sources") or [],
+                "retrieval_citations": update.get("retrieval_citations") or [],
+                "ts": time.time(),
+            })
         if update.get("approval_status") == "awaiting_approval":
             draft_id = update.get("draft_id") or current_state.get("draft_id", "")
             yield _json_line({
@@ -1005,6 +1301,7 @@ async def stream_workbench_graph(
     operator_timezone: str = "",
     session_mode: str = "workbench",
     source_message_id: str = "",
+    source_controls: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Async generator that runs the graph and yields NDJSON event lines.
 
@@ -1023,6 +1320,14 @@ async def stream_workbench_graph(
         "operator_timezone": operator_timezone,
         "session_mode": session_mode,
         "source_message_id": source_message_id,
+        "retrieval_request": _normalize_retrieval_request(
+            {"source_controls": normalize_source_controls(source_controls)},
+            user_prompt=user_prompt,
+            session_id=session_id,
+        ),
+        "retrieved_sources": [],
+        "retrieval_citations": [],
+        "loaded_data_refs": [],
         "tool_trace": [],
         "node_trace": [],
         "errors": [],

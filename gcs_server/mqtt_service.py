@@ -177,6 +177,7 @@ class MQTTRuntime:
             try:
                 payload = json.loads(msg.payload.decode("utf-8"))
             except Exception:
+                logger.warning("Malformed telemetry payload on topic %s", msg.topic, exc_info=True)
                 return
             self._schedule(self._handle_telemetry(payload))
         elif msg.topic == camera_topic:

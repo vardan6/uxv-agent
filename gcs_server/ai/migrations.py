@@ -39,8 +39,14 @@ def _migration_001_create_ai_mission_drafts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_002_add_ai_session_meta_json(conn: sqlite3.Connection) -> None:
+    if not _column_exists(conn, "ai_sessions", "meta_json"):
+        conn.execute("ALTER TABLE ai_sessions ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
+    (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
 )
 
 
@@ -90,3 +96,8 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row[1]) == column_name for row in rows)

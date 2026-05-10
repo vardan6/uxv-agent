@@ -91,17 +91,17 @@ class AppConfig:
 
     @property
     def ai_settings(self) -> dict[str, Any]:
-        settings = self.raw.setdefault("ai_settings", {})
+        settings = self.raw.get("ai_settings", {})
         return settings if isinstance(settings, dict) else {}
 
     @property
     def llm_providers(self) -> list[dict[str, Any]]:
-        providers = self.raw.setdefault("llm_providers", [])
+        providers = self.raw.get("llm_providers", [])
         return providers if isinstance(providers, list) else []
 
     @property
     def model_routing(self) -> dict[str, Any]:
-        routing = self.raw.setdefault("model_routing", {})
+        routing = self.raw.get("model_routing", {})
         return routing if isinstance(routing, dict) else {}
 
 

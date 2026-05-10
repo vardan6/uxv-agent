@@ -10,9 +10,11 @@ from typing import Any
 
 try:
     from gcs_server.scene_map import get_scene_map_payload
+    from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.spatial_query_service import SpatialQueryService
 except ModuleNotFoundError:
     from scene_map import get_scene_map_payload
+    from ai.session_store import normalize_source_controls
     from ai.spatial_query_service import SpatialQueryService
 
 
@@ -33,7 +35,9 @@ class AIContextService:
         session_id: str = "",
         timezone_name: str = "",
         run_mode: str = "chat",
+        source_controls: dict[str, Any] | None = None,
     ) -> AIContextSnapshot:
+        clean_source_controls = normalize_source_controls(source_controls)
         providers = [
             "get_current_rover_state",
             "get_runtime_context",
@@ -78,11 +82,12 @@ class AIContextService:
             if kind:
                 details["objects_by_kind"] = self._find_objects_by_kind_from_payload(scene_payload, kind)
                 providers.append("find_objects_by_kind")
-        if "recent" in lower or "happened" in lower:
+        replay_enabled = clean_source_controls.get("replay_reports", True)
+        if replay_enabled and ("recent" in lower or "happened" in lower):
             details["current_replay"] = self.get_current_replay_summary()
             details["recent_telemetry"] = self.get_recent_telemetry(seconds=120, limit=10)
             providers.extend(["get_current_replay_summary", "get_recent_telemetry"])
-        replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name)
+        replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name) if replay_enabled else {}
         if replay_context.get("available"):
             details["replay_sessions"] = replay_context
             providers.append("get_replay_session_context")
@@ -117,6 +122,7 @@ class AIContextService:
                 "context_providers": list(seen),
                 "operator_timezone": str(timezone_name or "").strip(),
                 "run_mode": "agent" if agent_mode else "chat",
+                "source_controls": clean_source_controls,
                 "budget_chars": max_chars,
                 "estimated_chars": _estimate_chars(trimmed_context),
                 "dropped_sections": dropped,
