@@ -2177,7 +2177,7 @@ code {
 .ai-chat-panel {
   grid-area: chat;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 16px;
   min-width: 0;
 }
