@@ -2444,6 +2444,255 @@ code {
   font-weight: 600;
 }
 
+.ai-agent-tools {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.ai-agent-tools-title {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ai-agent-tools ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-agent-tool-row {
+  display: grid;
+  grid-template-columns: auto minmax(120px, max-content) 1fr;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.ai-agent-tool-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 72%, var(--line));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-soft) 32%, transparent);
+}
+
+.ai-agent-tool-running .ai-agent-tool-dot {
+  animation: aiToolPulse 1s ease-in-out infinite;
+}
+
+.ai-agent-tool-name {
+  color: var(--text);
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.78rem;
+}
+
+.ai-agent-tool-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes aiToolPulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.84);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* Intent panel */
+.ai-intent-panel {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.ai-intent-title {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ai-intent-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 4px;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.ai-intent-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.ai-intent-value {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.ai-intent-warn {
+  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
+}
+
+.ai-intent-candidates {
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  list-style: disc;
+  color: var(--text);
+}
+
+/* Workbench approval card */
+.ai-approval-card {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+}
+
+.ai-approval-title {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ai-approval-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+}
+
+.ai-approval-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.ai-approval-value {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.ai-approval-risks {
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  list-style: disc;
+  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
+  font-size: 0.82rem;
+}
+
+.ai-approval-note-row {
+  margin: 10px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-approval-note-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.ai-approval-note-input {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.ai-approval-note-input:focus {
+  border-color: var(--accent);
+}
+
+.ai-approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ai-approval-btn {
+  padding: 5px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ai-approval-approve {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.ai-approval-approve:hover {
+  background: color-mix(in srgb, var(--accent) 25%, var(--bg));
+}
+
+.ai-approval-reject {
+  background: color-mix(in srgb, var(--danger, #d97706) 10%, var(--bg));
+  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
+  border-color: color-mix(in srgb, var(--danger, #d97706) 30%, var(--line));
+}
+
+.ai-approval-reject:hover {
+  background: color-mix(in srgb, var(--danger, #d97706) 20%, var(--bg));
+}
+
+/* Clarification card variant */
+.ai-clarification-card {
+  border-color: color-mix(in srgb, var(--warn, #d97706) 40%, var(--line));
+  background: color-mix(in srgb, var(--warn, #d97706) 4%, var(--bg));
+}
+
+.ai-clarification-card .ai-approval-title {
+  color: color-mix(in srgb, var(--warn, #d97706) 90%, var(--text));
+}
+
+.ai-clarification-questions {
+  color: var(--text);
+}
+
+.ai-clarification-input {
+  resize: vertical;
+  min-height: 2.5rem;
+}
+
 /* Inline code */
 .ai-message-body code {
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;

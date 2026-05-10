@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -17,6 +19,34 @@ OPENAI_COMPATIBLE_PROVIDER_TYPES = {
     "huggingface",
     "openai_compatible",
 }
+
+
+_MODEL_CACHE: dict[str, Any] = {}
+
+
+def _provider_cache_key(provider: dict[str, Any], secret_resolver: Callable[[str], str] | None) -> str:
+    """Stable key that changes whenever the provider connection config changes."""
+    relevant = {
+        "id": provider.get("id"),
+        "provider_type": provider.get("provider_type"),
+        "model_id": provider.get("model_id"),
+        "base_url": provider.get("base_url"),
+        "auth_mode": provider.get("auth_mode"),
+        "secret_ref": provider.get("secret_ref"),
+    }
+    # Include resolved secret value so cache is invalidated when credentials rotate.
+    auth_mode = str(provider.get("auth_mode", "env_var"))
+    if auth_mode != "none":
+        secret_ref = str(provider.get("secret_ref", "")).strip()
+        if secret_ref and auth_mode == "env_var":
+            relevant["_secret_val"] = os.getenv(secret_ref, "")
+    payload = json.dumps(relevant, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def evict_model_cache() -> None:
+    """Clear the process-level model cache (call after provider config changes)."""
+    _MODEL_CACHE.clear()
 
 
 @dataclass(slots=True)
@@ -38,7 +68,36 @@ def resolve_provider(
         raise ValueError("No LLM provider is configured for General Chat.")
     if not provider.get("enabled", True):
         raise ValueError(f"LLM provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
-    return ResolvedProvider(provider=provider, model=build_chat_model(provider, secret_resolver=secret_resolver))
+    return ResolvedProvider(provider=provider, model=_cached_chat_model(provider, secret_resolver=secret_resolver))
+
+
+def resolve_intent_provider(
+    config: Any,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> ResolvedProvider:
+    providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+    for purpose in ("command_parser", "planner", "general_chat"):
+        provider = _find_provider(providers, provider_id) if provider_id else _provider_from_routing(
+            config.model_routing,
+            providers,
+            purpose,
+            allow_default=purpose == "general_chat",
+        )
+        if provider is None:
+            continue
+        if not provider.get("enabled", True):
+            raise ValueError(f"LLM provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
+        return ResolvedProvider(provider=provider, model=_cached_chat_model(provider, secret_resolver=secret_resolver))
+    raise ValueError("No LLM provider is configured for intent parsing.")
+
+
+def _cached_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    key = _provider_cache_key(provider, secret_resolver)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = build_chat_model(provider, secret_resolver=secret_resolver)
+    return _MODEL_CACHE[key]
 
 
 def build_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
@@ -62,6 +121,7 @@ def build_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str
         "model": str(provider.get("model_id") or "").strip(),
         "api_key": api_key,
         "temperature": 0.2,
+        "stream_usage": True,
     }
     base_url = str(provider.get("base_url") or "").strip()
     if base_url:
@@ -98,6 +158,10 @@ def _build_ollama_chat_model(provider: dict[str, Any]) -> Any:
     kwargs: dict[str, Any] = {
         "model": model_id,
         "temperature": 0.2,
+        # Keep the model loaded in Ollama until explicitly unloaded.
+        # Without this Ollama unloads the model after 5 minutes of idle,
+        # causing a 20-40s reload on the next message.
+        "keep_alive": -1,
     }
     base_url = str(provider.get("base_url") or "").strip()
     if base_url:
@@ -109,6 +173,8 @@ def _provider_from_routing(
     routing: dict[str, Any],
     providers: list[dict[str, Any]],
     purpose: str,
+    *,
+    allow_default: bool = True,
 ) -> dict[str, Any] | None:
     rule = routing.get(purpose, {}) if isinstance(routing, dict) else {}
     candidate_ids = []
@@ -120,6 +186,8 @@ def _provider_from_routing(
         provider = _find_provider(providers, candidate_id)
         if provider and provider.get("enabled", True):
             return provider
+    if not allow_default:
+        return None
     return next((provider for provider in providers if provider.get("enabled", True)), None)
 
 

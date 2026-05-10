@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .migrations import apply_ai_store_migrations
+
 
 _AUTO_TITLE_MAX_CHARS = 54
 
@@ -287,6 +289,7 @@ class AISessionStore:
                 CREATE INDEX IF NOT EXISTS idx_ai_messages_session_created_at ON ai_messages(session_id, created_at);
                 """
             )
+            apply_ai_store_migrations(conn)
             conn.commit()
 
     @staticmethod

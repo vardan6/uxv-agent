@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -18,19 +19,48 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 try:
-    from gcs_server.ai.agent_tools import ReadOnlyAgentToolset
+    from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+except Exception:  # pragma: no cover - defensive for older langchain_core versions
+    LangChainPendingDeprecationWarning = Warning  # type: ignore[assignment]
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"The default value of `allowed_objects` will change in a future version\..*",
+    category=LangChainPendingDeprecationWarning,
+)
+
+try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
+    from gcs_server.ai.intent_service import IntentService
+    from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
+    from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
+    from gcs_server.ai.tool_registry import ToolRegistry
+    from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
-    from ai.agent_tools import ReadOnlyAgentToolset
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from ai.graph_runtime import WorkbenchGraphRuntime
+    from ai.intent_service import IntentService
+    from ai.mission_draft_service import MissionDraftService, validate_draft_payload
+    from ai.provider_registry import evict_model_cache, resolve_intent_provider
+    from ai.tool_registry import ToolRegistry
+    from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from config import load_config, save_config
     from runtime import AppRuntime, build_runtime
     from scene_map import get_scene_map_payload
+
+# Phase 2: LangGraph checkpointer for interrupt/resume approval
+try:
+    from langgraph.checkpoint.memory import MemorySaver as _MemorySaver
+    _LANGGRAPH_CHECKPOINTER_AVAILABLE = True
+except ImportError:
+    _MemorySaver = None  # type: ignore[assignment,misc]
+    _LANGGRAPH_CHECKPOINTER_AVAILABLE = False
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -110,6 +140,23 @@ async def lifespan(app: FastAPI):
         save_config(config)
     runtime = await build_runtime(config)
     app.state.runtime = runtime
+    _tool_registry = ToolRegistry()
+    app.state.ai_chat_service = AIChatService(
+        runtime.ai_store,
+        secret_resolver=runtime.secret_store.get_secret,
+        tool_registry=_tool_registry,
+    )
+    _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
+    app.state.workbench_runtime = WorkbenchGraphRuntime(
+        app_runtime=runtime,
+        tool_registry=_tool_registry,
+        context_service=AIContextService(runtime),
+        intent_service=IntentService(),
+        draft_service=runtime.mission_draft_service,
+        ai_session_store=runtime.ai_store,
+        secret_resolver=runtime.secret_store.get_secret,
+        checkpointer=_checkpointer,
+    )
     await runtime.control_service.start()
     await runtime.mqtt_runtime.start()
     try:
@@ -676,6 +723,7 @@ async def create_llm_provider(request: Request) -> JSONResponse:
         providers = runtime.config.raw["llm_providers"]
     providers.append(provider)
     save_config(runtime.config)
+    evict_model_cache()
     return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
 
 
@@ -700,6 +748,7 @@ async def update_llm_provider(provider_id: str, request: Request) -> JSONRespons
         runtime.secret_store.delete_secret(previous_secret_ref)
     runtime.config.raw["llm_providers"][index] = provider
     save_config(runtime.config)
+    evict_model_cache()
     return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
 
 
@@ -723,6 +772,7 @@ async def delete_llm_provider(provider_id: str, request: Request) -> JSONRespons
                 rule["fallback_provider_ids"] = [item for item in fallback_ids if item != provider_id]
 
     save_config(runtime.config)
+    evict_model_cache()
     return JSONResponse({"ok": True, "deleted_provider_id": provider_id, "provider": _provider_public(provider, runtime)})
 
 
@@ -833,12 +883,8 @@ def _public_ai_session(session: dict[str, Any], include_messages: bool = False) 
     return out
 
 
-def _ai_chat_service(runtime: AppRuntime) -> AIChatService:
-    return AIChatService(
-        runtime.ai_store,
-        secret_resolver=runtime.secret_store.get_secret,
-        agent_toolset=ReadOnlyAgentToolset(runtime),
-    )
+def _ai_chat_service(request: Request) -> AIChatService:
+    return request.app.state.ai_chat_service
 
 
 def _request_timezone_name(request: Request, payload: dict[str, Any] | None = None) -> str:
@@ -886,7 +932,7 @@ def _latest_user_run_mode(messages: list[dict[str, Any]]) -> str:
 
 def _ai_run_mode(payload: dict[str, Any]) -> str:
     clean = str(payload.get("run_mode", "chat")).strip().lower()
-    if clean in {"", "chat", "general_chat"}:
+    if clean in {"", "chat", "general_chat", "workbench", "intent", "rover_intent_test"}:
         return "chat"
     if clean == "agent":
         return "agent"
@@ -1113,13 +1159,13 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
         )
         result = await _run_ai_call(
             runtime,
-            _ai_chat_service(runtime).send_message,
+            _ai_chat_service(request).send_message,
             runtime.config,
             session_id,
             content,
             context_snapshot,
             run_mode,
-            {"timezone_name": timezone_name},
+            {"timezone_name": timezone_name, "runtime": runtime},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1150,13 +1196,13 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
             timezone_name=timezone_name,
             run_mode=run_mode,
         )
-        stream = _ai_chat_service(runtime).stream_message_events(
+        stream = _ai_chat_service(request).stream_message_events(
             runtime.config,
             session_id,
             content,
             context_snapshot,
             run_mode,
-            {"timezone_name": timezone_name},
+            {"timezone_name": timezone_name, "runtime": runtime},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1189,11 +1235,11 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
         )
         result = await _run_ai_call(
             runtime,
-            _ai_chat_service(runtime).retry_last_response,
+            _ai_chat_service(request).retry_last_response,
             runtime.config,
             session_id,
             context_snapshot,
-            {"timezone_name": timezone_name},
+            {"timezone_name": timezone_name, "runtime": runtime},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1224,11 +1270,11 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
             timezone_name=timezone_name,
             run_mode=_latest_user_run_mode(messages),
         )
-        stream = _ai_chat_service(runtime).stream_retry_events(
+        stream = _ai_chat_service(request).stream_retry_events(
             runtime.config,
             session_id,
             context_snapshot,
-            {"timezone_name": timezone_name},
+            {"timezone_name": timezone_name, "runtime": runtime},
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1240,6 +1286,317 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
             raise provider_error from exc
         raise
     return StreamingResponse(_stream_ai_events(stream), media_type="application/x-ndjson")
+
+
+@app.post("/api/ai/sessions/{session_id}/intent-test")
+async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    timezone_name = _request_timezone_name(request, payload)
+
+    session = runtime.ai_store.get_session(session_id, include_messages=False)
+    if session is None or session.get("archived_at") is not None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+
+    try:
+        resolved = resolve_intent_provider(
+            runtime.config,
+            provider_id=str(session.get("provider_id") or ""),
+            secret_resolver=runtime.secret_store.get_secret,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    context_snapshot = await _ai_context_snapshot(
+        runtime,
+        content,
+        session_id=session_id,
+        timezone_name=timezone_name,
+        run_mode="rover_intent_test",
+    )
+    context_summary = str(context_snapshot.get("prompt") or "")
+
+    intent_service = IntentService()
+    loop = asyncio.get_event_loop()
+    try:
+        parse_result = await loop.run_in_executor(
+            None,
+            lambda: intent_service.parse(
+                content,
+                model=resolved.model,
+                context_summary=context_summary,
+                timezone_name=timezone_name,
+            ),
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        provider_error = _llm_provider_http_exception(exc)
+        if provider_error is not None:
+            raise provider_error from exc
+        raise
+
+    intent = parse_result["intent"]
+    errors = parse_result.get("parse_errors") or []
+    tool_calls: list[dict[str, Any]] = []
+    target_resolution: dict[str, Any] = {}
+
+    target = intent.get("target") or {}
+    if intent.get("requires_rover_motion") and any(v is not None and v != "" for v in target.values()):
+        registry = ToolRegistry()
+        target_resolution = registry.invoke(
+            "resolve_spatial_target",
+            {"target": target},
+            runtime,
+            context_snapshot,
+            timezone_name=timezone_name,
+        )
+        tool_calls.append({
+            "tool": "resolve_spatial_target",
+            "args": {"target": target},
+            "result": target_resolution,
+        })
+
+    runtime.ai_store.maybe_auto_title(session_id, content)
+    user_message = runtime.ai_store.add_message(
+        session_id,
+        role="user",
+        content=content,
+        provider_id=str(resolved.provider.get("id", "")),
+        model_id=str(resolved.provider.get("model_id", "")),
+        meta={"run_mode": "rover_intent_test"},
+    )
+
+    intent_type = str(intent.get("intent_type", "unknown"))
+    summary = str(intent.get("summary", ""))
+    approval_note = " Operator approval required before any rover motion." if intent.get("requires_rover_motion") else ""
+    errors_note = f"\n\nParse errors: {', '.join(errors)}" if errors else ""
+    assistant_content = f"**Intent parsed:** {intent_type}\n{summary}{approval_note}{errors_note}"
+
+    assistant_message = runtime.ai_store.add_message(
+        session_id,
+        role="assistant",
+        content=assistant_content,
+        provider_id=str(resolved.provider.get("id", "")),
+        model_id=str(resolved.provider.get("model_id", "")),
+        latency_ms=parse_result.get("latency_ms", 0),
+        meta={
+            "run_mode": "rover_intent_test",
+            "intent": intent,
+            "target_resolution": target_resolution,
+            "parse_errors": errors,
+            "tool_calls": tool_calls,
+        },
+    )
+
+    return JSONResponse({
+        "ok": True,
+        "intent": intent,
+        "target_resolution": target_resolution,
+        "parse_errors": errors,
+        "tool_calls": tool_calls,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+        "session": _public_ai_session(session),
+    })
+
+
+@app.post("/api/ai/sessions/{session_id}/mission-draft")
+async def create_mission_draft(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    session = runtime.ai_store.get_session(session_id, include_messages=False)
+    if session is None or session.get("archived_at") is not None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+
+    intent = payload.get("intent")
+    if not isinstance(intent, dict):
+        raise HTTPException(status_code=400, detail="intent is required and must be an object")
+    target_resolution = payload.get("target_resolution") or {}
+    if not isinstance(target_resolution, dict):
+        raise HTTPException(status_code=400, detail="target_resolution must be an object")
+    draft_payload = payload.get("draft")
+    if not isinstance(draft_payload, dict):
+        raise HTTPException(status_code=400, detail="draft is required and must be an object")
+    source_message_id = str(payload.get("source_message_id") or "")
+
+    context_snapshot = payload.get("context_snapshot") or {}
+    rover_state: dict[str, Any] | None = None
+    if isinstance(context_snapshot, dict):
+        meta = context_snapshot.get("meta") or {}
+        snap = meta.get("context_snapshot") if isinstance(meta, dict) else None
+        rover_state = snap.get("rover") if isinstance(snap, dict) else None
+
+    draft = runtime.mission_draft_service.create_draft(
+        session_id=session_id,
+        source_message_id=source_message_id,
+        intent=intent,
+        target_resolution=target_resolution,
+        draft_payload=draft_payload,
+        rover_state=rover_state if isinstance(rover_state, dict) else None,
+    )
+    return JSONResponse({"ok": True, "draft": draft})
+
+
+@app.get("/api/ai/mission-drafts")
+async def list_mission_drafts(
+    request: Request,
+    session_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> JSONResponse:
+    runtime = _runtime(request)
+    drafts = runtime.mission_draft_service.list_drafts(
+        session_id=session_id,
+        status_filter=status,
+        limit=max(1, min(200, limit)),
+    )
+    return JSONResponse({"ok": True, "drafts": drafts, "count": len(drafts)})
+
+
+@app.get("/api/ai/mission-drafts/{draft_id}")
+async def get_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    draft = runtime.mission_draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="mission draft not found")
+    return JSONResponse({"ok": True, "draft": draft})
+
+
+@app.post("/api/ai/mission-drafts/{draft_id}/approve")
+async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    note = str(payload.get("note", "") if isinstance(payload, dict) else "")
+    draft = runtime.mission_draft_service.approve_draft(draft_id, note=note)
+    if draft is None:
+        raise HTTPException(
+            status_code=409,
+            detail="draft not found or not in awaiting_approval status",
+        )
+    return JSONResponse({"ok": True, "draft": draft})
+
+
+@app.post("/api/ai/mission-drafts/{draft_id}/reject")
+async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    note = str(payload.get("note", "") if isinstance(payload, dict) else "")
+    draft = runtime.mission_draft_service.reject_draft(draft_id, note=note)
+    if draft is None:
+        raise HTTPException(
+            status_code=409,
+            detail="draft not found or not in a rejectable status",
+        )
+    return JSONResponse({"ok": True, "draft": draft})
+
+
+@app.post("/api/ai/sessions/{session_id}/workbench/stream")
+async def run_workbench_session_stream(session_id: str, request: Request) -> StreamingResponse:
+    """Stream a workbench planning graph run for the given session.
+
+    Request body:
+        content        (str, required)  — the operator's planning prompt
+        operator_timezone (str, optional) — IANA timezone name
+
+    Response: NDJSON stream of graph lifecycle and tool events:
+        graph_run_start, graph_node_result, agent_tool_start, agent_tool_result,
+        mission_draft_created, mission_draft_validation, mission_draft_approval_required,
+        graph_run_end, graph_run_error
+    """
+    runtime = _runtime(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    timezone_name = _request_timezone_name(request, payload)
+    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+
+    session = runtime.ai_store.get_session(session_id, include_messages=False)
+    if session is None or session.get("archived_at") is not None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+
+    async def _generate():
+        try:
+            async for line in stream_workbench_graph(
+                wb_runtime,
+                session_id=session_id,
+                user_prompt=content,
+                operator_timezone=timezone_name,
+                session_mode=str(session.get("mode", "workbench")),
+            ):
+                yield line
+        except Exception as exc:
+            yield _ai_stream_error_line(str(exc))
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
+@app.post("/api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume")
+async def resume_workbench_session(
+    session_id: str, thread_id: str, request: Request
+) -> StreamingResponse:
+    """Resume a workbench graph suspended at an interrupt() approval gate.
+
+    Request body:
+        decision  (str, required)   — "approve" or "reject"
+        note      (str, optional)   — operator note attached to the approval/rejection
+
+    Response: NDJSON stream continuing from the interrupted node:
+        graph_resume_start, graph_node_result, mission_draft_decision, graph_run_end
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    decision = str(payload.get("decision", "")).strip().lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'")
+    note = str(payload.get("note", "") or "")
+
+    session = _runtime(request).ai_store.get_session(session_id, include_messages=False)
+    if session is None or session.get("archived_at") is not None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+
+    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+
+    async def _generate():
+        try:
+            async for line in resume_workbench_graph(
+                wb_runtime,
+                thread_id=thread_id,
+                decision=decision,
+                note=note,
+            ):
+                yield line
+        except Exception as exc:
+            yield _ai_stream_error_line(str(exc))
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
 @app.post("/api/settings/export")

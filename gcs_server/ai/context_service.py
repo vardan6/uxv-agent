@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import math
 import re
 import time
 from dataclasses import dataclass
@@ -11,8 +10,10 @@ from typing import Any
 
 try:
     from gcs_server.scene_map import get_scene_map_payload
+    from gcs_server.ai.spatial_query_service import SpatialQueryService
 except ModuleNotFoundError:
     from scene_map import get_scene_map_payload
+    from ai.spatial_query_service import SpatialQueryService
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class AIContextSnapshot:
 class AIContextService:
     def __init__(self, runtime: Any):
         self._runtime = runtime
+        self._spatial = SpatialQueryService()
 
     async def build_compact_context(
         self,
@@ -49,7 +51,7 @@ class AIContextService:
         llm = self.get_llm_context(session_id=session_id)
         mission = self.get_current_mission_state()
         # B3: load scene payload once and reuse for all spatial queries
-        scene_payload = self._load_scene_payload()
+        scene_payload = self.load_scene_payload()
         scene = self._get_scene_map_summary_from_payload(scene_payload)
         details: dict[str, Any] = {}
 
@@ -71,7 +73,8 @@ class AIContextService:
                     scene_payload, radius_m=radius, rover_state=rover
                 )
                 providers.append("find_objects_near_rover")
-            kind = _parse_kind_query(lower)
+            known_kinds = frozenset((scene.get("object_kinds") or {}).keys()) if scene.get("available") else None
+            kind = _parse_kind_query(lower, known_kinds)
             if kind:
                 details["objects_by_kind"] = self._find_objects_by_kind_from_payload(scene_payload, kind)
                 providers.append("find_objects_by_kind")
@@ -250,7 +253,7 @@ class AIContextService:
             "last_check": _pick(provider.get("last_check") or {}, ["status", "ok", "checked_at"]),
         }
 
-    def _load_scene_payload(self) -> dict[str, Any] | None:
+    def load_scene_payload(self) -> dict[str, Any] | None:
         backend = str(self._runtime.config.simulation.get("backend") or "3d-env")
         try:
             return get_scene_map_payload(backend=backend, grid_size=32)
@@ -259,27 +262,13 @@ class AIContextService:
 
     def _get_scene_map_summary_from_payload(self, scene: dict[str, Any] | None) -> dict[str, Any]:
         backend = str(self._runtime.config.simulation.get("backend") or "3d-env")
-        if scene is None:
-            return {"available": False, "backend": backend, "error": "scene payload unavailable"}
-        kinds: dict[str, int] = {}
-        for obj in scene.get("objects", []):
-            kind = str(obj.get("kind") or "unknown")
-            kinds[kind] = kinds.get(kind, 0) + 1
-        return {
-            "available": True,
-            "backend": scene.get("backend"),
-            "source_path": scene.get("source_path"),
-            "terrain_size": scene.get("terrain_size"),
-            "bounds": scene.get("bounds"),
-            "road_count": len(scene.get("roads") or []),
-            "object_count": len(scene.get("objects") or []),
-            "object_kinds": kinds,
-            "spawn": scene.get("spawn"),
-            "site_name": str(self._runtime.config.map.get("site_name", "default-site")),
-        }
+        summary = self._spatial.get_scene_summary(scene)
+        summary["backend"] = summary.get("backend") or backend
+        summary["site_name"] = str(self._runtime.config.map.get("site_name", "default-site"))
+        return summary
 
     def get_scene_map_summary(self) -> dict[str, Any]:
-        return self._get_scene_map_summary_from_payload(self._load_scene_payload())
+        return self._get_scene_map_summary_from_payload(self.load_scene_payload())
 
     def _find_objects_in_front_from_payload(
         self,
@@ -288,31 +277,12 @@ class AIContextService:
         fov_deg: float = 20.0,
         rover_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        rover = rover_state or {}
-        pose = _rover_pose(rover)
-        if pose is None:
-            return {"available": False, "reason": "rover pose or heading is unavailable"}
-        objects = list((scene or {}).get("objects") or [])
-        matches = []
-        half_fov = max(0.0, float(fov_deg)) / 2.0
-        for obj in objects:
-            center = obj.get("center") or {}
-            dx = float(center.get("x") or 0.0) - pose["x"]
-            dy = float(center.get("y") or 0.0) - pose["y"]
-            distance = math.hypot(dx, dy)
-            if distance > max_distance_m:
-                continue
-            bearing = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
-            delta = _angle_delta_deg(bearing, pose["heading_deg"])
-            if abs(delta) <= half_fov:
-                matches.append(_object_hit(obj, distance, bearing, delta))
-        matches.sort(key=lambda item: item["distance_m"])
-        return {
-            "available": True,
-            "query": {"max_distance_m": max_distance_m, "fov_deg": fov_deg},
-            "rover_pose": pose,
-            "objects": matches,
-        }
+        return self._spatial.find_objects_in_front(
+            scene,
+            rover_state or {},
+            max_distance_m=max_distance_m,
+            fov_deg=fov_deg,
+        )
 
     def find_objects_in_front(
         self,
@@ -321,7 +291,7 @@ class AIContextService:
         rover_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._find_objects_in_front_from_payload(
-            self._load_scene_payload(),
+            self.load_scene_payload(),
             max_distance_m=max_distance_m,
             fov_deg=fov_deg,
             rover_state=rover_state,
@@ -333,21 +303,7 @@ class AIContextService:
         radius_m: float = 50.0,
         rover_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        rover = rover_state or {}
-        pose = _rover_pose(rover)
-        if pose is None:
-            return {"available": False, "reason": "rover pose is unavailable"}
-        matches = []
-        for obj in list((scene or {}).get("objects") or []):
-            center = obj.get("center") or {}
-            distance = math.hypot(
-                float(center.get("x") or 0.0) - pose["x"],
-                float(center.get("y") or 0.0) - pose["y"],
-            )
-            if distance <= radius_m:
-                matches.append(_object_hit(obj, distance, None, None))
-        matches.sort(key=lambda item: item["distance_m"])
-        return {"available": True, "query": {"radius_m": radius_m}, "rover_pose": pose, "objects": matches}
+        return self._spatial.find_objects_near(scene, rover_state or {}, radius_m=radius_m)
 
     def find_objects_near_rover(
         self,
@@ -355,20 +311,62 @@ class AIContextService:
         rover_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._find_objects_near_rover_from_payload(
-            self._load_scene_payload(), radius_m=radius_m, rover_state=rover_state
+            self.load_scene_payload(), radius_m=radius_m, rover_state=rover_state
         )
 
     def _find_objects_by_kind_from_payload(self, scene: dict[str, Any] | None, kind: str) -> dict[str, Any]:
-        clean = kind.strip().lower()
-        matches = [
-            _object_hit(obj, None, None, None)
-            for obj in list((scene or {}).get("objects") or [])
-            if str(obj.get("kind") or "").lower() == clean
-        ]
-        return {"available": True, "query": {"kind": clean}, "objects": matches}
+        return self._spatial.find_objects_by_kind(scene, kind)
 
     def find_objects_by_kind(self, kind: str) -> dict[str, Any]:
-        return self._find_objects_by_kind_from_payload(self._load_scene_payload(), kind)
+        return self._find_objects_by_kind_from_payload(self.load_scene_payload(), kind)
+
+    def find_objects_to_left(
+        self,
+        max_distance_m: float = 100.0,
+        angle_width_deg: float = 90.0,
+        kinds: list[str] | None = None,
+        rover_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._spatial.find_objects_to_left(
+            self.load_scene_payload(),
+            rover_state or {},
+            max_distance_m=max_distance_m,
+            angle_width_deg=angle_width_deg,
+            kinds=kinds,
+        )
+
+    def find_objects_to_right(
+        self,
+        max_distance_m: float = 100.0,
+        angle_width_deg: float = 90.0,
+        kinds: list[str] | None = None,
+        rover_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._spatial.find_objects_to_right(
+            self.load_scene_payload(),
+            rover_state or {},
+            max_distance_m=max_distance_m,
+            angle_width_deg=angle_width_deg,
+            kinds=kinds,
+        )
+
+    def find_nearest_objects(
+        self,
+        limit: int = 5,
+        max_distance_m: float | None = None,
+        kinds: list[str] | None = None,
+        rover_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._spatial.find_nearest_objects(
+            self.load_scene_payload(),
+            rover_state or {},
+            limit=limit,
+            max_distance_m=max_distance_m,
+            kinds=kinds,
+        )
+
+    def resolve_target_description(self, target: dict[str, Any], rover_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._spatial.resolve_target_description(self.load_scene_payload(), rover_state or {}, target)
 
     def get_current_replay_summary(self) -> dict[str, Any]:
         current_id = self._runtime.replay_store.current_session_id
@@ -475,56 +473,6 @@ def _age_seconds(ts: Any) -> float | None:
     return max(0.0, time.time() - value)
 
 
-def _rover_pose(rover: dict[str, Any]) -> dict[str, float] | None:
-    pos = rover.get("position") or {}
-    try:
-        x = float(pos["x"])
-        y = float(pos["y"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    # B5: None heading means unknown — do not silently default to 0° (North),
-    # which would make directional queries return wrong results on stale telemetry.
-    heading_raw = rover.get("heading_deg")
-    if heading_raw is None:
-        return None
-    try:
-        heading = float(heading_raw) % 360.0
-    except (TypeError, ValueError):
-        return None
-    return {
-        "x": x,
-        "y": y,
-        "z": float(pos.get("z") or 0.0),
-        "heading_deg": heading,
-    }
-
-
-def _angle_delta_deg(target: float, heading: float) -> float:
-    return ((target - heading + 540.0) % 360.0) - 180.0
-
-
-def _object_hit(
-    obj: dict[str, Any],
-    distance: float | None,
-    bearing: float | None,
-    delta: float | None,
-) -> dict[str, Any]:
-    hit = {
-        "id": obj.get("id"),
-        "kind": obj.get("kind"),
-        "label": obj.get("label"),
-        "center": obj.get("center"),
-        "size": obj.get("size"),
-    }
-    if distance is not None:
-        hit["distance_m"] = round(distance, 2)
-    if bearing is not None:
-        hit["bearing_deg"] = round(bearing, 1)
-    if delta is not None:
-        hit["relative_bearing_deg"] = round(delta, 1)
-    return hit
-
-
 def _parse_front_query(text: str) -> tuple[float, float]:
     distance = _parse_radius_query(text, default=100.0)
     fov_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:degree|deg)", text)
@@ -539,9 +487,15 @@ def _parse_radius_query(text: str, default: float) -> float:
     return float(match.group(1)) if match else default
 
 
-def _parse_kind_query(text: str) -> str:
+def _parse_kind_query(text: str, known_kinds: frozenset[str] | None = None) -> str:
     match = re.search(r"(?:kind|type)\s+([a-z0-9_-]+)", text)
-    return match.group(1) if match else ""
+    if match:
+        return match.group(1)
+    if known_kinds:
+        for word in re.findall(r"[a-z0-9_-]+", text):
+            if word in known_kinds:
+                return word
+    return ""
 
 
 # ---------------------------------------------------------------------------

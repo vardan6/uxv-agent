@@ -3,12 +3,8 @@ const aiState = {
   providers: [],
   routing: {},
   activeSession: null,
-  sending: false,
   editingSessionId: '',
   showArchived: false,
-  activeRequestAbortController: null,
-  pendingUserMessageId: '',
-  pendingAssistantMessageId: '',
   runMode: 'chat',
   messageListPinnedToBottom: true,
   activeSpeechMessageId: '',
@@ -33,6 +29,39 @@ const aiState = {
     },
   },
 };
+
+// Per-session live state — keyed by session ID.
+// Each entry tracks: messages (including in-progress pending), sending flag,
+// abort controller, and pending message IDs. This allows multiple sessions to
+// stream concurrently and independently, so switching sessions does not
+// interrupt or corrupt an in-flight response.
+const _sessionLive = new Map();
+
+function liveStateFor(sessionId) {
+  if (!_sessionLive.has(sessionId)) {
+    _sessionLive.set(sessionId, {
+      messages: [],
+      sending: false,
+      pendingUserMessageId: '',
+      pendingAssistantMessageId: '',
+      abortController: null,
+      // Phase 2: workbench interrupt/resume state
+      pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
+      workbenchThreadId: '',
+    });
+  }
+  return _sessionLive.get(sessionId);
+}
+
+function isSending() {
+  const id = aiState.activeSession?.id;
+  return id ? liveStateFor(id).sending : false;
+}
+
+function activeAbortController() {
+  const id = aiState.activeSession?.id;
+  return id ? liveStateFor(id).abortController : null;
+}
 
 const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
 const AI_LAYOUT_HEIGHT_KEY = 'gcs-ai-chat-shell-height';
@@ -157,7 +186,8 @@ function renderMarkdown(content) {
 
 function postRenderMessages() {
   const list = aiEls.messageList;
-  const isStreaming = Boolean(aiState.pendingAssistantMessageId);
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const isStreaming = Boolean(activeLive?.pendingAssistantMessageId);
 
   // Syntax highlight only when not streaming (avoids re-running hljs on every delta)
   if (typeof hljs !== 'undefined' && !isStreaming) {
@@ -194,10 +224,11 @@ function postRenderMessages() {
 }
 
 function fmtTokens(n) {
-  if (!Number.isFinite(n) || n < 0) return '';
-  if (n >= 10000) return `${Math.round(n / 1000)}K`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(Math.round(n));
+  const value = Number(n);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value >= 10000) return `${Math.round(value / 1000)}K`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+  return String(Math.round(value));
 }
 
 function fmtTokPerSec(n) {
@@ -211,10 +242,13 @@ function messageStats(message) {
   const rm = meta.response_metadata || {};
   const latencyMs = message.latency_ms;
 
-  // OpenAI-compatible (NIM, vLLM, OpenAI)
-  const usage = rm.token_usage || rm.usage || {};
-  let inputTok = usage.prompt_tokens ?? usage.input_tokens ?? null;
-  let outputTok = usage.completion_tokens ?? usage.output_tokens ?? null;
+  // OpenAI-compatible (NIM, vLLM, OpenAI) + LangChain usage_metadata
+  const usage = meta.usage_metadata || rm.usage_metadata || rm.token_usage || rm.usage || {};
+  let inputTok = usage.prompt_tokens ?? usage.input_tokens ?? usage.input_token_details?.total_tokens ?? null;
+  let outputTok = usage.completion_tokens ?? usage.output_tokens ?? usage.output_token_details?.total_tokens ?? null;
+  const totalTok = usage.total_tokens ?? null;
+  if (inputTok == null) inputTok = usage.input_tokens ?? usage.prompt_tokens ?? null;
+  if (outputTok == null) outputTok = usage.output_tokens ?? usage.completion_tokens ?? null;
 
   // Ollama shape
   if (inputTok === null && rm.prompt_eval_count != null) inputTok = rm.prompt_eval_count;
@@ -239,15 +273,301 @@ function messageStats(message) {
 
   const parts = [];
   if (inputTok != null && ctxMax) {
-    const pct = Math.round((inputTok / ctxMax) * 100);
+    const pct = Math.round((Number(inputTok) / Number(ctxMax)) * 100);
     parts.push(`ctx ${fmtTokens(inputTok)}/${fmtTokens(ctxMax)} (${pct}%)`);
   } else if (inputTok != null) {
     parts.push(`↑${fmtTokens(inputTok)}`);
   }
   if (outputTok != null) parts.push(`↓${fmtTokens(outputTok)} tok`);
+  else if (inputTok == null && totalTok != null) parts.push(`tok ${fmtTokens(totalTok)}`);
   if (tokPerSec != null) parts.push(fmtTokPerSec(tokPerSec));
   if (showFinish) parts.push(`[${finishReason}]`);
   return parts.join(' · ');
+}
+
+function agentToolCalls(message) {
+  const meta = message.meta || {};
+  if (Array.isArray(meta.agent_tool_progress) && meta.agent_tool_progress.length) {
+    return meta.agent_tool_progress;
+  }
+  if (Array.isArray(meta.tool_calls) && meta.tool_calls.length) {
+    return meta.tool_calls.map((call) => ({ ...call, status: 'complete' }));
+  }
+  return [];
+}
+
+function summarizeAgentToolResult(result) {
+  if (result == null) return '';
+  if (typeof result !== 'object') return String(result);
+  if (result.ok === false && result.error) return `error: ${result.error}`;
+  if (Array.isArray(result)) return `${result.length} item${result.length === 1 ? '' : 's'}`;
+  if (Array.isArray(result.objects)) return `${result.objects.length} object${result.objects.length === 1 ? '' : 's'}`;
+  if (Array.isArray(result.sessions)) return `${result.sessions.length} session${result.sessions.length === 1 ? '' : 's'}`;
+  if (typeof result.available === 'boolean' && !result.available) return result.reason || result.error || 'unavailable';
+  const keys = Object.keys(result).filter((key) => result[key] != null);
+  return keys.slice(0, 4).join(', ');
+}
+
+function renderAgentToolPanel(message) {
+  const calls = agentToolCalls(message);
+  if (!calls.length) return '';
+  const rows = calls.map((call) => {
+    const status = call.status || (call.result !== undefined ? 'complete' : 'running');
+    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
+    const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
+    return `
+      <li class="ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
+        <span class="ai-agent-tool-dot" aria-hidden="true"></span>
+        <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
+        <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
+      </li>
+    `;
+  }).join('');
+  return `
+    <div class="ai-agent-tools" aria-label="Agent tool activity">
+      <div class="ai-agent-tools-title">Agent tool activity</div>
+      <ul>${rows}</ul>
+    </div>
+  `;
+}
+
+function renderIntentPanel(message) {
+  const meta = message?.meta || {};
+  const intent = meta.intent;
+  if (!intent) return '';
+
+  const intentType = escapeHtml(intent.intent_type || 'unknown');
+  const summary = escapeHtml(intent.summary || '');
+  const confidence = Number.isFinite(intent.confidence) ? `${Math.round(intent.confidence * 100)}%` : '—';
+  const requiresMotion = intent.requires_rover_motion ? 'Yes — operator approval required' : 'No';
+
+  const target = intent.target || {};
+  const targetParts = [
+    target.description ? `"${escapeHtml(String(target.description))}"` : null,
+    target.kind ? `kind: ${escapeHtml(String(target.kind))}` : null,
+    target.side ? `side: ${escapeHtml(String(target.side))}` : null,
+    target.max_distance_m != null ? `max ${escapeHtml(String(target.max_distance_m))} m` : null,
+  ].filter(Boolean).join(' · ');
+
+  const missing = Array.isArray(intent.missing_information) && intent.missing_information.length
+    ? `<div class="ai-intent-row"><span class="ai-intent-label">Missing</span><span class="ai-intent-value ai-intent-warn">${intent.missing_information.map((s) => escapeHtml(String(s))).join(', ')}</span></div>`
+    : '';
+
+  const parseErrors = Array.isArray(meta.parse_errors) && meta.parse_errors.length
+    ? `<div class="ai-intent-row"><span class="ai-intent-label">Parse errors</span><span class="ai-intent-value ai-intent-warn">${meta.parse_errors.map((s) => escapeHtml(String(s))).join('; ')}</span></div>`
+    : '';
+
+  const resolution = meta.target_resolution || {};
+  let candidateRows = '';
+  if (Array.isArray(resolution.candidates) && resolution.candidates.length) {
+    const items = resolution.candidates.slice(0, 5).map((c) => {
+      const label = escapeHtml(c.label || c.kind || c.id || 'object');
+      const dist = Number.isFinite(c.distance_m) ? ` · ${c.distance_m} m` : '';
+      const side = c.side ? ` · ${escapeHtml(c.side)}` : '';
+      const selected = c === resolution.selected ? ' ✓' : '';
+      return `<li>${label}${dist}${side}${selected}</li>`;
+    }).join('');
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Candidates</span><ul class="ai-intent-candidates">${items}</ul></div>`;
+  } else if (resolution.available === false) {
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Rover pose or scene unavailable</span></div>`;
+  } else if (resolution.needs_clarification) {
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Needs clarification</span></div>`;
+  }
+
+  return `
+    <div class="ai-intent-panel" aria-label="Parsed rover intent">
+      <div class="ai-intent-title">Rover intent</div>
+      <div class="ai-intent-row"><span class="ai-intent-label">Type</span><span class="ai-intent-value">${intentType}</span></div>
+      ${summary ? `<div class="ai-intent-row"><span class="ai-intent-label">Summary</span><span class="ai-intent-value">${summary}</span></div>` : ''}
+      <div class="ai-intent-row"><span class="ai-intent-label">Confidence</span><span class="ai-intent-value">${confidence}</span></div>
+      <div class="ai-intent-row"><span class="ai-intent-label">Requires motion</span><span class="ai-intent-value">${requiresMotion}</span></div>
+      ${targetParts ? `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value">${targetParts}</span></div>` : ''}
+      ${candidateRows}
+      ${missing}
+      ${parseErrors}
+    </div>
+  `;
+}
+
+async function sendIntentTestRequest(sessionId, content, abortController) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/intent-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Operator-Timezone': timezone },
+    body: JSON.stringify({ content, timezone }),
+    signal: abortController.signal,
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `Intent test failed (${response.status})`);
+  }
+  const result = await response.json();
+  const live = liveStateFor(sessionId);
+  if (Array.isArray(result.user_message) || result.user_message) {
+    const msgs = live.messages.filter((m) => !m.id?.startsWith('pending-'));
+    if (result.user_message) msgs.push(result.user_message);
+    if (result.assistant_message) msgs.push(result.assistant_message);
+    live.messages = msgs;
+  }
+}
+
+// ── Workbench streaming and approval ──────────────────────────────────────────
+
+function handleWorkbenchStreamEvent(sessionId, eventData) {
+  const live = liveStateFor(sessionId);
+  if (eventData.type === 'graph_run_start') {
+    live.workbenchThreadId = eventData.thread_id || '';
+    setAiStatus('Workbench planning graph started.');
+  } else if (eventData.type === 'graph_resume_start') {
+    setAiStatus(`Submitting ${eventData.decision || 'decision'}...`);
+  } else if (eventData.type === 'graph_node_result') {
+    const node = String(eventData.node || '').replace(/_/g, ' ');
+    setAiStatus(`Workbench: ${node}...`);
+  } else if (eventData.type === 'mission_draft_created') {
+    setAiStatus(`Draft created (${eventData.draft_id || '?'}). Awaiting approval.`);
+  } else if (eventData.type === 'mission_draft_decision') {
+    const status = eventData.approval_status || '';
+    setAiStatus(`Draft ${status}.`, status === 'approved' ? 'ok' : 'warn');
+  } else if (eventData.type === 'graph_interrupt') {
+    live.pendingInterrupt = {
+      threadId: eventData.thread_id || live.workbenchThreadId || '',
+      approvalPayload: eventData.interrupt_value || {},
+    };
+    // Remove the spinner pending message — graph is paused, not running
+    live.messages = live.messages.filter((m) => m.id !== live.pendingAssistantMessageId);
+    live.pendingAssistantMessageId = '';
+    const interruptType = (eventData.interrupt_value || {}).type || '';
+    setAiStatus(
+      interruptType === 'clarification_request'
+        ? 'Clarification needed before planning can continue.'
+        : 'Mission draft awaiting your approval.',
+      'warn',
+    );
+    if (aiState.activeSession?.id === sessionId) renderMessages();
+  } else if (eventData.type === 'graph_run_error') {
+    throw new Error(String(eventData.error || 'Workbench graph error'));
+  } else if (eventData.type === 'graph_run_end') {
+    live.pendingInterrupt = null;
+    setAiStatus('Workbench graph complete.', 'ok');
+  }
+  if (aiState.activeSession?.id === sessionId) renderMessages();
+}
+
+async function sendWorkbenchRequest(sessionId, content, abortController) {
+  const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/stream`;
+  const response = await fetch(url, withAiTimezone({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+    signal: abortController.signal,
+  }));
+  if (!response.ok) {
+    let detail = await response.text();
+    try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
+    throw new Error(detail || `${response.status}`);
+  }
+  await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+}
+
+async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
+  const live = liveStateFor(sessionId);
+  live.pendingInterrupt = null;
+  live.sending = true;
+  const abortController = new AbortController();
+  live.abortController = abortController;
+  renderMessages();
+  setAiStatus(`Submitting ${decision}...`);
+  try {
+    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/thread/${encodeURIComponent(threadId)}/resume`;
+    const response = await fetch(url, withAiTimezone({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, note: note || '' }),
+      signal: abortController.signal,
+    }));
+    if (!response.ok) {
+      let detail = await response.text();
+      try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
+      throw new Error(detail || `${response.status}`);
+    }
+    await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    setAiStatus('Ready.', 'ok');
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    setAiStatus(isAbort ? 'Interrupted.' : (error.message || 'Approval failed.'), isAbort ? 'warn' : 'danger');
+  } finally {
+    clearSessionLiveState(sessionId);
+    renderMessages();
+  }
+}
+
+function renderWorkbenchApprovalCard(sessionId, interrupt) {
+  const payload = interrupt.approvalPayload || {};
+  if (payload.type === 'clarification_request') {
+    return renderClarificationCard(sessionId, interrupt);
+  }
+  const threadId = interrupt.threadId || '';
+  const safeThreadId = escapeHtml(threadId);
+  const goal = escapeHtml(String(payload.goal || payload.summary || ''));
+  const draftId = escapeHtml(String(payload.draft_id || ''));
+  const risks = Array.isArray(payload.risks) ? payload.risks : [];
+  const riskItems = risks.length
+    ? `<ul class="ai-approval-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
+    : '';
+  return `
+    <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
+      <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
+      ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
+      ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
+      ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
+      <div class="ai-approval-note-row">
+        <label class="ai-approval-note-label" for="ai-approval-note-input">Note (optional)</label>
+        <input type="text" id="ai-approval-note-input" class="ai-approval-note-input" placeholder="Reason for approval or rejection…" />
+      </div>
+      <div class="ai-approval-actions">
+        <button class="ai-approval-btn ai-approval-approve" type="button"
+          data-approval-action="approve"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Approve</button>
+        <button class="ai-approval-btn ai-approval-reject" type="button"
+          data-approval-action="reject"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Reject</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderClarificationCard(sessionId, interrupt) {
+  const payload = interrupt.approvalPayload || {};
+  const threadId = interrupt.threadId || '';
+  const safeThreadId = escapeHtml(threadId);
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const intentSummary = escapeHtml(String(payload.intent_summary || ''));
+  const questionItems = questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('');
+  return `
+    <div class="ai-approval-card ai-clarification-card" role="region" aria-label="Clarification needed">
+      <div class="ai-approval-title">Clarification Needed</div>
+      ${intentSummary ? `<div class="ai-approval-row"><span class="ai-approval-label">Request</span><span class="ai-approval-value">${intentSummary}</span></div>` : ''}
+      ${questionItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Missing</span><ul class="ai-approval-risks ai-clarification-questions">${questionItems}</ul></div>` : ''}
+      <div class="ai-approval-note-row">
+        <label class="ai-approval-note-label" for="ai-clarification-input">Your answer</label>
+        <textarea id="ai-clarification-input" class="ai-approval-note-input ai-clarification-input" rows="2" placeholder="Provide the missing information…"></textarea>
+      </div>
+      <div class="ai-approval-actions">
+        <button class="ai-approval-btn ai-approval-approve" type="button"
+          data-clarification-action="continue"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Continue</button>
+        <button class="ai-approval-btn ai-approval-reject" type="button"
+          data-clarification-action="cancel"
+          data-thread-id="${safeThreadId}"
+          data-session-id="${escapeHtml(sessionId)}">Cancel</button>
+      </div>
+    </div>
+  `;
 }
 
 function formatAiTime(value) {
@@ -299,7 +619,10 @@ function providerNameForMessage(message) {
 
 function normalizeRunMode(value) {
   const clean = String(value || '').trim().toLowerCase();
-  return clean === 'agent' ? 'agent' : 'chat';
+  if (clean === 'agent') return 'agent';
+  if (clean === 'intent' || clean === 'rover_intent_test') return 'intent';
+  if (clean === 'workbench') return 'workbench';
+  return 'chat';
 }
 
 function sessionModeToRunMode(session) {
@@ -307,7 +630,11 @@ function sessionModeToRunMode(session) {
 }
 
 function runModeToSessionMode(runMode) {
-  return normalizeRunMode(runMode) === 'agent' ? 'agent' : 'general_chat';
+  const mode = normalizeRunMode(runMode);
+  if (mode === 'agent') return 'agent';
+  if (mode === 'intent') return 'rover_intent_test';
+  if (mode === 'workbench') return 'workbench';
+  return 'general_chat';
 }
 
 function currentRunMode() {
@@ -319,7 +646,11 @@ function messageRunMode(message) {
 }
 
 function runModeLabel(runMode) {
-  return normalizeRunMode(runMode) === 'agent' ? 'Agent' : 'Chat';
+  const mode = normalizeRunMode(runMode);
+  if (mode === 'agent') return 'Agent';
+  if (mode === 'intent') return 'Intent Test';
+  if (mode === 'workbench') return 'Workbench';
+  return 'Chat';
 }
 
 function providerSupportsAgentMode(provider) {
@@ -331,6 +662,11 @@ function providerSupportsAgentMode(provider) {
   return String(provider.provider_type || '').trim().toLowerCase() !== 'ollama';
 }
 
+function providerToolsSupportLabel(provider) {
+  if (!provider) return 'Tools: unknown';
+  return providerSupportsAgentMode(provider) ? 'Tools: supported' : 'Tools: not supported';
+}
+
 function renderRunModeToggle() {
   const provider = currentProvider();
   const runMode = currentRunMode();
@@ -340,8 +676,7 @@ function renderRunModeToggle() {
     const active = buttonRunMode === runMode;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    button.disabled = aiState.sending
-      || Boolean(aiState.activeSession?.archived_at);
+    button.disabled = isSending() || Boolean(aiState.activeSession?.archived_at);
     if (buttonRunMode === 'agent') {
       const title = agentSupported
         ? 'Use read-only rover tools when the provider supports tool calling'
@@ -530,7 +865,8 @@ async function speakAiMessage(messageId) {
     setAiStatus('Text to speech is not supported by this browser.', 'warn');
     return;
   }
-  const message = (aiState.activeSession?.messages || []).find((item) => item.id === messageId);
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const message = (activeLive?.messages || []).find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
   if (aiState.activeSpeechMessageId === messageId) {
@@ -669,7 +1005,8 @@ function renderProviderSelect() {
     )),
   ].join('');
   const active = selectedProviderId ? providerById(selectedProviderId) : defaultProvider;
-  aiEls.providerPill.textContent = `Provider: ${providerLabel(active)}`;
+  const toolsLabel = currentRunMode() === 'agent' ? ` · ${providerToolsSupportLabel(active)}` : '';
+  aiEls.providerPill.textContent = `Provider: ${providerLabel(active)}${toolsLabel}`;
 }
 
 function filteredSessions() {
@@ -751,22 +1088,30 @@ function renderMessages(options = {}) {
   const forceScrollBottom = Boolean(options.forceScrollBottom);
   const previousScrollTop = aiEls.messageList.scrollTop;
   const shouldStickToBottom = forceScrollBottom || (!preserveScroll && aiState.messageListPinnedToBottom);
-  const messages = aiState.activeSession?.messages || [];
-  const pendingAssistantId = aiState.pendingAssistantMessageId;
+  const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
+  const messages = activeLive?.messages || [];
+  const pendingAssistantId = activeLive?.pendingAssistantMessageId || '';
+  const sending = Boolean(activeLive?.sending);
   const viewingArchived = Boolean(aiState.activeSession?.archived_at);
   aiEls.sessionTitle.textContent = aiState.activeSession?.title || 'New chat';
   aiEls.renameSession.disabled = !aiState.activeSession;
   aiEls.archiveSession.disabled = !aiState.activeSession;
   aiEls.archiveSession.textContent = viewingArchived ? 'Restore' : 'Archive';
   aiEls.archiveSession.title = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
-  aiEls.retryResponse.disabled = !aiState.activeSession || aiState.sending || !messages.length || viewingArchived;
-  aiEls.stopMessage.disabled = !aiState.sending || !aiState.activeRequestAbortController;
+  aiEls.retryResponse.disabled = !aiState.activeSession || sending || !messages.length || viewingArchived;
+  aiEls.stopMessage.disabled = !sending || !activeLive?.abortController;
   aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
   aiEls.retryResponse.setAttribute('aria-label', 'Retry the last model response');
   aiEls.messageInput.disabled = viewingArchived;
   aiEls.messageInput.placeholder = viewingArchived
     ? 'Restore this archived chat to continue messaging'
-    : (currentRunMode() === 'agent' ? 'Ask the read-only rover agent' : 'Ask the configured General Chat provider');
+    : currentRunMode() === 'agent'
+      ? 'Ask the read-only rover agent'
+      : currentRunMode() === 'intent'
+        ? 'Describe a rover task to parse into structured intent (non-executing)'
+        : currentRunMode() === 'workbench'
+          ? 'Describe a rover mission to plan (workbench mode — requires operator approval)'
+          : 'Ask the configured General Chat provider';
   aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
   aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
   renderProviderSelect();
@@ -781,6 +1126,9 @@ function renderMessages(options = {}) {
     aiEls.messageList.innerHTML = `<div class="ai-empty-state">${viewingArchived ? 'Archived chat has no messages.' : 'Start a new conversation.'}</div>`;
     return;
   }
+  const pendingInterrupt = activeLive?.pendingInterrupt || null;
+  const sessionIdForApproval = aiState.activeSession?.id || '';
+
   aiEls.messageList.innerHTML = messages.map((message) => {
     const isPendingAssistant = message.role === 'assistant'
       && message.id === pendingAssistantId
@@ -847,7 +1195,9 @@ function renderMessages(options = {}) {
             </span>
             <span class="ai-thinking-text">Thinking</span>
           </span>`
-        : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}</div>
+        : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}
+        ${message.role === 'assistant' ? renderAgentToolPanel(message) : ''}
+        ${message.role === 'assistant' && messageRunMode(message) === 'intent' ? renderIntentPanel(message) : ''}</div>
       ${message.role === 'assistant'
         ? (() => {
             const stats = messageStats(message);
@@ -856,7 +1206,7 @@ function renderMessages(options = {}) {
         : ''}
     </article>
   `;
-  }).join('');
+  }).join('') + (pendingInterrupt ? renderWorkbenchApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
   postRenderMessages();
   aiEls.messageList.scrollTop = shouldStickToBottom
     ? aiEls.messageList.scrollHeight
@@ -864,21 +1214,24 @@ function renderMessages(options = {}) {
   updateMessageListScrollIntent();
 }
 
-function pushLocalPendingMessages(content, runMode = currentRunMode()) {
-  if (!aiState.activeSession) return;
+function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
+  const live = liveStateFor(sessionId);
   const now = Date.now() / 1000;
   const pendingUserId = `pending-user-${crypto.randomUUID()}`;
   const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
-  aiState.pendingUserMessageId = pendingUserId;
-  aiState.pendingAssistantMessageId = pendingAssistantId;
-  aiState.activeSession.messages = [
-    ...(aiState.activeSession.messages || []),
+  live.pendingUserMessageId = pendingUserId;
+  live.pendingAssistantMessageId = pendingAssistantId;
+  const providerId = aiState.activeSession?.id === sessionId
+    ? (activeProviderId() || generalChatProviderId())
+    : generalChatProviderId();
+  live.messages = [
+    ...live.messages,
     {
       id: pendingUserId,
       role: 'user',
       content,
       created_at: now,
-      provider_id: activeProviderId() || generalChatProviderId(),
+      provider_id: providerId,
       model_id: '',
       meta: { run_mode: normalizeRunMode(runMode) },
     },
@@ -887,7 +1240,7 @@ function pushLocalPendingMessages(content, runMode = currentRunMode()) {
       role: 'assistant',
       content: '',
       created_at: now,
-      provider_id: activeProviderId() || generalChatProviderId(),
+      provider_id: providerId,
       model_id: '',
       latency_ms: null,
       meta: { interrupted: false, run_mode: normalizeRunMode(runMode) },
@@ -895,17 +1248,17 @@ function pushLocalPendingMessages(content, runMode = currentRunMode()) {
   ];
 }
 
-function pushLocalRetryPendingAssistant() {
-  if (!aiState.activeSession) return;
+function pushLocalRetryPendingAssistant(sessionId) {
+  const live = liveStateFor(sessionId);
   const now = Date.now() / 1000;
   const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
-  const messages = [...(aiState.activeSession.messages || [])];
+  const messages = [...live.messages];
   if (messages[messages.length - 1]?.role === 'assistant') {
     messages.pop();
   }
   const runMode = messageRunMode(messages[messages.length - 1]);
-  aiState.pendingAssistantMessageId = pendingAssistantId;
-  aiState.activeSession.messages = [
+  live.pendingAssistantMessageId = pendingAssistantId;
+  live.messages = [
     ...messages,
     {
       id: pendingAssistantId,
@@ -920,32 +1273,60 @@ function pushLocalRetryPendingAssistant() {
   ];
 }
 
-function replacePendingUserMessage(serverMessage) {
-  if (!aiState.activeSession || !aiState.pendingUserMessageId) return;
-  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
-    message.id === aiState.pendingUserMessageId ? serverMessage : message
+function replacePendingUserMessage(sessionId, serverMessage) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingUserMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingUserMessageId ? serverMessage : message
   ));
 }
 
-function appendAssistantDelta(delta) {
-  if (!aiState.activeSession || !aiState.pendingAssistantMessageId) return;
-  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
-    message.id === aiState.pendingAssistantMessageId
+function appendAssistantDelta(sessionId, delta) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingAssistantMessageId
       ? { ...message, content: `${message.content || ''}${delta}` }
       : message
   ));
 }
 
-function replacePendingAssistantMessage(serverMessage) {
-  if (!aiState.activeSession || !aiState.pendingAssistantMessageId) return;
-  aiState.activeSession.messages = (aiState.activeSession.messages || []).map((message) => (
-    message.id === aiState.pendingAssistantMessageId ? serverMessage : message
+function replacePendingAssistantMessage(sessionId, serverMessage) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => (
+    message.id === live.pendingAssistantMessageId ? serverMessage : message
   ));
 }
 
-function clearPendingMessageIds() {
-  aiState.pendingUserMessageId = '';
-  aiState.pendingAssistantMessageId = '';
+function updatePendingAgentToolCall(sessionId, toolCall, status) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId || !toolCall) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    const progress = Array.isArray(meta.agent_tool_progress) ? [...meta.agent_tool_progress] : [];
+    const id = String(toolCall.id || `${toolCall.name || 'tool'}-${progress.length}`);
+    const index = progress.findIndex((item) => String(item.id || '') === id);
+    const nextCall = {
+      ...(index >= 0 ? progress[index] : {}),
+      ...toolCall,
+      id,
+      status,
+    };
+    if (index >= 0) progress[index] = nextCall;
+    else progress.push(nextCall);
+    meta.agent_tool_progress = progress;
+    return { ...message, meta };
+  });
+}
+
+function clearSessionLiveState(sessionId) {
+  const live = liveStateFor(sessionId);
+  live.sending = false;
+  live.abortController = null;
+  live.pendingUserMessageId = '';
+  live.pendingAssistantMessageId = '';
 }
 
 async function readJsonLinesStream(response, onEvent) {
@@ -971,27 +1352,34 @@ async function readJsonLinesStream(response, onEvent) {
   }
 }
 
-function handleAiStreamEvent(eventData) {
+function handleAiStreamEvent(sessionId, eventData) {
   let autoSpeakMessageId = '';
   if (eventData.type === 'user_message' && eventData.message) {
-    replacePendingUserMessage(eventData.message);
+    replacePendingUserMessage(sessionId, eventData.message);
   } else if (eventData.type === 'assistant_delta') {
-    appendAssistantDelta(String(eventData.delta || ''));
+    appendAssistantDelta(sessionId, String(eventData.delta || ''));
   } else if (eventData.type === 'assistant_message' && eventData.message) {
-    replacePendingAssistantMessage(eventData.message);
-    if (aiTtsSettings().enabled !== false && aiTtsSettings().auto_read) {
+    replacePendingAssistantMessage(sessionId, eventData.message);
+    if (aiState.activeSession?.id === sessionId && aiTtsSettings().enabled !== false && aiTtsSettings().auto_read) {
       autoSpeakMessageId = eventData.message.id;
     }
+  } else if (eventData.type === 'agent_tool_start') {
+    updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'running');
+  } else if (eventData.type === 'agent_tool_result') {
+    updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
   } else if (eventData.type === 'error') {
     throw new Error(String(eventData.detail || 'Chat streaming failed.'));
   }
-  renderMessages();
+  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI
+  if (aiState.activeSession?.id === sessionId) {
+    renderMessages();
+  }
   if (autoSpeakMessageId) {
     speakAiMessage(autoSpeakMessageId).catch((error) => setAiStatus(error.message, 'warn'));
   }
 }
 
-async function streamAiRequest(url, payload, abortController) {
+async function streamAiRequest(url, payload, abortController, sessionId) {
   const response = await fetch(url, withAiTimezone({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1008,7 +1396,7 @@ async function streamAiRequest(url, payload, abortController) {
     }
     throw new Error(detail || `${response.status}`);
   }
-  await readJsonLinesStream(response, handleAiStreamEvent);
+  await readJsonLinesStream(response, (event) => handleAiStreamEvent(sessionId, event));
 }
 
 async function deleteSession(sessionId) {
@@ -1016,6 +1404,7 @@ async function deleteSession(sessionId) {
   const title = session?.title || 'this chat';
   if (!window.confirm(`Delete "${title}" permanently? This cannot be undone.`)) return;
   await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/purge`, { method: 'DELETE' });
+  _sessionLive.delete(sessionId);
   if (aiState.activeSession?.id === sessionId) {
     aiState.activeSession = null;
   }
@@ -1067,13 +1456,45 @@ async function createSession(options = {}) {
 async function openSession(sessionId) {
   const session = aiState.sessions.find((item) => item.id === sessionId);
   const includeArchived = Boolean(session?.archived_at);
+  const live = liveStateFor(sessionId);
+
+  if (live.sending) {
+    // Session is actively streaming in the background — switch the view to it without reloading
+    // messages from server (the in-progress stream owns the messages array right now).
+    aiState.activeSession = session || aiState.activeSession;
+    aiState.runMode = sessionModeToRunMode(session);
+    aiState.messageListPinnedToBottom = true;
+    renderSessionList();
+    renderMessages({ forceScrollBottom: true });
+    setAiStatus('Response in progress…', 'ok');
+    return;
+  }
+
   const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
   aiState.activeSession = result.session;
+  // Initialise (or refresh) the live state from the server's message list.
+  live.messages = [...(result.session.messages || [])];
   aiState.runMode = sessionModeToRunMode(result.session);
   aiState.messageListPinnedToBottom = true;
   renderSessionList();
   renderMessages({ forceScrollBottom: true });
   setAiStatus('Ready.', 'ok');
+}
+
+// Fetch a session's latest data from the server and update its live state and
+// (if it is the currently viewed session) also update aiState.activeSession.
+// Called after a stream finishes — including for background sessions.
+async function refreshSessionLive(sessionId) {
+  const listSession = aiState.sessions.find((s) => s.id === sessionId);
+  const includeArchived = Boolean(listSession?.archived_at);
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
+  const live = liveStateFor(sessionId);
+  live.messages = [...(result.session.messages || [])];
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = result.session;
+    renderMessages({ forceScrollBottom: true });
+  }
+  return result.session;
 }
 
 async function renameSession() {
@@ -1142,6 +1563,7 @@ async function toggleSessionArchive(sessionId) {
     await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/restore`, { method: 'POST' });
     aiState.showArchived = false;
     aiState.activeSession = null;
+    _sessionLive.delete(sessionId);
     await loadSessions();
     await openSession(sessionId);
     setAiStatus('Session restored.', 'ok');
@@ -1153,6 +1575,7 @@ async function toggleSessionArchive(sessionId) {
     aiState.activeSession = null;
     aiState.showArchived = true;
   }
+  _sessionLive.delete(sessionId);
   await loadSessions(false);
   renderMessages();
   setAiStatus('Session archived.', 'ok');
@@ -1160,7 +1583,9 @@ async function toggleSessionArchive(sessionId) {
 
 async function setArchiveFilter(showArchived) {
   aiState.showArchived = showArchived;
-  aiState.activeSession = null;
+  if (!showArchived || !aiState.activeSession?.archived_at) {
+    aiState.activeSession = null;
+  }
   renderMessages();
   await loadSessions(true);
   setAiStatus(showArchived ? 'Viewing archived chats.' : 'Viewing active chats.', 'ok');
@@ -1202,101 +1627,149 @@ async function updateSessionRunMode(runMode) {
 
 async function sendMessage(event) {
   event.preventDefault();
-  if (aiState.sending) return;
+  // Per-session guard: only block sending if THIS session is already streaming.
+  const activeId = aiState.activeSession?.id || '';
+  if (activeId && liveStateFor(activeId).sending) return;
   const content = aiEls.messageInput.value.trim();
   if (!content) return;
   const runMode = currentRunMode();
-  aiState.sending = true;
-  const abortController = new AbortController();
-  aiState.activeRequestAbortController = abortController;
+
   aiEls.messageInput.value = '';
   resizeComposer();
-  if (aiState.activeSession) {
-    pushLocalPendingMessages(content, runMode);
+
+  let sessionId = activeId;
+  const abortController = new AbortController();
+
+  if (sessionId) {
+    const live = liveStateFor(sessionId);
+    live.sending = true;
+    live.abortController = abortController;
+    pushLocalPendingMessages(sessionId, content, runMode);
   }
   renderMessages();
-  setAiStatus(runMode === 'agent' ? 'Agent is checking rover context.' : 'Waiting for model response.');
-  let sessionId = aiState.activeSession?.id || '';
+  setAiStatus(
+    runMode === 'agent' ? 'Agent is checking rover context.'
+    : runMode === 'intent' ? 'Parsing rover intent...'
+    : runMode === 'workbench' ? 'Workbench graph starting...'
+    : 'Waiting for model response.'
+  );
+
   try {
     if (!sessionId) {
       const createdSession = await createSession({ providerId: activeProviderId() });
       sessionId = createdSession.id;
+      // createSession calls openSession internally, so activeSession is now set.
+      const live = liveStateFor(sessionId);
+      live.sending = true;
+      live.abortController = abortController;
     }
     if (!aiState.activeSession) {
       await openSession(sessionId);
-      pushLocalPendingMessages(content, runMode);
+      const live = liveStateFor(sessionId);
+      live.sending = true;
+      live.abortController = abortController;
+      pushLocalPendingMessages(sessionId, content, runMode);
       renderMessages();
     }
-    await streamAiRequest(
-      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-      { content, run_mode: runMode },
-      abortController,
-    );
-    await openSession(sessionId);
-    await loadSessions();
-    setAiStatus('Ready.', 'ok');
+    if (runMode === 'intent') {
+      await sendIntentTestRequest(sessionId, content, abortController);
+    } else if (runMode === 'workbench') {
+      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else {
+      await streamAiRequest(
+        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+        { content, run_mode: runMode },
+        abortController,
+        sessionId,
+      );
+    }
+    // Refresh from server and update live state (works even if user switched away).
+    // Skip refresh if workbench is suspended at interrupt (pendingInterrupt is set).
+    if (!liveStateFor(sessionId).pendingInterrupt) {
+      await refreshSessionLive(sessionId);
+      await loadSessions();
+    }
+    if (aiState.activeSession?.id === sessionId && !liveStateFor(sessionId).pendingInterrupt) {
+      setAiStatus('Ready.', 'ok');
+    }
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const message = isAbort ? 'Response interrupted.' : error.message;
-    setAiStatus(message, isAbort ? 'warn' : 'danger');
-    if (sessionId) {
-      await openSession(sessionId);
+    if (aiState.activeSession?.id === sessionId) {
       setAiStatus(message, isAbort ? 'warn' : 'danger');
+    }
+    if (sessionId) {
+      await refreshSessionLive(sessionId).catch(() => {});
+      await loadSessions().catch(() => {});
+      if (aiState.activeSession?.id === sessionId) {
+        setAiStatus(message, isAbort ? 'warn' : 'danger');
+      }
     } else {
       renderMessages();
     }
   } finally {
-    aiState.sending = false;
-    aiState.activeRequestAbortController = null;
-    clearPendingMessageIds();
+    if (sessionId) {
+      clearSessionLiveState(sessionId);
+    }
     renderMessages();
     aiEls.messageInput.focus();
   }
 }
 
 async function resendMessage(messageId) {
-  if (!aiState.activeSession || aiState.sending) return;
-  const message = (aiState.activeSession.messages || []).find((item) => item.id === messageId);
+  const sessionId = aiState.activeSession?.id;
+  if (!sessionId || liveStateFor(sessionId).sending) return;
+  const live = liveStateFor(sessionId);
+  const message = live.messages.find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
   const runMode = currentRunMode();
-  const sessionId = aiState.activeSession.id;
-  aiState.sending = true;
+  live.sending = true;
   const abortController = new AbortController();
-  aiState.activeRequestAbortController = abortController;
-  pushLocalPendingMessages(content, runMode);
+  live.abortController = abortController;
+  pushLocalPendingMessages(sessionId, content, runMode);
   renderMessages();
   setAiStatus('Resending message.');
   try {
-    await streamAiRequest(
-      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-      { content, run_mode: runMode },
-      abortController,
-    );
-    await openSession(sessionId);
-    await loadSessions();
-    setAiStatus('Ready.', 'ok');
+    if (runMode === 'intent') {
+      await sendIntentTestRequest(sessionId, content, abortController);
+    } else if (runMode === 'workbench') {
+      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else {
+      await streamAiRequest(
+        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+        { content, run_mode: runMode },
+        abortController,
+        sessionId,
+      );
+    }
+    // Workbench sessions can pause at interrupt() waiting for operator input.
+    if (!liveStateFor(sessionId).pendingInterrupt) {
+      await refreshSessionLive(sessionId);
+      await loadSessions();
+      if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
+    }
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const messageText = isAbort ? 'Response interrupted.' : error.message;
-    setAiStatus(messageText, isAbort ? 'warn' : 'danger');
-    await openSession(sessionId);
-    setAiStatus(messageText, isAbort ? 'warn' : 'danger');
+    if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
+    await refreshSessionLive(sessionId).catch(() => {});
+    await loadSessions().catch(() => {});
+    if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
   } finally {
-    aiState.sending = false;
-    aiState.activeRequestAbortController = null;
-    clearPendingMessageIds();
+    clearSessionLiveState(sessionId);
     renderMessages();
   }
 }
 
 async function retryResponse() {
-  if (!aiState.activeSession || aiState.sending) return;
-  const sessionId = aiState.activeSession.id;
-  aiState.sending = true;
+  const sessionId = aiState.activeSession?.id;
+  if (!sessionId || liveStateFor(sessionId).sending) return;
+  const live = liveStateFor(sessionId);
+  live.sending = true;
   const abortController = new AbortController();
-  aiState.activeRequestAbortController = abortController;
-  pushLocalRetryPendingAssistant();
+  live.abortController = abortController;
+  pushLocalRetryPendingAssistant(sessionId);
   renderMessages();
   setAiStatus('Retrying last model response.');
   try {
@@ -1304,20 +1777,20 @@ async function retryResponse() {
       `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`,
       {},
       abortController,
+      sessionId,
     );
-    await openSession(sessionId);
+    await refreshSessionLive(sessionId);
     await loadSessions();
-    setAiStatus('Ready.', 'ok');
+    if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const message = isAbort ? 'Response interrupted.' : error.message;
-    setAiStatus(message, isAbort ? 'warn' : 'danger');
-    await openSession(sessionId);
-    setAiStatus(message, isAbort ? 'warn' : 'danger');
+    if (aiState.activeSession?.id === sessionId) setAiStatus(message, isAbort ? 'warn' : 'danger');
+    await refreshSessionLive(sessionId).catch(() => {});
+    await loadSessions().catch(() => {});
+    if (aiState.activeSession?.id === sessionId) setAiStatus(message, isAbort ? 'warn' : 'danger');
   } finally {
-    aiState.sending = false;
-    aiState.activeRequestAbortController = null;
-    clearPendingMessageIds();
+    clearSessionLiveState(sessionId);
     renderMessages();
   }
 }
@@ -1325,9 +1798,9 @@ async function retryResponse() {
 function updateComposerState() {
   if (!aiEls.sendMessage) return;
   const hasContent = Boolean(aiEls.messageInput.value.trim());
-  aiEls.sendMessage.disabled = aiState.sending || !hasContent || Boolean(aiState.activeSession?.archived_at);
+  aiEls.sendMessage.disabled = isSending() || !hasContent || Boolean(aiState.activeSession?.archived_at);
   if (aiEls.stopMessage) {
-    aiEls.stopMessage.disabled = !aiState.sending || !aiState.activeRequestAbortController;
+    aiEls.stopMessage.disabled = !isSending() || !activeAbortController();
   }
 }
 
@@ -1564,6 +2037,36 @@ function bindAi() {
   });
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
+    // Workbench clarification card buttons
+    const clarificationBtn = event.target.closest('[data-clarification-action]');
+    if (clarificationBtn) {
+      const action = clarificationBtn.dataset.clarificationAction;
+      const threadId = clarificationBtn.dataset.threadId || '';
+      const sid = clarificationBtn.dataset.sessionId || '';
+      const answerInput = document.getElementById('ai-clarification-input');
+      const answer = answerInput ? answerInput.value.trim() : '';
+      if (sid && threadId) {
+        resumeWorkbenchApproval(sid, threadId, action, answer)
+          .catch((err) => setAiStatus(err.message || 'Clarification failed.', 'danger'));
+      }
+      return;
+    }
+
+    // Workbench approval card buttons
+    const approvalBtn = event.target.closest('[data-approval-action]');
+    if (approvalBtn) {
+      const decision = approvalBtn.dataset.approvalAction;
+      const threadId = approvalBtn.dataset.threadId || '';
+      const sid = approvalBtn.dataset.sessionId || '';
+      const noteInput = document.getElementById('ai-approval-note-input');
+      const note = noteInput ? noteInput.value.trim() : '';
+      if (sid && threadId && (decision === 'approve' || decision === 'reject')) {
+        resumeWorkbenchApproval(sid, threadId, decision, note)
+          .catch((err) => setAiStatus(err.message || 'Approval failed.', 'danger'));
+      }
+      return;
+    }
+
     const action = event.target.closest('[data-message-action]');
     if (!action) return;
     if (action.dataset.messageAction === 'toggle-speech') {
@@ -1580,8 +2083,7 @@ function bindAi() {
   });
   aiEls.retryResponse.addEventListener('click', () => retryResponse().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.stopMessage.addEventListener('click', () => {
-    if (!aiState.activeRequestAbortController) return;
-    aiState.activeRequestAbortController.abort();
+    activeAbortController()?.abort();
   });
   window.addEventListener('beforeunload', cancelAiSpeech);
 }
