@@ -61,7 +61,8 @@ class AIContextService:
 
         lower = user_message.lower()
         agent_mode = str(run_mode or "").strip().lower() == "agent"
-        if not agent_mode:
+        eager_detail_mode = not agent_mode
+        if eager_detail_mode:
             if "in front" in lower or "ahead" in lower:
                 max_distance, fov = _parse_front_query(lower)
                 details["objects_in_front"] = self._find_objects_in_front_from_payload(
@@ -83,11 +84,11 @@ class AIContextService:
                 details["objects_by_kind"] = self._find_objects_by_kind_from_payload(scene_payload, kind)
                 providers.append("find_objects_by_kind")
         replay_enabled = clean_source_controls.get("replay_reports", True)
-        if replay_enabled and ("recent" in lower or "happened" in lower):
+        if eager_detail_mode and replay_enabled and ("recent" in lower or "happened" in lower):
             details["current_replay"] = self.get_current_replay_summary()
             details["recent_telemetry"] = self.get_recent_telemetry(seconds=120, limit=10)
             providers.extend(["get_current_replay_summary", "get_recent_telemetry"])
-        replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name) if replay_enabled else {}
+        replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name) if eager_detail_mode and replay_enabled else {}
         if replay_context.get("available"):
             details["replay_sessions"] = replay_context
             providers.append("get_replay_session_context")
@@ -133,7 +134,7 @@ class AIContextService:
         snapshot = await self._runtime.state_store.snapshot()
         telemetry = snapshot.get("telemetry") or {}
         broker = snapshot.get("broker") or {}
-        return {
+        current = {
             "telemetry_fresh": not bool(broker.get("telemetry_stale", True)),
             "last_telemetry_ts": broker.get("last_telemetry_ts") or 0.0,
             "telemetry_age_s": _age_seconds(broker.get("last_telemetry_ts")),
@@ -148,6 +149,10 @@ class AIContextService:
             "last_camera_ts": broker.get("last_camera_ts") or 0.0,
             "camera_age_s": _age_seconds(broker.get("last_camera_ts")),
         }
+        last_known = self.get_last_known_rover_state()
+        if last_known:
+            current["last_known_replay_state"] = last_known
+        return current
 
     async def get_runtime_context(self) -> dict[str, Any]:
         snapshot = await self._runtime.state_store.snapshot()
@@ -383,6 +388,35 @@ class AIContextService:
 
     def get_recent_telemetry(self, seconds: int = 120, limit: int = 20) -> list[dict[str, Any]]:
         return self._runtime.replay_store.get_recent_telemetry(seconds=seconds, limit=limit)
+
+    def get_last_known_rover_state(self) -> dict[str, Any] | None:
+        analytics = getattr(self._runtime, "replay_analytics", None)
+        if analytics is None:
+            return None
+        sessions = analytics.list_sessions(limit=1, order="desc")
+        session = sessions[0] if sessions else None
+        if not isinstance(session, dict):
+            return None
+        session_id = str(session.get("session_id") or "").strip()
+        if not session_id:
+            return None
+        sample = self._runtime.replay_store.get_latest_telemetry_sample(session_id)
+        if not isinstance(sample, dict):
+            return None
+        payload = sample.get("payload") if isinstance(sample.get("payload"), dict) else {}
+        return {
+            "session_id": session_id,
+            "session_started_at": session.get("started_at"),
+            "session_ended_at": session.get("ended_at"),
+            "sample_ts": sample.get("ts"),
+            "position_frame": sample.get("position_frame") or "unknown",
+            "position": sample.get("position") or {},
+            "gps": sample.get("gps") or {},
+            "heading_deg": sample.get("heading_deg"),
+            "speed": payload.get("speed") or {},
+            "battery": payload.get("power") or {},
+            "camera": payload.get("camera") or {},
+        }
 
     def get_replay_session_context(self, user_message: str, *, timezone_name: str = "") -> dict[str, Any]:
         analytics = getattr(self._runtime, "replay_analytics", None)

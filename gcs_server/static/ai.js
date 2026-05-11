@@ -7,6 +7,8 @@ const aiState = {
   showArchived: false,
   runMode: 'chat',
   messageListPinnedToBottom: true,
+  slashMenuItems: [],
+  slashMenuIndex: 0,
   activeSpeechMessageId: '',
   activeSpeechUtterance: null,
   activeSpeechAudio: null,
@@ -61,6 +63,109 @@ const AI_SOURCE_CONTROL_META = {
   },
 };
 
+const AI_AGENT_TOOL_DEFINITIONS = [
+  {
+    name: 'get_current_rover_state',
+    permission: 'read_only',
+    description: 'Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.',
+  },
+  {
+    name: 'get_scene_summary',
+    permission: 'read_only',
+    description: 'Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.',
+  },
+  {
+    name: 'query_objects_in_front',
+    permission: 'read_only',
+    description: 'Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds.',
+  },
+  {
+    name: 'query_objects_near',
+    permission: 'read_only',
+    description: 'Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings.',
+  },
+  {
+    name: 'query_objects_by_kind',
+    permission: 'read_only',
+    description: 'Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.',
+  },
+  {
+    name: 'query_objects_to_left',
+    permission: 'read_only',
+    description: 'Find map objects to the rover\'s left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.',
+  },
+  {
+    name: 'query_objects_to_right',
+    permission: 'read_only',
+    description: 'Find map objects to the rover\'s right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.',
+  },
+  {
+    name: 'query_nearest_objects',
+    permission: 'read_only',
+    description: 'Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds.',
+  },
+  {
+    name: 'resolve_spatial_target',
+    permission: 'planning',
+    description: 'Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects.',
+  },
+  {
+    name: 'get_current_mission_state',
+    permission: 'read_only',
+    description: 'Get the current mission state. This is read-only.',
+  },
+  {
+    name: 'get_current_replay_summary',
+    permission: 'read_only',
+    description: 'Get the active replay session summary.',
+  },
+  {
+    name: 'get_recent_telemetry',
+    permission: 'read_only',
+    description: 'Get recent telemetry samples from the active replay session.',
+  },
+  {
+    name: 'list_replay_sessions',
+    permission: 'analysis',
+    description: 'List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.',
+  },
+  {
+    name: 'resolve_replay_sessions',
+    permission: 'analysis',
+    description: 'Resolve a natural-language replay session selector such as all sessions, latest 5 sessions, first session, or a date-based selector into explicit session_ids.',
+  },
+  {
+    name: 'get_replay_session_summary',
+    permission: 'read_only',
+    description: 'Get a replay session summary by session_id.',
+  },
+  {
+    name: 'get_replay_session_metrics',
+    permission: 'analysis',
+    description: 'Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.',
+  },
+  {
+    name: 'get_replay_session_path',
+    permission: 'analysis',
+    description: 'Get downsampled replay path points for a session_id.',
+  },
+  {
+    name: 'search_replay_session_events',
+    permission: 'analysis',
+    description: 'Search runtime events within a replay session.',
+  },
+  {
+    name: 'compare_replay_sessions',
+    permission: 'analysis',
+    description: 'Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
+  },
+  {
+    name: 'aggregate_replay_sessions',
+    permission: 'analysis',
+    description: 'Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
+  },
+];
+
 // Per-session live state — keyed by session ID.
 // Each entry tracks: messages (including in-progress pending), sending flag,
 // abort controller, and pending message IDs. This allows multiple sessions to
@@ -79,6 +184,8 @@ function liveStateFor(sessionId) {
       // Phase 2: workbench interrupt/resume state
       pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
       workbenchThreadId: '',
+      scrollTop: 0,
+      pinnedToBottom: true,
     });
   }
   return _sessionLive.get(sessionId);
@@ -118,11 +225,17 @@ const aiEls = {
   providerPill: document.getElementById('ai-provider-pill'),
   statusPill: document.getElementById('ai-status-pill'),
   sourceControls: document.getElementById('ai-source-controls'),
+  sourcesControl: document.querySelector('[data-ai-sources-control]'),
+  sourcesToggle: document.getElementById('ai-sources-toggle'),
+  sourcesToggleCount: document.getElementById('ai-sources-toggle-count'),
+  sourcesPopover: document.getElementById('ai-sources-popover'),
+  sourcesPopoverCount: document.getElementById('ai-sources-popover-count'),
   renameSession: document.getElementById('ai-rename-session'),
   archiveSession: document.getElementById('ai-archive-session'),
   messageList: document.getElementById('ai-message-list'),
   messageForm: document.getElementById('ai-message-form'),
   messageInput: document.getElementById('ai-message-input'),
+  slashMenu: document.getElementById('ai-slash-menu'),
   retryResponse: document.getElementById('ai-retry-response'),
   stopMessage: document.getElementById('ai-stop-message'),
   sendMessage: document.getElementById('ai-send-message'),
@@ -439,10 +552,15 @@ function renderRetrievalPanel(message) {
   const request = meta.retrieval_request || {};
   const sources = Array.isArray(meta.retrieved_sources) ? meta.retrieved_sources : [];
   if (!sources.length) return '';
+  const citations = Array.isArray(meta.retrieval_citations) ? meta.retrieval_citations : [];
+  const loadedRefs = Array.isArray(meta.loaded_data_refs) ? meta.loaded_data_refs : [];
+  const usedSources = sources.filter((source) => source?.requested || source?.loaded || source?.status === 'loaded_summary');
+  if (!usedSources.length && !citations.length && !loadedRefs.length) return '';
+  const visibleSources = usedSources.length ? usedSources : sources;
 
   const enabled = Array.isArray(request.enabled_sources) ? request.enabled_sources : [];
   const scope = String(request.request_scope || '');
-  const rows = sources.map((source) => {
+  const rows = visibleSources.map((source) => {
     const label = AI_SOURCE_CONTROL_META[source.source]?.label || source.source || 'source';
     const status = source.status || 'planned';
     const requested = source.requested ? '<span class="ai-retrieval-pill">lazy</span>' : '';
@@ -478,6 +596,7 @@ function renderSourceControls() {
   const disabled = !session || Boolean(session.archived_at) || isSending();
   const sourceKeys = Object.keys(AI_SOURCE_CONTROL_META);
   const enabledCount = sourceKeys.filter((key) => sourceControls[key]).length;
+  const totalCount = sourceKeys.length;
   const items = sourceKeys.map((key) => {
     const meta = AI_SOURCE_CONTROL_META[key];
     return `
@@ -495,19 +614,44 @@ function renderSourceControls() {
       </label>
     `;
   }).join('');
-  aiEls.sourceControls.innerHTML = `
-    <div class="ai-source-controls-head">
-      <div>
-        <p class="section-kicker">Phase 4</p>
-        <h3>Source Controls</h3>
-      </div>
-      <span class="pill">${enabledCount}/${sourceKeys.length} enabled</span>
-    </div>
-    <p class="ai-source-controls-note">
-      These toggles are stored per session and now flow into chat, agent, and workbench retrieval scaffolding. Unwired sources remain visible as planned surfaces for testing.
-    </p>
-    <div class="ai-source-controls-grid">${items}</div>
-  `;
+  aiEls.sourceControls.innerHTML = items;
+  if (aiEls.sourcesToggleCount) {
+    aiEls.sourcesToggleCount.textContent = `${enabledCount}/${totalCount}`;
+  }
+  if (aiEls.sourcesPopoverCount) {
+    aiEls.sourcesPopoverCount.textContent = `${enabledCount}/${totalCount} enabled`;
+  }
+  if (aiEls.sourcesToggle) {
+    aiEls.sourcesToggle.disabled = !session;
+    aiEls.sourcesToggle.classList.toggle('has-enabled', enabledCount > 0);
+    if (!session) closeSourcesPopover();
+  }
+}
+
+function isSourcesPopoverOpen() {
+  return aiEls.sourcesPopover && !aiEls.sourcesPopover.hidden;
+}
+
+function openSourcesPopover(options = {}) {
+  if (!aiEls.sourcesPopover || !aiEls.sourcesToggle) return;
+  if (aiEls.sourcesToggle.disabled) return;
+  aiEls.sourcesPopover.hidden = false;
+  aiEls.sourcesToggle.setAttribute('aria-expanded', 'true');
+  if (options.focusFirst) {
+    const firstControl = aiEls.sourcesPopover.querySelector('input, button');
+    firstControl?.focus();
+  }
+}
+
+function closeSourcesPopover() {
+  if (!aiEls.sourcesPopover || !aiEls.sourcesToggle) return;
+  aiEls.sourcesPopover.hidden = true;
+  aiEls.sourcesToggle.setAttribute('aria-expanded', 'false');
+}
+
+function toggleSourcesPopover() {
+  if (isSourcesPopoverOpen()) closeSourcesPopover();
+  else openSourcesPopover();
 }
 
 async function sendIntentTestRequest(sessionId, content, abortController) {
@@ -530,6 +674,198 @@ async function sendIntentTestRequest(sessionId, content, abortController) {
     if (result.assistant_message) msgs.push(result.assistant_message);
     live.messages = msgs;
   }
+}
+
+async function sendSessionCommand(sessionId, command) {
+  const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/commands`, withAiTimezone({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command }),
+  }));
+  if (response.ok) {
+    return response.json();
+  }
+  if (response.status === 404) {
+    return runLocalSessionCommand(sessionId, command);
+  }
+  const data = await response.json().catch(() => ({}));
+  throw new Error(data.detail || `Command failed (${response.status})`);
+}
+
+function toolPermissionLabel(value) {
+  const labels = {
+    read_only: 'read-only',
+    analysis: 'analysis',
+    planning: 'planning',
+    command_staging: 'command staging',
+    execution: 'execution',
+  };
+  const key = String(value || '').trim().toLowerCase();
+  return labels[key] || key || 'unknown';
+}
+
+function formatRetrievalSurfacesMarkdown(session) {
+  const sourceControls = normalizeSourceControls(session?.source_controls);
+  const enabled = Object.entries(AI_SOURCE_CONTROL_META).filter(([key]) => sourceControls[key]);
+  const disabled = Object.entries(AI_SOURCE_CONTROL_META).filter(([key]) => !sourceControls[key]);
+  const lines = ['## Retrieval Surfaces', ''];
+  if (enabled.length) {
+    lines.push('Enabled for this session:');
+    enabled.forEach(([key, meta]) => {
+      const status = key === 'web_research' ? 'planned' : 'available';
+      lines.push(`- \`${meta.label}\`: ${status}`);
+      if (meta.description) {
+        lines.push(`  ${meta.description}`);
+      }
+    });
+  } else {
+    lines.push('No retrieval surfaces are enabled for this session.');
+  }
+  if (disabled.length) {
+    lines.push('', 'Disabled for this session:');
+    disabled.forEach(([, meta]) => {
+      lines.push(`- \`${meta.label}\``);
+    });
+  }
+  return lines.join('\n').trim();
+}
+
+function formatToolCatalogMarkdown() {
+  const lines = ['## Agent Tools', '', 'Available in agent mode:'];
+  AI_AGENT_TOOL_DEFINITIONS.forEach((tool) => {
+    lines.push(`- \`${tool.name}\` (${toolPermissionLabel(tool.permission)}): ${tool.description}`);
+  });
+  return lines.join('\n').trim();
+}
+
+function formatAgentToolActivityMarkdown(sessionId) {
+  const messages = liveStateFor(sessionId).messages || [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (String(message?.role || '') !== 'assistant') continue;
+    const meta = message?.meta && typeof message.meta === 'object' ? message.meta : {};
+    let toolCalls = Array.isArray(meta.agent_tool_progress) ? meta.agent_tool_progress : [];
+    if (!toolCalls.length && Array.isArray(meta.tool_calls)) {
+      toolCalls = meta.tool_calls;
+    }
+    if (!toolCalls.length) continue;
+    const lines = ['## Agent Tool Activity', ''];
+    if (message.created_at) {
+      lines.push(`Latest assistant message: \`${formatAiTime(message.created_at)}\``);
+      lines.push('');
+    }
+    toolCalls.forEach((call) => {
+      if (!call || typeof call !== 'object') return;
+      const name = String(call.name || call.tool || 'tool');
+      const status = String(call.status || (call.result != null ? 'complete' : 'recorded'));
+      lines.push(`- \`${name}\`: ${status}`);
+    });
+    return lines.join('\n').trim();
+  }
+  return '## Agent Tool Activity\n\nNo agent tool activity has been recorded in this session yet.';
+}
+
+function buildLocalSessionCommandResponse(sessionId, command) {
+  const session = aiState.activeSession?.id === sessionId
+    ? aiState.activeSession
+    : aiState.sessions.find((item) => item.id === sessionId);
+  const normalized = String(command || '').trim().toLowerCase();
+  if (!session) {
+    throw new Error('AI session not found');
+  }
+  if (normalized === 'retrieval-surfaces') {
+    return { rawCommand: '/retrieval-surfaces', assistantContent: formatRetrievalSurfacesMarkdown(session) };
+  }
+  if (normalized === 'tools') {
+    return { rawCommand: '/tools', assistantContent: formatToolCatalogMarkdown() };
+  }
+  if (normalized === 'tool-activity') {
+    return { rawCommand: '/tool-activity', assistantContent: formatAgentToolActivityMarkdown(sessionId) };
+  }
+  if (normalized === 'capabilities') {
+    return {
+      rawCommand: '/capabilities',
+      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdown()}`,
+    };
+  }
+  throw new Error(`unsupported command '${command}'`);
+}
+
+function applySessionPreviewUpdate(sessionId, assistantContent, timestamp) {
+  aiState.sessions = aiState.sessions.map((session) => {
+    if (session.id !== sessionId) return session;
+    return {
+      ...session,
+      updated_at: timestamp,
+      message_count: Number(session.message_count || 0) + 2,
+      last_message: assistantContent,
+    };
+  });
+  if (aiState.activeSession?.id === sessionId) {
+    aiState.activeSession = {
+      ...aiState.activeSession,
+      updated_at: timestamp,
+      message_count: Number(aiState.activeSession.message_count || 0) + 2,
+      last_message: assistantContent,
+    };
+  }
+}
+
+function runLocalSessionCommand(sessionId, command) {
+  const live = liveStateFor(sessionId);
+  const { rawCommand, assistantContent } = buildLocalSessionCommandResponse(sessionId, command);
+  const providerId = aiState.activeSession?.id === sessionId
+    ? (activeProviderId() || generalChatProviderId())
+    : generalChatProviderId();
+  const timestamp = Date.now() / 1000;
+  const userMessage = {
+    id: `local-command-user-${crypto.randomUUID()}`,
+    role: 'user',
+    content: rawCommand,
+    created_at: timestamp,
+    provider_id: providerId,
+    model_id: '',
+    meta: { run_mode: 'chat', local_command: rawCommand, local_only: true },
+  };
+  const assistantMessage = {
+    id: `local-command-assistant-${crypto.randomUUID()}`,
+    role: 'assistant',
+    content: assistantContent,
+    created_at: timestamp,
+    provider_id: providerId,
+    model_id: '',
+    latency_ms: 0,
+    meta: { run_mode: 'chat', local_command: rawCommand, local_only: true },
+  };
+  live.messages = [...live.messages, userMessage, assistantMessage];
+  applySessionPreviewUpdate(sessionId, assistantContent, timestamp);
+  renderSessionList();
+  if (aiState.activeSession?.id === sessionId) {
+    renderMessages({ forceScrollBottom: true });
+  }
+  return { ok: true, user_message: userMessage, assistant_message: assistantMessage, local_fallback: true };
+}
+
+function mergeServerAndLocalMessages(serverMessages, existingMessages) {
+  const serverList = Array.isArray(serverMessages) ? serverMessages : [];
+  const existingList = Array.isArray(existingMessages) ? existingMessages : [];
+  const localOnly = existingList.filter((message) => message?.meta?.local_only === true);
+  if (!localOnly.length) {
+    return [...serverList];
+  }
+  const merged = [...serverList];
+  localOnly.forEach((message) => {
+    if (!merged.some((item) => item?.id === message.id)) {
+      merged.push(message);
+    }
+  });
+  merged.sort((left, right) => {
+    const leftTime = Number(left?.created_at || 0);
+    const rightTime = Number(right?.created_at || 0);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return String(left?.id || '').localeCompare(String(right?.id || ''));
+  });
+  return merged;
 }
 
 // ── Workbench streaming and approval ──────────────────────────────────────────
@@ -754,7 +1090,8 @@ function normalizeRunMode(value) {
 }
 
 function sessionModeToRunMode(session) {
-  return normalizeRunMode(session?.mode);
+  const mode = normalizeRunMode(session?.mode);
+  return mode === 'intent' || mode === 'workbench' ? 'agent' : mode;
 }
 
 function runModeToSessionMode(runMode) {
@@ -1207,13 +1544,24 @@ function isMessageListNearBottom(threshold = 40) {
   return (scrollHeight - clientHeight - scrollTop) <= threshold;
 }
 
+function saveSessionScrollState(sessionId = aiState.activeSession?.id) {
+  if (!sessionId || !aiEls.messageList) return;
+  const live = liveStateFor(sessionId);
+  live.scrollTop = aiEls.messageList.scrollTop;
+  live.pinnedToBottom = isMessageListNearBottom();
+}
+
 function updateMessageListScrollIntent() {
   aiState.messageListPinnedToBottom = isMessageListNearBottom();
+  saveSessionScrollState();
 }
 
 function renderMessages(options = {}) {
   const preserveScroll = Boolean(options.preserveScroll);
   const forceScrollBottom = Boolean(options.forceScrollBottom);
+  const restoreScrollTop = Number.isFinite(options.restoreScrollTop)
+    ? Number(options.restoreScrollTop)
+    : null;
   const previousScrollTop = aiEls.messageList.scrollTop;
   const shouldStickToBottom = forceScrollBottom || (!preserveScroll && aiState.messageListPinnedToBottom);
   const activeLive = aiState.activeSession ? liveStateFor(aiState.activeSession.id) : null;
@@ -1235,11 +1583,7 @@ function renderMessages(options = {}) {
     ? 'Restore this archived chat to continue messaging'
     : currentRunMode() === 'agent'
       ? 'Ask the read-only rover agent'
-      : currentRunMode() === 'intent'
-        ? 'Describe a rover task to parse into structured intent (non-executing)'
-        : currentRunMode() === 'workbench'
-          ? 'Describe a rover mission to plan (workbench mode — requires operator approval)'
-          : 'Ask the configured General Chat provider';
+      : 'Ask the configured General Chat provider';
   aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
   aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
   renderProviderSelect();
@@ -1325,8 +1669,6 @@ function renderMessages(options = {}) {
             <span class="ai-thinking-text">Thinking</span>
           </span>`
         : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}
-        ${message.role === 'assistant' ? renderAgentToolPanel(message) : ''}
-        ${message.role === 'assistant' ? renderRetrievalPanel(message) : ''}
         ${message.role === 'assistant' && messageRunMode(message) === 'intent' ? renderIntentPanel(message) : ''}</div>
       ${message.role === 'assistant'
         ? (() => {
@@ -1338,9 +1680,13 @@ function renderMessages(options = {}) {
   `;
   }).join('') + (pendingInterrupt ? renderWorkbenchApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
   postRenderMessages();
-  aiEls.messageList.scrollTop = shouldStickToBottom
-    ? aiEls.messageList.scrollHeight
-    : previousScrollTop;
+  if (shouldStickToBottom) {
+    aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
+  } else if (restoreScrollTop !== null) {
+    aiEls.messageList.scrollTop = restoreScrollTop;
+  } else {
+    aiEls.messageList.scrollTop = previousScrollTop;
+  }
   updateMessageListScrollIntent();
 }
 
@@ -1468,6 +1814,13 @@ function clearSessionLiveState(sessionId) {
   const live = liveStateFor(sessionId);
   live.sending = false;
   live.abortController = null;
+  live.pendingUserMessageId = '';
+  live.pendingAssistantMessageId = '';
+}
+
+function removePendingMessages(sessionId) {
+  const live = liveStateFor(sessionId);
+  live.messages = live.messages.filter((message) => !String(message.id || '').startsWith('pending-'));
   live.pendingUserMessageId = '';
   live.pendingAssistantMessageId = '';
 }
@@ -1605,18 +1958,23 @@ async function createSession(options = {}) {
 }
 
 async function openSession(sessionId) {
+  saveSessionScrollState();
   const session = aiState.sessions.find((item) => item.id === sessionId);
   const includeArchived = Boolean(session?.archived_at);
   const live = liveStateFor(sessionId);
+  const shouldRestoreScroll = !live.pinnedToBottom;
 
   if (live.sending) {
     // Session is actively streaming in the background — switch the view to it without reloading
     // messages from server (the in-progress stream owns the messages array right now).
     aiState.activeSession = session || aiState.activeSession;
     aiState.runMode = sessionModeToRunMode(session);
-    aiState.messageListPinnedToBottom = true;
+    aiState.messageListPinnedToBottom = live.pinnedToBottom;
     renderSessionList();
-    renderMessages({ forceScrollBottom: true });
+    renderMessages({
+      forceScrollBottom: live.pinnedToBottom,
+      restoreScrollTop: shouldRestoreScroll ? live.scrollTop : null,
+    });
     setAiStatus('Response in progress…', 'ok');
     return;
   }
@@ -1624,11 +1982,14 @@ async function openSession(sessionId) {
   const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
   aiState.activeSession = result.session;
   // Initialise (or refresh) the live state from the server's message list.
-  live.messages = [...(result.session.messages || [])];
+  live.messages = mergeServerAndLocalMessages(result.session.messages || [], live.messages);
   aiState.runMode = sessionModeToRunMode(result.session);
-  aiState.messageListPinnedToBottom = true;
+  aiState.messageListPinnedToBottom = live.pinnedToBottom;
   renderSessionList();
-  renderMessages({ forceScrollBottom: true });
+  renderMessages({
+    forceScrollBottom: live.pinnedToBottom,
+    restoreScrollTop: shouldRestoreScroll ? live.scrollTop : null,
+  });
   setAiStatus('Ready.', 'ok');
 }
 
@@ -1640,10 +2001,14 @@ async function refreshSessionLive(sessionId) {
   const includeArchived = Boolean(listSession?.archived_at);
   const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}${includeArchived ? '?include_archived=true' : ''}`);
   const live = liveStateFor(sessionId);
-  live.messages = [...(result.session.messages || [])];
+  live.messages = mergeServerAndLocalMessages(result.session.messages || [], live.messages);
   if (aiState.activeSession?.id === sessionId) {
     aiState.activeSession = result.session;
-    renderMessages({ forceScrollBottom: true });
+    aiState.messageListPinnedToBottom = live.pinnedToBottom;
+    renderMessages({
+      forceScrollBottom: live.pinnedToBottom,
+      restoreScrollTop: live.pinnedToBottom ? null : live.scrollTop,
+    });
   }
   return result.session;
 }
@@ -1791,22 +2156,173 @@ async function updateSessionSourceControl(key, enabled) {
   setAiStatus('Source controls updated.', 'ok');
 }
 
+const AI_SLASH_COMMANDS = [
+  {
+    command: '/capabilities',
+    kind: 'session_command',
+    serverCommand: 'capabilities',
+    description: 'Show this session\'s retrieval surfaces and available agent tools.',
+  },
+  {
+    command: '/retrieval-surfaces',
+    kind: 'session_command',
+    serverCommand: 'retrieval-surfaces',
+    description: 'Show enabled retrieval surfaces and their current availability.',
+  },
+  {
+    command: '/tools',
+    kind: 'session_command',
+    serverCommand: 'tools',
+    description: 'List the read-only and analysis tools exposed to agent mode.',
+  },
+  {
+    command: '/tool-activity',
+    kind: 'session_command',
+    serverCommand: 'tool-activity',
+    description: 'Show the latest recorded agent tool activity for this session.',
+  },
+  {
+    command: '/intent',
+    kind: 'run_mode',
+    runMode: 'intent',
+    description: 'Parse a rover task into structured intent without executing it.',
+  },
+  {
+    command: '/plan',
+    kind: 'run_mode',
+    runMode: 'workbench',
+    description: 'Run the workbench planner for the current prompt.',
+  },
+];
+
+function slashCommandDefinition(command) {
+  const normalized = String(command || '').trim().toLowerCase();
+  return AI_SLASH_COMMANDS.find((item) => item.command === normalized) || null;
+}
+
+function parseSlashCommand(rawContent) {
+  const match = rawContent.match(/^(\/[a-zA-Z-]+)(\s+([\s\S]+))?$/);
+  if (!match) return { definition: null, runMode: null, content: rawContent };
+  const command = match[1].toLowerCase();
+  const definition = slashCommandDefinition(command);
+  if (!definition) return { definition: null, runMode: null, content: rawContent };
+  const body = (match[3] || '').trim();
+  return {
+    definition,
+    runMode: definition.kind === 'run_mode' ? definition.runMode : null,
+    content: body,
+    command,
+  };
+}
+
+function slashQueryState() {
+  if (!aiEls.messageInput) return null;
+  const value = aiEls.messageInput.value || '';
+  const cursor = aiEls.messageInput.selectionStart ?? value.length;
+  const head = value.slice(0, cursor);
+  if (!head.startsWith('/')) return null;
+  if (/\s/.test(head)) return null;
+  const query = head.toLowerCase();
+  const items = AI_SLASH_COMMANDS.filter((item) => item.command.startsWith(query));
+  return { query, items };
+}
+
+function isSlashMenuOpen() {
+  return Boolean(aiEls.slashMenu && !aiEls.slashMenu.hidden);
+}
+
+function closeSlashMenu() {
+  if (!aiEls.slashMenu) return;
+  aiState.slashMenuItems = [];
+  aiState.slashMenuIndex = 0;
+  aiEls.slashMenu.hidden = true;
+  aiEls.slashMenu.innerHTML = '';
+}
+
+function renderSlashMenu(items, selectedIndex = 0) {
+  if (!aiEls.slashMenu) return;
+  if (!items.length) {
+    closeSlashMenu();
+    return;
+  }
+  aiState.slashMenuItems = items;
+  aiState.slashMenuIndex = Math.max(0, Math.min(selectedIndex, items.length - 1));
+  aiEls.slashMenu.innerHTML = items.map((item, index) => `
+    <button
+      class="ai-slash-item${index === aiState.slashMenuIndex ? ' active' : ''}"
+      type="button"
+      role="option"
+      aria-selected="${index === aiState.slashMenuIndex ? 'true' : 'false'}"
+      data-slash-command="${escapeHtml(item.command)}"
+    >
+      <span class="ai-slash-item-command">${escapeHtml(item.command)}</span>
+      <span class="ai-slash-item-description">${escapeHtml(item.description)}</span>
+    </button>
+  `).join('');
+  aiEls.slashMenu.hidden = false;
+}
+
+function updateSlashMenu() {
+  const state = slashQueryState();
+  if (!state || !state.items.length) {
+    closeSlashMenu();
+    return;
+  }
+  const previous = aiState.slashMenuItems[aiState.slashMenuIndex]?.command || '';
+  const nextIndex = Math.max(0, state.items.findIndex((item) => item.command === previous));
+  renderSlashMenu(state.items, nextIndex);
+}
+
+function selectSlashMenuStep(step) {
+  if (!aiState.slashMenuItems.length) return;
+  const count = aiState.slashMenuItems.length;
+  const nextIndex = (aiState.slashMenuIndex + step + count) % count;
+  renderSlashMenu(aiState.slashMenuItems, nextIndex);
+}
+
+function applySlashCommand(command) {
+  if (!aiEls.messageInput) return;
+  const definition = slashCommandDefinition(command);
+  if (!definition) return;
+  aiEls.messageInput.value = definition.kind === 'run_mode'
+    ? `${definition.command} `
+    : definition.command;
+  closeSlashMenu();
+  resizeComposer();
+  updateComposerState();
+  aiEls.messageInput.focus();
+  const position = aiEls.messageInput.value.length;
+  aiEls.messageInput.setSelectionRange(position, position);
+}
+
 async function sendMessage(event) {
   event.preventDefault();
   // Per-session guard: only block sending if THIS session is already streaming.
   const activeId = aiState.activeSession?.id || '';
   if (activeId && liveStateFor(activeId).sending) return;
-  const content = aiEls.messageInput.value.trim();
-  if (!content) return;
-  const runMode = currentRunMode();
+  const rawContent = aiEls.messageInput.value.trim();
+  if (!rawContent) return;
+  const slash = parseSlashCommand(rawContent);
+  if (slash.runMode && !slash.content) {
+    setAiStatus(`Usage: ${slash.command} <prompt>`, 'warn');
+    return;
+  }
+  if (slash.definition?.kind === 'session_command' && slash.content) {
+    setAiStatus(`${slash.command} does not accept additional text.`, 'warn');
+    return;
+  }
+  const content = slash.runMode ? slash.content : rawContent;
+  const runMode = slash.runMode || currentRunMode();
 
   aiEls.messageInput.value = '';
+  closeSlashMenu();
   resizeComposer();
 
   let sessionId = activeId;
   const abortController = new AbortController();
+  const isSessionCommand = slash.definition?.kind === 'session_command';
 
-  if (sessionId) {
+  if (sessionId && !isSessionCommand) {
     const live = liveStateFor(sessionId);
     live.sending = true;
     live.abortController = abortController;
@@ -1814,7 +2330,8 @@ async function sendMessage(event) {
   }
   renderMessages();
   setAiStatus(
-    runMode === 'agent' ? 'Agent is checking rover context.'
+    isSessionCommand ? `Running ${slash.command}...`
+    : runMode === 'agent' ? 'Agent is checking rover context.'
     : runMode === 'intent' ? 'Parsing rover intent...'
     : runMode === 'workbench' ? 'Workbench graph starting...'
     : 'Waiting for model response.'
@@ -1825,9 +2342,20 @@ async function sendMessage(event) {
       const createdSession = await createSession({ providerId: activeProviderId() });
       sessionId = createdSession.id;
       // createSession calls openSession internally, so activeSession is now set.
-      const live = liveStateFor(sessionId);
-      live.sending = true;
-      live.abortController = abortController;
+      if (!isSessionCommand) {
+        const live = liveStateFor(sessionId);
+        live.sending = true;
+        live.abortController = abortController;
+      }
+    }
+    if (slash.definition?.kind === 'session_command') {
+      const result = await sendSessionCommand(sessionId, slash.definition.serverCommand);
+      if (!result?.local_fallback) {
+        await refreshSessionLive(sessionId);
+        await loadSessions();
+      }
+      if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
+      return;
     }
     if (!aiState.activeSession) {
       await openSession(sessionId);
@@ -1861,6 +2389,9 @@ async function sendMessage(event) {
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const message = isAbort ? 'Response interrupted.' : error.message;
+    if (sessionId) {
+      removePendingMessages(sessionId);
+    }
     if (aiState.activeSession?.id === sessionId) {
       setAiStatus(message, isAbort ? 'warn' : 'danger');
     }
@@ -1889,7 +2420,7 @@ async function resendMessage(messageId) {
   const message = live.messages.find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
-  const runMode = currentRunMode();
+  const runMode = messageRunMode(message);
   live.sending = true;
   const abortController = new AbortController();
   live.abortController = abortController;
@@ -1918,6 +2449,7 @@ async function resendMessage(messageId) {
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const messageText = isAbort ? 'Response interrupted.' : error.message;
+    removePendingMessages(sessionId);
     if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
     await refreshSessionLive(sessionId).catch(() => {});
     await loadSessions().catch(() => {});
@@ -1978,8 +2510,39 @@ function resizeComposer() {
 
 function handleComposerKeydown(event) {
   if (event.isComposing) return;
+  if (isSlashMenuOpen()) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      selectSlashMenuStep(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      selectSlashMenuStep(-1);
+      return;
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      const item = aiState.slashMenuItems[aiState.slashMenuIndex];
+      if (item) applySlashCommand(item.command);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSlashMenu();
+      return;
+    }
+  }
   if (event.key !== 'Enter') return;
   if (event.shiftKey) return;
+  if (isSlashMenuOpen()) {
+    const item = aiState.slashMenuItems[aiState.slashMenuIndex];
+    if (item) {
+      event.preventDefault();
+      applySlashCommand(item.command);
+      return;
+    }
+  }
   event.preventDefault();
   if (!aiEls.sendMessage.disabled) {
     aiEls.messageForm.requestSubmit();
@@ -2198,6 +2761,37 @@ function bindAi() {
     updateSessionSourceControl(input.dataset.sourceControl, input.checked)
       .catch((error) => setAiStatus(error.message, 'danger'));
   });
+  aiEls.sourcesToggle?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleSourcesPopover();
+  });
+  document.addEventListener('click', (event) => {
+    if (!isSourcesPopoverOpen()) return;
+    if (aiEls.sourcesControl?.contains(event.target)) return;
+    closeSourcesPopover();
+  });
+  document.addEventListener('mousedown', (event) => {
+    if (!isSlashMenuOpen()) return;
+    if (event.target.closest('#ai-slash-menu, #ai-message-input')) return;
+    closeSlashMenu();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 's') {
+      if (!aiEls.sourcesToggle || aiEls.sourcesToggle.disabled) return;
+      event.preventDefault();
+      if (isSourcesPopoverOpen()) {
+        closeSourcesPopover();
+        aiEls.sourcesToggle?.focus();
+      } else {
+        openSourcesPopover({ focusFirst: true });
+      }
+      return;
+    }
+    if (event.key === 'Escape' && isSourcesPopoverOpen()) {
+      closeSourcesPopover();
+      aiEls.sourcesToggle?.focus();
+    }
+  });
   aiEls.runModeButtons.forEach((button) => {
     button.addEventListener('click', () => updateSessionRunMode(button.dataset.runMode).catch((error) => setAiStatus(error.message, 'danger')));
   });
@@ -2206,6 +2800,20 @@ function bindAi() {
   aiEls.messageInput.addEventListener('input', () => {
     resizeComposer();
     updateComposerState();
+    updateSlashMenu();
+  });
+  aiEls.messageInput.addEventListener('click', updateSlashMenu);
+  aiEls.messageInput.addEventListener('focus', updateSlashMenu);
+  aiEls.messageInput.addEventListener('blur', () => {
+    window.setTimeout(() => {
+      if (!aiEls.slashMenu?.matches(':hover')) closeSlashMenu();
+    }, 80);
+  });
+  aiEls.slashMenu?.addEventListener('mousedown', (event) => {
+    const item = event.target.closest('[data-slash-command]');
+    if (!item) return;
+    event.preventDefault();
+    applySlashCommand(item.dataset.slashCommand || '');
   });
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {

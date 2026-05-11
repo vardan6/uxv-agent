@@ -3,8 +3,8 @@
 > Note:
 > For the current documentation set and high-level project context, start with:
 > - `../docs/README.md`
-> - `../docs/gcs_server/README.md`
-> - `../docs/gcs_server/technical-details.md`
+> - `../docs/technical/gcs/overview.md`
+> - `../docs/technical/gcs/api-and-runtime.md`
 
 `gcs_server/` is the browser-facing Ground Control Station for the Remote Rover project.
 
@@ -32,7 +32,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - LLM provider settings, provider checks, and purpose-based model routing
 - `/ai` provider-backed Chat and read-only Agent modes with persistent SQLite sessions
 - `/ai` `Intent Test` mode for non-executing structured rover-task parsing
-- `/ai` Workbench mode for non-executing mission-draft planning and approval (see `../docs/gcs_server/workbench-mode.md`)
+- `/ai` Workbench mode for non-executing mission-draft planning and approval (see `../docs/technical/gcs/workbench-mode.md`)
 - Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
 - AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
 - Chat/Agent/Intent Test/Workbench composer mode toggle
@@ -47,7 +47,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
-- AI Chat, Agent, Intent Test, and Workbench are non-executing today; intent parsing and mission-draft approval foundation are implemented, but RAG/source controls, web research/search, durable LangGraph workflows, and rover-agent command workflows are not implemented yet
+- AI Chat, Agent, Intent Test, and Workbench are non-executing today; intent parsing and mission-draft approval foundation are implemented, but non-RAG lazy retrieval is still incomplete, RAG/web-grounding remains deferred to a later phase, and rover-agent command workflows are not implemented
 
 ## Dependencies
 
@@ -171,15 +171,15 @@ Main modules:
 
 ## Control Regression Notes
 
-See [docs/gcs_server/regressions.md](../docs/gcs_server/regressions.md) for pinned one-line control invariants that should not regress.
+See [../docs/technical/gcs/regressions.md](../docs/technical/gcs/regressions.md) for pinned one-line control invariants that should not regress.
 
 ## LLM Capability Reference
 
-See [../docs/gcs_server/llm-provider-agentic-capability-matrix.md](../docs/gcs_server/llm-provider-agentic-capability-matrix.md) for the researched matrix of currently configured providers/models, including tool-calling support, context-window notes, and agentic-fit guidance.
+See [../docs/technical/gcs/llm-capability-matrix.md](../docs/technical/gcs/llm-capability-matrix.md) for the researched matrix of currently configured providers/models, including tool-calling support, context-window notes, and agentic-fit guidance.
 
 ## Workbench Mode Reference
 
-See [../docs/gcs_server/workbench-mode.md](../docs/gcs_server/workbench-mode.md) for the full Workbench guide: purpose, operator flow, endpoints, streaming/interrupt lifecycle, examples, and troubleshooting.
+See [../docs/technical/gcs/workbench-mode.md](../docs/technical/gcs/workbench-mode.md) for the full Workbench guide: purpose, operator flow, endpoints, streaming/interrupt lifecycle, examples, and troubleshooting.
 
 ## MQTT Setup Flow
 
@@ -226,6 +226,7 @@ Implemented now:
 - sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values
 
 Not implemented yet:
+- bounded non-RAG retrieval for AI session history, settings sections, and sensor/perception metadata
 - RAG source controls and document upload
 - web research/search as a chat source
 - richer recent-history and mission retrieval in chat
@@ -233,8 +234,8 @@ Not implemented yet:
 - AI-assisted command staging or execution
 
 Reference:
-- [Rover Intents And Intent Test](../docs/gcs_server/intent-and-intent-test.md)
-- [Workbench Mode](../docs/gcs_server/workbench-mode.md)
+- [Rover Intents And Intent Test](../docs/technical/gcs/intent-parsing.md)
+- [Workbench Mode](../docs/technical/gcs/workbench-mode.md)
 
 The AI Chat system prompt is intentionally read-only and must not publish rover control commands.
 
@@ -262,7 +263,8 @@ The next work is:
 - actual `rover-sim-next` backend implementation
 - spatial query service extraction and an agent-ready permissioned tool registry
 - supervised rover intent parsing and mission draft planning
-- RAG/web-grounded AI Chat source controls
+- non-RAG lazy retrieval surfaces for AI Chat and Agent mode
+- later RAG/web-grounded AI Chat source controls
 - live map on the main dashboard
 - simulator-side logging
 - future synchronized recorded video support

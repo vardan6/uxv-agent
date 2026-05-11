@@ -121,6 +121,39 @@ def _json_line(data: dict) -> str:
     return json.dumps(data, separators=(",", ":")) + "\n"
 
 
+def _usage_metadata(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage_metadata", {}) or {}
+    return usage if isinstance(usage, dict) else {}
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    metadata = getattr(response, "response_metadata", {}) or {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _merge_usage_metadata(*items: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    numeric_keys = ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens")
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if key in numeric_keys and isinstance(value, (int, float)):
+                merged[key] = int(merged.get(key, 0)) + int(value)
+            elif key not in merged:
+                merged[key] = value
+    return merged
+
+
+def _merge_response_metadata(*items: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        merged.update(item)
+    return merged
+
+
 def _has_spatial_target(intent: dict) -> bool:
     target = intent.get("target") or {}
     if not isinstance(target, dict):
@@ -539,6 +572,8 @@ def parse_intent(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             "latency_ms": result.get("latency_ms", 0),
         },
         "intent_errors": [{"error": e} for e in result.get("parse_errors", [])],
+        "intent_usage_metadata": result.get("usage_metadata") or {},
+        "intent_response_metadata": result.get("response_metadata") or {},
         "node_trace": [_node_entry(
             "parse_intent", ok=True,
             intent_type=intent.get("intent_type", "unknown"),
@@ -647,6 +682,8 @@ def generate_mission_draft(state: WorkbenchGraphState, config: RunnableConfig) -
 
     return {
         "draft": draft,
+        "draft_usage_metadata": _usage_metadata(response),
+        "draft_response_metadata": _response_metadata(response),
         "node_trace": [_node_entry(
             "generate_mission_draft", ok=True,
             provider_id=str(resolved.provider.get("id", "")),
@@ -803,6 +840,18 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         "loaded_data_refs": state.get("loaded_data_refs") or [],
         "node_count": len(state.get("node_trace") or []),
     }
+    usage_metadata = _merge_usage_metadata(
+        state.get("intent_usage_metadata") or {},
+        state.get("draft_usage_metadata") or {},
+    )
+    if usage_metadata:
+        meta["usage_metadata"] = usage_metadata
+    response_metadata = _merge_response_metadata(
+        state.get("intent_response_metadata") or {},
+        state.get("draft_response_metadata") or {},
+    )
+    if response_metadata:
+        meta["response_metadata"] = response_metadata
     if session_id and content:
         try:
             rt.ai_session_store.add_message(

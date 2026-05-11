@@ -900,6 +900,110 @@ def _public_ai_session(session: dict[str, Any], include_messages: bool = False) 
     return out
 
 
+def _tool_permission_label(value: Any) -> str:
+    labels = {
+        "read_only": "read-only",
+        "analysis": "analysis",
+        "planning": "planning",
+        "command_staging": "command staging",
+        "execution": "execution",
+    }
+    key = str(value or "").strip().lower()
+    return labels.get(key, key or "unknown")
+
+
+def _format_retrieval_surfaces_markdown(
+    session_id: str,
+    source_controls: dict[str, bool],
+) -> str:
+    retrieval_request = normalize_retrieval_request({"source_controls": source_controls}, session_id=session_id)
+    sources = build_retrieved_sources(retrieval_request=retrieval_request, session_id=session_id)
+    enabled_sources = [source for source in sources if source_controls.get(str(source.get("source", "")))]
+    disabled_keys = [key for key, enabled in source_controls.items() if not enabled]
+
+    lines = ["## Retrieval Surfaces", ""]
+    if enabled_sources:
+        lines.append("Enabled for this session:")
+        for source in enabled_sources:
+            label = str(source.get("source", "source")).replace("_", " ")
+            status = str(source.get("status", "planned"))
+            note = str(source.get("note", "")).strip()
+            lines.append(f"- `{label}`: {status}")
+            if note:
+                lines.append(f"  {note}")
+    else:
+        lines.append("No retrieval surfaces are enabled for this session.")
+
+    if disabled_keys:
+        lines.extend(["", "Disabled for this session:"])
+        for key in disabled_keys:
+            lines.append(f"- `{key.replace('_', ' ')}`")
+    return "\n".join(lines).strip()
+
+
+def _format_tool_catalog_markdown(tool_registry: ToolRegistry) -> str:
+    definitions = tool_registry.definitions()
+    lines = ["## Agent Tools", "", "Available in agent mode:"]
+    for definition in definitions:
+        permission = _tool_permission_label(definition.permission)
+        lines.append(f"- `{definition.name}` ({permission}): {definition.description}")
+    return "\n".join(lines).strip()
+
+
+def _format_agent_tool_activity_markdown(session: dict[str, Any]) -> str:
+    messages = session.get("messages")
+    if not isinstance(messages, list):
+        return "## Agent Tool Activity\n\nNo message history is available for this session."
+    for message in reversed(messages):
+        if str(message.get("role", "")) != "assistant":
+            continue
+        meta = message.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        tool_calls = meta.get("agent_tool_progress")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            tool_calls = meta.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            continue
+        lines = ["## Agent Tool Activity", ""]
+        created_at = message.get("created_at")
+        if created_at is not None:
+            lines.append(f"Latest assistant message: `{created_at}`")
+            lines.append("")
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or call.get("tool") or "tool")
+            status = str(call.get("status") or ("complete" if call.get("result") is not None else "recorded"))
+            lines.append(f"- `{name}`: {status}")
+        return "\n".join(lines).strip()
+    return "## Agent Tool Activity\n\nNo agent tool activity has been recorded in this session yet."
+
+
+def _build_ai_session_command_response(
+    runtime: AppRuntime,
+    session_id: str,
+    command: str,
+) -> tuple[str, str]:
+    include_messages = str(command or "").strip().lower() == "tool-activity"
+    session = runtime.ai_store.get_session(session_id, include_messages=include_messages)
+    if session is None:
+        raise KeyError("AI session not found")
+    source_controls = normalize_source_controls(session.get("source_controls"))
+    normalized = str(command or "").strip().lower()
+    if normalized == "retrieval-surfaces":
+        return "/retrieval-surfaces", _format_retrieval_surfaces_markdown(session_id, source_controls)
+    if normalized == "tools":
+        return "/tools", _format_tool_catalog_markdown(ToolRegistry())
+    if normalized == "tool-activity":
+        return "/tool-activity", _format_agent_tool_activity_markdown(session)
+    if normalized == "capabilities":
+        retrieval = _format_retrieval_surfaces_markdown(session_id, source_controls)
+        tools = _format_tool_catalog_markdown(ToolRegistry())
+        return "/capabilities", f"{retrieval}\n\n{tools}"
+    raise ValueError(f"unsupported command '{command}'")
+
+
 def _ai_chat_service(request: Request) -> AIChatService:
     return request.app.state.ai_chat_service
 
@@ -1152,6 +1256,42 @@ async def get_ai_session(session_id: str, request: Request, include_archived: bo
     if session.get("archived_at") is not None and not include_archived:
         raise HTTPException(status_code=404, detail="AI session not found")
     return {"session": _public_ai_session(session, include_messages=True)}
+
+
+@app.post("/api/ai/sessions/{session_id}/commands")
+async def run_ai_session_command(session_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="command payload must be an object")
+    try:
+        raw_command, assistant_content = _build_ai_session_command_response(
+            runtime,
+            session_id,
+            str(payload.get("command", "")),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user_message = runtime.ai_store.add_message(
+        session_id,
+        role="user",
+        content=raw_command,
+        meta={"run_mode": "chat", "local_command": raw_command},
+    )
+    assistant_message = runtime.ai_store.add_message(
+        session_id,
+        role="assistant",
+        content=assistant_content,
+        meta={"run_mode": "chat", "local_command": raw_command},
+    )
+    return JSONResponse({
+        "ok": True,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+    })
 
 
 @app.patch("/api/ai/sessions/{session_id}")

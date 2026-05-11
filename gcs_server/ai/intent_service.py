@@ -9,6 +9,10 @@ from .prompts import build_intent_prompt
 from .schemas import make_empty_intent, validate_intent
 
 _MAX_REPAIR_ATTEMPTS = 1
+_GREETING_PATTERN = re.compile(
+    r"^\s*(?:hi|hello|hey|yo|howdy|greetings|good\s+(?:morning|afternoon|evening))(?:[!.?,\s]+)?$",
+    re.IGNORECASE,
+)
 
 
 class IntentService:
@@ -31,6 +35,19 @@ class IntentService:
                 "parse_errors": ["empty prompt"],
                 "provider_name": "",
                 "latency_ms": 0,
+                "usage_metadata": {},
+                "response_metadata": {},
+            }
+
+        fast_path_intent = _fast_path_intent(clean_prompt)
+        if fast_path_intent is not None:
+            return {
+                "intent": fast_path_intent,
+                "parse_errors": [],
+                "provider_name": "",
+                "latency_ms": 0,
+                "usage_metadata": {},
+                "response_metadata": {},
             }
 
         system = build_intent_prompt(context_summary)
@@ -44,7 +61,7 @@ class IntentService:
             ) from exc
 
         lc_messages = [SystemMessage(content=system), HumanMessage(content=clean_prompt)]
-        intent, errors = _invoke_with_repair(model, lc_messages, repair_attempts=_MAX_REPAIR_ATTEMPTS)
+        intent, errors, response = _invoke_with_repair(model, lc_messages, repair_attempts=_MAX_REPAIR_ATTEMPTS)
         latency_ms = int((time.time() - start) * 1000)
 
         provider_name = ""
@@ -60,6 +77,8 @@ class IntentService:
             "parse_errors": errors,
             "provider_name": provider_name,
             "latency_ms": latency_ms,
+            "usage_metadata": _usage_metadata(response),
+            "response_metadata": _response_metadata(response),
         }
 
 
@@ -67,17 +86,17 @@ def _invoke_with_repair(
     model: Any,
     messages: list[Any],
     repair_attempts: int = 1,
-) -> tuple[dict[str, Any], list[str]]:
+) -> tuple[dict[str, Any], list[str], Any]:
     try:
         from langchain_core.messages import AIMessage, HumanMessage
     except ImportError:
-        return make_empty_intent(), ["langchain_core not installed"]
+        return make_empty_intent(), ["langchain_core not installed"], None
 
     raw_response = model.invoke(messages)
     raw_text = str(getattr(raw_response, "content", raw_response) or "")
     intent, errors = _parse_intent_json(raw_text)
     if not errors:
-        return intent, []
+        return intent, [], raw_response
 
     for _ in range(repair_attempts):
         repair_messages = [
@@ -95,9 +114,18 @@ def _invoke_with_repair(
         raw_text = str(getattr(raw_response, "content", raw_response) or "")
         intent, errors = _parse_intent_json(raw_text)
         if not errors:
-            return intent, []
+            return intent, [], raw_response
 
-    return intent, errors
+    return intent, errors, raw_response
+
+
+def _fast_path_intent(clean_prompt: str) -> dict[str, Any] | None:
+    if not _GREETING_PATTERN.match(clean_prompt):
+        return None
+    intent = make_empty_intent()
+    intent["summary"] = "Operator sent a greeting"
+    intent["confidence"] = 1.0
+    return intent
 
 
 def _parse_intent_json(text: str) -> tuple[dict[str, Any], list[str]]:
@@ -140,3 +168,13 @@ def _coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
         elif key in data:
             base[key] = data[key]
     return base
+
+
+def _usage_metadata(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage_metadata", {}) or {}
+    return usage if isinstance(usage, dict) else {}
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    metadata = getattr(response, "response_metadata", {}) or {}
+    return metadata if isinstance(metadata, dict) else {}

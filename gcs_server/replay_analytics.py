@@ -134,6 +134,7 @@ class ReplayAnalyticsService:
         timezone_name: str = "",
         active_session_id: str | None = None,
         limit: int = 1000,
+        top_n: int = 5,
     ) -> dict[str, Any]:
         if session_ids:
             clean_ids = [str(item).strip() for item in session_ids if str(item).strip()]
@@ -165,7 +166,7 @@ class ReplayAnalyticsService:
             "selection": selection,
             "session_ids": [row["session"]["session_id"] for row in rows],
             "session_count": len(rows),
-            "summary": _aggregate_summary(rows),
+            "summary": _aggregate_summary(rows, top_n=max(1, int(top_n))),
             "sessions": rows,
         }
 
@@ -184,6 +185,8 @@ class ReplayAnalyticsService:
         wants_aggregate = wants_compare or any(token in lower for token in ("total", "average", "avg", "overall", "combined", "sum"))
         wants_events = "event" in lower or "error" in lower or "warning" in lower
         wants_path = "path" in lower or "route" in lower or "track" in lower
+        wants_metrics = _looks_like_metrics_question(lower)
+        wants_summary_only = _looks_like_session_listing(lower) and not (wants_metrics or wants_events or wants_path)
         selection = self.resolve_sessions(
             clean,
             timezone_name=timezone_name,
@@ -195,22 +198,25 @@ class ReplayAnalyticsService:
         sessions: list[dict[str, Any]] = []
         for session_id in target_ids:
             summary = self.get_session_summary(session_id)
-            metrics = self.get_session_metrics(session_id)
-            if summary is None or metrics is None:
+            if summary is None:
                 continue
             item: dict[str, Any] = {
                 "session_id": session_id,
                 "summary": summary,
-                "metrics": metrics,
             }
+            metrics = None if wants_summary_only else self.get_session_metrics(session_id)
+            if not wants_summary_only and metrics is None:
+                continue
+            if metrics is not None:
+                item["metrics"] = metrics
             if wants_events:
                 item["events"] = self.search_session_events(session_id, text=_event_search_text(lower), limit=20)
-            if wants_path:
+            if wants_path and metrics is not None:
                 item["path"] = self.get_session_path(session_id, downsample=_path_downsample(metrics), limit=500)
             sessions.append(item)
 
         aggregate = None
-        if wants_aggregate or len(sessions) > 1:
+        if not wants_summary_only and (wants_aggregate or len(sessions) > 1):
             aggregate = self.aggregate_sessions(
                 session_ids=[item["session_id"] for item in sessions],
                 timezone_name=timezone_name,
@@ -223,6 +229,7 @@ class ReplayAnalyticsService:
             "requested_aggregate": wants_aggregate,
             "requested_events": wants_events,
             "requested_path": wants_path,
+            "requested_metrics": wants_metrics,
             "aggregate": aggregate,
             "sessions": sessions,
         }
@@ -354,7 +361,32 @@ def _event_search_text(text: str) -> str:
     return ""
 
 
-def _aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _looks_like_session_listing(text: str) -> bool:
+    return any(token in text for token in ("list", "show", "enumerate", "which sessions", "what sessions"))
+
+
+def _looks_like_metrics_question(text: str) -> bool:
+    return any(
+        token in text
+        for token in (
+            "duration",
+            "longest",
+            "shortest",
+            "travel distance",
+            "path length",
+            "distance",
+            "furthest",
+            "farthest",
+            "max distance",
+            "speed",
+            "metrics",
+            "compare",
+            "top ",
+        )
+    )
+
+
+def _aggregate_summary(rows: list[dict[str, Any]], top_n: int = 5) -> dict[str, Any]:
     if not rows:
         return {
             "session_count": 0,
@@ -366,6 +398,10 @@ def _aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "latest_session_id": None,
             "first_session_id": None,
             "furthest_session_from_start_id": None,
+            "top_sessions_by_duration": [],
+            "top_sessions_by_travel_distance": [],
+            "top_sessions_by_path_length": [],
+            "top_sessions_by_max_distance_from_start": [],
         }
     total_duration = sum(float(row["metrics"].get("duration_s") or 0.0) for row in rows)
     total_path = sum(float(row["metrics"].get("path_length_m") or 0.0) for row in rows)
@@ -373,6 +409,7 @@ def _aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     furthest = max(rows, key=lambda row: float(row["metrics"].get("max_distance_from_start_m") or 0.0))
     latest = max(rows, key=lambda row: float(row["session"].get("started_at") or 0.0))
     first = min(rows, key=lambda row: float(row["session"].get("started_at") or 0.0))
+    count = max(1, int(top_n))
     return {
         "session_count": len(rows),
         "total_duration_s": round(total_duration, 3),
@@ -383,4 +420,25 @@ def _aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "latest_session_id": latest["session"]["session_id"],
         "first_session_id": first["session"]["session_id"],
         "furthest_session_from_start_id": furthest["session"]["session_id"],
+        "top_sessions_by_duration": _top_ranked_sessions(rows, "duration_s", count),
+        "top_sessions_by_travel_distance": _top_ranked_sessions(rows, "path_length_m", count),
+        "top_sessions_by_path_length": _top_ranked_sessions(rows, "path_length_m", count),
+        "top_sessions_by_max_distance_from_start": _top_ranked_sessions(rows, "max_distance_from_start_m", count),
     }
+
+
+def _top_ranked_sessions(rows: list[dict[str, Any]], metric_key: str, count: int) -> list[dict[str, Any]]:
+    ordered = sorted(
+        rows,
+        key=lambda row: float(row["metrics"].get(metric_key) or 0.0),
+        reverse=True,
+    )
+    top_rows = ordered[:max(1, int(count))]
+    return [
+        {
+            "session_id": row["session"]["session_id"],
+            "started_at": row["session"].get("started_at"),
+            metric_key: row["metrics"].get(metric_key),
+        }
+        for row in top_rows
+    ]

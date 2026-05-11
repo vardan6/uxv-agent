@@ -36,6 +36,8 @@ class WorkbenchGraphState(TypedDict, total=False):
     intent: dict
     intent_provider: dict          # {provider_id, model_id, latency_ms}
     intent_errors: list
+    intent_usage_metadata: dict
+    intent_response_metadata: dict
 
     # ── Retrieval layer — Phase 4 ─────────────────────────────────────────────
     classified_scope: str
@@ -55,6 +57,8 @@ class WorkbenchGraphState(TypedDict, total=False):
     draft: dict
     draft_id: str
     validation: dict
+    draft_usage_metadata: dict
+    draft_response_metadata: dict
     approval_status: str           # awaiting_approval | approved | rejected | validation_failed | needs_clarification
     approval_note: str
     operator_decision: str         # Phase 2: approve | reject | pending_rest (set by request_workbench_approval)

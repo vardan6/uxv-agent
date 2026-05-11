@@ -17,12 +17,18 @@ If the operator asks for rover movement or mission execution, explain that this 
 
 AGENT_SYSTEM_PROMPT = """You are the read-only AI agent inside Remote Rover GCS.
 Answer operator questions using conversation history plus available tool/context results.
-You may inspect rover state, map summaries, object queries, telemetry, and replay summaries.
+You may inspect rover state, map summaries, object queries, telemetry, replay sessions, replay metrics, replay paths, and replay event history.
+For cross-session analytics, enumerate or resolve sessions first, then use replay metrics/compare/aggregate tools instead of claiming you lack access.
+Travel distance means the rover path length (`path_length_m`). Furthest from home or start means `max_distance_from_start_m`.
+For follow-up requests like "the first one in each set" or "that session", reuse explicit session_ids already present in recent conversation history before resolving a new selector.
+For current rover state, prefer live telemetry when fresh; otherwise report that live state is unavailable and use last_known_replay_state when present.
 Do not claim to control the rover, publish commands, start missions, or mutate GCS state.
 If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing.
 If a tool returns {"ok": false, "error": "..."}, report the failure clearly to the operator. Do not invent data to fill the gap."""
 
 AI_CONTEXT_MESSAGE_LIMIT = 40
+AI_CONTEXT_HISTORY_CHAR_BUDGET = 16000
+AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT = 4000
 AI_AGENT_MAX_TOOL_ITERATIONS = 6
 
 
@@ -233,18 +239,21 @@ class AIChatService:
         tool_context: dict[str, Any] | None = None,
     ) -> Iterator[str]:
         clean_run_mode = _normalize_run_mode(run_mode)
+        prompt_messages = _fit_messages_to_budget(messages)
         prompt_tool_calls = _tool_calls(context_snapshot) if clean_run_mode == "agent" else []
         agent_tooling_error: str | None = None
-        if clean_run_mode == "agent":
+        should_try_tools = clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot)
+        if should_try_tools:
             started = time.perf_counter()
             agent_result = None
             try:
                 for agent_event in self._stream_agent_with_tools_events(
                     model,
-                    messages=messages,
+                    messages=prompt_messages,
                     context_snapshot=context_snapshot,
                     prompt_tool_calls=prompt_tool_calls,
                     tool_context=tool_context,
+                    run_mode=clean_run_mode,
                 ):
                     if agent_event.get("type") == "_agent_result":
                         agent_result = agent_event.get("result")
@@ -279,7 +288,7 @@ class AIChatService:
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
                     return
         langchain_messages = _to_langchain_messages(
-            messages,
+            prompt_messages,
             _prompt_for_mode(context_snapshot, clean_run_mode, prompt_tool_calls),
             system_prompt=AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT,
         )
@@ -358,17 +367,19 @@ class AIChatService:
         tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         clean_run_mode = _normalize_run_mode(run_mode)
+        prompt_messages = _fit_messages_to_budget(messages)
         prompt_tool_calls = _tool_calls(context_snapshot) if clean_run_mode == "agent" else []
         agent_tooling_error: str | None = None
-        if clean_run_mode == "agent":
+        if clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot):
             started = time.perf_counter()
             try:
                 agent_result = self._try_invoke_agent_with_tools(
                     model,
-                    messages=messages,
+                    messages=prompt_messages,
                     context_snapshot=context_snapshot,
                     prompt_tool_calls=prompt_tool_calls,
                     tool_context=tool_context,
+                    run_mode=clean_run_mode,
                 )
             except Exception as exc:
                 agent_result = None
@@ -394,7 +405,7 @@ class AIChatService:
                     },
                 )
         langchain_messages = _to_langchain_messages(
-            messages,
+            prompt_messages,
             _prompt_for_mode(context_snapshot, clean_run_mode, prompt_tool_calls),
             system_prompt=AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT,
         )
@@ -428,6 +439,7 @@ class AIChatService:
         context_snapshot: dict[str, Any] | None,
         prompt_tool_calls: list[dict[str, Any]],
         tool_context: dict[str, Any] | None = None,
+        run_mode: str = "agent",
     ) -> AgentInvokeResult | None:
         runtime = self._prepare_agent_tool_runtime(
             model,
@@ -435,6 +447,7 @@ class AIChatService:
             context_snapshot=context_snapshot,
             prompt_tool_calls=prompt_tool_calls,
             tool_context=tool_context,
+            run_mode=run_mode,
         )
         if runtime is None:
             return None
@@ -496,6 +509,7 @@ class AIChatService:
         context_snapshot: dict[str, Any] | None,
         prompt_tool_calls: list[dict[str, Any]],
         tool_context: dict[str, Any] | None = None,
+        run_mode: str = "agent",
     ) -> Iterator[dict[str, Any]]:
         runtime = self._prepare_agent_tool_runtime(
             model,
@@ -503,6 +517,7 @@ class AIChatService:
             context_snapshot=context_snapshot,
             prompt_tool_calls=prompt_tool_calls,
             tool_context=tool_context,
+            run_mode=run_mode,
         )
         if runtime is None:
             yield {"type": "_agent_result", "result": None}
@@ -589,6 +604,7 @@ class AIChatService:
         context_snapshot: dict[str, Any] | None,
         prompt_tool_calls: list[dict[str, Any]],
         tool_context: dict[str, Any] | None = None,
+        run_mode: str = "agent",
     ) -> AgentToolRuntime | None:
         if self._tool_registry is None:
             return None
@@ -630,8 +646,8 @@ class AIChatService:
             tool_map={str(tool.name): tool for tool in tools},
             langchain_messages=_to_langchain_messages(
                 messages,
-                _prompt_for_mode(context_snapshot, "agent", prompt_tool_calls),
-                system_prompt=AGENT_SYSTEM_PROMPT,
+                _prompt_for_mode(context_snapshot, run_mode, prompt_tool_calls, tools),
+                system_prompt=AGENT_SYSTEM_PROMPT if run_mode == "agent" else SYSTEM_PROMPT,
             ),
             tool_message_cls=ToolMessage,
         )
@@ -682,6 +698,32 @@ def _normalize_run_mode(run_mode: str) -> str:
     raise ValueError("run_mode must be chat or agent")
 
 
+def _fit_messages_to_budget(
+    messages: list[dict[str, Any]],
+    *,
+    total_char_budget: int = AI_CONTEXT_HISTORY_CHAR_BUDGET,
+    per_message_char_limit: int = AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT,
+) -> list[dict[str, Any]]:
+    if not isinstance(messages, list) or not messages:
+        return []
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for message in reversed(messages):
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "")
+        if len(content) > per_message_char_limit:
+            content = f"{content[:per_message_char_limit]}\n[earlier message truncated for context budget]"
+        projected = used + len(content)
+        if kept and projected > total_char_budget:
+            continue
+        next_message = dict(message)
+        next_message["role"] = role
+        next_message["content"] = content
+        kept.append(next_message)
+        used = projected
+    return list(reversed(kept))
+
+
 def _message_run_mode(message: dict[str, Any]) -> str:
     meta = message.get("meta")
     if not isinstance(meta, dict):
@@ -693,14 +735,29 @@ def _prompt_for_mode(
     context_snapshot: dict[str, Any] | None,
     run_mode: str,
     tool_calls: list[dict[str, Any]],
+    tools: list[Any] | None = None,
 ) -> str:
     base_prompt = _context_prompt(context_snapshot)
-    if run_mode != "agent":
+    tool_guidance = _tool_catalog_prompt(tools)
+    if run_mode != "agent" and not tool_calls and not tool_guidance:
         return base_prompt
+    if run_mode != "agent":
+        return (
+            "This chat message may use read-only rover and replay tools when needed. Use tool/context results as current facts. "
+            "If live telemetry is stale, prefer the last known replay-backed state when available.\n"
+            f"{tool_guidance}"
+            f"Read-only tool/context results: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
+            f"{base_prompt}"
+        )
     return (
         "Agent mode is enabled for this message. Use the read-only tool/context results below as current facts. "
+        "When the operator asks about nearby, nearest, left, right, ahead, object kinds, sessions, duration, path length, "
+        "travel distance, or furthest distance, call the matching tools instead of answering from memory. "
+        "Treat travel distance as path_length_m. Treat furthest from home/start as max_distance_from_start_m. "
+        "For follow-up references like 'the first one in each set', prefer session_ids already named in recent conversation history. "
         "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, rover pose, "
         "or telemetry values.\n"
+        f"{tool_guidance}"
         f"Read-only tool calls: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
         f"{base_prompt}"
     )
@@ -767,6 +824,7 @@ def _allowed_agent_tool_names(context_snapshot: dict[str, Any] | None) -> set[st
         allowed.update({
             "get_current_replay_summary",
             "get_recent_telemetry",
+            "list_replay_sessions",
             "resolve_replay_sessions",
             "get_replay_session_summary",
             "get_replay_session_metrics",
@@ -776,6 +834,50 @@ def _allowed_agent_tool_names(context_snapshot: dict[str, Any] | None) -> set[st
             "aggregate_replay_sessions",
         })
     return allowed
+
+
+def _should_use_read_only_tools(messages: list[dict[str, Any]], context_snapshot: dict[str, Any] | None) -> bool:
+    if not isinstance(messages, list) or not messages:
+        return False
+    latest_user = next((message for message in reversed(messages) if message.get("role") == "user"), None)
+    if not isinstance(latest_user, dict):
+        return False
+    content = str(latest_user.get("content") or "").strip().lower()
+    if not content:
+        return False
+    if not _allowed_agent_tool_names(context_snapshot):
+        return False
+    return any(
+        token in content
+        for token in (
+            "replay",
+            "session",
+            "telemetry",
+            "duration",
+            "travel distance",
+            "path length",
+            "distance from home",
+            "distance from start",
+            "furthest",
+            "longest",
+            "current state of rover",
+            "current rover state",
+            "last known",
+        )
+    )
+
+
+def _tool_catalog_prompt(tools: list[Any] | None) -> str:
+    if not isinstance(tools, list) or not tools:
+        return ""
+    names = [
+        str(getattr(tool, "name", "")).strip()
+        for tool in tools
+        if str(getattr(tool, "name", "")).strip()
+    ]
+    if not names:
+        return ""
+    return f"Available read-only tools: {', '.join(names)}.\n"
 
 
 def _context_prompt(context_snapshot: dict[str, Any] | None) -> str:

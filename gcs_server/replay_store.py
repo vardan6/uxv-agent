@@ -394,6 +394,34 @@ class ReplayStore:
             for row in rows
         ]
 
+    def get_latest_telemetry_sample(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT ts, payload_json, position_x, position_y, position_z, gps_lat, gps_lon, gps_alt,
+                       heading_deg, speed_m_s, speed_km_h, has_position, has_gps, position_frame
+                FROM replay_telemetry
+                WHERE session_id = ?
+                ORDER BY ts DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "ts": row["ts"],
+            "payload": json.loads(row["payload_json"]),
+            "position": _row_position(row),
+            "gps": _row_gps(row),
+            "heading_deg": row["heading_deg"],
+            "speed_m_s": row["speed_m_s"],
+            "speed_km_h": row["speed_km_h"],
+            "has_position": bool(row["has_position"]),
+            "has_gps": bool(row["has_gps"]),
+            "position_frame": row["position_frame"] or "unknown",
+        }
+
     def list_session_events(
         self,
         session_id: str,

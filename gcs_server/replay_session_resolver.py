@@ -34,6 +34,7 @@ LAST_N_RE = re.compile(r"\b(?:last|latest|most recent)\s+(\d+)\s+sessions?\b", r
 FROM_LAST_RE = re.compile(r"\b((?:\d+)(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+from\s+last\b", re.IGNORECASE)
 ORDINAL_SESSION_RE = re.compile(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th)?)\s+sessions?\b", re.IGNORECASE)
 SESSION_ID_RE = re.compile(r"\bsession-[a-z0-9]+\b", re.IGNORECASE)
+ALL_SESSIONS_RE = re.compile(r"\b(?:all|every)\b(?:\s+\w+){0,3}\s+\bsessions?\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +127,7 @@ class ReplaySessionResolver:
             if target:
                 return self._resolve_date_range(target, target, tz_name, tzinfo, sessions_desc)
 
-        if "all sessions" in lower or "every session" in lower:
+        if ALL_SESSIONS_RE.search(text):
             return _selection(
                 "all_sessions",
                 [item["session_id"] for item in sessions_desc],
@@ -186,6 +187,14 @@ class ReplaySessionResolver:
                 [item["session_id"] for item in sessions_asc[max(0, ordinal - 1):ordinal]],
                 {"timezone": tz_name, "sort_order": "started_at_asc", "ordinal": ordinal, "source": "ordinal_session"},
                 sessions_asc,
+            )
+
+        if _looks_like_cross_session_ranking_query(lower):
+            return _selection(
+                "all_sessions_ranking_fallback",
+                [item["session_id"] for item in sessions_desc],
+                {"timezone": tz_name, "sort_order": "started_at_desc", "source": "ranking_query_fallback"},
+                sessions_desc,
             )
 
         if active_session_id:
@@ -372,3 +381,24 @@ def _month_from_token(token: str) -> int | None:
     clean = token[:3].lower()
     months = {name[:3].lower(): index for index, name in enumerate(calendar.month_name) if name}
     return months.get(clean)
+
+
+def _looks_like_cross_session_ranking_query(text: str) -> bool:
+    if "session" not in text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "longest",
+            "shortest",
+            "top",
+            "duration",
+            "travel distance",
+            "path length",
+            "furthest",
+            "farthest",
+            "max distance",
+            "distance from start",
+            "distance from home",
+        )
+    )

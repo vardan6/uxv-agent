@@ -61,18 +61,56 @@
             <span id="ai-status-pill" class="pill warn">Idle</span>
           </div>
 
-          <section id="ai-source-controls" class="ai-source-controls" aria-label="AI source controls"></section>
-
           <div id="ai-message-list" class="ai-message-list" aria-live="polite"></div>
 
           <form id="ai-message-form" class="ai-composer">
-            <textarea id="ai-message-input" rows="3" placeholder="Ask the configured General Chat provider"></textarea>
+            <div class="ai-composer-input-wrap">
+              <textarea id="ai-message-input" rows="3" placeholder="Ask anything"></textarea>
+              <div
+                id="ai-slash-menu"
+                class="ai-slash-menu"
+                role="listbox"
+                aria-label="AI slash commands"
+                hidden
+              ></div>
+            </div>
             <div class="ai-composer-actions">
               <div class="ai-run-mode-toggle" role="group" aria-label="Message mode">
                 <button class="ghost active" type="button" data-run-mode="chat" aria-pressed="true">Chat</button>
                 <button class="ghost" type="button" data-run-mode="agent" aria-pressed="false">Agent</button>
-                <button class="ghost" type="button" data-run-mode="intent" aria-pressed="false" title="Parse a natural-language rover task into structured intent. Non-executing.">Intent Test</button>
-                <button class="ghost" type="button" data-run-mode="workbench" aria-pressed="false" title="Plan rover missions using the AI workbench. Generates a draft requiring operator approval. Non-executing.">Workbench</button>
+                <button class="ghost" type="button" data-run-mode="intent" aria-pressed="false" hidden title="Parse a natural-language rover task into structured intent. Non-executing.">Intent Test</button>
+                <button class="ghost" type="button" data-run-mode="workbench" aria-pressed="false" hidden title="Plan rover missions using the AI workbench. Generates a draft requiring operator approval. Non-executing.">Workbench</button>
+              </div>
+              <div class="ai-sources-control" data-ai-sources-control>
+                <button
+                  id="ai-sources-toggle"
+                  class="ghost ai-sources-toggle"
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  aria-controls="ai-sources-popover"
+                  title="Per-session retrieval source controls"
+                >
+                  <span class="ai-sources-toggle-label">Sources</span>
+                  <span class="ai-sources-toggle-count" id="ai-sources-toggle-count">0/0</span>
+                  <span class="ai-sources-toggle-caret" aria-hidden="true">▾</span>
+                </button>
+                <div
+                  id="ai-sources-popover"
+                  class="ai-sources-popover"
+                  role="dialog"
+                  aria-label="Source controls"
+                  hidden
+                >
+                  <div class="ai-sources-popover-head">
+                    <h3>Source Controls</h3>
+                    <span class="pill" id="ai-sources-popover-count">0/0 enabled</span>
+                  </div>
+                  <p class="ai-sources-popover-note">
+                    Toggle which retrieval sources this session can use. Saved per session.
+                  </p>
+                  <div class="ai-sources-popover-list" id="ai-source-controls"></div>
+                </div>
               </div>
               <p id="ai-status" class="status-banner">Create or open a session to begin.</p>
               <div class="inline-actions">

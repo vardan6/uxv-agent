@@ -100,7 +100,7 @@ class ToolRegistry:
         definitions = [
             ToolDefinition(
                 "get_current_rover_state",
-                "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state.",
+                "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.",
                 READ_ONLY,
                 {},
                 {},
@@ -108,7 +108,7 @@ class ToolRegistry:
             ),
             ToolDefinition(
                 "get_scene_summary",
-                "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name.",
+                "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.",
                 READ_ONLY,
                 {},
                 {},
@@ -116,28 +116,29 @@ class ToolRegistry:
             ),
             ToolDefinition(
                 "query_objects_in_front",
-                "Find map objects in front of the rover within max_distance_m and fov_deg. Optional kinds filters the returned object kinds.",
+                "Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds.",
                 READ_ONLY,
                 {},
                 {},
                 self._query_objects_in_front,
             ),
-            ToolDefinition("query_objects_near", "Find map objects near the rover within radius_m.", READ_ONLY, {}, {}, self._query_objects_near),
-            ToolDefinition("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string.", READ_ONLY, {}, {}, self._query_objects_by_kind),
-            ToolDefinition("query_objects_to_left", "Find map objects to the rover's left.", READ_ONLY, {}, {}, self._query_objects_to_left),
-            ToolDefinition("query_objects_to_right", "Find map objects to the rover's right.", READ_ONLY, {}, {}, self._query_objects_to_right),
-            ToolDefinition("query_nearest_objects", "Find nearest map objects to the rover.", READ_ONLY, {}, {}, self._query_nearest_objects),
-            ToolDefinition("resolve_spatial_target", "Resolve a structured spatial target description against the current map and rover pose.", PLANNING, {}, {}, self._resolve_spatial_target),
+            ToolDefinition("query_objects_near", "Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings.", READ_ONLY, {}, {}, self._query_objects_near),
+            ToolDefinition("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.", READ_ONLY, {}, {}, self._query_objects_by_kind),
+            ToolDefinition("query_objects_to_left", "Find map objects to the rover's left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.", READ_ONLY, {}, {}, self._query_objects_to_left),
+            ToolDefinition("query_objects_to_right", "Find map objects to the rover's right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.", READ_ONLY, {}, {}, self._query_objects_to_right),
+            ToolDefinition("query_nearest_objects", "Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds.", READ_ONLY, {}, {}, self._query_nearest_objects),
+            ToolDefinition("resolve_spatial_target", "Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects.", PLANNING, {}, {}, self._resolve_spatial_target),
             ToolDefinition("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, {}, {}, self._get_current_mission_state),
             ToolDefinition("get_current_replay_summary", "Get the active replay session summary.", READ_ONLY, {}, {}, self._get_current_replay_summary),
             ToolDefinition("get_recent_telemetry", "Get recent telemetry samples from the active replay session.", READ_ONLY, {}, {}, self._get_recent_telemetry),
-            ToolDefinition("resolve_replay_sessions", "Resolve a natural-language replay session selector.", ANALYSIS, {}, {}, self._resolve_replay_sessions),
+            ToolDefinition("list_replay_sessions", "List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.", ANALYSIS, {}, {}, self._list_replay_sessions),
+            ToolDefinition("resolve_replay_sessions", "Resolve a natural-language replay session selector such as 'all sessions', 'latest 5 sessions', 'first session', or a date-based selector into explicit session_ids.", ANALYSIS, {}, {}, self._resolve_replay_sessions),
             ToolDefinition("get_replay_session_summary", "Get a replay session summary by session_id.", READ_ONLY, {}, {}, self._get_replay_session_summary),
-            ToolDefinition("get_replay_session_metrics", "Get computed replay analytics metrics for a session_id.", ANALYSIS, {}, {}, self._get_replay_session_metrics),
+            ToolDefinition("get_replay_session_metrics", "Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.", ANALYSIS, {}, {}, self._get_replay_session_metrics),
             ToolDefinition("get_replay_session_path", "Get downsampled replay path points for a session_id.", ANALYSIS, {}, {}, self._get_replay_session_path),
             ToolDefinition("search_replay_session_events", "Search runtime events within a replay session.", ANALYSIS, {}, {}, self._search_replay_session_events),
-            ToolDefinition("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids.", ANALYSIS, {}, {}, self._compare_replay_sessions),
-            ToolDefinition("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids.", ANALYSIS, {}, {}, self._aggregate_replay_sessions),
+            ToolDefinition("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._compare_replay_sessions),
+            ToolDefinition("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._aggregate_replay_sessions),
         ]
         return {definition.name: definition for definition in definitions}
 
@@ -163,7 +164,16 @@ class ToolRegistry:
         call.__name__ = definition.name
         call.__doc__ = definition.description
         parameters = list(inspect.signature(definition.handler).parameters.values())
-        call.__signature__ = inspect.Signature(parameters=parameters[1:])  # type: ignore[attr-defined]
+        exposed_parameters = parameters[1:]
+        call.__signature__ = inspect.Signature(parameters=exposed_parameters)  # type: ignore[attr-defined]
+        annotations: dict[str, Any] = {}
+        for parameter in exposed_parameters:
+            if parameter.annotation is not inspect.Signature.empty:
+                annotations[parameter.name] = parameter.annotation
+        return_annotation = inspect.signature(definition.handler).return_annotation
+        if return_annotation is not inspect.Signature.empty:
+            annotations["return"] = return_annotation
+        call.__annotations__ = annotations
         return call
 
     def _is_allowed(self, definition: ToolDefinition, permissions: frozenset[str]) -> bool:
@@ -214,6 +224,20 @@ class ToolRegistry:
     def _get_recent_telemetry(self, context: ToolInvocationContext, seconds: int = 120, limit: int = 10) -> list[dict[str, Any]]:
         return AIContextService(context.runtime).get_recent_telemetry(seconds=seconds, limit=limit)
 
+    def _list_replay_sessions(
+        self,
+        context: ToolInvocationContext,
+        limit: int = 100,
+        order: str = "desc",
+    ) -> dict[str, Any]:
+        sessions = context.runtime.replay_analytics.list_sessions(limit=max(1, int(limit)), order=order)
+        return {
+            "count": len(sessions),
+            "limit": max(1, int(limit)),
+            "order": "asc" if str(order).strip().lower() == "asc" else "desc",
+            "sessions": sessions,
+        }
+
     def _resolve_replay_sessions(self, context: ToolInvocationContext, selector: str, timezone_name: str = "") -> dict[str, Any]:
         return context.runtime.replay_analytics.resolve_sessions(
             selector,
@@ -237,13 +261,14 @@ class ToolRegistry:
     def _compare_replay_sessions(self, context: ToolInvocationContext, session_ids: list[str]) -> dict[str, Any]:
         return context.runtime.replay_analytics.compare_sessions(session_ids)
 
-    def _aggregate_replay_sessions(self, context: ToolInvocationContext, selector: str = "", session_ids: list[str] | None = None, timezone_name: str = "") -> dict[str, Any]:
+    def _aggregate_replay_sessions(self, context: ToolInvocationContext, selector: str = "", session_ids: list[str] | None = None, timezone_name: str = "", top_n: int = 5) -> dict[str, Any]:
         return context.runtime.replay_analytics.aggregate_sessions(
             session_ids=session_ids or None,
             selector=selector or None,
             timezone_name=str(timezone_name or context.timezone_name).strip(),
             active_session_id=context.runtime.replay_store.current_session_id,
             limit=1000,
+            top_n=max(1, int(top_n)),
         )
 
 

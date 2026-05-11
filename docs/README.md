@@ -39,7 +39,7 @@ How the system is built.
 |---|---|
 | [technical/gcs/overview.md](./technical/gcs/overview.md) | What the GCS does today; main files |
 | [technical/gcs/api-and-runtime.md](./technical/gcs/api-and-runtime.md) | HTTP/WebSocket routes, runtime model |
-| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and Intent Test mode |
+| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and the `/intent` slash command (formerly Intent Test mode) |
 | [technical/gcs/workbench-mode.md](./technical/gcs/workbench-mode.md) | Workbench graph stages, endpoints, interrupt types, troubleshooting |
 | [technical/gcs/llm-capability-matrix.md](./technical/gcs/llm-capability-matrix.md) | Configured providers and tool-calling fit |
 | [technical/gcs/regressions.md](./technical/gcs/regressions.md) | Behavioral regressions to avoid |
@@ -61,6 +61,7 @@ How the system is built.
 | [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
 | [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
 | [technical/ai/langgraph-design.md](./technical/ai/langgraph-design.md) | LangGraph-based AI agent architecture |
+| [technical/ai/langgraph-graph-diagrams-codex-gpt-5.5.md](./technical/ai/langgraph-graph-diagrams-codex-gpt-5.5.md) | Current and planned LangGraph state-machine diagrams, including planned RAG capabilities |
 | [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
 
 ## Decisions (ADRs)
