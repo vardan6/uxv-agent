@@ -677,6 +677,11 @@ async def favicon() -> Response:
     return Response(status_code=204)
 
 
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+async def chrome_devtools_probe() -> Response:
+    return Response(status_code=204)
+
+
 @app.get("/settings")
 async def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings.html")

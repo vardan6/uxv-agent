@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
+from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
-from .tool_registry import DEFAULT_PERMISSIONS
 
 
 SYSTEM_PROMPT = """You are the AI chat assistant inside Remote Rover GCS.
@@ -29,23 +28,6 @@ If a tool returns {"ok": false, "error": "..."}, report the failure clearly to t
 AI_CONTEXT_MESSAGE_LIMIT = 40
 AI_CONTEXT_HISTORY_CHAR_BUDGET = 16000
 AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT = 4000
-AI_AGENT_MAX_TOOL_ITERATIONS = 6
-
-
-@dataclass(slots=True)
-class AgentInvokeResult:
-    content: str
-    tool_calls: list[dict[str, Any]]
-    response_metadata: dict[str, Any]
-    usage_metadata: dict[str, Any]
-
-
-@dataclass(slots=True)
-class AgentToolRuntime:
-    bound_model: Any
-    tool_map: dict[str, Any]
-    langchain_messages: list[Any]
-    tool_message_cls: Any
 
 
 class AIChatService:
@@ -58,6 +40,15 @@ class AIChatService:
         self._store = store
         self._secret_resolver = secret_resolver
         self._tool_registry = tool_registry
+        self._agent_loop = AgentLoopRuntime(
+            tool_registry=tool_registry,
+            prompt_builder=_prompt_for_mode,
+            system_prompt_for_mode=_system_prompt_for_run_mode,
+            allowed_tool_names=_allowed_agent_tool_names,
+            response_content=_response_content,
+            usage_metadata=_usage_metadata,
+            tool_calling_unsupported=_is_tool_calling_unsupported_error,
+        )
 
     def send_message(
         self,
@@ -277,8 +268,11 @@ class AIChatService:
                         meta={
                             "run_mode": clean_run_mode,
                             "tool_calls": agent_result.tool_calls,
+                            "agent_trace": agent_result.trace_events,
                             "prompt_context_tool_calls": prompt_tool_calls,
                             "agent_permissions": _agent_permissions(clean_run_mode),
+                            "agent_stop_reason": agent_result.stop_reason,
+                            "agent_iterations": agent_result.iterations,
                             "agent_tool_fallback_error": agent_tooling_error,
                             "response_metadata": agent_result.response_metadata,
                             "usage_metadata": agent_result.usage_metadata,
@@ -396,8 +390,11 @@ class AIChatService:
                     meta={
                         "run_mode": clean_run_mode,
                         "tool_calls": agent_result.tool_calls,
+                        "agent_trace": agent_result.trace_events,
                         "prompt_context_tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
+                        "agent_stop_reason": agent_result.stop_reason,
+                        "agent_iterations": agent_result.iterations,
                         "agent_tool_fallback_error": agent_tooling_error,
                         "response_metadata": agent_result.response_metadata,
                         "usage_metadata": agent_result.usage_metadata,
@@ -441,64 +438,13 @@ class AIChatService:
         tool_context: dict[str, Any] | None = None,
         run_mode: str = "agent",
     ) -> AgentInvokeResult | None:
-        runtime = self._prepare_agent_tool_runtime(
+        return self._agent_loop.invoke_with_tools(
             model,
             messages=messages,
             context_snapshot=context_snapshot,
             prompt_tool_calls=prompt_tool_calls,
             tool_context=tool_context,
             run_mode=run_mode,
-        )
-        if runtime is None:
-            return None
-        executed_tool_calls: list[dict[str, Any]] = []
-        final_response = None
-
-        for _ in range(AI_AGENT_MAX_TOOL_ITERATIONS):
-            try:
-                final_response = runtime.bound_model.invoke(runtime.langchain_messages)
-            except Exception as exc:
-                if _is_tool_calling_unsupported_error(exc):
-                    return None
-                raise
-            runtime.langchain_messages.append(final_response)
-            response_tool_calls = getattr(final_response, "tool_calls", None) or []
-            if not response_tool_calls:
-                break
-            for call in response_tool_calls:
-                tool_name = str(call.get("name") or "").strip()
-                tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
-                tool = runtime.tool_map.get(tool_name)
-                if tool is None:
-                    tool_result: Any = {"ok": False, "error": f"tool '{tool_name}' is not available"}
-                else:
-                    try:
-                        tool_result = tool.invoke(tool_args)
-                    except Exception as exc:
-                        tool_result = {"ok": False, "error": str(exc)}
-                executed_tool_calls.append(
-                    {
-                        "id": str(call.get("id") or ""),
-                        "name": tool_name,
-                        "args": tool_args,
-                        "result": tool_result,
-                    }
-                )
-                runtime.langchain_messages.append(
-                    runtime.tool_message_cls(
-                        content=json.dumps(tool_result, separators=(",", ":"), sort_keys=True),
-                        tool_call_id=str(call.get("id") or tool_name),
-                        name=tool_name,
-                    )
-                )
-
-        if final_response is None:
-            return None
-        return AgentInvokeResult(
-            content=_response_content(final_response),
-            tool_calls=executed_tool_calls,
-            response_metadata=getattr(final_response, "response_metadata", {}) or {},
-            usage_metadata=_usage_metadata(final_response),
         )
 
     def _stream_agent_with_tools_events(
@@ -511,7 +457,7 @@ class AIChatService:
         tool_context: dict[str, Any] | None = None,
         run_mode: str = "agent",
     ) -> Iterator[dict[str, Any]]:
-        runtime = self._prepare_agent_tool_runtime(
+        yield from self._agent_loop.stream_tool_events(
             model,
             messages=messages,
             context_snapshot=context_snapshot,
@@ -519,82 +465,6 @@ class AIChatService:
             tool_context=tool_context,
             run_mode=run_mode,
         )
-        if runtime is None:
-            yield {"type": "_agent_result", "result": None}
-            return
-
-        executed_tool_calls: list[dict[str, Any]] = []
-        final_response = None
-
-        for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
-            try:
-                final_response = runtime.bound_model.invoke(runtime.langchain_messages)
-            except Exception as exc:
-                if _is_tool_calling_unsupported_error(exc):
-                    yield {"type": "_agent_result", "result": None}
-                    return
-                raise
-            runtime.langchain_messages.append(final_response)
-            response_tool_calls = getattr(final_response, "tool_calls", None) or []
-            if not response_tool_calls:
-                break
-            for call in response_tool_calls:
-                tool_name = str(call.get("name") or "").strip()
-                tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
-                tool_call_id = str(call.get("id") or tool_name)
-                started = time.perf_counter()
-                yield {
-                    "type": "agent_tool_start",
-                    "tool_call": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "args": tool_args,
-                        "iteration": iteration,
-                    },
-                }
-                tool = runtime.tool_map.get(tool_name)
-                if tool is None:
-                    tool_result: Any = {"ok": False, "error": f"tool '{tool_name}' is not available"}
-                else:
-                    try:
-                        tool_result = tool.invoke(tool_args)
-                    except Exception as exc:
-                        tool_result = {"ok": False, "error": str(exc)}
-                executed_tool_call = {
-                    "id": tool_call_id,
-                    "name": tool_name,
-                    "args": tool_args,
-                    "result": tool_result,
-                }
-                executed_tool_calls.append(executed_tool_call)
-                yield {
-                    "type": "agent_tool_result",
-                    "tool_call": {
-                        **executed_tool_call,
-                        "iteration": iteration,
-                        "latency_ms": int((time.perf_counter() - started) * 1000),
-                    },
-                }
-                runtime.langchain_messages.append(
-                    runtime.tool_message_cls(
-                        content=json.dumps(tool_result, separators=(",", ":"), sort_keys=True),
-                        tool_call_id=tool_call_id,
-                        name=tool_name,
-                    )
-                )
-
-        if final_response is None:
-            yield {"type": "_agent_result", "result": None}
-            return
-        yield {
-            "type": "_agent_result",
-            "result": AgentInvokeResult(
-                content=_response_content(final_response),
-                tool_calls=executed_tool_calls,
-                response_metadata=getattr(final_response, "response_metadata", {}) or {},
-                usage_metadata=_usage_metadata(final_response),
-            ),
-        }
 
     def _prepare_agent_tool_runtime(
         self,
@@ -606,50 +476,13 @@ class AIChatService:
         tool_context: dict[str, Any] | None = None,
         run_mode: str = "agent",
     ) -> AgentToolRuntime | None:
-        if self._tool_registry is None:
-            return None
-        bind_tools = getattr(model, "bind_tools", None)
-        if not callable(bind_tools):
-            return None
-
-        try:
-            from langchain_core.messages import ToolMessage
-        except ImportError as exc:
-            raise RuntimeError("LangChain core is not installed. Install gcs_server/requirements-gcs.txt.") from exc
-
-        ctx = tool_context or {}
-        runtime = ctx.get("runtime")
-        timezone_name = str(ctx.get("timezone_name") or "").strip()
-        tools = self._tool_registry.build_langchain_tools(
-            runtime,
-            context_snapshot or {},
-            timezone_name=timezone_name,
-            permissions=set(DEFAULT_PERMISSIONS),
-        )
-        allowed_names = _allowed_agent_tool_names(context_snapshot)
-        if allowed_names is not None:
-            tools = [tool for tool in tools if str(getattr(tool, "name", "")) in allowed_names]
-        if not tools:
-            return None
-
-        try:
-            # OpenAI Responses normalizes omitted tool strictness into strict mode,
-            # which breaks our optional tool arguments (for example max_distance_m).
-            # Force best-effort tool calling so the existing schemas remain valid.
-            bound_model = bind_tools(tools, strict=False)
-        except Exception as exc:
-            if _is_tool_calling_unsupported_error(exc):
-                return None
-            raise
-        return AgentToolRuntime(
-            bound_model=bound_model,
-            tool_map={str(tool.name): tool for tool in tools},
-            langchain_messages=_to_langchain_messages(
-                messages,
-                _prompt_for_mode(context_snapshot, run_mode, prompt_tool_calls, tools),
-                system_prompt=AGENT_SYSTEM_PROMPT if run_mode == "agent" else SYSTEM_PROMPT,
-            ),
-            tool_message_cls=ToolMessage,
+        return self._agent_loop.prepare_tool_runtime(
+            model,
+            messages=messages,
+            context_snapshot=context_snapshot,
+            prompt_tool_calls=prompt_tool_calls,
+            tool_context=tool_context,
+            run_mode=run_mode,
         )
 
 
@@ -729,6 +562,10 @@ def _message_run_mode(message: dict[str, Any]) -> str:
     if not isinstance(meta, dict):
         meta = {}
     return _normalize_run_mode(str(meta.get("run_mode") or "chat"))
+
+
+def _system_prompt_for_run_mode(run_mode: str) -> str:
+    return AGENT_SYSTEM_PROMPT if run_mode == "agent" else SYSTEM_PROMPT
 
 
 def _prompt_for_mode(

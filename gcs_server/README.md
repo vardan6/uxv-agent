@@ -37,6 +37,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
 - Chat/Agent/Intent Test/Workbench composer mode toggle
 - Read-only Agent mode tools for current rover state, scene summary, front/near/by-kind object queries, mission state, and replay analytics
+- Foldable in-message Agent activity panel showing live thinking/activity state, bounded iteration trace, tool calls, tool arguments/results, and prompt-context injections
 - Structured rover intent parsing, target resolution hints, and mission-draft approval foundation
 
 ## Current Limitations
@@ -149,7 +150,8 @@ Main modules:
 - `video.py`: MQTT camera frame decoding helper
 - `ai/provider_registry.py`: configured provider to LangChain model adapter
 - `ai/context_service.py`: live rover/runtime/settings/LLM/map/replay current-context providers for AI Chat
-- `ai/chat_service.py`: read-only Chat/Agent orchestration
+- `ai/chat_service.py`: read-only Chat/Agent orchestration and session persistence
+- `ai/agent_loop.py`: extracted bounded Agent tool loop used by Agent chat
 - `ai/session_store.py`: SQLite AI session and message storage
 - `ai/secret_store.py`: local stored-secret helper
 - `static/`: browser UI assets
@@ -221,6 +223,8 @@ Implemented now:
 - `Intent Test` parses natural-language rover tasks into a validated structured intent object and can optionally show spatial target candidates
 - Agent tools close over the request's prebuilt context snapshot so they do not await runtime state inside LangChain's synchronous tool loop
 - streaming Agent mode emits read-only tool progress events while tools run
+- Agent chat messages render a foldable in-message activity panel that can show run start/end, bounded iteration count, tool usage, tool arguments/results, prompt-context injections, and tool fallback errors
+- the activity panel is execution tracing only; it is not hidden chain-of-thought exposure
 - settings and LLM context are structured current facts, not RAG documents
 - larger map/object/replay/perception details should be retrieved on demand through tools rather than injected into every chat prompt
 - sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values

@@ -21,7 +21,7 @@ What the project is, what users see, what the system must do.
 | [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
 | [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: Chat, Agent, Intent Test, Workbench modes |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
-| [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Product-level requirements for the AI agent layer, safety boundaries, use cases |
+| [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Canonical AI agent product requirements, safety boundaries, capability ladder, fixed decisions |
 
 ## Technical (Implementation)
 
@@ -58,10 +58,11 @@ How the system is built.
 
 | Doc | Purpose |
 |---|---|
+| [technical/ai/README.md](./technical/ai/README.md) | Current AI documentation index and canonical reading order |
+| [technical/ai/ai-agent-functional-spec.md](./technical/ai/ai-agent-functional-spec.md) | Canonical AI agent technical spec: runtime, tools, policy, events, migration, rollback |
+| [technical/ai/ai-agent-graph-spec.md](./technical/ai/ai-agent-graph-spec.md) | Canonical AI agent diagrams and state machines |
 | [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
 | [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
-| [technical/ai/langgraph-design.md](./technical/ai/langgraph-design.md) | LangGraph-based AI agent architecture |
-| [technical/ai/langgraph-graph-diagrams-codex-gpt-5.5.md](./technical/ai/langgraph-graph-diagrams-codex-gpt-5.5.md) | Current and planned LangGraph state-machine diagrams, including planned RAG capabilities |
 | [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
 
 ## Decisions (ADRs)
@@ -106,7 +107,9 @@ For technical readers:
 
 1. [technical/architecture.md](./technical/architecture.md)
 2. [technical/gcs/overview.md](./technical/gcs/overview.md)
-3. [technical/ai/context-layer.md](./technical/ai/context-layer.md)
-4. [technical/ai/langgraph-design.md](./technical/ai/langgraph-design.md)
-5. [decisions/](./decisions/) — read all ADRs
-6. [operations/run-and-config.md](./operations/run-and-config.md)
+3. [product/ai-agent-requirements.md](./product/ai-agent-requirements.md)
+4. [technical/ai/ai-agent-functional-spec.md](./technical/ai/ai-agent-functional-spec.md)
+5. [technical/ai/ai-agent-graph-spec.md](./technical/ai/ai-agent-graph-spec.md)
+6. [technical/ai/context-layer.md](./technical/ai/context-layer.md)
+7. [decisions/](./decisions/) — read all ADRs
+8. [operations/run-and-config.md](./operations/run-and-config.md)

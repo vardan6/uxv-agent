@@ -1,5 +1,9 @@
 const replayState = {
   sessions: [],
+  sessionSort: {
+    field: 'started_at',
+    direction: 'desc',
+  },
   currentSessionId: null,
   loadedSession: null,
   playbackIndex: 0,
@@ -49,6 +53,9 @@ const replayEls = {
   replayControlsPanel: document.querySelector('.replay-controls-panel'),
   replayMap: document.getElementById('replay-map'),
   sessionList: document.getElementById('session-list'),
+  sessionCountPill: document.getElementById('session-count-pill'),
+  sessionSortButtons: Array.from(document.querySelectorAll('[data-session-sort]')),
+  sessionSortDirection: document.getElementById('session-sort-direction'),
   currentSessionPill: document.getElementById('current-session-pill'),
   loadedSessionPill: document.getElementById('loaded-session-pill'),
   refreshSessions: document.getElementById('refresh-sessions'),
@@ -93,6 +100,28 @@ const REPLAY_PATH_FIT_PADDING = [64, 64];
 const REPLAY_PANE_MIN_HEIGHT = 560;
 const REPLAY_PANE_MAX_HEIGHT = 1600;
 const REPLAY_PANE_BOTTOM_GUTTER = 24;
+const REPLAY_SESSION_SORT_META = {
+  started_at: {
+    label: 'date',
+    ascendingLabel: 'oldest first',
+    descendingLabel: 'newest first',
+  },
+  telemetry_count: {
+    label: 'telemetry frame count',
+    ascendingLabel: 'fewest telemetry frames first',
+    descendingLabel: 'most telemetry frames first',
+  },
+  control_count: {
+    label: 'control count',
+    ascendingLabel: 'fewest controls first',
+    descendingLabel: 'most controls first',
+  },
+  runtime_event_count: {
+    label: 'event count',
+    ascendingLabel: 'fewest events first',
+    descendingLabel: 'most events first',
+  },
+};
 
 function isDesktopReplayLayout() {
   return window.matchMedia('(min-width: 1101px)').matches;
@@ -495,7 +524,7 @@ function loadReplaySidebarWidth() {
   } catch (_) {
     // Ignore storage failures.
   }
-  return 320;
+  return 344;
 }
 
 function syncReplaySplitLayout() {
@@ -681,6 +710,55 @@ function sessionLabel(session) {
   return `${session.backend_type} • ${start}`;
 }
 
+function sessionSortValue(session, field) {
+  if (field === 'started_at') {
+    return Number(session.started_at) || 0;
+  }
+  return Number(session[field]) || 0;
+}
+
+function orderedSessions() {
+  const direction = replayState.sessionSort.direction === 'asc' ? 1 : -1;
+  return [...replayState.sessions].sort((left, right) => {
+    const primary = sessionSortValue(left, replayState.sessionSort.field) - sessionSortValue(right, replayState.sessionSort.field);
+    if (primary !== 0) return primary * direction;
+
+    const startedAt = (Number(right.started_at) || 0) - (Number(left.started_at) || 0);
+    if (startedAt !== 0) return startedAt;
+    return String(left.session_id || '').localeCompare(String(right.session_id || ''));
+  });
+}
+
+function sessionCountMarkup(label, value, iconPath) {
+  return `
+    <span class="session-stat" title="${label}: ${value}">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${iconPath}"/></svg>
+      <span>${value}</span>
+    </span>
+  `;
+}
+
+function updateSessionSortUi() {
+  const sortMeta = REPLAY_SESSION_SORT_META[replayState.sessionSort.field] || REPLAY_SESSION_SORT_META.started_at;
+  replayEls.sessionSortButtons.forEach((button) => {
+    const active = button.dataset.sessionSort === replayState.sessionSort.field;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  if (replayEls.sessionSortDirection) {
+    const ascending = replayState.sessionSort.direction === 'asc';
+    replayEls.sessionSortDirection.classList.toggle('ascending', ascending);
+    replayEls.sessionSortDirection.setAttribute(
+      'title',
+      `Sort order: ${ascending ? sortMeta.ascendingLabel : sortMeta.descendingLabel}. Click to reverse.`
+    );
+    replayEls.sessionSortDirection.setAttribute(
+      'aria-label',
+      `Sort order is ${ascending ? sortMeta.ascendingLabel : sortMeta.descendingLabel}. Click to reverse.`
+    );
+  }
+}
+
 function clearReplaySelection() {
   stopPlayback();
   replayState.loadedSession = null;
@@ -699,7 +777,12 @@ function clearReplaySelection() {
 function renderSessions() {
   if (!replayEls.sessionList) return;
   replayEls.sessionList.innerHTML = '';
+  if (replayEls.sessionCountPill) {
+    const count = replayState.sessions.length;
+    replayEls.sessionCountPill.textContent = `${count} session${count === 1 ? '' : 's'}`;
+  }
   replayEls.currentSessionPill.textContent = replayState.currentSessionId || 'No active session';
+  updateSessionSortUi();
   if (!replayState.sessions.length) {
     const empty = document.createElement('article');
     empty.className = 'session-item';
@@ -707,7 +790,7 @@ function renderSessions() {
     replayEls.sessionList.appendChild(empty);
     return;
   }
-  for (const session of replayState.sessions) {
+  for (const session of orderedSessions()) {
     const item = document.createElement('article');
     item.className = 'session-item';
     if (session.session_id === replayState.loadedSession?.session?.session_id) {
@@ -718,7 +801,11 @@ function renderSessions() {
     selectButton.className = 'session-select';
     selectButton.innerHTML = `
       <strong class="session-title">${sessionLabel(session)}</strong>
-      <span>${session.telemetry_count} telemetry • ${session.control_count || 0} controls • ${session.runtime_event_count} events</span>
+      <span class="session-meta">
+        ${sessionCountMarkup('Telemetry frames', session.telemetry_count || 0, 'M3 13h3.2l1.7-4.6c.12-.33.6-.31.7.03L11.2 17l2.04-6.12c.11-.34.59-.35.72-.02L15.6 15H21v2h-6.8l-1.45-3.2-2.05 6.16c-.11.33-.58.35-.72.03L7.54 11.7 6.8 15H3v-2Z')}
+        ${sessionCountMarkup('Controls', session.control_count || 0, 'M6 6.5A3.5 3.5 0 0 1 9.5 3h5A3.5 3.5 0 0 1 18 6.5v11a3.5 3.5 0 0 1-3.5 3.5h-5A3.5 3.5 0 0 1 6 17.5v-11Zm3.5-1.5A1.5 1.5 0 0 0 8 6.5v11A1.5 1.5 0 0 0 9.5 19h5a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 14.5 5h-5Zm-.5 4h2v2H9V9Zm4 0h2v2h-2V9Zm-4 4h6v2H9v-2Z')}
+        ${sessionCountMarkup('Events', session.runtime_event_count || 0, 'M12 2a5 5 0 0 0-5 5v2.17c0 .53-.21 1.04-.59 1.41L5 12v1h14v-1l-1.41-1.42A2 2 0 0 1 17 9.17V7a5 5 0 0 0-5-5Zm0 20a2.98 2.98 0 0 0 2.82-2H9.18A2.98 2.98 0 0 0 12 22Zm-3-4v-2h6v2H9Z')}
+      </span>
       <span class="session-id" title="${session.session_id}">${session.session_id}</span>
     `;
     selectButton.addEventListener('click', async () => {
@@ -1332,6 +1419,22 @@ function bindReplayActions() {
   }
   replayEls.refreshSessions?.addEventListener('click', loadSessions);
   replayEls.rolloverSession?.addEventListener('click', rolloverSession);
+  replayEls.sessionSortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextField = button.dataset.sessionSort || 'started_at';
+      if (replayState.sessionSort.field === nextField) {
+        replayState.sessionSort.direction = replayState.sessionSort.direction === 'desc' ? 'asc' : 'desc';
+      } else {
+        replayState.sessionSort.field = nextField;
+        replayState.sessionSort.direction = 'desc';
+      }
+      renderSessions();
+    });
+  });
+  replayEls.sessionSortDirection?.addEventListener('click', () => {
+    replayState.sessionSort.direction = replayState.sessionSort.direction === 'desc' ? 'asc' : 'desc';
+    renderSessions();
+  });
   replayEls.mapViewMode?.addEventListener('change', (event) => {
     replayState.visualMode = event.target.value || 'virtual';
     resetCurrentMapView();

@@ -30,6 +30,7 @@ const aiState = {
       pitch: 1,
     },
   },
+  messageActivityOpen: {},
 };
 
 const AI_SOURCE_CONTROL_META = {
@@ -199,6 +200,21 @@ function isSending() {
 function activeAbortController() {
   const id = aiState.activeSession?.id;
   return id ? liveStateFor(id).abortController : null;
+}
+
+function isMessageActivityOpen(messageId, pending = false) {
+  const key = String(messageId || '');
+  if (!key) return Boolean(pending);
+  if (Object.prototype.hasOwnProperty.call(aiState.messageActivityOpen, key)) {
+    return Boolean(aiState.messageActivityOpen[key]);
+  }
+  return Boolean(pending);
+}
+
+function setMessageActivityOpen(messageId, open) {
+  const key = String(messageId || '');
+  if (!key) return;
+  aiState.messageActivityOpen[key] = Boolean(open);
 }
 
 const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
@@ -454,6 +470,11 @@ function agentToolCalls(message) {
   return [];
 }
 
+function agentTraceEvents(message) {
+  const meta = message?.meta || {};
+  return Array.isArray(meta.agent_trace) ? meta.agent_trace : [];
+}
+
 function summarizeAgentToolResult(result) {
   if (result == null) return '';
   if (typeof result !== 'object') return String(result);
@@ -466,26 +487,203 @@ function summarizeAgentToolResult(result) {
   return keys.slice(0, 4).join(', ');
 }
 
-function renderAgentToolPanel(message) {
+function summarizeAgentToolArgs(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return '';
+  const entries = Object.entries(args).filter(([, value]) => value != null && value !== '');
+  if (!entries.length) return '';
+  return entries.slice(0, 3).map(([key, value]) => {
+    if (Array.isArray(value)) return `${key}: ${value.length} item${value.length === 1 ? '' : 's'}`;
+    if (typeof value === 'object') return `${key}: object`;
+    return `${key}: ${String(value)}`;
+  }).join(' · ');
+}
+
+function prettyAgentJson(value, maxChars = 3600) {
+  if (value == null) return '';
+  let text = '';
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  } catch (_) {
+    text = String(value);
+  }
+  const normalized = String(text || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxChars) return escapeHtml(normalized);
+  return `${escapeHtml(normalized.slice(0, maxChars))}\n…`;
+}
+
+function distinctAgentIterations(message) {
+  const iterations = new Set();
+  agentTraceEvents(message).forEach((event) => {
+    const value = Number(event?.iteration ?? event?.tool_call?.iteration);
+    if (Number.isFinite(value) && value > 0) iterations.add(value);
+  });
+  agentToolCalls(message).forEach((call) => {
+    const value = Number(call?.iteration);
+    if (Number.isFinite(value) && value > 0) iterations.add(value);
+  });
+  const metaIterations = Number(message?.meta?.agent_iterations);
+  if (Number.isFinite(metaIterations) && metaIterations > 0) {
+    for (let index = 1; index <= metaIterations; index += 1) iterations.add(index);
+  }
+  return Array.from(iterations).sort((a, b) => a - b);
+}
+
+function renderAgentToolRows(message) {
   const calls = agentToolCalls(message);
-  if (!calls.length) return '';
-  const rows = calls.map((call) => {
+  return calls.map((call) => {
     const status = call.status || (call.result !== undefined ? 'complete' : 'running');
     const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
+    const argsSummary = summarizeAgentToolArgs(call.args);
     const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
+    const iteration = Number.isFinite(call.iteration) ? `Iteration ${call.iteration}` : '';
     return `
-      <li class="ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
-        <span class="ai-agent-tool-dot" aria-hidden="true"></span>
-        <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
-        <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
-      </li>
+      <details class="ai-activity-step ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
+        <summary>
+          <span class="ai-agent-tool-dot" aria-hidden="true"></span>
+          <span class="ai-activity-step-main">
+            <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
+            <span class="ai-activity-step-meta">
+              ${iteration ? `<span>${escapeHtml(iteration)}</span>` : ''}
+              ${argsSummary ? `<span>${escapeHtml(argsSummary)}</span>` : ''}
+            </span>
+          </span>
+          <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
+        </summary>
+        <div class="ai-activity-step-body">
+          ${call.args && typeof call.args === 'object' && Object.keys(call.args).length
+            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Arguments</div><pre>${prettyAgentJson(call.args, 2400)}</pre></div>`
+            : ''}
+          ${call.result !== undefined
+            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Result</div><pre>${prettyAgentJson(call.result)}</pre></div>`
+            : '<div class="ai-activity-note">Waiting for tool result.</div>'}
+        </div>
+      </details>
+    `;
+  }).join('');
+}
+
+function renderPromptContextRows(message) {
+  const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
+    ? message.meta.prompt_context_tool_calls
+    : [];
+  if (!promptCalls.length) return '';
+  const rows = promptCalls.map((call) => {
+    const summary = summarizeAgentToolResult(call?.result);
+    return `
+      <details class="ai-activity-step">
+        <summary>
+          <span class="ai-activity-step-kind">Context</span>
+          <span class="ai-activity-step-main">
+            <span class="ai-agent-tool-name">${escapeHtml(call?.name || 'context')}</span>
+          </span>
+          <span class="ai-agent-tool-status">${escapeHtml(summary || 'available')}</span>
+        </summary>
+        <div class="ai-activity-step-body">
+          <div class="ai-activity-block">
+            <div class="ai-activity-block-label">Injected result</div>
+            <pre>${prettyAgentJson(call?.result)}</pre>
+          </div>
+        </div>
+      </details>
     `;
   }).join('');
   return `
-    <div class="ai-agent-tools" aria-label="Agent tool activity">
-      <div class="ai-agent-tools-title">Agent tool activity</div>
-      <ul>${rows}</ul>
-    </div>
+    <section class="ai-activity-section">
+      <div class="ai-activity-section-title">Context used</div>
+      <div class="ai-activity-step-list">${rows}</div>
+    </section>
+  `;
+}
+
+function renderAgentTraceChips(message) {
+  const trace = agentTraceEvents(message);
+  const chips = trace.map((event) => {
+    if (!event || typeof event !== 'object') return '';
+    if (event.type === 'agent_iteration_start') {
+      return `<span class="ai-activity-chip">Iteration ${escapeHtml(String(event.iteration || '?'))}</span>`;
+    }
+    if (event.type === 'agent_run_end') {
+      return `<span class="ai-activity-chip">Done · ${escapeHtml(String(event.stop_reason || 'complete'))}</span>`;
+    }
+    if (event.type === 'agent_run_start') {
+      return `<span class="ai-activity-chip">Agent run</span>`;
+    }
+    return '';
+  }).filter(Boolean).join('');
+  if (!chips) return '';
+  return `
+    <section class="ai-activity-section">
+      <div class="ai-activity-section-title">Run trace</div>
+      <div class="ai-activity-chip-row">${chips}</div>
+    </section>
+  `;
+}
+
+function renderAgentActivityDisclosure(message, options = {}) {
+  const pending = Boolean(options.pending);
+  const mode = messageRunMode(message);
+  if (mode !== 'agent') return '';
+  const calls = agentToolCalls(message);
+  const trace = agentTraceEvents(message);
+  const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
+    ? message.meta.prompt_context_tool_calls
+    : [];
+  const fallbackError = String(message?.meta?.agent_tool_fallback_error || '').trim();
+  const iterations = distinctAgentIterations(message);
+  const hasContent = calls.length || trace.length || promptCalls.length || fallbackError || pending;
+  if (!hasContent) return '';
+
+  const title = pending ? 'Thinking now' : 'Agent activity';
+  const status = calls.some((call) => (call?.status || '') === 'running')
+    ? 'running'
+    : (pending ? 'pending' : 'complete');
+  const summaryParts = [];
+  if (iterations.length) summaryParts.push(`${iterations.length} iteration${iterations.length === 1 ? '' : 's'}`);
+  if (calls.length) summaryParts.push(`${calls.length} tool${calls.length === 1 ? '' : 's'}`);
+  if (!summaryParts.length) summaryParts.push(pending ? 'starting' : 'recorded');
+  const stateLabel = pending
+    ? (calls.length ? 'Live' : 'Starting')
+    : (calls.length ? 'Complete' : 'Recorded');
+  const toolRows = renderAgentToolRows(message);
+  const openAttr = isMessageActivityOpen(message.id, pending) ? ' open' : '';
+
+  return `
+    <details class="ai-activity-disclosure ai-activity-${escapeHtml(status)}${pending ? ' ai-activity-live' : ''}" data-message-disclosure="activity" data-message-id="${escapeHtml(message.id)}"${openAttr}>
+      <summary>
+        <span class="ai-activity-summary-main">
+          ${pending
+            ? `<span class="ai-thinking ai-thinking-inline" role="status" aria-live="polite" aria-label="Assistant is working">
+                <span class="ai-thinking-core" aria-hidden="true"></span>
+                <span class="ai-thinking-rings" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+              </span>`
+            : '<span class="ai-activity-caret" aria-hidden="true"></span>'}
+          <span class="ai-activity-title">${escapeHtml(title)}</span>
+        </span>
+        <span class="ai-activity-summary-side">
+          <span class="ai-activity-state ai-activity-state-${escapeHtml(status)}">${escapeHtml(stateLabel)}</span>
+          <span class="ai-activity-summary-meta">${escapeHtml(summaryParts.join(' · '))}</span>
+        </span>
+      </summary>
+      <div class="ai-activity-panel">
+        ${renderAgentTraceChips(message)}
+        ${toolRows
+          ? `<section class="ai-activity-section">
+              <div class="ai-activity-section-title">Tools used</div>
+              <div class="ai-activity-step-list">${toolRows}</div>
+            </section>`
+          : (pending ? '<div class="ai-activity-note">Waiting for the first tool call.</div>' : '')}
+        ${renderPromptContextRows(message)}
+        ${fallbackError
+          ? `<section class="ai-activity-section">
+              <div class="ai-activity-section-title">Fallback</div>
+              <div class="ai-activity-note">${escapeHtml(fallbackError)}</div>
+            </section>`
+          : ''}
+      </div>
+    </details>
   `;
 }
 
@@ -1661,14 +1859,10 @@ function renderMessages(options = {}) {
         </span>
       </div>
       <div class="ai-message-body">${isPendingAssistant
-        ? `<span class="ai-thinking" role="status" aria-live="polite" aria-label="Assistant is working">
-            <span class="ai-thinking-core" aria-hidden="true"></span>
-            <span class="ai-thinking-rings" aria-hidden="true">
-              <span></span><span></span><span></span>
-            </span>
-            <span class="ai-thinking-text">Thinking</span>
-          </span>`
-        : (message.role === 'assistant' ? renderMarkdown(message.content) : escapeHtml(message.content))}
+        ? `${renderAgentActivityDisclosure(message, { pending: true })}`
+        : (message.role === 'assistant'
+            ? `${renderMarkdown(message.content)}${renderAgentActivityDisclosure(message)}`
+            : escapeHtml(message.content))}
         ${message.role === 'assistant' && messageRunMode(message) === 'intent' ? renderIntentPanel(message) : ''}</div>
       ${message.role === 'assistant'
         ? (() => {
@@ -1695,8 +1889,10 @@ function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
   const now = Date.now() / 1000;
   const pendingUserId = `pending-user-${crypto.randomUUID()}`;
   const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  const normalizedRunMode = normalizeRunMode(runMode);
   live.pendingUserMessageId = pendingUserId;
   live.pendingAssistantMessageId = pendingAssistantId;
+  setMessageActivityOpen(pendingAssistantId, normalizedRunMode === 'agent');
   const providerId = aiState.activeSession?.id === sessionId
     ? (activeProviderId() || generalChatProviderId())
     : generalChatProviderId();
@@ -1709,7 +1905,7 @@ function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
       created_at: now,
       provider_id: providerId,
       model_id: '',
-      meta: { run_mode: normalizeRunMode(runMode) },
+      meta: { run_mode: normalizedRunMode },
     },
     {
       id: pendingAssistantId,
@@ -1719,7 +1915,7 @@ function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
       provider_id: providerId,
       model_id: '',
       latency_ms: null,
-      meta: { interrupted: false, run_mode: normalizeRunMode(runMode) },
+      meta: { interrupted: false, run_mode: normalizedRunMode, agent_trace: [], agent_tool_progress: [] },
     },
   ];
 }
@@ -1734,6 +1930,7 @@ function pushLocalRetryPendingAssistant(sessionId) {
   }
   const runMode = messageRunMode(messages[messages.length - 1]);
   live.pendingAssistantMessageId = pendingAssistantId;
+  setMessageActivityOpen(pendingAssistantId, runMode === 'agent');
   live.messages = [
     ...messages,
     {
@@ -1744,7 +1941,7 @@ function pushLocalRetryPendingAssistant(sessionId) {
       provider_id: activeProviderId() || generalChatProviderId(),
       model_id: '',
       latency_ms: null,
-      meta: { interrupted: false, run_mode: runMode },
+      meta: { interrupted: false, run_mode: runMode, agent_trace: [], agent_tool_progress: [] },
     },
   ];
 }
@@ -1770,8 +1967,12 @@ function appendAssistantDelta(sessionId, delta) {
 function replacePendingAssistantMessage(sessionId, serverMessage) {
   const live = liveStateFor(sessionId);
   if (!live.pendingAssistantMessageId) return;
+  const pendingId = live.pendingAssistantMessageId;
+  if (isMessageActivityOpen(pendingId, true)) {
+    setMessageActivityOpen(serverMessage?.id, true);
+  }
   live.messages = live.messages.map((message) => (
-    message.id === live.pendingAssistantMessageId ? serverMessage : message
+    message.id === pendingId ? serverMessage : message
   ));
 }
 
@@ -1793,6 +1994,19 @@ function updatePendingAgentToolCall(sessionId, toolCall, status) {
     if (index >= 0) progress[index] = nextCall;
     else progress.push(nextCall);
     meta.agent_tool_progress = progress;
+    return { ...message, meta };
+  });
+}
+
+function updatePendingAgentTrace(sessionId, eventData) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId || !eventData) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    const trace = Array.isArray(meta.agent_trace) ? [...meta.agent_trace] : [];
+    trace.push(eventData);
+    meta.agent_trace = trace;
     return { ...message, meta };
   });
 }
@@ -1859,9 +2073,13 @@ function handleAiStreamEvent(sessionId, eventData) {
     if (aiState.activeSession?.id === sessionId && aiTtsSettings().enabled !== false && aiTtsSettings().auto_read) {
       autoSpeakMessageId = eventData.message.id;
     }
+  } else if (eventData.type === 'agent_run_start' || eventData.type === 'agent_iteration_start' || eventData.type === 'agent_run_end') {
+    updatePendingAgentTrace(sessionId, eventData);
   } else if (eventData.type === 'agent_tool_start') {
+    updatePendingAgentTrace(sessionId, eventData);
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'running');
   } else if (eventData.type === 'agent_tool_result') {
+    updatePendingAgentTrace(sessionId, eventData);
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
   } else if (eventData.type === 'graph_retrieval_result') {
     updatePendingRetrievalState(
@@ -2815,6 +3033,11 @@ function bindAi() {
     event.preventDefault();
     applySlashCommand(item.dataset.slashCommand || '');
   });
+  aiEls.messageList.addEventListener('toggle', (event) => {
+    const disclosure = event.target.closest('[data-message-disclosure="activity"]');
+    if (!disclosure) return;
+    setMessageActivityOpen(disclosure.dataset.messageId, disclosure.open);
+  }, true);
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
     // Workbench clarification card buttons

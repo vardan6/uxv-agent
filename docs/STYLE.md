@@ -37,7 +37,7 @@ If a doc spans multiple categories, split it.
 
 ## Naming
 
-- **Use stable concept names**, not session names. `langgraph-design.md`, not `langgraph-design-2026-05-10.md`.
+- **Use stable concept names**, not session names. `ai-agent-functional-spec.md`, not `ai-agent-functional-spec-2026-05-12.md`.
 - **No dates in active filenames.** Git history provides dates. Date-stamped filenames belong only in `archive/`.
 - **Lowercase, dash-separated.** `operator-experience.md`, not `OperatorExperience.md` or `operator_experience.md`.
 - **Singular nouns by default.** `decision`, `provider`, `mode`.

@@ -26,10 +26,12 @@ Recommended reading order:
 - [Vision](./docs/product/vision.md)
 - [Current State](./docs/current-state.md)
 - [Architecture](./docs/technical/architecture.md)
+- [AI Agent Requirements](./docs/product/ai-agent-requirements.md)
+- [AI Agent Technical Spec](./docs/technical/ai/ai-agent-functional-spec.md)
+- [AI Agent Graph Spec](./docs/technical/ai/ai-agent-graph-spec.md)
 - [AI Current Context Layer](./docs/technical/ai/context-layer.md)
 - [AI Spatial Tools And Agent Plan](./docs/technical/ai/spatial-tools.md)
 - [Implementation Roadmap](./docs/implementation-roadmap.md)
-- [LangGraph Agent Design](./docs/technical/ai/langgraph-design.md)
 - [Run And Config Guide](./docs/operations/run-and-config.md)
 
 Subproject documentation:
@@ -153,4 +155,4 @@ For cross-platform launcher details, shared config behavior, and telemetry polic
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is AI-assisted remote robot operation: an operator prompts by text or voice, external AI agents generate a mission using map and robot context, the mission is passed to an autopilot/control layer, and AI agents monitor execution in parallel. If new obstacles, map mismatches, sensor findings, or other rule-triggering events make the mission unsafe or impossible, the agents either adjust within approved policy or report to a human for a revised prompt or decision. The first GCS-side AI foundation now exists through config-backed controls, LLM provider settings, provider checks, model routing, selected-section JSON settings import/export, provider-backed AI Chat with persistent sessions, a live current-context layer that injects compact exact rover/runtime/settings/LLM/map/replay facts before RAG, and a first read-only Agent mode with rover/map/replay tools. The next AI implementation track is to add agent tool progress events, extract deterministic spatial query services, add a permissioned agent-ready tool registry, then add supervised rover-intent parsing, mission drafts, RAG/web-grounded source controls, and later LangGraph-backed mission monitoring and planning. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is AI-assisted remote robot operation: an operator prompts by text or voice, external AI agents generate a mission using map and robot context, the mission is passed to an autopilot/control layer, and AI agents monitor execution in parallel. If new obstacles, map mismatches, sensor findings, or other rule-triggering events make the mission unsafe or impossible, the agents either adjust within approved policy or report to a human for a revised prompt or decision. The GCS-side AI foundation now includes config-backed controls, LLM provider settings, provider checks, model routing, selected-section JSON settings import/export, provider-backed AI Chat with persistent sessions, compact exact rover/runtime/settings/LLM/map/replay context, a read-only Agent mode with rover/map/replay tools through the extracted AgentLoopRuntime, supervised intent parsing, and non-executing Workbench mission drafts with approval and clarification gates. The next AI implementation track is AgentLoopRuntime hardening, trace/stop reasons, policy seams, and Workbench planner-loop migration as documented in the AI agent requirements, technical spec, and graph spec. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.
