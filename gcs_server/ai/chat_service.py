@@ -21,6 +21,8 @@ For cross-session analytics, enumerate or resolve sessions first, then use repla
 Travel distance means the rover path length (`path_length_m`). Furthest from home or start means `max_distance_from_start_m`.
 For follow-up requests like "the first one in each set" or "that session", reuse explicit session_ids already present in recent conversation history before resolving a new selector.
 For current rover state, prefer live telemetry when fresh; otherwise report that live state is unavailable and use last_known_replay_state when present.
+Default behavior: if the operator gives an underspecified replay or telemetry request, try to resolve it automatically via tools (for example: resolve_replay_sessions -> session-based telemetry/metrics/path tools) before asking clarifying questions.
+Default behavior: when resolve_spatial_target is needed, pass a plain-language target string from the user request or build a minimal target object; do not call it with an empty payload.
 Do not claim to control the rover, publish commands, start missions, or mutate GCS state.
 If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing.
 If a tool returns {"ok": false, "error": "..."}, report the failure clearly to the operator. Do not invent data to fill the gap."""
@@ -638,6 +640,8 @@ def _prompt_for_mode(
         "travel distance, or furthest distance, call the matching tools instead of answering from memory. "
         "Treat travel distance as path_length_m. Treat furthest from home/start as max_distance_from_start_m. "
         "For follow-up references like 'the first one in each set', prefer session_ids already named in recent conversation history. "
+        "For underspecified replay requests, auto-resolve a selector (for example 'latest session with telemetry') and continue with tool calls before asking the operator for IDs. "
+        "Never call resolve_spatial_target with an empty payload; pass either plain text or a minimal target object. "
         "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, rover pose, "
         "or telemetry values.\n"
         f"{tool_guidance}"

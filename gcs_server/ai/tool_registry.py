@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 try:
@@ -29,6 +30,7 @@ class ToolDefinition:
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     handler: Callable[..., Any]
+    contract: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -122,15 +124,15 @@ class ToolRegistry:
                 {},
                 self._query_objects_in_front,
             ),
-            ToolDefinition("query_objects_near", "Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings.", READ_ONLY, {}, {}, self._query_objects_near),
+            ToolDefinition("query_objects_near", "Find map objects near the rover within radius_m. Uses rover position only (heading not required), with automatic fallback to last_known_replay_state when available. Use this for prompts about nearby, around the rover, close objects, or surroundings.", READ_ONLY, {}, {}, self._query_objects_near),
             ToolDefinition("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.", READ_ONLY, {}, {}, self._query_objects_by_kind),
             ToolDefinition("query_objects_to_left", "Find map objects to the rover's left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.", READ_ONLY, {}, {}, self._query_objects_to_left),
             ToolDefinition("query_objects_to_right", "Find map objects to the rover's right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.", READ_ONLY, {}, {}, self._query_objects_to_right),
-            ToolDefinition("query_nearest_objects", "Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds.", READ_ONLY, {}, {}, self._query_nearest_objects),
-            ToolDefinition("resolve_spatial_target", "Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects.", PLANNING, {}, {}, self._resolve_spatial_target),
+            ToolDefinition("query_nearest_objects", "Find nearest map objects to the rover. Uses rover position only (heading not required). Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If heading is unavailable, results still include distance and absolute bearing, while heading-relative fields may be omitted. If live rover telemetry is stale, this tool automatically falls back to last_known_replay_state when available.", READ_ONLY, {}, {}, self._query_nearest_objects),
+            ToolDefinition("resolve_spatial_target", "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.", PLANNING, {}, {}, self._resolve_spatial_target),
             ToolDefinition("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, {}, {}, self._get_current_mission_state),
             ToolDefinition("get_current_replay_summary", "Get the active replay session summary.", READ_ONLY, {}, {}, self._get_current_replay_summary),
-            ToolDefinition("get_recent_telemetry", "Get recent telemetry samples from the active replay session.", READ_ONLY, {}, {}, self._get_recent_telemetry),
+            ToolDefinition("get_recent_telemetry", "Get telemetry samples. By default returns recent samples from the active replay session using seconds+limit. If session_id is provided, returns samples for that explicit session_id so the agent can fetch telemetry from older sessions without extra clarification.", READ_ONLY, {}, {}, self._get_recent_telemetry),
             ToolDefinition("list_replay_sessions", "List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.", ANALYSIS, {}, {}, self._list_replay_sessions),
             ToolDefinition("resolve_replay_sessions", "Resolve a natural-language replay session selector such as 'all sessions', 'latest 5 sessions', 'first session', or a date-based selector into explicit session_ids.", ANALYSIS, {}, {}, self._resolve_replay_sessions),
             ToolDefinition("get_replay_session_summary", "Get a replay session summary by session_id.", READ_ONLY, {}, {}, self._get_replay_session_summary),
@@ -140,7 +142,8 @@ class ToolRegistry:
             ToolDefinition("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._compare_replay_sessions),
             ToolDefinition("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._aggregate_replay_sessions),
         ]
-        return {definition.name: definition for definition in definitions}
+        with_contracts = [_with_tool_contract(definition) for definition in definitions]
+        return {definition.name: definition for definition in with_contracts}
 
     def _invocation_context(
         self,
@@ -184,7 +187,23 @@ class ToolRegistry:
 
     def _rover_snapshot(self, context: ToolInvocationContext) -> dict[str, Any]:
         rover = context.context_snapshot.get("rover")
-        return rover if isinstance(rover, dict) else {}
+        if not isinstance(rover, dict):
+            return {}
+        if _has_pose_and_heading(rover):
+            return rover
+        fallback = rover.get("last_known_replay_state")
+        if isinstance(fallback, dict) and _has_position(fallback):
+            merged = dict(rover)
+            merged["position"] = fallback.get("position") or {}
+            if fallback.get("heading_deg") is not None:
+                merged["heading_deg"] = fallback.get("heading_deg")
+            merged["gps"] = fallback.get("gps") or merged.get("gps") or {}
+            merged["position_frame"] = fallback.get("position_frame") or merged.get("position_frame") or "unknown"
+            merged["telemetry_fresh"] = False
+            merged["telemetry_source"] = "last_known_replay_state"
+            merged["telemetry_source_session_id"] = fallback.get("session_id")
+            return merged
+        return rover
 
     def _get_current_rover_state(self, context: ToolInvocationContext) -> dict[str, Any]:
         return dict(self._rover_snapshot(context))
@@ -211,8 +230,9 @@ class ToolRegistry:
     def _query_nearest_objects(self, context: ToolInvocationContext, limit: int = 5, max_distance_m: float | None = None, kinds: list[str] | None = None) -> dict[str, Any]:
         return self._spatial.find_nearest_objects(self._scene_payload(context), self._rover_snapshot(context), limit, max_distance_m, kinds)
 
-    def _resolve_spatial_target(self, context: ToolInvocationContext, target: dict[str, Any]) -> dict[str, Any]:
-        return self._spatial.resolve_target_description(self._scene_payload(context), self._rover_snapshot(context), target)
+    def _resolve_spatial_target(self, context: ToolInvocationContext, target: dict[str, Any] | str) -> dict[str, Any]:
+        resolved_target = _normalize_spatial_target(target)
+        return self._spatial.resolve_target_description(self._scene_payload(context), self._rover_snapshot(context), resolved_target)
 
     def _get_current_mission_state(self, context: ToolInvocationContext) -> dict[str, Any]:
         mission = context.context_snapshot.get("mission")
@@ -221,7 +241,16 @@ class ToolRegistry:
     def _get_current_replay_summary(self, context: ToolInvocationContext) -> dict[str, Any]:
         return AIContextService(context.runtime).get_current_replay_summary()
 
-    def _get_recent_telemetry(self, context: ToolInvocationContext, seconds: int = 120, limit: int = 10) -> list[dict[str, Any]]:
+    def _get_recent_telemetry(
+        self,
+        context: ToolInvocationContext,
+        seconds: int = 120,
+        limit: int = 10,
+        session_id: str = "",
+    ) -> list[dict[str, Any]]:
+        clean_session_id = str(session_id or "").strip()
+        if clean_session_id:
+            return context.runtime.replay_store.list_telemetry_samples(clean_session_id, limit=max(1, int(limit)))
         return AIContextService(context.runtime).get_recent_telemetry(seconds=seconds, limit=limit)
 
     def _list_replay_sessions(
@@ -280,3 +309,242 @@ def _snapshot_context(context_snapshot: dict[str, Any] | None) -> dict[str, Any]
         return {}
     snapshot = meta.get("context_snapshot")
     return snapshot if isinstance(snapshot, dict) else {}
+
+
+def _has_pose_and_heading(rover: dict[str, Any]) -> bool:
+    if not _has_position(rover):
+        return False
+    try:
+        float(rover.get("heading_deg"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_position(rover: dict[str, Any]) -> bool:
+    if not isinstance(rover, dict):
+        return False
+    position = rover.get("position")
+    if not isinstance(position, dict):
+        return False
+    try:
+        float(position.get("x"))
+        float(position.get("y"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_spatial_target(target: dict[str, Any] | str) -> dict[str, Any]:
+    if isinstance(target, dict):
+        normalized = dict(target)
+        description = str(normalized.get("description") or "").strip()
+        if description:
+            return normalized
+        kind = str(normalized.get("kind") or "").strip()
+        normalized["description"] = f"nearest {kind}" if kind else "nearest object"
+        return normalized
+
+    text = str(target or "").strip()
+    if not text:
+        return {"description": "nearest object"}
+    lowered = text.lower()
+    parsed: dict[str, Any] = {"description": text}
+    if "left" in lowered:
+        parsed["side"] = "left"
+    elif "right" in lowered:
+        parsed["side"] = "right"
+    elif "front" in lowered or "ahead" in lowered:
+        parsed["side"] = "front"
+    elif "behind" in lowered or "back" in lowered:
+        parsed["side"] = "behind"
+    kind_match = re.search(r"\b(tree|stone|boulder|building|charger|solar_panel|solar frame|solar_frame|pad|guard_rail|collision_proxy|rock|rocks)\b", lowered)
+    if kind_match:
+        kind = kind_match.group(1).replace(" ", "_")
+        parsed["kind"] = "stone" if kind in {"rock", "rocks"} else kind
+    return parsed
+
+
+def _with_tool_contract(definition: ToolDefinition) -> ToolDefinition:
+    contract = TOOL_CONTRACTS.get(definition.name, {})
+    if not contract:
+        return definition
+    description = _render_tool_description(definition.description, contract)
+    return ToolDefinition(
+        name=definition.name,
+        description=description,
+        permission=definition.permission,
+        input_schema=dict(contract.get("inputs") or {}),
+        output_schema=dict(contract.get("returns") or {}),
+        handler=definition.handler,
+        contract=contract,
+    )
+
+
+def _render_tool_description(base: str, contract: dict[str, Any]) -> str:
+    lines = [base.strip(), "", "Tool Contract:"]
+    inputs = contract.get("inputs", {})
+    if isinstance(inputs, dict) and inputs:
+        lines.append(f"- Inputs: {', '.join(f'{k}: {v}' for k, v in inputs.items())}")
+    required = contract.get("required_inputs", [])
+    if isinstance(required, list) and required:
+        lines.append(f"- Required Inputs: {', '.join(str(item) for item in required)}")
+    upstream = contract.get("upstream_from_tools", [])
+    if isinstance(upstream, list) and upstream:
+        lines.append(f"- Upstream Sources: {', '.join(str(item) for item in upstream)}")
+    returns = contract.get("returns", {})
+    if isinstance(returns, dict) and returns:
+        lines.append(f"- Returns: {', '.join(f'{k}: {v}' for k, v in returns.items())}")
+    downstream = contract.get("next_tools", [])
+    if isinstance(downstream, list) and downstream:
+        lines.append(f"- Next Tools: {', '.join(str(item) for item in downstream)}")
+    return "\n".join(lines)
+
+
+TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
+    "get_current_rover_state": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {
+            "position": "object{x,y,z} | {}",
+            "heading_deg": "number | null",
+            "telemetry_fresh": "boolean",
+            "last_known_replay_state": "object | null",
+        },
+        "next_tools": ["query_nearest_objects", "query_objects_near", "query_objects_in_front", "resolve_spatial_target"],
+    },
+    "get_scene_summary": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {"object_kinds": "object{kind->count}", "spawn": "object{x,y,z}", "object_count": "number"},
+        "next_tools": ["query_objects_by_kind", "resolve_spatial_target"],
+    },
+    "query_objects_in_front": {
+        "inputs": {"max_distance_m": "number", "fov_deg": "number", "kinds": "string[]"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_rover_state (pose/heading)", "get_scene_summary (kind discovery)"],
+        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "query_objects_near": {
+        "inputs": {"radius_m": "number", "kinds": "string[]"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_rover_state (position; heading optional; replay fallback supported)", "get_scene_summary"],
+        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "query_objects_by_kind": {
+        "inputs": {"kind": "string"},
+        "required_inputs": ["kind"],
+        "upstream_from_tools": ["get_scene_summary.object_kinds"],
+        "returns": {"available": "boolean", "objects": "object[]"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "query_objects_to_left": {
+        "inputs": {"max_distance_m": "number", "angle_width_deg": "number", "kinds": "string[]"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_rover_state (pose/heading)"],
+        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "query_objects_to_right": {
+        "inputs": {"max_distance_m": "number", "angle_width_deg": "number", "kinds": "string[]"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_rover_state (pose/heading)"],
+        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "query_nearest_objects": {
+        "inputs": {"limit": "integer", "max_distance_m": "number|null", "kinds": "string[]"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_rover_state (position; heading optional; replay fallback supported)", "get_scene_summary"],
+        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
+        "next_tools": ["resolve_spatial_target"],
+    },
+    "resolve_spatial_target": {
+        "inputs": {"target": "string | object{description,kind,side,min_distance_m,max_distance_m,relative_bearing_deg}"},
+        "required_inputs": ["target"],
+        "upstream_from_tools": ["get_current_rover_state", "get_scene_summary", "query_objects_* results"],
+        "returns": {"available": "boolean", "candidates": "object[]", "selected": "object|null", "needs_clarification": "boolean"},
+        "next_tools": [],
+    },
+    "get_current_mission_state": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {"active": "boolean", "status": "string", "summary": "string"},
+        "next_tools": [],
+    },
+    "get_current_replay_summary": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {"session_id": "string|null", "telemetry_count": "number", "runtime_event_count": "number"},
+        "next_tools": ["get_recent_telemetry", "get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events"],
+    },
+    "get_recent_telemetry": {
+        "inputs": {"seconds": "integer", "limit": "integer", "session_id": "string (optional)"},
+        "required_inputs": [],
+        "upstream_from_tools": ["get_current_replay_summary.session_id", "resolve_replay_sessions.resolved_session_ids[*]"],
+        "returns": {"result": "telemetry_sample[]"},
+        "next_tools": ["query_nearest_objects", "query_objects_near"],
+    },
+    "list_replay_sessions": {
+        "inputs": {"limit": "integer", "order": "string(desc|asc)"},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {"sessions": "session_summary[]", "count": "number"},
+        "next_tools": ["resolve_replay_sessions", "get_replay_session_summary", "get_replay_session_metrics", "compare_replay_sessions", "aggregate_replay_sessions"],
+    },
+    "resolve_replay_sessions": {
+        "inputs": {"selector": "string", "timezone_name": "string"},
+        "required_inputs": ["selector"],
+        "upstream_from_tools": ["operator natural-language selector"],
+        "returns": {"resolved_session_ids": "string[]", "matched_count": "number", "preview_sessions": "session_summary[]"},
+        "next_tools": ["get_replay_session_summary", "get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events", "compare_replay_sessions", "aggregate_replay_sessions", "get_recent_telemetry"],
+    },
+    "get_replay_session_summary": {
+        "inputs": {"session_id": "string"},
+        "required_inputs": ["session_id"],
+        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id", "get_current_replay_summary.session_id"],
+        "returns": {"session_id": "string", "telemetry_count": "number", "control_count": "number", "runtime_event_count": "number"},
+        "next_tools": ["get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events", "get_recent_telemetry"],
+    },
+    "get_replay_session_metrics": {
+        "inputs": {"session_id": "string", "refresh": "boolean"},
+        "required_inputs": ["session_id"],
+        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id", "get_replay_session_summary.session_id"],
+        "returns": {"path_length_m": "number", "duration_s": "number", "max_distance_from_start_m": "number", "net_displacement_m": "number"},
+        "next_tools": ["compare_replay_sessions", "aggregate_replay_sessions"],
+    },
+    "get_replay_session_path": {
+        "inputs": {"session_id": "string", "downsample": "integer", "limit": "integer"},
+        "required_inputs": ["session_id"],
+        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id"],
+        "returns": {"session_id": "string", "point_count": "number", "points": "path_point[]"},
+        "next_tools": ["get_recent_telemetry"],
+    },
+    "search_replay_session_events": {
+        "inputs": {"session_id": "string", "event_type": "string", "text": "string", "limit": "integer"},
+        "required_inputs": ["session_id"],
+        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id"],
+        "returns": {"events": "event[]", "count": "number"},
+        "next_tools": ["compare_replay_sessions", "aggregate_replay_sessions"],
+    },
+    "compare_replay_sessions": {
+        "inputs": {"session_ids": "string[]"},
+        "required_inputs": ["session_ids"],
+        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids", "list_replay_sessions.sessions[*].session_id"],
+        "returns": {"sessions": "comparison_row[]", "best_by_metric": "object"},
+        "next_tools": ["aggregate_replay_sessions"],
+    },
+    "aggregate_replay_sessions": {
+        "inputs": {"selector": "string", "session_ids": "string[]", "timezone_name": "string", "top_n": "integer"},
+        "required_inputs": [],
+        "upstream_from_tools": ["resolve_replay_sessions", "list_replay_sessions"],
+        "returns": {"totals": "object", "averages": "object", "top_sessions": "session_metric[]"},
+        "next_tools": [],
+    },
+}

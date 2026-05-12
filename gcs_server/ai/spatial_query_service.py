@@ -48,9 +48,9 @@ class SpatialQueryService:
         radius_m: float = 50.0,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        pose = _rover_pose(rover_state)
+        pose = _rover_position(rover_state)
         if pose is None:
-            return {"available": False, "reason": "rover pose or heading is unavailable"}
+            return {"available": False, "reason": "rover position is unavailable"}
         radius = max(0.0, _float(radius_m, 50.0))
         matches = [
             _object_hit(obj, pose)
@@ -98,9 +98,9 @@ class SpatialQueryService:
         max_distance_m: float | None = None,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        pose = _rover_pose(rover_state)
+        pose = _rover_position(rover_state)
         if pose is None:
-            return {"available": False, "reason": "rover pose or heading is unavailable"}
+            return {"available": False, "reason": "rover position is unavailable"}
         max_distance = None if max_distance_m is None else max(0.0, _float(max_distance_m, 0.0))
         matches = []
         for obj in _objects(scene):
@@ -208,13 +208,8 @@ def _objects(scene: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 
 def _rover_pose(rover: dict[str, Any] | None) -> dict[str, float] | None:
-    if not isinstance(rover, dict):
-        return None
-    pos = rover.get("position") or {}
-    try:
-        x = float(pos["x"])
-        y = float(pos["y"])
-    except (KeyError, TypeError, ValueError):
+    pose = _rover_position(rover)
+    if pose is None:
         return None
     heading_raw = rover.get("heading_deg")
     if heading_raw is None:
@@ -223,7 +218,19 @@ def _rover_pose(rover: dict[str, Any] | None) -> dict[str, float] | None:
         heading = float(heading_raw) % 360.0
     except (TypeError, ValueError):
         return None
-    return {"x": x, "y": y, "z": float(pos.get("z") or 0.0), "heading_deg": heading}
+    return {**pose, "heading_deg": heading}
+
+
+def _rover_position(rover: dict[str, Any] | None) -> dict[str, float] | None:
+    if not isinstance(rover, dict):
+        return None
+    pos = rover.get("position") or {}
+    try:
+        x = float(pos["x"])
+        y = float(pos["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"x": x, "y": y, "z": float(pos.get("z") or 0.0)}
 
 
 def _object_hit(obj: dict[str, Any], pose: dict[str, float] | None) -> dict[str, Any]:
@@ -241,12 +248,14 @@ def _object_hit(obj: dict[str, Any], pose: dict[str, float] | None) -> dict[str,
     dy = float(center.get("y") or 0.0) - pose["y"]
     distance = math.hypot(dx, dy)
     bearing = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
-    relative = _angle_delta_deg(bearing, pose["heading_deg"])
     hit["distance_m"] = round(distance, 2)
     hit["bearing_deg"] = round(bearing, 1)
-    hit["relative_bearing_deg"] = round(relative, 1)
-    hit["side"] = _side_for_relative_bearing(relative)
-    hit["sector"] = _sector_for_relative_bearing(relative)
+    heading = pose.get("heading_deg")
+    if heading is not None:
+        relative = _angle_delta_deg(bearing, float(heading))
+        hit["relative_bearing_deg"] = round(relative, 1)
+        hit["side"] = _side_for_relative_bearing(relative)
+        hit["sector"] = _sector_for_relative_bearing(relative)
     return hit
 
 

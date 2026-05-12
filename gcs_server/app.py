@@ -158,13 +158,15 @@ async def lifespan(app: FastAPI):
     runtime = await build_runtime(config)
     app.state.runtime = runtime
     _tool_registry = ToolRegistry()
+    agent_trace_store = AgentTraceStore(
+        _resolve_gcs_data_path(config.logging.get("agent_trace_dir", "data/agent_traces"))
+    )
+    app.state.agent_trace_store = agent_trace_store
     app.state.ai_chat_service = AIChatService(
         runtime.ai_store,
         secret_resolver=runtime.secret_store.get_secret,
         tool_registry=_tool_registry,
-        trace_store=AgentTraceStore(
-            _resolve_gcs_data_path(config.logging.get("agent_trace_dir", "data/agent_traces"))
-        ),
+        trace_store=agent_trace_store,
     )
     app.state.ai_inflight_streams = AIInflightStreamManager()
     _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
@@ -1037,6 +1039,17 @@ def _format_tool_catalog_markdown(tool_registry: ToolRegistry) -> str:
     for definition in definitions:
         permission = _tool_permission_label(definition.permission)
         lines.append(f"- `{definition.name}` ({permission}): {definition.description}")
+        if definition.input_schema:
+            lines.append(f"  inputs: `{json.dumps(definition.input_schema, separators=(',', ':'), sort_keys=True)}`")
+        if definition.output_schema:
+            lines.append(f"  returns: `{json.dumps(definition.output_schema, separators=(',', ':'), sort_keys=True)}`")
+        contract = definition.contract if isinstance(definition.contract, dict) else {}
+        upstream = contract.get("upstream_from_tools")
+        downstream = contract.get("next_tools")
+        if isinstance(upstream, list) and upstream:
+            lines.append(f"  upstream: `{', '.join(str(item) for item in upstream)}`")
+        if isinstance(downstream, list) and downstream:
+            lines.append(f"  next_tools: `{', '.join(str(item) for item in downstream)}`")
     return "\n".join(lines).strip()
 
 
@@ -1096,6 +1109,10 @@ def _build_ai_session_command_response(
 
 def _ai_chat_service(request: Request) -> AIChatService:
     return request.app.state.ai_chat_service
+
+
+def _agent_trace_store(request: Request) -> AgentTraceStore:
+    return request.app.state.agent_trace_store
 
 
 def _request_timezone_name(request: Request, payload: dict[str, Any] | None = None) -> str:
@@ -1602,6 +1619,28 @@ async def ai_session_stream_status(session_id: str, request: Request) -> dict[st
         raise HTTPException(status_code=404, detail="AI session not found")
     run = _ai_inflight_streams(request).get(session_id)
     return {"session_id": session_id, "in_progress": bool(run), "run_id": run.run_id if run else ""}
+
+
+@app.get("/api/ai/traces")
+async def list_ai_traces(request: Request, limit: int = 20, day: str = "") -> JSONResponse:
+    trace_store = _agent_trace_store(request)
+    clean_day = str(day or "").strip()
+    if clean_day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", clean_day):
+        raise HTTPException(status_code=400, detail="day must use YYYY-MM-DD format")
+    traces = trace_store.list(limit=max(1, min(200, limit)), day=clean_day)
+    return JSONResponse({"ok": True, "traces": traces, "count": len(traces)})
+
+
+@app.get("/api/ai/traces/{trace_id}")
+async def get_ai_trace(trace_id: str, request: Request) -> JSONResponse:
+    trace_store = _agent_trace_store(request)
+    try:
+        trace = trace_store.get(trace_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="agent trace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse({"ok": True, "trace": trace})
 
 
 @app.post("/api/ai/sessions/{session_id}/intent-test")

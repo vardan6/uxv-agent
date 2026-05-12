@@ -781,7 +781,8 @@ function renderSessions() {
     const count = replayState.sessions.length;
     replayEls.sessionCountPill.textContent = `${count} session${count === 1 ? '' : 's'}`;
   }
-  replayEls.currentSessionPill.textContent = replayState.currentSessionId || 'No active session';
+  const selectedSessionId = replayState.loadedSession?.session?.session_id || replayState.currentSessionId;
+  replayEls.currentSessionPill.textContent = selectedSessionId || 'No session selected';
   updateSessionSortUi();
   if (!replayState.sessions.length) {
     const empty = document.createElement('article');
