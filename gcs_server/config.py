@@ -42,6 +42,7 @@ DEFAULT_GCS_SETTINGS["logging"] = {
     "replay_db_path": "data/gcs_replay.sqlite3",
     "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
     "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
+    "agent_trace_dir": "data/agent_traces",
     "auto_start_session": True,
 }
 

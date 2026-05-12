@@ -36,6 +36,7 @@ class AIChatService:
         store: AISessionStore,
         secret_resolver: Callable[[str], str] | None = None,
         tool_registry: Any | None = None,
+        trace_store: Any | None = None,
     ):
         self._store = store
         self._secret_resolver = secret_resolver
@@ -48,6 +49,7 @@ class AIChatService:
             response_content=_response_content,
             usage_metadata=_usage_metadata,
             tool_calling_unsupported=_is_tool_calling_unsupported_error,
+            trace_store=trace_store,
         )
 
     def send_message(
@@ -231,9 +233,14 @@ class AIChatService:
     ) -> Iterator[str]:
         clean_run_mode = _normalize_run_mode(run_mode)
         prompt_messages = _fit_messages_to_budget(messages)
-        prompt_tool_calls = _tool_calls(context_snapshot) if clean_run_mode == "agent" else []
+        bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
+        effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
+        prompt_tool_calls = _tool_calls(effective_context_snapshot) if clean_run_mode == "agent" else []
         agent_tooling_error: str | None = None
-        should_try_tools = clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot)
+        should_try_tools = (
+            not bypass_for_smalltalk
+            and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot))
+        )
         if should_try_tools:
             started = time.perf_counter()
             agent_result = None
@@ -269,10 +276,12 @@ class AIChatService:
                             "run_mode": clean_run_mode,
                             "tool_calls": agent_result.tool_calls,
                             "agent_trace": agent_result.trace_events,
+                            "agent_trace_id": agent_result.trace_id,
                             "prompt_context_tool_calls": prompt_tool_calls,
                             "agent_permissions": _agent_permissions(clean_run_mode),
                             "agent_stop_reason": agent_result.stop_reason,
                             "agent_iterations": agent_result.iterations,
+                            "agent_smalltalk_bypass": bypass_for_smalltalk,
                             "agent_tool_fallback_error": agent_tooling_error,
                             "response_metadata": agent_result.response_metadata,
                             "usage_metadata": agent_result.usage_metadata,
@@ -283,8 +292,8 @@ class AIChatService:
                     return
         langchain_messages = _to_langchain_messages(
             prompt_messages,
-            _prompt_for_mode(context_snapshot, clean_run_mode, prompt_tool_calls),
-            system_prompt=AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT,
+            _prompt_for_mode(effective_context_snapshot, clean_run_mode, prompt_tool_calls),
+            system_prompt=SYSTEM_PROMPT if bypass_for_smalltalk else (AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT),
         )
         started = time.perf_counter()
         parts: list[str] = []
@@ -338,6 +347,7 @@ class AIChatService:
                         "run_mode": clean_run_mode,
                         "tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
+                        "agent_smalltalk_bypass": bypass_for_smalltalk,
                         "agent_tool_fallback_error": agent_tooling_error,
                         "interrupted": interrupted or failed,
                         "response_metadata": response_metadata,
@@ -362,9 +372,11 @@ class AIChatService:
     ) -> dict[str, Any]:
         clean_run_mode = _normalize_run_mode(run_mode)
         prompt_messages = _fit_messages_to_budget(messages)
-        prompt_tool_calls = _tool_calls(context_snapshot) if clean_run_mode == "agent" else []
+        bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
+        effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
+        prompt_tool_calls = _tool_calls(effective_context_snapshot) if clean_run_mode == "agent" else []
         agent_tooling_error: str | None = None
-        if clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot):
+        if (not bypass_for_smalltalk) and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot)):
             started = time.perf_counter()
             try:
                 agent_result = self._try_invoke_agent_with_tools(
@@ -391,10 +403,12 @@ class AIChatService:
                         "run_mode": clean_run_mode,
                         "tool_calls": agent_result.tool_calls,
                         "agent_trace": agent_result.trace_events,
+                        "agent_trace_id": agent_result.trace_id,
                         "prompt_context_tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
                         "agent_stop_reason": agent_result.stop_reason,
                         "agent_iterations": agent_result.iterations,
+                        "agent_smalltalk_bypass": bypass_for_smalltalk,
                         "agent_tool_fallback_error": agent_tooling_error,
                         "response_metadata": agent_result.response_metadata,
                         "usage_metadata": agent_result.usage_metadata,
@@ -403,8 +417,8 @@ class AIChatService:
                 )
         langchain_messages = _to_langchain_messages(
             prompt_messages,
-            _prompt_for_mode(context_snapshot, clean_run_mode, prompt_tool_calls),
-            system_prompt=AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT,
+            _prompt_for_mode(effective_context_snapshot, clean_run_mode, prompt_tool_calls),
+            system_prompt=SYSTEM_PROMPT if bypass_for_smalltalk else (AGENT_SYSTEM_PROMPT if clean_run_mode == "agent" else SYSTEM_PROMPT),
         )
         started = time.perf_counter()
         response = model.invoke(langchain_messages)
@@ -421,6 +435,7 @@ class AIChatService:
                 "run_mode": clean_run_mode,
                 "tool_calls": prompt_tool_calls,
                 "agent_permissions": _agent_permissions(clean_run_mode),
+                "agent_smalltalk_bypass": bypass_for_smalltalk,
                 "agent_tool_fallback_error": agent_tooling_error,
                 "response_metadata": getattr(response, "response_metadata", {}) or {},
                 "usage_metadata": _usage_metadata(response),
@@ -562,6 +577,37 @@ def _message_run_mode(message: dict[str, Any]) -> str:
     if not isinstance(meta, dict):
         meta = {}
     return _normalize_run_mode(str(meta.get("run_mode") or "chat"))
+
+
+def _latest_user_content(messages: list[dict[str, Any]]) -> str:
+    if not isinstance(messages, list):
+        return ""
+    latest_user = next((message for message in reversed(messages) if message.get("role") == "user"), None)
+    if not isinstance(latest_user, dict):
+        return ""
+    return str(latest_user.get("content") or "").strip().lower()
+
+
+def _is_trivial_agent_smalltalk(messages: list[dict[str, Any]]) -> bool:
+    content = _latest_user_content(messages)
+    if not content:
+        return False
+    if len(content) > 40:
+        return False
+    simple = {
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "sup",
+        "hiya",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "how are you?",
+    }
+    return content in simple
 
 
 def _system_prompt_for_run_mode(run_mode: str) -> str:

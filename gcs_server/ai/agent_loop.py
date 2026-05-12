@@ -4,11 +4,14 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
+from uuid import uuid4
 
 from .tool_registry import DEFAULT_PERMISSIONS
 
 
 AI_AGENT_MAX_TOOL_ITERATIONS = 6
+AI_AGENT_MAX_REPEATED_TOOL_FAILURES = 2
+AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE = "I stopped because the same tool call failed repeatedly."
 
 
 @dataclass(slots=True)
@@ -20,6 +23,7 @@ class AgentInvokeResult:
     usage_metadata: dict[str, Any]
     stop_reason: str = "final_answer"
     iterations: int = 0
+    trace_id: str = ""
 
 
 @dataclass(slots=True)
@@ -41,6 +45,7 @@ class AgentLoopRuntime:
         response_content: Callable[[Any], str],
         usage_metadata: Callable[[Any], dict[str, Any]],
         tool_calling_unsupported: Callable[[Exception], bool],
+        trace_store: Any | None = None,
     ):
         self._tool_registry = tool_registry
         self._prompt_builder = prompt_builder
@@ -49,6 +54,7 @@ class AgentLoopRuntime:
         self._response_content = response_content
         self._usage_metadata = usage_metadata
         self._tool_calling_unsupported = tool_calling_unsupported
+        self._trace_store = trace_store
 
     def invoke_with_tools(
         self,
@@ -71,19 +77,25 @@ class AgentLoopRuntime:
         if runtime is None:
             return None
 
+        trace_id = _new_trace_id()
         executed_tool_calls: list[dict[str, Any]] = []
-        trace_events: list[dict[str, Any]] = [{
+        trace_events: list[dict[str, Any]] = []
+        self._append_trace_event(trace_id, trace_events, {
             "type": "agent_run_start",
             "run_mode": run_mode,
             "max_iterations": AI_AGENT_MAX_TOOL_ITERATIONS,
-        }]
+            "max_repeated_tool_failures": AI_AGENT_MAX_REPEATED_TOOL_FAILURES,
+        })
         final_response = None
         iterations = 0
         stop_reason = "iteration_limit"
+        consecutive_failure_signature: str | None = None
+        consecutive_failure_count = 0
+        should_stop = False
 
         for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
             iterations = iteration
-            trace_events.append({"type": "agent_iteration_start", "iteration": iteration})
+            self._append_trace_event(trace_id, trace_events, {"type": "agent_iteration_start", "iteration": iteration})
             try:
                 final_response = runtime.bound_model.invoke(runtime.langchain_messages)
             except Exception as exc:
@@ -99,7 +111,7 @@ class AgentLoopRuntime:
                 tool_name = str(call.get("name") or "").strip()
                 tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
                 tool_call_id = str(call.get("id") or tool_name)
-                trace_events.append({
+                self._append_trace_event(trace_id, trace_events, {
                     "type": "agent_tool_start",
                     "tool_call": {
                         "id": tool_call_id,
@@ -111,6 +123,15 @@ class AgentLoopRuntime:
                 started = time.perf_counter()
                 tool_result = self._invoke_tool(runtime, tool_name, tool_args)
                 latency_ms = int((time.perf_counter() - started) * 1000)
+                failure_signature = _tool_failure_signature(tool_name, tool_args, tool_result)
+                if failure_signature and failure_signature == consecutive_failure_signature:
+                    consecutive_failure_count += 1
+                elif failure_signature:
+                    consecutive_failure_signature = failure_signature
+                    consecutive_failure_count = 1
+                else:
+                    consecutive_failure_signature = None
+                    consecutive_failure_count = 0
                 executed_tool_calls.append(
                     {
                         "id": tool_call_id,
@@ -121,7 +142,7 @@ class AgentLoopRuntime:
                         "latency_ms": latency_ms,
                     }
                 )
-                trace_events.append({
+                self._append_trace_event(trace_id, trace_events, {
                     "type": "agent_tool_result",
                     "tool_call": {
                         "id": tool_call_id,
@@ -132,6 +153,19 @@ class AgentLoopRuntime:
                         "latency_ms": latency_ms,
                     },
                 })
+                if consecutive_failure_count >= AI_AGENT_MAX_REPEATED_TOOL_FAILURES:
+                    stop_reason = "repeated_tool_failure"
+                    self._append_trace_event(trace_id, trace_events, {
+                        "type": "agent_repeated_tool_failure",
+                        "tool_call": {
+                            "id": tool_call_id,
+                            "name": tool_name,
+                            "args": tool_args,
+                            "iteration": iteration,
+                        },
+                        "failure_count": consecutive_failure_count,
+                    })
+                    should_stop = True
                 runtime.langchain_messages.append(
                     runtime.tool_message_cls(
                         content=json.dumps(tool_result, separators=(",", ":"), sort_keys=True),
@@ -139,16 +173,20 @@ class AgentLoopRuntime:
                         name=tool_name,
                     )
                 )
+                if should_stop:
+                    break
+            if should_stop:
+                break
 
         if final_response is None:
             return None
-        trace_events.append({
+        self._append_trace_event(trace_id, trace_events, {
             "type": "agent_run_end",
             "stop_reason": stop_reason,
             "iterations": iterations,
             "tool_call_count": len(executed_tool_calls),
         })
-        return self._result_from_response(final_response, executed_tool_calls, trace_events, stop_reason, iterations)
+        return self._result_from_response(final_response, executed_tool_calls, trace_events, stop_reason, iterations, trace_id)
 
     def stream_tool_events(
         self,
@@ -172,20 +210,26 @@ class AgentLoopRuntime:
             yield {"type": "_agent_result", "result": None}
             return
 
+        trace_id = _new_trace_id()
         executed_tool_calls: list[dict[str, Any]] = []
-        trace_events: list[dict[str, Any]] = [{
+        trace_events: list[dict[str, Any]] = []
+        self._append_trace_event(trace_id, trace_events, {
             "type": "agent_run_start",
             "run_mode": run_mode,
             "max_iterations": AI_AGENT_MAX_TOOL_ITERATIONS,
-        }]
+            "max_repeated_tool_failures": AI_AGENT_MAX_REPEATED_TOOL_FAILURES,
+        })
         yield trace_events[-1]
         final_response = None
         iterations = 0
         stop_reason = "iteration_limit"
+        consecutive_failure_signature: str | None = None
+        consecutive_failure_count = 0
+        should_stop = False
 
         for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
             iterations = iteration
-            trace_events.append({"type": "agent_iteration_start", "iteration": iteration})
+            self._append_trace_event(trace_id, trace_events, {"type": "agent_iteration_start", "iteration": iteration})
             yield trace_events[-1]
             try:
                 final_response = runtime.bound_model.invoke(runtime.langchain_messages)
@@ -204,7 +248,7 @@ class AgentLoopRuntime:
                 tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
                 tool_call_id = str(call.get("id") or tool_name)
                 started = time.perf_counter()
-                trace_events.append({
+                self._append_trace_event(trace_id, trace_events, {
                     "type": "agent_tool_start",
                     "tool_call": {
                         "id": tool_call_id,
@@ -215,6 +259,15 @@ class AgentLoopRuntime:
                 })
                 yield trace_events[-1]
                 tool_result = self._invoke_tool(runtime, tool_name, tool_args)
+                failure_signature = _tool_failure_signature(tool_name, tool_args, tool_result)
+                if failure_signature and failure_signature == consecutive_failure_signature:
+                    consecutive_failure_count += 1
+                elif failure_signature:
+                    consecutive_failure_signature = failure_signature
+                    consecutive_failure_count = 1
+                else:
+                    consecutive_failure_signature = None
+                    consecutive_failure_count = 0
                 executed_tool_call = {
                     "id": tool_call_id,
                     "name": tool_name,
@@ -224,11 +277,25 @@ class AgentLoopRuntime:
                     "latency_ms": int((time.perf_counter() - started) * 1000),
                 }
                 executed_tool_calls.append(executed_tool_call)
-                trace_events.append({
+                self._append_trace_event(trace_id, trace_events, {
                     "type": "agent_tool_result",
                     "tool_call": dict(executed_tool_call),
                 })
                 yield trace_events[-1]
+                if consecutive_failure_count >= AI_AGENT_MAX_REPEATED_TOOL_FAILURES:
+                    stop_reason = "repeated_tool_failure"
+                    self._append_trace_event(trace_id, trace_events, {
+                        "type": "agent_repeated_tool_failure",
+                        "tool_call": {
+                            "id": tool_call_id,
+                            "name": tool_name,
+                            "args": tool_args,
+                            "iteration": iteration,
+                        },
+                        "failure_count": consecutive_failure_count,
+                    })
+                    yield trace_events[-1]
+                    should_stop = True
                 runtime.langchain_messages.append(
                     runtime.tool_message_cls(
                         content=json.dumps(tool_result, separators=(",", ":"), sort_keys=True),
@@ -236,11 +303,15 @@ class AgentLoopRuntime:
                         name=tool_name,
                     )
                 )
+                if should_stop:
+                    break
+            if should_stop:
+                break
 
         if final_response is None:
             yield {"type": "_agent_result", "result": None}
             return
-        trace_events.append({
+        self._append_trace_event(trace_id, trace_events, {
             "type": "agent_run_end",
             "stop_reason": stop_reason,
             "iterations": iterations,
@@ -249,7 +320,14 @@ class AgentLoopRuntime:
         yield trace_events[-1]
         yield {
             "type": "_agent_result",
-            "result": self._result_from_response(final_response, executed_tool_calls, trace_events, stop_reason, iterations),
+            "result": self._result_from_response(
+                final_response,
+                executed_tool_calls,
+                trace_events,
+                stop_reason,
+                iterations,
+                trace_id,
+            ),
         }
 
     def prepare_tool_runtime(
@@ -332,13 +410,72 @@ class AgentLoopRuntime:
         trace_events: list[dict[str, Any]],
         stop_reason: str,
         iterations: int,
+        trace_id: str,
     ) -> AgentInvokeResult:
+        content = self._response_content(response)
+        if stop_reason == "repeated_tool_failure" and not content.strip():
+            content = _repeated_tool_failure_message(executed_tool_calls)
         return AgentInvokeResult(
-            content=self._response_content(response),
+            content=content,
             tool_calls=executed_tool_calls,
             trace_events=trace_events,
             response_metadata=getattr(response, "response_metadata", {}) or {},
             usage_metadata=self._usage_metadata(response),
             stop_reason=stop_reason,
             iterations=iterations,
+            trace_id=trace_id,
         )
+
+    def _append_trace_event(
+        self,
+        trace_id: str,
+        trace_events: list[dict[str, Any]],
+        event: dict[str, Any],
+    ) -> None:
+        payload = dict(event)
+        payload.setdefault("trace_id", trace_id)
+        payload.setdefault("ts", time.time())
+        trace_events.append(payload)
+        if self._trace_store is None:
+            return
+        try:
+            self._trace_store.append(trace_id, payload)
+        except Exception as exc:
+            trace_events.append({
+                "type": "agent_trace_write_error",
+                "trace_id": trace_id,
+                "ts": time.time(),
+                "error": str(exc),
+            })
+
+
+def _new_trace_id() -> str:
+    return f"agt-{uuid4().hex}"
+
+
+def _tool_failure_signature(tool_name: str, tool_args: dict[str, Any], tool_result: Any) -> str | None:
+    if not _is_tool_failure(tool_result):
+        return None
+    try:
+        args_json = json.dumps(tool_args, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        args_json = repr(sorted((str(key), repr(value)) for key, value in tool_args.items()))
+    return f"{tool_name}:{args_json}"
+
+
+def _is_tool_failure(tool_result: Any) -> bool:
+    return isinstance(tool_result, dict) and (tool_result.get("ok") is False or bool(tool_result.get("error")))
+
+
+def _repeated_tool_failure_message(executed_tool_calls: list[dict[str, Any]]) -> str:
+    if not executed_tool_calls:
+        return AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE
+    last_call = executed_tool_calls[-1]
+    tool_name = str(last_call.get("name") or "tool")
+    result = last_call.get("result")
+    error = ""
+    if isinstance(result, dict):
+        error = str(result.get("error") or "").strip()
+    if not error:
+        return f"{AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE} Tool: {tool_name}."
+    return f"{AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE} Tool: {tool_name}. Error: {error}"

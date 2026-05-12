@@ -33,6 +33,7 @@ warnings.filterwarnings(
 try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.intent_service import IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
@@ -47,11 +48,12 @@ try:
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from gcs_server.config import load_config, save_config
-    from gcs_server.runtime import AppRuntime, build_runtime
+    from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
 except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.intent_service import IntentService
     from ai.mission_draft_service import MissionDraftService, validate_draft_payload
@@ -66,7 +68,7 @@ except ModuleNotFoundError:
     from ai.session_store import normalize_source_controls
     from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from config import load_config, save_config
-    from runtime import AppRuntime, build_runtime
+    from runtime import AppRuntime, GCS_DIR, build_runtime
     from scene_map import get_scene_map_payload
 
 # Phase 2: LangGraph checkpointer for interrupt/resume approval
@@ -160,6 +162,9 @@ async def lifespan(app: FastAPI):
         runtime.ai_store,
         secret_resolver=runtime.secret_store.get_secret,
         tool_registry=_tool_registry,
+        trace_store=AgentTraceStore(
+            _resolve_gcs_data_path(config.logging.get("agent_trace_dir", "data/agent_traces"))
+        ),
     )
     app.state.ai_inflight_streams = AIInflightStreamManager()
     _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
@@ -183,6 +188,13 @@ async def lifespan(app: FastAPI):
         await runtime.control_service.stop()
         await runtime.mqtt_runtime.stop()
         runtime.ai_executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _resolve_gcs_data_path(path: object) -> Path:
+    data_path = Path(str(path or ""))
+    if data_path.is_absolute():
+        return data_path
+    return GCS_DIR / data_path
 
 
 app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)

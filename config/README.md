@@ -44,6 +44,7 @@ Before every push, run a quick search for sensitive endpoint values and confirm 
 - AI Chat current-context providers use `terrain_scene.v1.json` through the GCS scene-map service for exact terrain/object facts
 - GCS stores LLM provider records under `llm_providers` and purpose-based model routing under `model_routing`
 - GCS stores AI chat sessions in SQLite at `logging.ai_sessions_db_path`
+- GCS writes Agent loop JSONL traces under `logging.agent_trace_dir`
 - GCS settings JSON export/import can operate on selected sections without clearing missing sections from older files
 - GCS dashboard keyboard controls read `key_bindings` from shared config
 - AI Chat current-context providers include safe settings and LLM summaries from shared config so chat can answer questions about broker settings, topics, key bindings, video mode, simulator identity, and configured models
