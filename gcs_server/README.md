@@ -216,6 +216,9 @@ Implemented now:
 - OpenAI-compatible providers and Ollama are supported by the current runtime adapter
 - the active provider can come from General Chat routing or a per-session provider override
 - streaming send/retry flows are implemented
+- AI stream generation is now decoupled from a single browser connection: refreshing `/ai` does not cancel an in-flight Chat/Agent response
+- when the UI reconnects, it can reattach to the same in-flight stream and keep receiving events without starting a duplicate model run
+- in-flight streams are session-scoped; only one active send/retry stream is allowed per session at a time
 - each AI send/retry call receives compact live context after the system prompt
 - assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
 - current rover state, runtime state, saved settings, LLM provider/routing summaries, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
@@ -228,6 +231,14 @@ Implemented now:
 - settings and LLM context are structured current facts, not RAG documents
 - larger map/object/replay/perception details should be retrieved on demand through tools rather than injected into every chat prompt
 - sensitive LLM secrets are redacted; AI Chat receives safe auth summaries only, not raw API keys or stored secret values
+
+Streaming API behavior:
+- `POST /api/ai/sessions/{session_id}/messages/stream` starts a new streamed response for the user message payload
+- `POST /api/ai/sessions/{session_id}/retry/stream` starts a streamed retry of the latest assistant response
+- `POST /api/ai/sessions/{session_id}/messages/stream?resume=1` reattaches to the currently running message stream for that session
+- `POST /api/ai/sessions/{session_id}/retry/stream?resume=1` reattaches to the currently running retry stream for that session
+- `GET /api/ai/sessions/{session_id}/stream-status` returns whether a stream is currently in progress for the session
+- resume calls return `404` when no in-flight stream exists; new-start calls reject concurrent duplicates for the same session
 
 Not implemented yet:
 - bounded non-RAG retrieval for AI session history, settings sections, and sensor/perception metadata

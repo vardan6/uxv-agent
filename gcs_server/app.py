@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 import uuid
 import warnings
 from contextlib import asynccontextmanager
@@ -160,6 +161,7 @@ async def lifespan(app: FastAPI):
         secret_resolver=runtime.secret_store.get_secret,
         tool_registry=_tool_registry,
     )
+    app.state.ai_inflight_streams = AIInflightStreamManager()
     _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
     app.state.workbench_runtime = WorkbenchGraphRuntime(
         app_runtime=runtime,
@@ -187,6 +189,73 @@ app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+class _AIStreamRun:
+    def __init__(self, run_id: str, session_id: str) -> None:
+        self.run_id = run_id
+        self.session_id = session_id
+        self._lines: list[str] = []
+        self._done = False
+        self._condition = threading.Condition()
+
+    def append(self, line: str) -> None:
+        with self._condition:
+            self._lines.append(line)
+            self._condition.notify_all()
+
+    def close(self) -> None:
+        with self._condition:
+            self._done = True
+            self._condition.notify_all()
+
+    def stream(self) -> Any:
+        index = 0
+        while True:
+            with self._condition:
+                while index >= len(self._lines) and not self._done:
+                    self._condition.wait(timeout=0.25)
+                if index < len(self._lines):
+                    line = self._lines[index]
+                    index += 1
+                elif self._done:
+                    break
+                else:
+                    continue
+            yield line
+
+
+class AIInflightStreamManager:
+    def __init__(self) -> None:
+        self._runs: dict[str, _AIStreamRun] = {}
+        self._lock = threading.Lock()
+
+    def start(self, runtime: AppRuntime, session_id: str, stream_factory: Any) -> _AIStreamRun:
+        with self._lock:
+            current = self._runs.get(session_id)
+            if current is not None:
+                raise ValueError("A response is already in progress for this session.")
+            run = _AIStreamRun(run_id=f"ai-run-{uuid.uuid4().hex[:12]}", session_id=session_id)
+            self._runs[session_id] = run
+
+        def _worker() -> None:
+            try:
+                stream = stream_factory()
+                for line in _stream_ai_events(stream):
+                    run.append(line)
+            finally:
+                run.close()
+                with self._lock:
+                    active = self._runs.get(session_id)
+                    if active is run:
+                        self._runs.pop(session_id, None)
+
+        runtime.ai_executor.submit(_worker)
+        return run
+
+    def get(self, session_id: str) -> _AIStreamRun | None:
+        with self._lock:
+            return self._runs.get(session_id)
+
+
 @app.middleware("http")
 async def add_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
@@ -200,6 +269,10 @@ async def add_cache_headers(request: Request, call_next):
 
 def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
     return request_or_socket.app.state.runtime
+
+
+def _ai_inflight_streams(request_or_socket: Request | WebSocket) -> AIInflightStreamManager:
+    return request_or_socket.app.state.ai_inflight_streams
 
 
 def _connectivity_payload(config) -> dict[str, Any]:
@@ -1383,6 +1456,14 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ai/sessions/{session_id}/messages/stream")
 async def send_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
+    inflight = _ai_inflight_streams(request)
+    resume = request.query_params.get("resume", "").strip().lower() in {"1", "true", "yes"}
+    if resume:
+        run = inflight.get(session_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="No in-progress response for this session.")
+        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
+
     runtime = _runtime(request)
     payload = await request.json()
     if not isinstance(payload, dict):
@@ -1398,14 +1479,16 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
             timezone_name=timezone_name,
             run_mode=run_mode,
         )
-        stream = _ai_chat_service(request).stream_message_events(
-            runtime.config,
-            session_id,
-            content,
-            context_snapshot,
-            run_mode,
-            {"timezone_name": timezone_name, "runtime": runtime},
-        )
+        def _stream_factory() -> Any:
+            return _ai_chat_service(request).stream_message_events(
+                runtime.config,
+                session_id,
+                content,
+                context_snapshot,
+                run_mode,
+                {"timezone_name": timezone_name, "runtime": runtime},
+            )
+        run = inflight.start(runtime, session_id, _stream_factory)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -1415,7 +1498,7 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
         if provider_error is not None:
             raise provider_error from exc
         raise
-    return StreamingResponse(_stream_ai_events(stream), media_type="application/x-ndjson")
+    return StreamingResponse(run.stream(), media_type="application/x-ndjson")
 
 
 @app.post("/api/ai/sessions/{session_id}/retry")
@@ -1457,6 +1540,14 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ai/sessions/{session_id}/retry/stream")
 async def retry_ai_message_stream(session_id: str, request: Request) -> StreamingResponse:
+    inflight = _ai_inflight_streams(request)
+    resume = request.query_params.get("resume", "").strip().lower() in {"1", "true", "yes"}
+    if resume:
+        run = inflight.get(session_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="No in-progress response for this session.")
+        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
+
     runtime = _runtime(request)
     try:
         payload = await request.json()
@@ -1472,12 +1563,14 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
             timezone_name=timezone_name,
             run_mode=_latest_user_run_mode(messages),
         )
-        stream = _ai_chat_service(request).stream_retry_events(
-            runtime.config,
-            session_id,
-            context_snapshot,
-            {"timezone_name": timezone_name, "runtime": runtime},
-        )
+        def _stream_factory() -> Any:
+            return _ai_chat_service(request).stream_retry_events(
+                runtime.config,
+                session_id,
+                context_snapshot,
+                {"timezone_name": timezone_name, "runtime": runtime},
+            )
+        run = inflight.start(runtime, session_id, _stream_factory)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -1487,7 +1580,16 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
         if provider_error is not None:
             raise provider_error from exc
         raise
-    return StreamingResponse(_stream_ai_events(stream), media_type="application/x-ndjson")
+    return StreamingResponse(run.stream(), media_type="application/x-ndjson")
+
+
+@app.get("/api/ai/sessions/{session_id}/stream-status")
+async def ai_session_stream_status(session_id: str, request: Request) -> dict[str, Any]:
+    session = _runtime(request).ai_store.get_session(session_id, include_messages=False)
+    if session is None or session.get("archived_at") is not None:
+        raise HTTPException(status_code=404, detail="AI session not found")
+    run = _ai_inflight_streams(request).get(session_id)
+    return {"session_id": session_id, "in_progress": bool(run), "run_id": run.run_id if run else ""}
 
 
 @app.post("/api/ai/sessions/{session_id}/intent-test")

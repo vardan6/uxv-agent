@@ -225,6 +225,7 @@ const AI_SHELL_HEIGHT_MIN = 420;
 const AI_SHELL_HEIGHT_MAX = 1100;
 const AI_MOBILE_QUERY = '(max-width: 1100px)';
 const AI_ARCHIVED_SESSION_LIMIT = 500;
+const AI_INFLIGHT_MARKER_KEY = 'gcs-ai-inflight-stream';
 let sessionOpenTimer = 0;
 
 const aiEls = {
@@ -258,6 +259,50 @@ const aiEls = {
   status: document.getElementById('ai-status'),
   runModeButtons: document.querySelectorAll('[data-run-mode]'),
 };
+
+function loadInflightMarker() {
+  try {
+    const raw = window.localStorage.getItem(AI_INFLIGHT_MARKER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const sessionId = String(parsed.sessionId || '').trim();
+    const endpoint = String(parsed.endpoint || '').trim();
+    if (!sessionId || !endpoint) return null;
+    return { sessionId, endpoint };
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveInflightMarker(sessionId, endpoint) {
+  if (!sessionId || !endpoint) return;
+  try {
+    window.localStorage.setItem(AI_INFLIGHT_MARKER_KEY, JSON.stringify({
+      sessionId: String(sessionId),
+      endpoint: String(endpoint),
+      updatedAt: Date.now(),
+    }));
+  } catch (_) {
+    // Best effort only.
+  }
+}
+
+function clearInflightMarker(sessionId = '') {
+  try {
+    const marker = loadInflightMarker();
+    if (!marker) return;
+    if (sessionId && marker.sessionId !== sessionId) return;
+    window.localStorage.removeItem(AI_INFLIGHT_MARKER_KEY);
+  } catch (_) {
+    // Ignore storage errors.
+  }
+}
+
+async function serverStreamInProgress(sessionId) {
+  const result = await aiFetchJson(`/api/ai/sessions/${encodeURIComponent(sessionId)}/stream-status`);
+  return Boolean(result?.in_progress);
+}
 
 async function aiFetchJson(url, options = {}) {
   const response = await fetch(url, withAiTimezone(options));
@@ -641,7 +686,6 @@ function renderAgentActivityDisclosure(message, options = {}) {
   const summaryParts = [];
   if (iterations.length) summaryParts.push(`${iterations.length} iteration${iterations.length === 1 ? '' : 's'}`);
   if (calls.length) summaryParts.push(`${calls.length} tool${calls.length === 1 ? '' : 's'}`);
-  if (!summaryParts.length) summaryParts.push(pending ? 'starting' : 'recorded');
   const stateLabel = pending
     ? (calls.length ? 'Live' : 'Starting')
     : (calls.length ? 'Complete' : 'Recorded');
@@ -664,7 +708,9 @@ function renderAgentActivityDisclosure(message, options = {}) {
         </span>
         <span class="ai-activity-summary-side">
           <span class="ai-activity-state ai-activity-state-${escapeHtml(status)}">${escapeHtml(stateLabel)}</span>
-          <span class="ai-activity-summary-meta">${escapeHtml(summaryParts.join(' · '))}</span>
+          ${summaryParts.length
+            ? `<span class="ai-activity-summary-meta">${escapeHtml(summaryParts.join(' · '))}</span>`
+            : ''}
         </span>
       </summary>
       <div class="ai-activity-panel">
@@ -2100,8 +2146,10 @@ function handleAiStreamEvent(sessionId, eventData) {
   }
 }
 
-async function streamAiRequest(url, payload, abortController, sessionId) {
-  const response = await fetch(url, withAiTimezone({
+async function streamAiRequest(url, payload, abortController, sessionId, options = {}) {
+  const resume = Boolean(options.resume);
+  const requestUrl = resume ? `${url}${url.includes('?') ? '&' : '?'}resume=1` : url;
+  const response = await fetch(requestUrl, withAiTimezone({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
@@ -2229,6 +2277,77 @@ async function refreshSessionLive(sessionId) {
     });
   }
   return result.session;
+}
+
+function ensurePendingAssistantForResume(sessionId) {
+  const live = liveStateFor(sessionId);
+  if (live.pendingAssistantMessageId) return;
+  const now = Date.now() / 1000;
+  const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
+  const recentMessages = live.messages || [];
+  const runMode = messageRunMode(recentMessages[recentMessages.length - 1]) || currentRunMode();
+  live.pendingAssistantMessageId = pendingAssistantId;
+  setMessageActivityOpen(pendingAssistantId, runMode === 'agent');
+  live.messages = [
+    ...recentMessages,
+    {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+      provider_id: activeProviderId() || generalChatProviderId(),
+      model_id: '',
+      latency_ms: null,
+      meta: { interrupted: false, run_mode: runMode, agent_trace: [], agent_tool_progress: [] },
+    },
+  ];
+}
+
+async function resumeInflightStreamIfPresent() {
+  const marker = loadInflightMarker();
+  if (!marker) return false;
+  const { sessionId, endpoint } = marker;
+  if (!sessionId || (endpoint !== 'messages' && endpoint !== 'retry')) {
+    clearInflightMarker();
+    return false;
+  }
+  const inProgress = await serverStreamInProgress(sessionId).catch(() => false);
+  if (!inProgress) {
+    clearInflightMarker(sessionId);
+    return false;
+  }
+  if (!aiState.sessions.some((session) => session.id === sessionId)) {
+    clearInflightMarker(sessionId);
+    return false;
+  }
+  await openSession(sessionId);
+  const live = liveStateFor(sessionId);
+  const abortController = new AbortController();
+  live.sending = true;
+  live.abortController = abortController;
+  ensurePendingAssistantForResume(sessionId);
+  renderMessages();
+  setAiStatus('Reconnected to in-progress response.', 'ok');
+  try {
+    const baseUrl = endpoint === 'retry'
+      ? `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`
+      : `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`;
+    await streamAiRequest(baseUrl, {}, abortController, sessionId, { resume: true });
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    setAiStatus('Ready.', 'ok');
+    return true;
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    setAiStatus(isAbort ? 'Response interrupted.' : (error.message || 'Reconnect failed.'), isAbort ? 'warn' : 'danger');
+    await refreshSessionLive(sessionId).catch(() => {});
+    await loadSessions().catch(() => {});
+    return false;
+  } finally {
+    clearSessionLiveState(sessionId);
+    clearInflightMarker(sessionId);
+    renderMessages();
+  }
 }
 
 async function renameSession() {
@@ -2588,6 +2707,7 @@ async function sendMessage(event) {
     } else if (runMode === 'workbench') {
       await sendWorkbenchRequest(sessionId, content, abortController);
     } else {
+      saveInflightMarker(sessionId, 'messages');
       await streamAiRequest(
         `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
         { content, run_mode: runMode },
@@ -2609,6 +2729,7 @@ async function sendMessage(event) {
     const message = isAbort ? 'Response interrupted.' : error.message;
     if (sessionId) {
       removePendingMessages(sessionId);
+      clearInflightMarker(sessionId);
     }
     if (aiState.activeSession?.id === sessionId) {
       setAiStatus(message, isAbort ? 'warn' : 'danger');
@@ -2625,6 +2746,7 @@ async function sendMessage(event) {
   } finally {
     if (sessionId) {
       clearSessionLiveState(sessionId);
+      clearInflightMarker(sessionId);
     }
     renderMessages();
     aiEls.messageInput.focus();
@@ -2651,6 +2773,7 @@ async function resendMessage(messageId) {
     } else if (runMode === 'workbench') {
       await sendWorkbenchRequest(sessionId, content, abortController);
     } else {
+      saveInflightMarker(sessionId, 'messages');
       await streamAiRequest(
         `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
         { content, run_mode: runMode },
@@ -2674,6 +2797,7 @@ async function resendMessage(messageId) {
     if (aiState.activeSession?.id === sessionId) setAiStatus(messageText, isAbort ? 'warn' : 'danger');
   } finally {
     clearSessionLiveState(sessionId);
+    clearInflightMarker(sessionId);
     renderMessages();
   }
 }
@@ -2689,6 +2813,7 @@ async function retryResponse() {
   renderMessages();
   setAiStatus('Retrying last model response.');
   try {
+    saveInflightMarker(sessionId, 'retry');
     await streamAiRequest(
       `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`,
       {},
@@ -2707,6 +2832,7 @@ async function retryResponse() {
     if (aiState.activeSession?.id === sessionId) setAiStatus(message, isAbort ? 'warn' : 'danger');
   } finally {
     clearSessionLiveState(sessionId);
+    clearInflightMarker(sessionId);
     renderMessages();
   }
 }
@@ -3119,6 +3245,7 @@ async function initAi() {
   renderMessages();
   await loadLlmSettings();
   await loadSessions(true);
+  await resumeInflightStreamIfPresent().catch((error) => setAiStatus(error.message, 'warn'));
   renderMessages();
 }
 
