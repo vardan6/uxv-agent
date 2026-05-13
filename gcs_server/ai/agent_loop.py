@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
+from .data_access import build_data_access_manifest
+from .policy_engine import POLICY_DENIED_STOP_REASON, PolicyEngine
 from .tool_registry import DEFAULT_PERMISSIONS
 
 
@@ -19,6 +21,7 @@ class AgentInvokeResult:
     content: str
     tool_calls: list[dict[str, Any]]
     trace_events: list[dict[str, Any]]
+    data_access_manifest: dict[str, Any]
     response_metadata: dict[str, Any]
     usage_metadata: dict[str, Any]
     stop_reason: str = "final_answer"
@@ -30,8 +33,13 @@ class AgentInvokeResult:
 class AgentToolRuntime:
     bound_model: Any
     tool_map: dict[str, Any]
+    tool_definitions: dict[str, Any]
     langchain_messages: list[Any]
     tool_message_cls: Any
+    permissions: frozenset[str]
+    data_access_manifest: dict[str, Any]
+    granted_scopes: frozenset[str]
+    run_mode: str
 
 
 class AgentLoopRuntime:
@@ -46,6 +54,7 @@ class AgentLoopRuntime:
         usage_metadata: Callable[[Any], dict[str, Any]],
         tool_calling_unsupported: Callable[[Exception], bool],
         trace_store: Any | None = None,
+        policy_engine: PolicyEngine | None = None,
     ):
         self._tool_registry = tool_registry
         self._prompt_builder = prompt_builder
@@ -55,6 +64,7 @@ class AgentLoopRuntime:
         self._usage_metadata = usage_metadata
         self._tool_calling_unsupported = tool_calling_unsupported
         self._trace_store = trace_store
+        self._policy_engine = policy_engine or PolicyEngine()
 
     def invoke_with_tools(
         self,
@@ -92,6 +102,7 @@ class AgentLoopRuntime:
         consecutive_failure_signature: str | None = None
         consecutive_failure_count = 0
         should_stop = False
+        terminal_tool_error: dict[str, Any] | None = None
 
         for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
             iterations = iteration
@@ -121,7 +132,17 @@ class AgentLoopRuntime:
                     },
                 })
                 started = time.perf_counter()
-                tool_result = self._invoke_tool(runtime, tool_name, tool_args)
+                tool_result, policy_decision = self._invoke_tool(runtime, tool_name, tool_args)
+                self._append_trace_event(trace_id, trace_events, {
+                    "type": "agent_policy_decision",
+                    "tool_call": {
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "iteration": iteration,
+                    },
+                    "policy_decision": policy_decision.as_trace_dict(),
+                })
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 failure_signature = _tool_failure_signature(tool_name, tool_args, tool_result)
                 if failure_signature and failure_signature == consecutive_failure_signature:
@@ -140,6 +161,7 @@ class AgentLoopRuntime:
                         "result": tool_result,
                         "iteration": iteration,
                         "latency_ms": latency_ms,
+                        "policy_decision": policy_decision.as_trace_dict(),
                     }
                 )
                 self._append_trace_event(trace_id, trace_events, {
@@ -151,8 +173,16 @@ class AgentLoopRuntime:
                         "result": tool_result,
                         "iteration": iteration,
                         "latency_ms": latency_ms,
+                        "policy_decision": policy_decision.as_trace_dict(),
                     },
                 })
+                if policy_decision.action != "allow":
+                    stop_reason = policy_decision.stop_reason or POLICY_DENIED_STOP_REASON
+                    should_stop = True
+                    terminal_tool_error = {
+                        "tool_name": tool_name,
+                        "error": str(tool_result.get("error") or policy_decision.reason),
+                    }
                 if consecutive_failure_count >= AI_AGENT_MAX_REPEATED_TOOL_FAILURES:
                     stop_reason = "repeated_tool_failure"
                     self._append_trace_event(trace_id, trace_events, {
@@ -186,7 +216,16 @@ class AgentLoopRuntime:
             "iterations": iterations,
             "tool_call_count": len(executed_tool_calls),
         })
-        return self._result_from_response(final_response, executed_tool_calls, trace_events, stop_reason, iterations, trace_id)
+        return self._result_from_response(
+            final_response,
+            executed_tool_calls,
+            trace_events,
+            stop_reason,
+            iterations,
+            trace_id,
+            runtime.data_access_manifest,
+            terminal_tool_error,
+        )
 
     def stream_tool_events(
         self,
@@ -258,7 +297,18 @@ class AgentLoopRuntime:
                     },
                 })
                 yield trace_events[-1]
-                tool_result = self._invoke_tool(runtime, tool_name, tool_args)
+                tool_result, policy_decision = self._invoke_tool(runtime, tool_name, tool_args)
+                self._append_trace_event(trace_id, trace_events, {
+                    "type": "agent_policy_decision",
+                    "tool_call": {
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "iteration": iteration,
+                    },
+                    "policy_decision": policy_decision.as_trace_dict(),
+                })
+                yield trace_events[-1]
                 failure_signature = _tool_failure_signature(tool_name, tool_args, tool_result)
                 if failure_signature and failure_signature == consecutive_failure_signature:
                     consecutive_failure_count += 1
@@ -275,6 +325,7 @@ class AgentLoopRuntime:
                     "result": tool_result,
                     "iteration": iteration,
                     "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "policy_decision": policy_decision.as_trace_dict(),
                 }
                 executed_tool_calls.append(executed_tool_call)
                 self._append_trace_event(trace_id, trace_events, {
@@ -282,6 +333,13 @@ class AgentLoopRuntime:
                     "tool_call": dict(executed_tool_call),
                 })
                 yield trace_events[-1]
+                if policy_decision.action != "allow":
+                    stop_reason = policy_decision.stop_reason or POLICY_DENIED_STOP_REASON
+                    should_stop = True
+                    terminal_tool_error = {
+                        "tool_name": tool_name,
+                        "error": str(tool_result.get("error") or policy_decision.reason),
+                    }
                 if consecutive_failure_count >= AI_AGENT_MAX_REPEATED_TOOL_FAILURES:
                     stop_reason = "repeated_tool_failure"
                     self._append_trace_event(trace_id, trace_events, {
@@ -327,6 +385,8 @@ class AgentLoopRuntime:
                 stop_reason,
                 iterations,
                 trace_id,
+                runtime.data_access_manifest,
+                terminal_tool_error,
             ),
         }
 
@@ -354,17 +414,21 @@ class AgentLoopRuntime:
         ctx = tool_context or {}
         runtime = ctx.get("runtime")
         timezone_name = str(ctx.get("timezone_name") or "").strip()
+        permissions = frozenset(DEFAULT_PERMISSIONS)
         tools = self._tool_registry.build_langchain_tools(
             runtime,
             context_snapshot or {},
             timezone_name=timezone_name,
-            permissions=set(DEFAULT_PERMISSIONS),
+            permissions=set(permissions),
         )
         allowed_names = self._allowed_tool_names(context_snapshot)
         if allowed_names is not None:
             tools = [tool for tool in tools if str(getattr(tool, "name", "")) in allowed_names]
         if not tools:
             return None
+        definitions = self._tool_registry.definitions()
+        definition_map = {definition.name: definition for definition in definitions}
+        manifest = build_data_access_manifest(definitions, allowed_tool_names=allowed_names)
 
         try:
             # OpenAI Responses normalizes omitted tool strictness into strict mode,
@@ -376,7 +440,7 @@ class AgentLoopRuntime:
             raise
 
         langchain_messages = [SystemMessage(content=self._system_prompt_for_mode(run_mode))]
-        context_prompt = self._prompt_builder(context_snapshot, run_mode, prompt_tool_calls, tools)
+        context_prompt = self._prompt_builder(context_snapshot, run_mode, prompt_tool_calls, tools, manifest)
         if context_prompt:
             langchain_messages.append(SystemMessage(content=context_prompt))
         for message in messages:
@@ -390,18 +454,40 @@ class AgentLoopRuntime:
         return AgentToolRuntime(
             bound_model=bound_model,
             tool_map={str(tool.name): tool for tool in tools},
+            tool_definitions=definition_map,
             langchain_messages=langchain_messages,
             tool_message_cls=ToolMessage,
+            permissions=permissions,
+            data_access_manifest=manifest,
+            granted_scopes=frozenset(),
+            run_mode=run_mode,
         )
 
-    def _invoke_tool(self, runtime: AgentToolRuntime, tool_name: str, tool_args: dict[str, Any]) -> Any:
+    def _invoke_tool(self, runtime: AgentToolRuntime, tool_name: str, tool_args: dict[str, Any]) -> tuple[Any, Any]:
+        definition = runtime.tool_definitions.get(tool_name)
+        policy_decision = self._policy_engine.evaluate(
+            definition=definition,
+            tool_name=tool_name,
+            available_permissions=runtime.permissions,
+            granted_scopes=runtime.granted_scopes,
+            run_mode=runtime.run_mode,
+        )
+        if policy_decision.action != "allow":
+            return {"ok": False, "error": policy_decision.reason}, policy_decision
         tool = runtime.tool_map.get(tool_name)
         if tool is None:
-            return {"ok": False, "error": f"tool '{tool_name}' is not available"}
+            fallback = self._policy_engine.evaluate(
+                definition=None,
+                tool_name=tool_name,
+                available_permissions=runtime.permissions,
+                granted_scopes=runtime.granted_scopes,
+                run_mode=runtime.run_mode,
+            )
+            return {"ok": False, "error": f"tool '{tool_name}' is not available"}, fallback
         try:
-            return tool.invoke(tool_args)
+            return tool.invoke(tool_args), policy_decision
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": str(exc)}, policy_decision
 
     def _result_from_response(
         self,
@@ -411,14 +497,19 @@ class AgentLoopRuntime:
         stop_reason: str,
         iterations: int,
         trace_id: str,
+        data_access_manifest: dict[str, Any],
+        terminal_tool_error: dict[str, Any] | None = None,
     ) -> AgentInvokeResult:
         content = self._response_content(response)
         if stop_reason == "repeated_tool_failure" and not content.strip():
             content = _repeated_tool_failure_message(executed_tool_calls)
+        if stop_reason == POLICY_DENIED_STOP_REASON and not content.strip():
+            content = _policy_denied_message(executed_tool_calls, terminal_tool_error)
         return AgentInvokeResult(
             content=content,
             tool_calls=executed_tool_calls,
             trace_events=trace_events,
+            data_access_manifest=data_access_manifest,
             response_metadata=getattr(response, "response_metadata", {}) or {},
             usage_metadata=self._usage_metadata(response),
             stop_reason=stop_reason,
@@ -479,3 +570,19 @@ def _repeated_tool_failure_message(executed_tool_calls: list[dict[str, Any]]) ->
     if not error:
         return f"{AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE} Tool: {tool_name}."
     return f"{AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE} Tool: {tool_name}. Error: {error}"
+
+
+def _policy_denied_message(executed_tool_calls: list[dict[str, Any]], terminal_tool_error: dict[str, Any] | None) -> str:
+    tool_name = str((terminal_tool_error or {}).get("tool_name") or "")
+    error = str((terminal_tool_error or {}).get("error") or "").strip()
+    if not tool_name and executed_tool_calls:
+        tool_name = str(executed_tool_calls[-1].get("name") or "")
+    if not error and executed_tool_calls:
+        result = executed_tool_calls[-1].get("result")
+        if isinstance(result, dict):
+            error = str(result.get("error") or "").strip()
+    if tool_name and error:
+        return f"I stopped because policy blocked tool `{tool_name}`. Reason: {error}"
+    if tool_name:
+        return f"I stopped because policy blocked tool `{tool_name}`."
+    return "I stopped because a tool call was blocked by policy."

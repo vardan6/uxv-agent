@@ -17,10 +17,11 @@ Every tool must define a contract entry in `TOOL_CONTRACTS` with:
 When adding a tool:
 
 1. Add a `ToolDefinition(...)` entry in `_build_definitions`.
-2. Add/update the tool contract in `TOOL_CONTRACTS`.
-3. Ensure the tool description explains the operational intent.
-4. Ensure inputs/returns include actual field names used by code paths.
-5. Ensure chaining guidance reflects realistic sequences (not hypothetical).
+2. Set the tool metadata fields on `ToolDefinition`: `permission`, `tier`, `required_scopes`, and `side_effects`.
+3. Add/update the tool contract in `TOOL_CONTRACTS`.
+4. Ensure the tool description explains the operational intent.
+5. Ensure inputs/returns include actual field names used by code paths.
+6. Ensure chaining guidance reflects realistic sequences (not hypothetical).
 
 ## Why This Is Required
 

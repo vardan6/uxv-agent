@@ -279,6 +279,7 @@ class AIChatService:
                             "tool_calls": agent_result.tool_calls,
                             "agent_trace": agent_result.trace_events,
                             "agent_trace_id": agent_result.trace_id,
+                            "data_access_manifest": agent_result.data_access_manifest,
                             "prompt_context_tool_calls": prompt_tool_calls,
                             "agent_permissions": _agent_permissions(clean_run_mode),
                             "agent_stop_reason": agent_result.stop_reason,
@@ -406,6 +407,7 @@ class AIChatService:
                         "tool_calls": agent_result.tool_calls,
                         "agent_trace": agent_result.trace_events,
                         "agent_trace_id": agent_result.trace_id,
+                        "data_access_manifest": agent_result.data_access_manifest,
                         "prompt_context_tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
                         "agent_stop_reason": agent_result.stop_reason,
@@ -436,6 +438,7 @@ class AIChatService:
             meta={
                 "run_mode": clean_run_mode,
                 "tool_calls": prompt_tool_calls,
+                "data_access_manifest": _data_access_manifest(context_snapshot),
                 "agent_permissions": _agent_permissions(clean_run_mode),
                 "agent_smalltalk_bypass": bypass_for_smalltalk,
                 "agent_tool_fallback_error": agent_tooling_error,
@@ -621,9 +624,11 @@ def _prompt_for_mode(
     run_mode: str,
     tool_calls: list[dict[str, Any]],
     tools: list[Any] | None = None,
+    data_access_manifest: dict[str, Any] | None = None,
 ) -> str:
     base_prompt = _context_prompt(context_snapshot)
     tool_guidance = _tool_catalog_prompt(tools)
+    manifest_guidance = _data_access_manifest_prompt(data_access_manifest)
     if run_mode != "agent" and not tool_calls and not tool_guidance:
         return base_prompt
     if run_mode != "agent":
@@ -631,6 +636,7 @@ def _prompt_for_mode(
             "This chat message may use read-only rover and replay tools when needed. Use tool/context results as current facts. "
             "If live telemetry is stale, prefer the last known replay-backed state when available.\n"
             f"{tool_guidance}"
+            f"{manifest_guidance}"
             f"Read-only tool/context results: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
             f"{base_prompt}"
         )
@@ -645,6 +651,7 @@ def _prompt_for_mode(
         "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, rover pose, "
         "or telemetry values.\n"
         f"{tool_guidance}"
+        f"{manifest_guidance}"
         f"Read-only tool calls: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
         f"{base_prompt}"
     )
@@ -767,6 +774,27 @@ def _tool_catalog_prompt(tools: list[Any] | None) -> str:
     return f"Available read-only tools: {', '.join(names)}.\n"
 
 
+def _data_access_manifest_prompt(data_access_manifest: dict[str, Any] | None) -> str:
+    if not isinstance(data_access_manifest, dict):
+        return ""
+    surfaces = data_access_manifest.get("data_surfaces")
+    if not isinstance(surfaces, list):
+        return ""
+    parts: list[str] = []
+    for surface in surfaces:
+        if not isinstance(surface, dict) or not surface.get("enabled"):
+            continue
+        name = str(surface.get("name") or "").strip()
+        enabled_tools = surface.get("enabled_tool_names")
+        tool_names = enabled_tools if isinstance(enabled_tools, list) and enabled_tools else surface.get("tool_names")
+        if not name or not isinstance(tool_names, list) or not tool_names:
+            continue
+        parts.append(f"{name}: {', '.join(str(item) for item in tool_names)}")
+    if not parts:
+        return ""
+    return f"Available data surfaces: {'; '.join(parts)}.\n"
+
+
 def _context_prompt(context_snapshot: dict[str, Any] | None) -> str:
     if not isinstance(context_snapshot, dict):
         return ""
@@ -778,6 +806,12 @@ def _context_meta(context_snapshot: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     meta = context_snapshot.get("meta")
     return meta if isinstance(meta, dict) else {}
+
+
+def _data_access_manifest(context_snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    meta = _context_meta(context_snapshot)
+    manifest = meta.get("data_access_manifest")
+    return manifest if isinstance(manifest, dict) else None
 
 
 def _response_content(response: Any) -> str:

@@ -49,6 +49,7 @@ except ImportError:
     _INTERRUPT_AVAILABLE = False
 
 try:
+    from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.graph_state import WorkbenchGraphState
     from gcs_server.ai.mission_draft_service import validate_draft_payload
@@ -61,6 +62,7 @@ try:
     )
     from gcs_server.ai.session_store import normalize_source_controls
 except ModuleNotFoundError:
+    from ai.data_access import build_data_access_manifest
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.graph_state import WorkbenchGraphState
     from ai.mission_draft_service import validate_draft_payload
@@ -183,46 +185,7 @@ def _build_tool_context(state: WorkbenchGraphState) -> dict:
 
 
 def _build_data_access_manifest(runtime: WorkbenchGraphRuntime) -> dict:
-    tool_names = [d.name for d in runtime.tool_registry.definitions()]
-    return {
-        "data_surfaces": [
-            {
-                "name": "current_rover_state",
-                "description": "Latest telemetry snapshot and freshness metadata.",
-                "access": "tool",
-                "tool_names": ["get_current_rover_state"],
-                "initial_context": "summary",
-            },
-            {
-                "name": "terrain_scene",
-                "description": "Terrain/map objects and deterministic spatial geometry.",
-                "access": "tool",
-                "tool_names": [n for n in tool_names if any(k in n for k in ("object", "spatial", "scene"))],
-                "initial_context": "scene_summary_only",
-            },
-            {
-                "name": "replay_sessions",
-                "description": "Recorded sessions, telemetry, events, paths, and metrics.",
-                "access": "tool",
-                "tool_names": [n for n in tool_names if "replay" in n],
-                "initial_context": "active_session_summary_only",
-            },
-            {
-                "name": "ai_chat_history",
-                "description": "Saved AI chat sessions and messages.",
-                "access": "planned_tool",
-                "tool_names": ["list_ai_sessions", "search_ai_messages", "get_ai_session_messages"],
-                "initial_context": "current_session_metadata_only",
-            },
-            {
-                "name": "video_perception",
-                "description": "Future sampled video frames and object detections.",
-                "access": "future_tool",
-                "tool_names": ["sample_video_frame", "detect_video_objects"],
-                "initial_context": "video_metadata_only",
-            },
-        ]
-    }
+    return build_data_access_manifest(runtime.tool_registry.definitions())
 
 
 def _build_draft_user_prompt(

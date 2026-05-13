@@ -27,6 +27,9 @@ class ToolDefinition:
     name: str
     description: str
     permission: str
+    tier: int
+    required_scopes: frozenset[str]
+    side_effects: frozenset[str]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     handler: Callable[..., Any]
@@ -99,48 +102,63 @@ class ToolRegistry:
         return result if isinstance(result, dict) else {"ok": True, "result": result}
 
     def _build_definitions(self) -> dict[str, ToolDefinition]:
+        def tool(
+            name: str,
+            description: str,
+            permission: str,
+            handler: Callable[..., Any],
+            *,
+            required_scopes: frozenset[str] | None = None,
+            side_effects: frozenset[str] | None = None,
+        ) -> ToolDefinition:
+            return ToolDefinition(
+                name=name,
+                description=description,
+                permission=permission,
+                tier=_permission_tier(permission),
+                required_scopes=required_scopes or frozenset(),
+                side_effects=side_effects or frozenset(),
+                input_schema={},
+                output_schema={},
+                handler=handler,
+            )
+
         definitions = [
-            ToolDefinition(
+            tool(
                 "get_current_rover_state",
                 "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.",
                 READ_ONLY,
-                {},
-                {},
                 self._get_current_rover_state,
             ),
-            ToolDefinition(
+            tool(
                 "get_scene_summary",
                 "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.",
                 READ_ONLY,
-                {},
-                {},
                 self._get_scene_summary,
             ),
-            ToolDefinition(
+            tool(
                 "query_objects_in_front",
                 "Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds.",
                 READ_ONLY,
-                {},
-                {},
                 self._query_objects_in_front,
             ),
-            ToolDefinition("query_objects_near", "Find map objects near the rover within radius_m. Uses rover position only (heading not required), with automatic fallback to last_known_replay_state when available. Use this for prompts about nearby, around the rover, close objects, or surroundings.", READ_ONLY, {}, {}, self._query_objects_near),
-            ToolDefinition("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.", READ_ONLY, {}, {}, self._query_objects_by_kind),
-            ToolDefinition("query_objects_to_left", "Find map objects to the rover's left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.", READ_ONLY, {}, {}, self._query_objects_to_left),
-            ToolDefinition("query_objects_to_right", "Find map objects to the rover's right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.", READ_ONLY, {}, {}, self._query_objects_to_right),
-            ToolDefinition("query_nearest_objects", "Find nearest map objects to the rover. Uses rover position only (heading not required). Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If heading is unavailable, results still include distance and absolute bearing, while heading-relative fields may be omitted. If live rover telemetry is stale, this tool automatically falls back to last_known_replay_state when available.", READ_ONLY, {}, {}, self._query_nearest_objects),
-            ToolDefinition("resolve_spatial_target", "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.", PLANNING, {}, {}, self._resolve_spatial_target),
-            ToolDefinition("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, {}, {}, self._get_current_mission_state),
-            ToolDefinition("get_current_replay_summary", "Get the active replay session summary.", READ_ONLY, {}, {}, self._get_current_replay_summary),
-            ToolDefinition("get_recent_telemetry", "Get telemetry samples. By default returns recent samples from the active replay session using seconds+limit. If session_id is provided, returns samples for that explicit session_id so the agent can fetch telemetry from older sessions without extra clarification.", READ_ONLY, {}, {}, self._get_recent_telemetry),
-            ToolDefinition("list_replay_sessions", "List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.", ANALYSIS, {}, {}, self._list_replay_sessions),
-            ToolDefinition("resolve_replay_sessions", "Resolve a natural-language replay session selector such as 'all sessions', 'latest 5 sessions', 'first session', or a date-based selector into explicit session_ids.", ANALYSIS, {}, {}, self._resolve_replay_sessions),
-            ToolDefinition("get_replay_session_summary", "Get a replay session summary by session_id.", READ_ONLY, {}, {}, self._get_replay_session_summary),
-            ToolDefinition("get_replay_session_metrics", "Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.", ANALYSIS, {}, {}, self._get_replay_session_metrics),
-            ToolDefinition("get_replay_session_path", "Get downsampled replay path points for a session_id.", ANALYSIS, {}, {}, self._get_replay_session_path),
-            ToolDefinition("search_replay_session_events", "Search runtime events within a replay session.", ANALYSIS, {}, {}, self._search_replay_session_events),
-            ToolDefinition("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._compare_replay_sessions),
-            ToolDefinition("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, {}, {}, self._aggregate_replay_sessions),
+            tool("query_objects_near", "Find map objects near the rover within radius_m. Uses rover position only (heading not required), with automatic fallback to last_known_replay_state when available. Use this for prompts about nearby, around the rover, close objects, or surroundings.", READ_ONLY, self._query_objects_near),
+            tool("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.", READ_ONLY, self._query_objects_by_kind),
+            tool("query_objects_to_left", "Find map objects to the rover's left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.", READ_ONLY, self._query_objects_to_left),
+            tool("query_objects_to_right", "Find map objects to the rover's right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.", READ_ONLY, self._query_objects_to_right),
+            tool("query_nearest_objects", "Find nearest map objects to the rover. Uses rover position only (heading not required). Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If heading is unavailable, results still include distance and absolute bearing, while heading-relative fields may be omitted. If live rover telemetry is stale, this tool automatically falls back to last_known_replay_state when available.", READ_ONLY, self._query_nearest_objects),
+            tool("resolve_spatial_target", "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.", PLANNING, self._resolve_spatial_target),
+            tool("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, self._get_current_mission_state),
+            tool("get_current_replay_summary", "Get the active replay session summary.", READ_ONLY, self._get_current_replay_summary),
+            tool("get_recent_telemetry", "Get telemetry samples. By default returns recent samples from the active replay session using seconds+limit. If session_id is provided, returns samples for that explicit session_id so the agent can fetch telemetry from older sessions without extra clarification.", READ_ONLY, self._get_recent_telemetry),
+            tool("list_replay_sessions", "List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.", ANALYSIS, self._list_replay_sessions),
+            tool("resolve_replay_sessions", "Resolve a natural-language replay session selector such as 'all sessions', 'latest 5 sessions', 'first session', or a date-based selector into explicit session_ids.", ANALYSIS, self._resolve_replay_sessions),
+            tool("get_replay_session_summary", "Get a replay session summary by session_id.", READ_ONLY, self._get_replay_session_summary),
+            tool("get_replay_session_metrics", "Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.", ANALYSIS, self._get_replay_session_metrics),
+            tool("get_replay_session_path", "Get downsampled replay path points for a session_id.", ANALYSIS, self._get_replay_session_path),
+            tool("search_replay_session_events", "Search runtime events within a replay session.", ANALYSIS, self._search_replay_session_events),
+            tool("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, self._compare_replay_sessions),
+            tool("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, self._aggregate_replay_sessions),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
         return {definition.name: definition for definition in with_contracts}
@@ -374,11 +392,24 @@ def _with_tool_contract(definition: ToolDefinition) -> ToolDefinition:
         name=definition.name,
         description=description,
         permission=definition.permission,
+        tier=definition.tier,
+        required_scopes=definition.required_scopes,
+        side_effects=definition.side_effects,
         input_schema=dict(contract.get("inputs") or {}),
         output_schema=dict(contract.get("returns") or {}),
         handler=definition.handler,
         contract=contract,
     )
+
+
+def _permission_tier(permission: str) -> int:
+    return {
+        READ_ONLY: 0,
+        ANALYSIS: 1,
+        PLANNING: 2,
+        COMMAND_STAGING: 3,
+        EXECUTION: 4,
+    }.get(str(permission or "").strip(), 0)
 
 
 def _render_tool_description(base: str, contract: dict[str, Any]) -> str:

@@ -33,6 +33,7 @@ warnings.filterwarnings(
 try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.intent_service import IntentService
@@ -53,6 +54,7 @@ try:
 except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+    from ai.data_access import build_data_access_manifest
     from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.intent_service import IntentService
@@ -1038,11 +1040,15 @@ def _format_tool_catalog_markdown(tool_registry: ToolRegistry) -> str:
     lines = ["## Agent Tools", "", "Available in agent mode:"]
     for definition in definitions:
         permission = _tool_permission_label(definition.permission)
-        lines.append(f"- `{definition.name}` ({permission}): {definition.description}")
+        lines.append(f"- `{definition.name}` ({permission}, tier {definition.tier}): {definition.description}")
         if definition.input_schema:
             lines.append(f"  inputs: `{json.dumps(definition.input_schema, separators=(',', ':'), sort_keys=True)}`")
         if definition.output_schema:
             lines.append(f"  returns: `{json.dumps(definition.output_schema, separators=(',', ':'), sort_keys=True)}`")
+        if definition.required_scopes:
+            lines.append(f"  required_scopes: `{', '.join(sorted(definition.required_scopes))}`")
+        if definition.side_effects:
+            lines.append(f"  side_effects: `{', '.join(sorted(definition.side_effects))}`")
         contract = definition.contract if isinstance(definition.contract, dict) else {}
         upstream = contract.get("upstream_from_tools")
         downstream = contract.get("next_tools")
@@ -1174,6 +1180,7 @@ async def _ai_context_snapshot(
     meta["retrieved_sources"] = retrieved_sources
     meta["loaded_data_refs"] = loaded_data_refs
     meta["retrieval_citations"] = build_retrieval_citations(retrieved_sources, loaded_data_refs)
+    meta["data_access_manifest"] = build_data_access_manifest(runtime.tool_registry.definitions())
     return {"prompt": snapshot.prompt, "meta": meta}
 
 
