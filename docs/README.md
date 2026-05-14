@@ -22,6 +22,7 @@ What the project is, what users see, what the system must do.
 | [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: Chat, Agent, Intent Test, Workbench modes |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
 | [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Canonical AI agent product requirements, safety boundaries, capability ladder, fixed decisions |
+| [product/route-planning-and-mission-export-prd.md](./product/route-planning-and-mission-export-prd.md) | PRD for route planning, mission generation, and QGC `.plan` export |
 
 ## Technical (Implementation)
 
@@ -64,6 +65,8 @@ How the system is built.
 | [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
 | [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
 | [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
+| [technical/ai/tool-contract-standard.md](./technical/ai/tool-contract-standard.md) | Mandatory contract fields and rules for every tool in `tool_registry.py` |
+| [other/rover-route-planning-and-mission-export.md](./other/rover-route-planning-and-mission-export.md) | Technical design: VehicleProfile, RoadGraphService, route planning tools, QGC exporter |
 
 ## Decisions (ADRs)
 
