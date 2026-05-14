@@ -70,6 +70,9 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "query_nearest_objects",
     "resolve_spatial_target",
     "get_current_mission_state",
+    "plan_route_around_group",
+    "plan_route_between",
+    "export_mission",
 })
 
 _OPTIONAL_TOOL_NAMES_BY_SOURCE = {

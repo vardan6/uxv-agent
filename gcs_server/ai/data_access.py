@@ -118,5 +118,16 @@ def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_name
                 ["get_sensor_status"],
                 "video_metadata_only",
             ),
+            _surface(
+                "route_planning",
+                "Road-graph route planning and QGC mission export. Compute drivable routes over the terrain road network and export approved drafts as .plan files.",
+                "tool",
+                [
+                    "plan_route_around_group",
+                    "plan_route_between",
+                    "export_mission",
+                ],
+                "manifest_only",
+            ),
         ]
     }
