@@ -29,6 +29,7 @@ class WorkbenchGraphState(TypedDict, total=False):
     scene_summary: dict
     runtime_summary: dict
     replay_summary: dict
+    chat_history_summary: dict
     settings_summary: dict
     llm_summary: dict
 

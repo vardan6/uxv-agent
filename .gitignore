@@ -26,3 +26,4 @@ tts_service/models/*
 !tts_service/models/.gitkeep
 tts-services-edit/models/*
 !tts-services-edit/models/.gitkeep
+ArduPilot-SITL/

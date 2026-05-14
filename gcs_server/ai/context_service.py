@@ -44,7 +44,7 @@ class AIContextService:
             "get_settings_context",
             "get_llm_context",
             "get_current_mission_state",
-            "get_scene_map_summary",
+            "get_scene_summary",
         ]
         # B4: fetch independent async sources in parallel
         rover, runtime = await asyncio.gather(
@@ -71,18 +71,18 @@ class AIContextService:
                     fov_deg=fov,
                     rover_state=rover,
                 )
-                providers.append("find_objects_in_front")
+                providers.append("query_objects_in_front")
             if "near" in lower and ("object" in lower or "rover" in lower):
                 radius = _parse_radius_query(lower, default=50.0)
                 details["objects_near_rover"] = self._find_objects_near_rover_from_payload(
                     scene_payload, radius_m=radius, rover_state=rover
                 )
-                providers.append("find_objects_near_rover")
+                providers.append("query_objects_near")
             known_kinds = frozenset((scene.get("object_kinds") or {}).keys()) if scene.get("available") else None
             kind = _parse_kind_query(lower, known_kinds)
             if kind:
                 details["objects_by_kind"] = self._find_objects_by_kind_from_payload(scene_payload, kind)
-                providers.append("find_objects_by_kind")
+                providers.append("query_objects_by_kind")
         replay_enabled = clean_source_controls.get("replay_reports", True)
         if eager_detail_mode and replay_enabled and ("recent" in lower or "happened" in lower):
             details["current_replay"] = self.get_current_replay_summary()
@@ -91,7 +91,12 @@ class AIContextService:
         replay_context = self.get_replay_session_context(user_message, timezone_name=timezone_name) if eager_detail_mode and replay_enabled else {}
         if replay_context.get("available"):
             details["replay_sessions"] = replay_context
-            providers.append("get_replay_session_context")
+            providers.append("resolve_replay_sessions")
+        if clean_source_controls.get("ai_chat_history") and _message_references(lower, _MEMORY_KEYWORDS):
+            history = self.get_recent_ai_chat_history(session_id=session_id)
+            if history.get("available"):
+                details["ai_chat_history"] = history
+                providers.append("get_recent_ai_chat_history")
 
         context = {
             "generated_at": time.time(),
@@ -435,6 +440,58 @@ class AIContextService:
             "summary": "No mission storage or active mission is implemented yet.",
         }
 
+    def get_recent_ai_chat_history(
+        self,
+        *,
+        session_id: str,
+        limit: int = 8,
+        char_budget: int = 2200,
+        per_message_char_limit: int = 240,
+    ) -> dict[str, Any]:
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id or not hasattr(self._runtime, "ai_store"):
+            return {"available": False, "session_id": clean_session_id, "messages": []}
+
+        try:
+            messages = self._runtime.ai_store.latest_messages(clean_session_id, limit=max(1, int(limit)))
+        except Exception as exc:
+            return {
+                "available": False,
+                "session_id": clean_session_id,
+                "messages": [],
+                "error": str(exc),
+            }
+
+        compact_messages: list[dict[str, Any]] = []
+        used = 0
+        trimmed = False
+        for message in reversed(messages):
+            content = " ".join(str(message.get("content") or "").split())
+            if len(content) > per_message_char_limit:
+                content = f"{content[:per_message_char_limit].rstrip()}..."
+                trimmed = True
+            entry = {
+                "id": str(message.get("id") or ""),
+                "role": str(message.get("role") or ""),
+                "content": content,
+                "created_at": message.get("created_at"),
+            }
+            entry_chars = len(json.dumps(entry, separators=(",", ":"), sort_keys=True))
+            if compact_messages and used + entry_chars > char_budget:
+                trimmed = True
+                continue
+            compact_messages.append(entry)
+            used += entry_chars
+
+        compact_messages.reverse()
+        return {
+            "available": bool(compact_messages),
+            "session_id": clean_session_id,
+            "message_count": len(compact_messages),
+            "trimmed": trimmed or len(compact_messages) < len(messages),
+            "messages": compact_messages,
+        }
+
 def _format_context_block(context: dict[str, Any], dropped: list[str] | None = None) -> str:
     header = (
         "Live GCS current context. Treat these structured facts as more current than conversation history. "
@@ -563,6 +620,10 @@ _SCENE_KEYWORDS: frozenset[str] = frozenset({
     "obstacle", "landmark", "tree", "rock", "building", "structure",
     "site", "grid",
 })
+_MEMORY_KEYWORDS: frozenset[str] = frozenset({
+    "remember", "earlier", "before", "previous chat", "previous session",
+    "last time", "chat history", "history", "we discussed",
+})
 
 
 def _estimate_chars(data: Any) -> int:
@@ -654,6 +715,19 @@ def _apply_context_budget(
         if _estimate_chars(ctx) <= max_chars:
             return ctx, dropped
 
+        if "ai_chat_history" in details:
+            history = details["ai_chat_history"]
+            if isinstance(history, dict):
+                messages = history.get("messages")
+                if isinstance(messages, list) and len(messages) > 4:
+                    trimmed_history = dict(history)
+                    trimmed_history["messages"] = messages[-4:]
+                    trimmed_history["message_count"] = len(trimmed_history["messages"])
+                    trimmed_history["trimmed"] = True
+                    details["ai_chat_history"] = trimmed_history
+                    if _estimate_chars(ctx) <= max_chars:
+                        return ctx, dropped
+
         # recent_telemetry: second pass 5 → 3
         if "recent_telemetry" in details:
             entries = details["recent_telemetry"]
@@ -669,6 +743,7 @@ def _apply_context_budget(
             "replay_sessions",
             "recent_telemetry",
             "current_replay",
+            "ai_chat_history",
             "objects_by_kind",
             "objects_near_rover",
             "objects_in_front",

@@ -48,15 +48,15 @@ const AI_SOURCE_CONTROL_META = {
   },
   ai_chat_history: {
     label: 'AI chat history',
-    description: 'Future bounded retrieval from AI session history.',
+    description: 'Bounded retrieval from saved AI sessions and messages.',
   },
   settings_config: {
     label: 'Settings/config',
-    description: 'Use compact settings context and future section lookups.',
+    description: 'Use compact settings context and safe section lookups.',
   },
   sensor_context: {
     label: 'Sensor context',
-    description: 'Placeholder for future perception and sampled sensor retrieval.',
+    description: 'Use metadata-only camera/video freshness and runtime sensor status.',
   },
   web_research: {
     label: 'Web research',
@@ -64,7 +64,54 @@ const AI_SOURCE_CONTROL_META = {
   },
 };
 
+const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
+  'list_data_surfaces',
+  'get_current_rover_state',
+  'get_scene_summary',
+  'query_objects_in_front',
+  'query_objects_near',
+  'query_objects_by_kind',
+  'query_objects_to_left',
+  'query_objects_to_right',
+  'query_nearest_objects',
+  'resolve_spatial_target',
+  'get_current_mission_state',
+]);
+
+const AI_OPTIONAL_TOOL_NAMES_BY_SOURCE = {
+  replay_reports: new Set([
+    'get_current_replay_summary',
+    'get_recent_telemetry',
+    'list_replay_sessions',
+    'resolve_replay_sessions',
+    'get_replay_session_summary',
+    'get_replay_session_metrics',
+    'get_replay_session_path',
+    'search_replay_session_events',
+    'compare_replay_sessions',
+    'aggregate_replay_sessions',
+  ]),
+  ai_chat_history: new Set([
+    'list_ai_sessions',
+    'search_ai_messages',
+    'get_ai_session_messages',
+  ]),
+  settings_config: new Set([
+    'get_settings_summary',
+    'get_settings_section',
+    'get_llm_provider_summary',
+  ]),
+  sensor_context: new Set([
+    'get_sensor_status',
+  ]),
+};
+
 const AI_AGENT_TOOL_DEFINITIONS = [
+  {
+    name: 'list_data_surfaces',
+    permission: 'read_only',
+    description: 'List every bounded data surface available to this session, show which source controls currently enable them, and identify the exact tools that can load each surface. Call this first when you need to discover where replay history, AI chat history, settings/config, or sensor metadata can be retrieved from.',
+  },
   {
     name: 'get_current_rover_state',
     permission: 'read_only',
@@ -78,12 +125,12 @@ const AI_AGENT_TOOL_DEFINITIONS = [
   {
     name: 'query_objects_in_front',
     permission: 'read_only',
-    description: 'Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds.',
+    description: 'Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
   },
   {
     name: 'query_objects_near',
     permission: 'read_only',
-    description: 'Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings.',
+    description: 'Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
   },
   {
     name: 'query_objects_by_kind',
@@ -93,22 +140,22 @@ const AI_AGENT_TOOL_DEFINITIONS = [
   {
     name: 'query_objects_to_left',
     permission: 'read_only',
-    description: 'Find map objects to the rover\'s left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover.',
+    description: 'Find map objects to the rover\'s left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
   },
   {
     name: 'query_objects_to_right',
     permission: 'read_only',
-    description: 'Find map objects to the rover\'s right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover.',
+    description: 'Find map objects to the rover\'s right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
   },
   {
     name: 'query_nearest_objects',
     permission: 'read_only',
-    description: 'Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds.',
+    description: 'Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
   },
   {
     name: 'resolve_spatial_target',
     permission: 'planning',
-    description: 'Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects.',
+    description: 'Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects. Target objects may also include position or coordinates and optionally heading_deg.',
   },
   {
     name: 'get_current_mission_state',
@@ -164,6 +211,41 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     name: 'aggregate_replay_sessions',
     permission: 'analysis',
     description: 'Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
+  },
+  {
+    name: 'list_ai_sessions',
+    permission: 'analysis',
+    description: 'List saved AI chat sessions with bounded metadata, message counts, archival state, and latest-message previews. Call this before `get_ai_session_messages` when you need a specific session_id, or before `search_ai_messages` when the operator refers to earlier chats without naming the session.',
+  },
+  {
+    name: 'search_ai_messages',
+    permission: 'analysis',
+    description: 'Search saved AI messages by text across the current session or across saved sessions and return bounded match snippets with session/message references. Use this when the operator asks about earlier answers, prior discussions, or something that was said before and you need to locate the right session or message window.',
+  },
+  {
+    name: 'get_ai_session_messages',
+    permission: 'read_only',
+    description: 'Load a bounded window of saved AI messages from one session. If session_id is omitted, use the current AI session. Call this after `list_ai_sessions` or `search_ai_messages` when you need the surrounding conversation, not just a preview or search snippet.',
+  },
+  {
+    name: 'get_settings_summary',
+    permission: 'read_only',
+    description: 'Get the safe compact settings summary available to AI flows, including which top-level sections exist, key non-secret configuration summaries, and the settings path. Call this first before requesting one section with `get_settings_section` or checking provider/routing state with `get_llm_provider_summary`.',
+  },
+  {
+    name: 'get_settings_section',
+    permission: 'read_only',
+    description: 'Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.',
+  },
+  {
+    name: 'get_llm_provider_summary',
+    permission: 'read_only',
+    description: 'Get safe LLM provider and model-routing metadata, including enabled providers, active chat-provider resolution, and routing rules without exposing secrets. Use this when the operator asks which provider/model path is active or how AI routing is configured.',
+  },
+  {
+    name: 'get_sensor_status',
+    permission: 'read_only',
+    description: 'Get metadata-only sensor and video status, including telemetry freshness, camera freshness, configured video delivery, and current perception limitations. Use this for questions about whether the agent can currently see live camera data or rely on sensor freshness. This tool does not expose raw frames, detections, or vision inference output.',
   },
 ];
 
@@ -974,10 +1056,29 @@ function formatRetrievalSurfacesMarkdown(session) {
   return lines.join('\n').trim();
 }
 
-function formatToolCatalogMarkdown() {
-  const lines = ['## Agent Tools', '', 'Available in agent mode:'];
-  AI_AGENT_TOOL_DEFINITIONS.forEach((tool) => {
-    lines.push(`- \`${tool.name}\` (${toolPermissionLabel(tool.permission)}): ${tool.description}`);
+function allowedToolNamesForSourceControls(sourceControls) {
+  const normalized = normalizeSourceControls(sourceControls);
+  const allowed = new Set(AI_ALWAYS_ALLOWED_TOOL_NAMES);
+  Object.entries(AI_OPTIONAL_TOOL_NAMES_BY_SOURCE).forEach(([sourceKey, toolNames]) => {
+    if (!normalized[sourceKey]) return;
+    toolNames.forEach((name) => allowed.add(name));
+  });
+  return allowed;
+}
+
+function formatToolCatalogMarkdown(session) {
+  const allowed = allowedToolNamesForSourceControls(session?.source_controls);
+  const tools = AI_AGENT_TOOL_DEFINITIONS.filter((tool) => allowed.has(tool.name));
+  const count = tools.length;
+  const noun = count === 1 ? 'tool' : 'tools';
+  const lines = ['## Agent Tools', '', `${count} ${noun} available in agent mode.`];
+  tools.forEach((tool) => {
+    lines.push(
+      '',
+      `### \`${tool.name}\``,
+      `- Permission: \`${toolPermissionLabel(tool.permission)}\``,
+      `- Description: ${tool.description}`,
+    );
   });
   return lines.join('\n').trim();
 }
@@ -1021,7 +1122,7 @@ function buildLocalSessionCommandResponse(sessionId, command) {
     return { rawCommand: '/retrieval-surfaces', assistantContent: formatRetrievalSurfacesMarkdown(session) };
   }
   if (normalized === 'tools') {
-    return { rawCommand: '/tools', assistantContent: formatToolCatalogMarkdown() };
+    return { rawCommand: '/tools', assistantContent: formatToolCatalogMarkdown(session) };
   }
   if (normalized === 'tool-activity') {
     return { rawCommand: '/tool-activity', assistantContent: formatAgentToolActivityMarkdown(sessionId) };
@@ -1029,7 +1130,7 @@ function buildLocalSessionCommandResponse(sessionId, command) {
   if (normalized === 'capabilities') {
     return {
       rawCommand: '/capabilities',
-      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdown()}`,
+      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdown(session)}`,
     };
   }
   throw new Error(`unsupported command '${command}'`);

@@ -37,6 +37,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
 - Chat/Agent/Intent Test/Workbench composer mode toggle
 - Read-only Agent mode tools for current rover state, scene summary, front/near/by-kind object queries, mission state, and replay analytics
+- Source-controlled bounded retrieval surfaces for replay reports, AI chat history, safe settings/config sections, and sensor/video metadata
 - Shared AI-agent data-access manifest across Agent chat and Workbench planning
 - Thin `PolicyEngine` seam for tool-call evaluation with trace-visible policy decisions
 - Foldable in-message Agent activity panel showing live thinking/activity state, bounded iteration trace, tool calls, tool arguments/results, policy decisions, and prompt-context injections
@@ -50,7 +51,7 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
-- AI Chat, Agent, Intent Test, and Workbench are non-executing today; intent parsing, mission-draft approval foundation, shared agent traces, shared data-access manifest, and Phase 3 policy seam are implemented, but bounded non-RAG lazy retrieval is still incomplete, RAG/web-grounding remains deferred to a later phase, and rover-agent command workflows are not implemented
+- AI Chat, Agent, Intent Test, and Workbench are non-executing today; intent parsing, mission-draft approval foundation, shared agent traces, shared data-access manifest, Phase 3 policy seam, and Phase 4 bounded non-RAG lazy retrieval/source controls are implemented, while RAG/web-grounding and rover-agent command workflows remain deferred
 
 ## Dependencies
 
@@ -227,6 +228,8 @@ Implemented now:
 - assistant messages store current context snapshots and provider names in `ai_messages.meta_json`
 - current rover state, runtime state, saved settings, LLM provider/routing summaries, scene-map summary, object lookup, replay summary, recent telemetry, and no-active-mission state are available to chat
 - Agent mode exposes synchronous read-only tools for current rover state, scene summary, object queries in front/near/by kind, mission state, and replay analytics
+- session-level source controls gate bounded non-RAG retrieval for replay reports, AI chat history, settings/config, and sensor/video metadata
+- assistant/workbench metadata records retrieval surfaces via `retrieved_sources`, `loaded_data_refs`, and `retrieval_citations`
 - `Intent Test` parses natural-language rover tasks into a validated structured intent object and can optionally show spatial target candidates
 - Agent tools close over the request's prebuilt context snapshot so they do not await runtime state inside LangChain's synchronous tool loop
 - streaming Agent mode emits read-only tool progress events while tools run
@@ -245,7 +248,6 @@ Streaming API behavior:
 - resume calls return `404` when no in-flight stream exists; new-start calls reject concurrent duplicates for the same session
 
 Not implemented yet:
-- bounded non-RAG retrieval for AI session history, settings sections, and sensor/perception metadata
 - RAG source controls and document upload
 - web research/search as a chat source
 - richer recent-history and mission retrieval in chat
@@ -280,7 +282,6 @@ The current bootstrap path is functional:
 
 The next work is:
 - actual `rover-sim-next` backend implementation
-- bounded lazy retrieval surfaces for AI Chat and Agent mode
 - Workbench planner-loop migration onto the shared agent runtime
 - later RAG/web-grounded AI Chat source controls
 - live map on the main dashboard

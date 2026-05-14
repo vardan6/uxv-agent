@@ -61,6 +61,7 @@ try:
         normalize_retrieval_request,
     )
     from gcs_server.ai.session_store import normalize_source_controls
+    from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls
 except ModuleNotFoundError:
     from ai.data_access import build_data_access_manifest
     from ai.graph_runtime import WorkbenchGraphRuntime
@@ -74,6 +75,7 @@ except ModuleNotFoundError:
         normalize_retrieval_request,
     )
     from ai.session_store import normalize_source_controls
+    from ai.tool_registry import allowed_tool_names_for_source_controls
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -184,8 +186,11 @@ def _build_tool_context(state: WorkbenchGraphState) -> dict:
     }
 
 
-def _build_data_access_manifest(runtime: WorkbenchGraphRuntime) -> dict:
-    return build_data_access_manifest(runtime.tool_registry.definitions())
+def _build_data_access_manifest(runtime: WorkbenchGraphRuntime, source_controls: dict[str, Any] | None = None) -> dict:
+    return build_data_access_manifest(
+        runtime.tool_registry.definitions(),
+        allowed_tool_names=allowed_tool_names_for_source_controls(source_controls),
+    )
 
 
 def _build_draft_user_prompt(
@@ -249,6 +254,7 @@ def _build_retrieved_sources(state: WorkbenchGraphState) -> list[dict[str, Any]]
         ),
         session_id=str(state.get("session_id", "") or ""),
         replay_summary=state.get("replay_summary") or {},
+        chat_history_summary=state.get("chat_history_summary") or {},
         settings_summary=state.get("settings_summary") or {},
         sensor_summary={
             "telemetry_fresh": ((state.get("rover_state") or {}).get("telemetry_fresh")),
@@ -318,9 +324,10 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
             source_controls=normalize_source_controls((state.get("retrieval_request") or {}).get("source_controls")),
         )
     except Exception as exc:
+        source_controls = normalize_source_controls((state.get("retrieval_request") or {}).get("source_controls"))
         return {
             "context_metadata": {"error": str(exc), "context_text": ""},
-            "data_access_manifest": _build_data_access_manifest(rt),
+            "data_access_manifest": _build_data_access_manifest(rt, source_controls),
             "errors": [{
                 "node": "retrieve_current_context", "code": "context_build_error",
                 "severity": "warning", "message": str(exc), "recoverable": True,
@@ -343,10 +350,12 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
         "camera_fresh": ((full_ctx.get("rover") or {}).get("camera_fresh")),
         "video_delivery": ((full_ctx.get("runtime") or {}).get("video")),
     }
+    chat_history_summary = (full_ctx.get("details") or {}).get("ai_chat_history") or {}
     retrieved_sources = _build_retrieved_sources({
         **state,
         "retrieval_request": retrieval_request,
         "replay_summary": (full_ctx.get("details") or {}).get("current_replay") or {},
+        "chat_history_summary": chat_history_summary,
         "settings_summary": full_ctx.get("settings") or {},
         "rover_state": full_ctx.get("rover") or {},
         "runtime_summary": full_ctx.get("runtime") or {},
@@ -355,6 +364,7 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
         retrieval_request=retrieval_request,
         session_id=str(state.get("session_id") or ""),
         replay_summary=(full_ctx.get("details") or {}).get("current_replay") or {},
+        chat_history_summary=chat_history_summary,
         settings_summary=full_ctx.get("settings") or {},
         sensor_summary=sensor_summary,
     )
@@ -362,11 +372,12 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
 
     return {
         "context_metadata": compact_meta,
-        "data_access_manifest": _build_data_access_manifest(rt),
+        "data_access_manifest": _build_data_access_manifest(rt, retrieval_request.get("source_controls")),
         "rover_state": full_ctx.get("rover") or {},
         "scene_summary": full_ctx.get("scene") or {},
         "runtime_summary": full_ctx.get("runtime") or {},
         "replay_summary": (full_ctx.get("details") or {}).get("current_replay") or {},
+        "chat_history_summary": chat_history_summary,
         "settings_summary": full_ctx.get("settings") or {},
         "llm_summary": full_ctx.get("llm") or {},
         "retrieval_request": retrieval_request,
@@ -405,6 +416,7 @@ def retrieve_replay_context(state: WorkbenchGraphState, config: RunnableConfig) 
         retrieval_request=retrieval_request,
         session_id=str(state.get("session_id") or ""),
         replay_summary=state.get("replay_summary") or {},
+        chat_history_summary=state.get("chat_history_summary") or {},
         settings_summary=state.get("settings_summary") or {},
     )
     return {
@@ -427,6 +439,7 @@ def retrieve_application_memory(state: WorkbenchGraphState, config: RunnableConf
         retrieval_request=retrieval_request,
         session_id=str(state.get("session_id") or ""),
         replay_summary=state.get("replay_summary") or {},
+        chat_history_summary=state.get("chat_history_summary") or {},
         settings_summary=state.get("settings_summary") or {},
     )
     return {
@@ -449,6 +462,7 @@ def retrieve_settings_context(state: WorkbenchGraphState, config: RunnableConfig
         retrieval_request=retrieval_request,
         session_id=str(state.get("session_id") or ""),
         replay_summary=state.get("replay_summary") or {},
+        chat_history_summary=state.get("chat_history_summary") or {},
         settings_summary=state.get("settings_summary") or {},
     )
     return {
@@ -471,6 +485,7 @@ def retrieve_sensor_context(state: WorkbenchGraphState, config: RunnableConfig) 
         retrieval_request=retrieval_request,
         session_id=str(state.get("session_id") or ""),
         replay_summary=state.get("replay_summary") or {},
+        chat_history_summary=state.get("chat_history_summary") or {},
         settings_summary=state.get("settings_summary") or {},
         sensor_summary={
             "telemetry_fresh": ((state.get("rover_state") or {}).get("telemetry_fresh")),

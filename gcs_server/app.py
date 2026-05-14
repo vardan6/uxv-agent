@@ -45,7 +45,7 @@ try:
         build_retrieved_sources,
         normalize_retrieval_request,
     )
-    from gcs_server.ai.tool_registry import ToolRegistry
+    from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from gcs_server.config import load_config, save_config
@@ -66,7 +66,7 @@ except ModuleNotFoundError:
         build_retrieved_sources,
         normalize_retrieval_request,
     )
-    from ai.tool_registry import ToolRegistry
+    from ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from ai.session_store import normalize_source_controls
     from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
     from config import load_config, save_config
@@ -1035,28 +1035,51 @@ def _format_retrieval_surfaces_markdown(
     return "\n".join(lines).strip()
 
 
-def _format_tool_catalog_markdown(tool_registry: ToolRegistry) -> str:
-    definitions = tool_registry.definitions()
-    lines = ["## Agent Tools", "", "Available in agent mode:"]
+def _format_tool_catalog_markdown(
+    tool_registry: ToolRegistry,
+    *,
+    source_controls: dict[str, Any] | None = None,
+) -> str:
+    allowed_tool_names = allowed_tool_names_for_source_controls(source_controls)
+    definitions = [definition for definition in tool_registry.definitions() if definition.name in allowed_tool_names]
+    lines = ["## Agent Tools", ""]
+    count = len(definitions)
+    noun = "tool" if count == 1 else "tools"
+    lines.append(f"{count} {noun} available in agent mode.")
     for definition in definitions:
         permission = _tool_permission_label(definition.permission)
-        lines.append(f"- `{definition.name}` ({permission}, tier {definition.tier}): {definition.description}")
-        if definition.input_schema:
-            lines.append(f"  inputs: `{json.dumps(definition.input_schema, separators=(',', ':'), sort_keys=True)}`")
-        if definition.output_schema:
-            lines.append(f"  returns: `{json.dumps(definition.output_schema, separators=(',', ':'), sort_keys=True)}`")
-        if definition.required_scopes:
-            lines.append(f"  required_scopes: `{', '.join(sorted(definition.required_scopes))}`")
-        if definition.side_effects:
-            lines.append(f"  side_effects: `{', '.join(sorted(definition.side_effects))}`")
+        lines.extend([
+            "",
+            f"### `{definition.name}`",
+            f"- Permission: `{permission}`",
+            f"- Tier: `{definition.tier}`",
+            f"- Description: {definition.description}",
+        ])
         contract = definition.contract if isinstance(definition.contract, dict) else {}
+        inputs = contract.get("inputs")
+        required = contract.get("required_inputs")
         upstream = contract.get("upstream_from_tools")
+        returns = contract.get("returns")
         downstream = contract.get("next_tools")
+        if isinstance(inputs, dict) and inputs:
+            lines.append(f"- Inputs: {_format_contract_mapping(inputs)}")
+        if isinstance(required, list) and required:
+            lines.append(f"- Required inputs: `{', '.join(str(item) for item in required)}`")
+        if definition.required_scopes:
+            lines.append(f"- Required scopes: `{', '.join(sorted(definition.required_scopes))}`")
+        if definition.side_effects:
+            lines.append(f"- Side effects: `{', '.join(sorted(definition.side_effects))}`")
         if isinstance(upstream, list) and upstream:
-            lines.append(f"  upstream: `{', '.join(str(item) for item in upstream)}`")
+            lines.append(f"- Upstream sources: `{', '.join(str(item) for item in upstream)}`")
+        if isinstance(returns, dict) and returns:
+            lines.append(f"- Returns: {_format_contract_mapping(returns)}")
         if isinstance(downstream, list) and downstream:
-            lines.append(f"  next_tools: `{', '.join(str(item) for item in downstream)}`")
+            lines.append(f"- Next tools: `{', '.join(str(item) for item in downstream)}`")
     return "\n".join(lines).strip()
+
+
+def _format_contract_mapping(values: dict[str, Any]) -> str:
+    return ", ".join(f"`{key}`: `{value}`" for key, value in values.items())
 
 
 def _format_agent_tool_activity_markdown(session: dict[str, Any]) -> str:
@@ -1091,6 +1114,7 @@ def _format_agent_tool_activity_markdown(session: dict[str, Any]) -> str:
 
 def _build_ai_session_command_response(
     runtime: AppRuntime,
+    tool_registry: ToolRegistry,
     session_id: str,
     command: str,
 ) -> tuple[str, str]:
@@ -1103,18 +1127,23 @@ def _build_ai_session_command_response(
     if normalized == "retrieval-surfaces":
         return "/retrieval-surfaces", _format_retrieval_surfaces_markdown(session_id, source_controls)
     if normalized == "tools":
-        return "/tools", _format_tool_catalog_markdown(ToolRegistry())
+        return "/tools", _format_tool_catalog_markdown(tool_registry, source_controls=source_controls)
     if normalized == "tool-activity":
         return "/tool-activity", _format_agent_tool_activity_markdown(session)
     if normalized == "capabilities":
         retrieval = _format_retrieval_surfaces_markdown(session_id, source_controls)
-        tools = _format_tool_catalog_markdown(ToolRegistry())
+        tools = _format_tool_catalog_markdown(tool_registry, source_controls=source_controls)
         return "/capabilities", f"{retrieval}\n\n{tools}"
     raise ValueError(f"unsupported command '{command}'")
 
 
 def _ai_chat_service(request: Request) -> AIChatService:
     return request.app.state.ai_chat_service
+
+
+def _tool_registry(request: Request) -> ToolRegistry:
+    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+    return wb_runtime.tool_registry
 
 
 def _agent_trace_store(request: Request) -> AgentTraceStore:
@@ -1131,6 +1160,7 @@ def _request_timezone_name(request: Request, payload: dict[str, Any] | None = No
 
 async def _ai_context_snapshot(
     runtime: AppRuntime,
+    tool_registry: ToolRegistry,
     user_message: str = "",
     session_id: str = "",
     timezone_name: str = "",
@@ -1148,6 +1178,7 @@ async def _ai_context_snapshot(
     full_ctx = snapshot.meta.get("context_snapshot") if isinstance(snapshot.meta, dict) else {}
     details = (full_ctx or {}).get("details") if isinstance(full_ctx, dict) else {}
     replay_summary = details.get("current_replay") if isinstance(details, dict) else {}
+    chat_history_summary = details.get("ai_chat_history") if isinstance(details, dict) else {}
     settings_summary = (full_ctx or {}).get("settings") if isinstance(full_ctx, dict) else {}
     rover_state = (full_ctx or {}).get("rover") if isinstance(full_ctx, dict) else {}
     runtime_summary = (full_ctx or {}).get("runtime") if isinstance(full_ctx, dict) else {}
@@ -1165,6 +1196,7 @@ async def _ai_context_snapshot(
         retrieval_request=retrieval_request,
         session_id=session_id,
         replay_summary=replay_summary if isinstance(replay_summary, dict) else {},
+        chat_history_summary=chat_history_summary if isinstance(chat_history_summary, dict) else {},
         settings_summary=settings_summary if isinstance(settings_summary, dict) else {},
         sensor_summary=sensor_summary,
     )
@@ -1172,6 +1204,7 @@ async def _ai_context_snapshot(
         retrieval_request=retrieval_request,
         session_id=session_id,
         replay_summary=replay_summary if isinstance(replay_summary, dict) else {},
+        chat_history_summary=chat_history_summary if isinstance(chat_history_summary, dict) else {},
         settings_summary=settings_summary if isinstance(settings_summary, dict) else {},
         sensor_summary=sensor_summary,
     )
@@ -1180,7 +1213,10 @@ async def _ai_context_snapshot(
     meta["retrieved_sources"] = retrieved_sources
     meta["loaded_data_refs"] = loaded_data_refs
     meta["retrieval_citations"] = build_retrieval_citations(retrieved_sources, loaded_data_refs)
-    meta["data_access_manifest"] = build_data_access_manifest(runtime.tool_registry.definitions())
+    meta["data_access_manifest"] = build_data_access_manifest(
+        tool_registry.definitions(),
+        allowed_tool_names=allowed_tool_names_for_source_controls(source_controls),
+    )
     return {"prompt": snapshot.prompt, "meta": meta}
 
 
@@ -1381,6 +1417,7 @@ async def run_ai_session_command(session_id: str, request: Request) -> JSONRespo
     try:
         raw_command, assistant_content = _build_ai_session_command_response(
             runtime,
+            _tool_registry(request),
             session_id,
             str(payload.get("command", "")),
         )
@@ -1463,6 +1500,7 @@ async def send_ai_message(session_id: str, request: Request) -> JSONResponse:
     try:
         context_snapshot = await _ai_context_snapshot(
             runtime,
+            _tool_registry(request),
             content,
             session_id=session_id,
             timezone_name=timezone_name,
@@ -1510,6 +1548,7 @@ async def send_ai_message_stream(session_id: str, request: Request) -> Streaming
     try:
         context_snapshot = await _ai_context_snapshot(
             runtime,
+            _tool_registry(request),
             content,
             session_id=session_id,
             timezone_name=timezone_name,
@@ -1549,6 +1588,7 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
         messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         context_snapshot = await _ai_context_snapshot(
             runtime,
+            _tool_registry(request),
             _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
@@ -1594,6 +1634,7 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
         messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
         context_snapshot = await _ai_context_snapshot(
             runtime,
+            _tool_registry(request),
             _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
@@ -1676,6 +1717,7 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
 
     context_snapshot = await _ai_context_snapshot(
         runtime,
+        _tool_registry(request),
         content,
         session_id=session_id,
         timezone_name=timezone_name,

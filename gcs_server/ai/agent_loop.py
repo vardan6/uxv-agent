@@ -265,6 +265,7 @@ class AgentLoopRuntime:
         consecutive_failure_signature: str | None = None
         consecutive_failure_count = 0
         should_stop = False
+        terminal_tool_error: dict[str, Any] | None = None
 
         for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
             iterations = iteration

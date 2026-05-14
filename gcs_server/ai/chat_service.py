@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator
 from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
+from .tool_registry import allowed_tool_names_for_source_controls
 
 
 SYSTEM_PROMPT = """You are the AI chat assistant inside Remote Rover GCS.
@@ -21,10 +22,11 @@ For cross-session analytics, enumerate or resolve sessions first, then use repla
 Travel distance means the rover path length (`path_length_m`). Furthest from home or start means `max_distance_from_start_m`.
 For follow-up requests like "the first one in each set" or "that session", reuse explicit session_ids already present in recent conversation history before resolving a new selector.
 For current rover state, prefer live telemetry when fresh; otherwise report that live state is unavailable and use last_known_replay_state when present.
+If the operator explicitly provides map coordinates for a hypothetical rover position, use those coordinates in object-query tool arguments instead of rejecting the request as unavailable telemetry.
 Default behavior: if the operator gives an underspecified replay or telemetry request, try to resolve it automatically via tools (for example: resolve_replay_sessions -> session-based telemetry/metrics/path tools) before asking clarifying questions.
 Default behavior: when resolve_spatial_target is needed, pass a plain-language target string from the user request or build a minimal target object; do not call it with an empty payload.
 Do not claim to control the rover, publish commands, start missions, or mutate GCS state.
-If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing.
+If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing. Operator-provided coordinates or heading are allowed inputs and are not guesses.
 If a tool returns {"ok": false, "error": "..."}, report the failure clearly to the operator. Do not invent data to fill the gap."""
 
 AI_CONTEXT_MESSAGE_LIMIT = 40
@@ -348,7 +350,8 @@ class AIChatService:
                     latency_ms=latency_ms,
                     meta={
                         "run_mode": clean_run_mode,
-                        "tool_calls": prompt_tool_calls,
+                        "tool_calls": [],
+                        "prompt_context_tool_calls": prompt_tool_calls,
                         "agent_permissions": _agent_permissions(clean_run_mode),
                         "agent_smalltalk_bypass": bypass_for_smalltalk,
                         "agent_tool_fallback_error": agent_tooling_error,
@@ -437,7 +440,8 @@ class AIChatService:
             latency_ms=latency_ms,
             meta={
                 "run_mode": clean_run_mode,
-                "tool_calls": prompt_tool_calls,
+                "tool_calls": [],
+                "prompt_context_tool_calls": prompt_tool_calls,
                 "data_access_manifest": _data_access_manifest(context_snapshot),
                 "agent_permissions": _agent_permissions(clean_run_mode),
                 "agent_smalltalk_bypass": bypass_for_smalltalk,
@@ -643,13 +647,14 @@ def _prompt_for_mode(
     return (
         "Agent mode is enabled for this message. Use the read-only tool/context results below as current facts. "
         "When the operator asks about nearby, nearest, left, right, ahead, object kinds, sessions, duration, path length, "
-        "travel distance, or furthest distance, call the matching tools instead of answering from memory. "
+        "travel distance, furthest distance, settings, model routing, earlier chats, or available data surfaces, call the matching tools instead of answering from memory. "
         "Treat travel distance as path_length_m. Treat furthest from home/start as max_distance_from_start_m. "
         "For follow-up references like 'the first one in each set', prefer session_ids already named in recent conversation history. "
         "For underspecified replay requests, auto-resolve a selector (for example 'latest session with telemetry') and continue with tool calls before asking the operator for IDs. "
         "Never call resolve_spatial_target with an empty payload; pass either plain text or a minimal target object. "
+        "If the operator explicitly supplies coordinates or heading for a hypothetical rover pose, pass them to object-query tools instead of treating them as unavailable telemetry. "
         "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, rover pose, "
-        "or telemetry values.\n"
+        "or telemetry values beyond what the operator explicitly supplied.\n"
         f"{tool_guidance}"
         f"{manifest_guidance}"
         f"Read-only tool calls: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
@@ -670,13 +675,14 @@ def _tool_calls(context_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]
     calls: list[dict[str, Any]] = []
     provider_to_result = {
         "get_current_rover_state": snapshot.get("rover"),
-        "get_scene_map_summary": snapshot.get("scene"),
-        "find_objects_in_front": details.get("objects_in_front"),
-        "find_objects_near_rover": details.get("objects_near_rover"),
-        "find_objects_by_kind": details.get("objects_by_kind"),
+        "get_scene_summary": snapshot.get("scene"),
+        "query_objects_in_front": details.get("objects_in_front"),
+        "query_objects_near": details.get("objects_near_rover"),
+        "query_objects_by_kind": details.get("objects_by_kind"),
         "get_current_replay_summary": details.get("current_replay") if allow_replay else None,
         "get_recent_telemetry": details.get("recent_telemetry") if allow_replay else None,
-        "get_replay_session_context": details.get("replay_sessions") if allow_replay else None,
+        "resolve_replay_sessions": details.get("replay_sessions") if allow_replay else None,
+        "get_recent_ai_chat_history": details.get("ai_chat_history"),
     }
     for name in providers:
         result = provider_to_result.get(str(name))
@@ -702,32 +708,7 @@ def _allowed_agent_tool_names(context_snapshot: dict[str, Any] | None) -> set[st
     source_controls = retrieval_request.get("source_controls") if isinstance(retrieval_request, dict) else {}
     if not isinstance(source_controls, dict):
         return None
-    allowed = {
-        "get_current_rover_state",
-        "get_scene_summary",
-        "query_objects_in_front",
-        "query_objects_near",
-        "query_objects_by_kind",
-        "query_objects_to_left",
-        "query_objects_to_right",
-        "query_nearest_objects",
-        "resolve_spatial_target",
-        "get_current_mission_state",
-    }
-    if source_controls.get("replay_reports", True):
-        allowed.update({
-            "get_current_replay_summary",
-            "get_recent_telemetry",
-            "list_replay_sessions",
-            "resolve_replay_sessions",
-            "get_replay_session_summary",
-            "get_replay_session_metrics",
-            "get_replay_session_path",
-            "search_replay_session_events",
-            "compare_replay_sessions",
-            "aggregate_replay_sessions",
-        })
-    return allowed
+    return allowed_tool_names_for_source_controls(source_controls)
 
 
 def _should_use_read_only_tools(messages: list[dict[str, Any]], context_snapshot: dict[str, Any] | None) -> bool:
@@ -746,6 +727,20 @@ def _should_use_read_only_tools(messages: list[dict[str, Any]], context_snapshot
         for token in (
             "replay",
             "session",
+            "chat history",
+            "previous chat",
+            "earlier",
+            "before",
+            "settings",
+            "config",
+            "configuration",
+            "provider",
+            "routing",
+            "surface",
+            "source",
+            "sensor",
+            "camera",
+            "video",
             "telemetry",
             "duration",
             "travel distance",

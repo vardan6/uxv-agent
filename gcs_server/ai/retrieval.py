@@ -119,6 +119,7 @@ def build_retrieved_sources(
     retrieval_request: dict[str, Any] | None = None,
     session_id: str = "",
     replay_summary: dict[str, Any] | None = None,
+    chat_history_summary: dict[str, Any] | None = None,
     settings_summary: dict[str, Any] | None = None,
     sensor_summary: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -126,6 +127,7 @@ def build_retrieved_sources(
     source_controls = normalize_source_controls(request.get("source_controls"))
     requested = set(request.get("lazy_branches") or [])
     replay_summary = replay_summary or {}
+    chat_history_summary = chat_history_summary or {}
     settings_summary = settings_summary or {}
     sensor_summary = sensor_summary or {}
 
@@ -164,18 +166,20 @@ def build_retrieved_sources(
         })
     if source_controls.get("ai_chat_history"):
         memory_requested = "retrieve_application_memory" in requested
+        history_loaded = bool(chat_history_summary.get("available"))
         sources.append({
             "source": "ai_chat_history",
             "kind": "memory",
             "available": bool(session_id),
-            "status": "scaffolded" if memory_requested else "planned",
+            "status": "loaded_summary" if memory_requested and history_loaded else "bounded",
             "requested": memory_requested,
             "note": (
-                "Session-memory retrieval is scaffolded for this request, but bounded cross-session loading is not wired yet."
-                if memory_requested
-                else "The current session exists, but bounded history retrieval tools are not wired yet."
+                "Bounded recent session history was loaded lazily for this request."
+                if memory_requested and history_loaded
+                else "Bounded recent session history can be loaded lazily for memory-style prompts."
             ),
             "session_id": str(session_id or ""),
+            "message_count": int(chat_history_summary.get("message_count") or 0) if history_loaded else 0,
         })
     if source_controls.get("settings_config"):
         settings_requested = "retrieve_settings_context" in requested
@@ -222,11 +226,13 @@ def build_loaded_data_refs(
     retrieval_request: dict[str, Any] | None = None,
     session_id: str = "",
     replay_summary: dict[str, Any] | None = None,
+    chat_history_summary: dict[str, Any] | None = None,
     settings_summary: dict[str, Any] | None = None,
     sensor_summary: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     request = retrieval_request if isinstance(retrieval_request, dict) else {}
     replay_summary = replay_summary or {}
+    chat_history_summary = chat_history_summary or {}
     settings_summary = settings_summary or {}
     sensor_summary = sensor_summary or {}
     refs: list[dict[str, Any]] = []
@@ -242,9 +248,10 @@ def build_loaded_data_refs(
             refs.append({
                 "branch": branch,
                 "source": "ai_chat_history",
-                "ref": "session_memory_scaffold",
-                "status": "scaffolded",
+                "ref": "recent_session_history",
+                "status": "loaded" if chat_history_summary.get("available") else "unavailable",
                 "session_id": str(session_id or ""),
+                "message_count": int(chat_history_summary.get("message_count") or 0),
             })
         elif branch == "retrieve_settings_context":
             refs.append({

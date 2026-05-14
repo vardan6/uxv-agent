@@ -284,6 +284,96 @@ class AISessionStore:
             ).fetchall()
         return [self._message_dict(row) for row in reversed(rows)]
 
+    def list_session_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int = 20,
+        before_message_id: str = "",
+        role: str = "",
+    ) -> list[dict[str, Any]]:
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            return []
+        clean_role = str(role or "").strip().lower()
+        with self._connect() as conn:
+            before_row = None
+            clean_before_id = str(before_message_id or "").strip()
+            if clean_before_id:
+                before_row = conn.execute(
+                    "SELECT id, created_at FROM ai_messages WHERE id = ? AND session_id = ?",
+                    (clean_before_id, clean_session_id),
+                ).fetchone()
+            where = ["session_id = ?"]
+            params: list[Any] = [clean_session_id]
+            if clean_role:
+                where.append("lower(role) = ?")
+                params.append(clean_role)
+            if before_row is not None:
+                where.append("(created_at < ? OR (created_at = ? AND id < ?))")
+                params.extend([before_row["created_at"], before_row["created_at"], before_row["id"]])
+            params.append(max(1, int(limit)))
+            rows = conn.execute(
+                f"""
+                SELECT * FROM ai_messages
+                WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._message_dict(row) for row in reversed(rows)]
+
+    def search_messages(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        session_id: str = "",
+        include_archived: bool = False,
+        role: str = "",
+    ) -> list[dict[str, Any]]:
+        clean_query = " ".join(str(query or "").split()).strip()
+        if not clean_query:
+            return []
+        clean_session_id = str(session_id or "").strip()
+        clean_role = str(role or "").strip().lower()
+        with self._connect() as conn:
+            where = ["lower(m.content) LIKE ?"]
+            params: list[Any] = [f"%{clean_query.lower()}%"]
+            if clean_session_id:
+                where.append("m.session_id = ?")
+                params.append(clean_session_id)
+            if clean_role:
+                where.append("lower(m.role) = ?")
+                params.append(clean_role)
+            if not include_archived:
+                where.append("s.archived_at IS NULL")
+            params.append(max(1, int(limit)))
+            rows = conn.execute(
+                f"""
+                SELECT
+                  m.*,
+                  s.title AS session_title,
+                  s.mode AS session_mode,
+                  s.archived_at AS session_archived_at
+                FROM ai_messages m
+                JOIN ai_sessions s ON s.id = m.session_id
+                WHERE {' AND '.join(where)}
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            message = self._message_dict(row)
+            message["session_title"] = row["session_title"]
+            message["session_mode"] = row["session_mode"]
+            message["session_archived_at"] = row["session_archived_at"]
+            results.append(message)
+        return results
+
     def delete_message(self, message_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute("SELECT session_id FROM ai_messages WHERE id = ?", (message_id,)).fetchone()

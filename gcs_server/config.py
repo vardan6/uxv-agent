@@ -30,9 +30,24 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
         },
         "ai_context_budget_chars": 24000,
     },
-    "llm_providers": [],
+    "llm_providers": [
+        {
+            "id": "provider-default-ollama",
+            "display_name": "Ollama Local (Default)",
+            "provider_type": "ollama",
+            "auth_mode": "none",
+            "secret_ref": "",
+            "base_url": "http://localhost:11434",
+            "model_id": "llama3:latest",
+            "enabled": True,
+            "capabilities": ["chat"],
+            "context_window": None,
+        }
+    ],
     "model_routing": {},
 }
+
+DEFAULT_LLM_PROVIDERS: list[dict[str, Any]] = copy.deepcopy(DEFAULT_GCS_SETTINGS["llm_providers"])
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = ROOT_DIR / "config" / "common.local.json"
@@ -116,6 +131,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         with open(settings_path, encoding="utf-8") as fh:
             data = _deep_merge(data, json.load(fh))
     merged = _deep_merge(DEFAULT_GCS_SETTINGS, data)
+    providers = merged.get("llm_providers")
+    if not isinstance(providers, list) or not providers:
+        merged["llm_providers"] = copy.deepcopy(DEFAULT_LLM_PROVIDERS)
     return AppConfig(raw=merged, settings_path=settings_path)
 
 

@@ -43,6 +43,13 @@ def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_name
     return {
         "data_surfaces": [
             _surface(
+                "system_capabilities",
+                "Discovery of available bounded data surfaces and source-control gating for this session.",
+                "tool",
+                ["list_data_surfaces"],
+                "manifest_only",
+            ),
+            _surface(
                 "current_rover_state",
                 "Latest telemetry snapshot and freshness metadata.",
                 "tool",
@@ -93,15 +100,22 @@ def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_name
             _surface(
                 "ai_chat_history",
                 "Saved AI chat sessions and messages.",
-                "planned_tool",
-                [],
-                "current_session_metadata_only",
+                "tool",
+                ["list_ai_sessions", "search_ai_messages", "get_ai_session_messages"],
+                "lazy_recent_session_summary",
+            ),
+            _surface(
+                "settings",
+                "Safe GCS settings sections plus LLM provider and routing metadata.",
+                "tool",
+                ["get_settings_summary", "get_settings_section", "get_llm_provider_summary"],
+                "safe_summary_only",
             ),
             _surface(
                 "video_perception",
-                "Future sampled video frames and object detections.",
-                "future_tool",
-                [],
+                "Metadata-only sensor/video status for the current runtime; raw frames and detections remain unavailable in this phase.",
+                "tool",
+                ["get_sensor_status"],
                 "video_metadata_only",
             ),
         ]
