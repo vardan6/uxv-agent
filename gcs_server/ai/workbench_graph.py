@@ -1,13 +1,22 @@
-"""Workbench planning graph (Phase 1 + Phase 2 + Phase 3).
+"""Workbench planning graph (Phase 1 + Phase 2 + Phase 3 + Phase 4).
 
 Phase 1: Linear deterministic graph, REST-only approval.
 Phase 2: Adds durable checkpointer and interrupt() at request_workbench_approval.
 Phase 3: Clarification loop via interrupt() at prepare_clarification; refreshes
          rover pose/scene on resume before draft generation.
+Phase 4: classify_request_scope node + lazy data branch nodes
+         (retrieve_replay_context, retrieve_application_memory,
+          retrieve_settings_context, retrieve_sensor_context);
+         conditional routing driven by request_scope and source-control flags.
 
 Node order:
     capture_request
     retrieve_current_context
+    classify_request_scope      (Phase 4)
+    retrieve_replay_context     (Phase 4: only when replay branch active)
+    retrieve_application_memory (Phase 4: only when memory branch active)
+    retrieve_settings_context   (Phase 4: only when settings branch active)
+    retrieve_sensor_context     (Phase 4: only when sensor branch active)
     parse_intent
     prepare_clarification       (Phase 3: only when intent has missing_information and no prior clarification)
     resolve_target              (only when intent has a spatial target)
