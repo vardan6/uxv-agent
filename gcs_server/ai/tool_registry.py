@@ -8,13 +8,21 @@ from typing import Any, Callable
 try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.data_access import build_data_access_manifest
+    from gcs_server.ai.mission_draft_service import MissionDraftService
+    from gcs_server.ai.mission_export_service import MissionExportService
+    from gcs_server.ai.road_graph_service import RoadGraphService
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.spatial_query_service import SpatialQueryService
+    from gcs_server.ai.vehicle_profile import get_active_profile
 except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.data_access import build_data_access_manifest
+    from ai.mission_draft_service import MissionDraftService
+    from ai.mission_export_service import MissionExportService
+    from ai.road_graph_service import RoadGraphService
     from ai.session_store import normalize_source_controls
     from ai.spatial_query_service import SpatialQueryService
+    from ai.vehicle_profile import get_active_profile
 
 
 READ_ONLY = "read_only"
@@ -105,6 +113,8 @@ def allowed_tool_names_for_source_controls(source_controls: dict[str, Any] | Non
 class ToolRegistry:
     def __init__(self, spatial: SpatialQueryService | None = None):
         self._spatial = spatial or SpatialQueryService()
+        self._road_graph = RoadGraphService()
+        self._exporter = MissionExportService()
         self._definitions = self._build_definitions()
 
     def definitions(self) -> list[ToolDefinition]:
@@ -264,6 +274,24 @@ class ToolRegistry:
                 "Get metadata-only sensor and video status, including telemetry freshness, camera freshness, configured video delivery, and current perception limitations. Use this for questions about whether the agent can currently see live camera data or rely on sensor freshness. This tool does not expose raw frames, detections, or vision inference output.",
                 READ_ONLY,
                 self._get_sensor_status,
+            ),
+            tool(
+                "plan_route_around_group",
+                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. Does not upload to the flight controller; pair with export_mission after approval.",
+                PLANNING,
+                self._plan_route_around_group,
+            ),
+            tool(
+                "plan_route_between",
+                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. Does not upload; pair with export_mission after approval.",
+                PLANNING,
+                self._plan_route_between,
+            ),
+            tool(
+                "export_mission",
+                "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. Returns file_path, waypoint_count, and the plan structure.",
+                PLANNING,
+                self._export_mission,
             ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
@@ -730,6 +758,101 @@ class ToolRegistry:
             "perception_note": "This phase exposes only metadata and freshness; raw frames, detections, and perception events are not implemented.",
         }
 
+    def _plan_route_around_group(
+        self,
+        context: ToolInvocationContext,
+        group_id: str,
+    ) -> dict[str, Any]:
+        rover = self._rover_snapshot(context)
+        pos = rover.get("position") or {}
+        try:
+            x = float(pos.get("x") or 0.0)
+            y = float(pos.get("y") or 0.0)
+        except (TypeError, ValueError):
+            x, y = 0.0, 0.0
+        if not str(group_id or "").strip():
+            return {"ok": False, "error": "group_id is required"}
+        known = self._road_graph.known_groups()
+        clean_group = str(group_id).strip()
+        if clean_group not in known:
+            return {"ok": False, "error": f"unknown group '{clean_group}'; known groups: {known}"}
+        result = self._road_graph.route_to_then_around_then_back(x, y, clean_group)
+        if result.get("ok"):
+            result["route_hash"] = _route_hash(result.get("waypoints", []))
+            result["known_groups"] = known
+        return result
+
+    def _plan_route_between(
+        self,
+        context: ToolInvocationContext,
+        goal_target: dict[str, Any] | str,
+        start_target: dict[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        scene = self._scene_payload(context)
+        rover = self._rover_snapshot(context)
+
+        if start_target is None or str(start_target or "").strip() in ("", "rover_pose"):
+            start_pos = rover.get("position") or {}
+            try:
+                sx = float(start_pos.get("x") or 0.0)
+                sy = float(start_pos.get("y") or 0.0)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "rover position unavailable for start_target=None; provide explicit start_target"}
+        else:
+            resolved = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(start_target))
+            selected = resolved.get("selected")
+            if not selected:
+                return {"ok": False, "error": "start_target could not be resolved on the scene map"}
+            p = selected.get("position") or {}
+            sx, sy = float(p.get("x") or 0.0), float(p.get("y") or 0.0)
+
+        if not goal_target:
+            return {"ok": False, "error": "goal_target is required"}
+        resolved_goal = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(goal_target))
+        selected_goal = resolved_goal.get("selected")
+        if not selected_goal:
+            return {"ok": False, "error": "goal_target could not be resolved on the scene map"}
+        gp = selected_goal.get("position") or {}
+        gx, gy = float(gp.get("x") or 0.0), float(gp.get("y") or 0.0)
+
+        result = self._road_graph.route_between(sx, sy, gx, gy)
+        if result.get("ok"):
+            result["route_hash"] = _route_hash(result.get("waypoints", []))
+        return result
+
+    def _export_mission(
+        self,
+        context: ToolInvocationContext,
+        draft_id: str,
+    ) -> dict[str, Any]:
+        if not str(draft_id or "").strip():
+            return {"ok": False, "error": "draft_id is required"}
+        store = getattr(context.runtime, "ai_store", None)
+        if store is None:
+            return {"ok": False, "error": "AI store is not available"}
+        draft_service = MissionDraftService(store.db_path)
+        draft = draft_service.get_draft(str(draft_id).strip())
+        if draft is None:
+            return {"ok": False, "error": f"draft '{draft_id}' not found"}
+        profile = get_active_profile()
+        rover = self._rover_snapshot(context)
+        pos = rover.get("position") or {}
+        gps = rover.get("gps") or {}
+        home: dict[str, float] | None = None
+        if gps.get("lat") and gps.get("lon"):
+            home = {
+                "latitude": float(gps["lat"]),
+                "longitude": float(gps["lon"]),
+                "altitude": float(gps.get("alt") or 0.0),
+            }
+        return self._exporter.export(draft, profile=profile, home_position=home)
+
+
+def _route_hash(waypoints: list[dict[str, Any]]) -> str:
+    import hashlib
+    key = "|".join(f"{w.get('x',0):.1f},{w.get('y',0):.1f}" for w in waypoints)
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
 
 def _snapshot_context(context_snapshot: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(context_snapshot, dict):
@@ -1106,6 +1229,27 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": [],
         "upstream_from_tools": ["get_current_rover_state"],
         "returns": {"telemetry_fresh": "boolean", "camera_fresh": "boolean", "video": "object", "perception_available": "boolean"},
+        "next_tools": [],
+    },
+    "plan_route_around_group": {
+        "inputs": {"group_id": "string — one of known_groups; e.g. 'plant_a', 'plant_b', 'connector', 'building', 'start_hub'"},
+        "required_inputs": ["group_id"],
+        "upstream_from_tools": ["get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"],
+        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string", "known_groups": "string[]"},
+        "next_tools": ["export_mission (after approval)"],
+    },
+    "plan_route_between": {
+        "inputs": {"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
+        "required_inputs": ["goal_target"],
+        "upstream_from_tools": ["get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"],
+        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string"},
+        "next_tools": ["export_mission (after approval)"],
+    },
+    "export_mission": {
+        "inputs": {"draft_id": "string — ID of an approved mission draft"},
+        "required_inputs": ["draft_id"],
+        "upstream_from_tools": ["plan_route_around_group or plan_route_between (to populate draft waypoints)", "approval interrupt (draft must be approved before calling)"],
+        "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},
         "next_tools": [],
     },
 }
