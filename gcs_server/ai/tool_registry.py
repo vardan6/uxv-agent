@@ -632,7 +632,11 @@ class ToolRegistry:
 
     def _get_current_mission_state(self, context: ToolInvocationContext) -> dict[str, Any]:
         mission = context.context_snapshot.get("mission")
-        return dict(mission) if isinstance(mission, dict) else AIContextService(context.runtime).get_current_mission_state()
+        return (
+            dict(mission)
+            if isinstance(mission, dict)
+            else AIContextService(context.runtime).get_current_mission_state(session_id=context.session_id)
+        )
 
     def _get_current_replay_summary(self, context: ToolInvocationContext) -> dict[str, Any]:
         return AIContextService(context.runtime).get_current_replay_summary()

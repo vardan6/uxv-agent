@@ -990,11 +990,50 @@ async def set_llm_settings(request: Request) -> JSONResponse:
     })
 
 
-def _public_ai_session(session: dict[str, Any], include_messages: bool = False) -> dict[str, Any]:
+def _session_mission_snapshot(runtime: AppRuntime, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None or not str(session_id or "").strip():
+        return (
+            {"active": False, "status": "no_active_mission", "summary": "No backend-owned mission proposal is stored yet."},
+            {"available": False, "status": "no_mission_overlay", "summary": "No mission overlay is available.", "features": [], "waypoint_count": 0, "bounds": None},
+        )
+    try:
+        mission_state = mission_execution.get_current_mission_state(session_id=session_id)
+    except Exception as exc:
+        mission_state = {
+            "active": False,
+            "status": "mission_state_unavailable",
+            "summary": f"Mission state unavailable: {exc}",
+        }
+    try:
+        mission_overlay = mission_execution.get_revision_overlay(session_id=session_id)
+    except Exception as exc:
+        mission_overlay = {
+            "available": False,
+            "status": "mission_overlay_unavailable",
+            "summary": f"Mission overlay unavailable: {exc}",
+            "features": [],
+            "waypoint_count": 0,
+            "bounds": None,
+        }
+    return mission_state, mission_overlay
+
+
+def _public_ai_session(
+    runtime: AppRuntime,
+    session: dict[str, Any],
+    include_messages: bool = False,
+    include_mission_overlay: bool = False,
+) -> dict[str, Any]:
     out = dict(session)
     if not include_messages:
         out.pop("messages", None)
     out["source_controls"] = normalize_source_controls(out.get("source_controls"))
+    session_id = str(out.get("id") or "")
+    mission_state, mission_overlay = _session_mission_snapshot(runtime, session_id)
+    out["mission_state"] = mission_state
+    if include_mission_overlay:
+        out["mission_overlay"] = mission_overlay
     return out
 
 
@@ -1400,7 +1439,7 @@ async def list_ai_sessions(
         include_archived=include_archived,
         archived_only=archived_only,
     )
-    return {"sessions": [_public_ai_session(session) for session in sessions]}
+    return {"sessions": [_public_ai_session(runtime, session) for session in sessions]}
 
 
 @app.post("/api/ai/sessions")
@@ -1415,7 +1454,7 @@ async def create_ai_session(request: Request) -> JSONResponse:
         provider_id=str(payload.get("provider_id", "")),
         source_controls=payload.get("source_controls"),
     )
-    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session)})
 
 
 @app.get("/api/ai/sessions/{session_id}")
@@ -1426,7 +1465,7 @@ async def get_ai_session(session_id: str, request: Request, include_archived: bo
         raise HTTPException(status_code=404, detail="AI session not found")
     if session.get("archived_at") is not None and not include_archived:
         raise HTTPException(status_code=404, detail="AI session not found")
-    return {"session": _public_ai_session(session, include_messages=True)}
+    return {"session": _public_ai_session(runtime, session, include_messages=True, include_mission_overlay=True)}
 
 
 @app.post("/api/ai/sessions/{session_id}/commands")
@@ -1481,7 +1520,7 @@ async def update_ai_session(session_id: str, request: Request) -> JSONResponse:
     )
     if session is None:
         raise HTTPException(status_code=404, detail="AI session not found")
-    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session)})
 
 
 @app.delete("/api/ai/sessions/{session_id}")
@@ -1498,7 +1537,7 @@ async def restore_ai_session(session_id: str, request: Request) -> JSONResponse:
     if not runtime.ai_store.restore_session(session_id):
         raise HTTPException(status_code=404, detail="AI session not found")
     session = runtime.ai_store.get_session(session_id, include_messages=False)
-    return JSONResponse({"ok": True, "session": _public_ai_session(session or {})})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session or {})})
 
 
 @app.delete("/api/ai/sessions/{session_id}/purge")
@@ -1827,7 +1866,7 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
         "tool_calls": tool_calls,
         "user_message": user_message,
         "assistant_message": assistant_message,
-        "session": _public_ai_session(session),
+        "session": _public_ai_session(runtime, session),
     })
 
 
@@ -1896,6 +1935,73 @@ async def get_mission_draft(draft_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "draft": draft})
 
 
+@app.get("/api/ai/mission-revisions")
+async def list_mission_revisions(
+    request: Request,
+    session_id: str | None = None,
+    operation_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revisions = mission_execution.list_revisions(
+        session_id=session_id,
+        operation_id=operation_id,
+        status_filter=status,
+        limit=max(1, min(200, limit)),
+    )
+    return JSONResponse({"ok": True, "revisions": revisions, "count": len(revisions)})
+
+
+@app.get("/api/ai/mission-revisions/current")
+async def get_current_mission_revision(request: Request, session_id: str = "") -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    state = mission_execution.get_current_mission_state(session_id=session_id)
+    revision_id = str(state.get("revision_id") or "").strip()
+    revision = mission_execution.get_revision(revision_id) if revision_id else None
+    overlay = mission_execution.get_revision_overlay(session_id=session_id)
+    return JSONResponse({"ok": True, "mission_state": state, "revision": revision, "overlay": overlay})
+
+
+@app.get("/api/ai/mission-revisions/{revision_id}")
+async def get_mission_revision(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revision = mission_execution.get_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="mission revision not found")
+    return JSONResponse({"ok": True, "revision": revision})
+
+
+@app.get("/api/ai/mission-revisions/{revision_id}/overlay")
+async def get_mission_revision_overlay(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revision = mission_execution.get_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="mission revision not found")
+    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(revision_id=revision_id)})
+
+
+@app.get("/api/ai/mission-overlays/current")
+async def get_current_mission_overlay(request: Request, session_id: str = "") -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
+
+
 @app.post("/api/ai/mission-drafts/{draft_id}/approve")
 async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -1910,6 +2016,9 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             status_code=409,
             detail="draft not found or not in awaiting_approval status",
         )
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is not None:
+        mission_execution.approve_revision_for_draft(draft_id, note=note)
     export_result: dict[str, Any] | None = None
     try:
         result = MissionExportService().export(draft)
@@ -1917,6 +2026,8 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             updated = runtime.mission_draft_service.mark_exported(draft_id, export_result=result)
             if updated is not None:
                 draft = updated
+            if mission_execution is not None:
+                mission_execution.mark_revision_exported(draft_id, export_result=result)
             export_result = {
                 "ok": True,
                 "file_path": result.get("file_path", ""),
@@ -1947,6 +2058,9 @@ async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
             status_code=409,
             detail="draft not found or not in a rejectable status",
         )
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is not None:
+        mission_execution.reject_revision_for_draft(draft_id, note=note)
     return JSONResponse({"ok": True, "draft": draft})
 
 

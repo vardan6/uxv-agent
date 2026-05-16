@@ -39,6 +39,56 @@ def _migration_001_create_ai_mission_drafts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_003_create_ai_mission_execution_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_operations (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          source_message_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          active_revision_id TEXT NOT NULL DEFAULT '',
+          policy_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_revisions (
+          id TEXT PRIMARY KEY,
+          operation_id TEXT NOT NULL,
+          draft_id TEXT NOT NULL DEFAULT '',
+          parent_revision_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          mission_json TEXT NOT NULL DEFAULT '{}',
+          intent_json TEXT NOT NULL DEFAULT '{}',
+          target_resolution_json TEXT NOT NULL DEFAULT '{}',
+          validation_json TEXT NOT NULL DEFAULT '{}',
+          review_context_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          approved_at REAL,
+          rejected_at REAL,
+          FOREIGN KEY(operation_id) REFERENCES ai_mission_operations(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_operations_session ON ai_mission_operations(session_id, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_operations_status ON ai_mission_operations(status, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_revisions_operation ON ai_mission_revisions(operation_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_revisions_draft ON ai_mission_revisions(draft_id, created_at DESC)"
+    )
+
+
 def _migration_002_add_ai_session_meta_json(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "ai_sessions", "meta_json"):
         conn.execute("ALTER TABLE ai_sessions ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
@@ -47,6 +97,7 @@ def _migration_002_add_ai_session_meta_json(conn: sqlite3.Connection) -> None:
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
+    (3, "create_ai_mission_execution_tables", _migration_003_create_ai_mission_execution_tables),
 )
 
 

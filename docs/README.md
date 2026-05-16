@@ -2,7 +2,7 @@
 
 This directory is the source of truth for Remote Rover documentation. Docs are organized by audience and purpose.
 
-The repo is a remote robot operations stack with a Panda3D rover simulator (`3d-env/`), a FastAPI + browser Ground Control Station (`gcs_server/`), shared MQTT + config, and an AI workbench. The successor simulator (`rover-sim-next/`) is scaffolded but not yet runnable.
+The repo is a remote robot operations stack with a Panda3D rover simulator (`3d-env/`), a FastAPI + browser Ground Control Station (`gcs_server/`), shared MQTT + config, and an evolving AI agent terminal. The successor simulator (`rover-sim-next/`) is scaffolded but not yet runnable.
 
 ## Living Status
 
@@ -19,7 +19,7 @@ What the project is, what users see, what the system must do.
 |---|---|
 | [product/vision.md](./product/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
 | [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
-| [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: Chat, Agent, Intent Test, Workbench modes |
+| [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: current Chat/Agent experience and the long-term single-Agent direction |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
 | [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Canonical AI agent product requirements, safety boundaries, capability ladder, fixed decisions |
 | [product/route-planning-and-mission-export-prd.md](./product/route-planning-and-mission-export-prd.md) | PRD for route planning, mission generation, and QGC `.plan` export |
@@ -41,8 +41,8 @@ How the system is built.
 |---|---|
 | [technical/gcs/overview.md](./technical/gcs/overview.md) | What the GCS does today; main files |
 | [technical/gcs/api-and-runtime.md](./technical/gcs/api-and-runtime.md) | HTTP/WebSocket routes, runtime model |
-| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and the `/intent` slash command (formerly Intent Test mode) |
-| [technical/gcs/workbench-mode.md](./technical/gcs/workbench-mode.md) | Workbench graph stages, endpoints, interrupt types, troubleshooting |
+| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and the `/intent` slash command |
+| [technical/gcs/workbench-mode.md](./technical/gcs/workbench-mode.md) | Planning shell stages, endpoints, interrupt types, troubleshooting (code namespace: `workbench_*`) |
 | [technical/gcs/llm-capability-matrix.md](./technical/gcs/llm-capability-matrix.md) | Configured providers and tool-calling fit |
 | [technical/gcs/regressions.md](./technical/gcs/regressions.md) | Behavioral regressions to avoid |
 
@@ -78,9 +78,9 @@ Non-obvious architectural choices and the reasoning behind them.
 | ADR | Title |
 |---|---|
 | [0001](./decisions/0001-no-retained-current-state-topic.md) | No Retained MQTT Current-State Topic |
-| [0002](./decisions/0002-two-approval-model.md) | Two-Approval Model: Workbench Approval ≠ Execution Approval |
+| [0002](./decisions/0002-two-approval-model.md) | Two-Approval Model: Draft Approval ≠ Execution Approval |
 | [0003](./decisions/0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
-| [0004](./decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Workbench Checkpointer: MemorySaver For Now |
+| [0004](./decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Planning Shell Checkpointer: MemorySaver For Now |
 
 ## Operations
 

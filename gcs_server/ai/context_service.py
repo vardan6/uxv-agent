@@ -53,7 +53,7 @@ class AIContextService:
         )
         settings = self.get_settings_context()
         llm = self.get_llm_context(session_id=session_id)
-        mission = self.get_current_mission_state()
+        mission = self.get_current_mission_state(session_id=session_id)
         # B3: load scene payload once and reuse for all spatial queries
         scene_payload = self.load_scene_payload()
         scene = self._get_scene_map_summary_from_payload(scene_payload)
@@ -433,11 +433,21 @@ class AIContextService:
             timezone_name=timezone_name,
         )
 
-    def get_current_mission_state(self) -> dict[str, Any]:
+    def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
+        mission_execution = getattr(self._runtime, "mission_execution_service", None)
+        if mission_execution is not None:
+            try:
+                return mission_execution.get_current_mission_state(session_id=session_id)
+            except Exception as exc:
+                return {
+                    "active": False,
+                    "status": "mission_state_unavailable",
+                    "summary": f"Mission state is temporarily unavailable: {exc}",
+                }
         return {
             "active": False,
             "status": "no_active_mission",
-            "summary": "No mission storage or active mission is implemented yet.",
+            "summary": "No backend-owned mission proposal is stored yet.",
         }
 
     def get_recent_ai_chat_history(

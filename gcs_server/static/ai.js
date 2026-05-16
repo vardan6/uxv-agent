@@ -1336,6 +1336,7 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
   const safeThreadId = escapeHtml(threadId);
   const goal = escapeHtml(String(payload.goal || payload.summary || ''));
   const draftId = escapeHtml(String(payload.draft_id || ''));
+  const revisionId = escapeHtml(String(payload.mission_revision_id || ''));
   const risks = Array.isArray(payload.risks) ? payload.risks : [];
   const routeSummary = payload.route_summary && typeof payload.route_summary === 'object' ? payload.route_summary : {};
   const waypointCount = Number(routeSummary.waypoint_count || 0);
@@ -1350,6 +1351,7 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
     <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
       <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
       ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
+      ${revisionId ? `<div class="ai-approval-row"><span class="ai-approval-label">Revision ID</span><span class="ai-approval-value">${revisionId}</span></div>` : ''}
       ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
       ${routeLabel ? `<div class="ai-approval-row"><span class="ai-approval-label">Route</span><span class="ai-approval-value">${escapeHtml(routeLabel)}</span></div>` : ''}
       ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
@@ -1859,8 +1861,17 @@ function renderSessionList() {
   }
   aiEls.sessionList.innerHTML = sessions.map((session) => {
     const active = aiState.activeSession?.id === session.id ? ' active' : '';
-    const preview = session.last_message || 'No messages yet';
+    const missionState = session.mission_state && typeof session.mission_state === 'object' ? session.mission_state : {};
+    const missionStatus = String(missionState.status || '').trim();
+    const missionGoal = String(missionState.goal || '').trim();
+    const missionPreview = missionStatus && missionStatus !== 'no_active_mission'
+      ? `Mission ${missionStatus.replace(/_/g, ' ')}${missionGoal ? ` · ${missionGoal}` : ''}`
+      : '';
+    const preview = missionPreview || session.last_message || 'No messages yet';
     const isEditing = aiState.editingSessionId === session.id;
+    const missionMeta = missionStatus && missionStatus !== 'no_active_mission'
+      ? ` · mission ${missionStatus.replace(/_/g, ' ')}`
+      : '';
     return `
       <div class="ai-session-row${active}" tabindex="0" data-session-id="${escapeHtml(session.id)}" aria-label="Open ${escapeHtml(session.title || 'New chat')}">
         <span class="ai-session-row-main">
@@ -1889,7 +1900,7 @@ function renderSessionList() {
             >✕</button>
           </span>
         </span>
-        <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg</span>
+        <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg${escapeHtml(missionMeta)}</span>
         <span class="ai-session-row-preview">${escapeHtml(preview)}</span>
       </div>
     `;
