@@ -36,6 +36,7 @@ class WorkbenchGraphRuntime:
 
     # Phase 2+ — None falls back to REST-only approval (no interrupt/resume)
     checkpointer: Any | None = None
+    trace_store: Any | None = None
 
     # Phase 4+ — None until RAG and settings-reader are implemented
     rag_service: Any | None = None

@@ -87,10 +87,10 @@ class MissionExportService:
 
         draft_id = str(draft.get("id") or "unknown")
         status = str(draft.get("status") or "")
-        if status != "approved":
+        if status not in ("approved", "exported"):
             return {
                 "ok": False,
-                "error": f"draft '{draft_id}' is not approved (status='{status}'); export requires approval",
+                "error": f"draft '{draft_id}' is not approved or exported (status='{status}'); export requires approval",
                 "draft_id": draft_id,
             }
 
@@ -129,6 +129,18 @@ class MissionExportService:
         # Draft payload may carry a top-level waypoints list (set by route tools)
         if isinstance(payload.get("waypoints"), list):
             return [dict(wp) for wp in payload["waypoints"] if isinstance(wp, dict)]
+
+        # Planner-loop route tools persist full waypoint lists under route_artifacts
+        # so the LLM only has to reason over compact summaries.
+        artifact_waypoints: list[dict[str, Any]] = []
+        for artifact in (payload.get("route_artifacts") or []):
+            if not isinstance(artifact, dict):
+                continue
+            artifact_wps = artifact.get("waypoints")
+            if isinstance(artifact_wps, list):
+                artifact_waypoints.extend(wp for wp in artifact_wps if isinstance(wp, dict))
+        if artifact_waypoints:
+            return artifact_waypoints
 
         # Otherwise extract from steps
         for step in (payload.get("steps") or []):

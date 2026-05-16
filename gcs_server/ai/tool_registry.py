@@ -375,6 +375,7 @@ class ToolRegistry:
                 "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. Returns file_path, waypoint_count, and the plan structure.",
                 PLANNING,
                 self._export_mission,
+                side_effects=frozenset({"writes_file"}),
             ),
             # ── Planner loop tools (Phase 5) ──────────────────────────────────
             tool(
@@ -973,7 +974,13 @@ class ToolRegistry:
                 "longitude": float(gps["lon"]),
                 "altitude": float(gps.get("alt") or 0.0),
             }
-        return self._exporter.export(draft, profile=profile, home_position=home)
+        result = self._exporter.export(draft, profile=profile, home_position=home)
+        if result.get("ok"):
+            updated = draft_service.mark_exported(str(draft_id).strip(), export_result=result)
+            if updated is not None:
+                result["draft_status"] = updated.get("status", "")
+                result["mission_export"] = (updated.get("draft") or {}).get("mission_export") or {}
+        return result
 
     # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
 

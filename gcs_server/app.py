@@ -38,6 +38,7 @@ try:
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.intent_service import IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
+    from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
     from gcs_server.ai.retrieval import (
         build_loaded_data_refs,
@@ -59,6 +60,7 @@ except ModuleNotFoundError:
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.intent_service import IntentService
     from ai.mission_draft_service import MissionDraftService, validate_draft_payload
+    from ai.mission_export_service import MissionExportService
     from ai.provider_registry import evict_model_cache, resolve_intent_provider
     from ai.retrieval import (
         build_loaded_data_refs,
@@ -181,6 +183,7 @@ async def lifespan(app: FastAPI):
         ai_session_store=runtime.ai_store,
         secret_resolver=runtime.secret_store.get_secret,
         checkpointer=_checkpointer,
+        trace_store=agent_trace_store,
     )
     await runtime.control_service.start()
     await runtime.mqtt_runtime.start()
@@ -1907,7 +1910,27 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             status_code=409,
             detail="draft not found or not in awaiting_approval status",
         )
-    return JSONResponse({"ok": True, "draft": draft})
+    export_result: dict[str, Any] | None = None
+    try:
+        result = MissionExportService().export(draft)
+        if result.get("ok"):
+            updated = runtime.mission_draft_service.mark_exported(draft_id, export_result=result)
+            if updated is not None:
+                draft = updated
+            export_result = {
+                "ok": True,
+                "file_path": result.get("file_path", ""),
+                "waypoint_count": result.get("waypoint_count", 0),
+                "vehicle_type": result.get("vehicle_type", 0),
+            }
+        elif "no waypoints" not in str(result.get("error") or ""):
+            export_result = {"ok": False, "error": result.get("error", "mission export failed")}
+    except Exception as exc:
+        export_result = {"ok": False, "error": str(exc)}
+    response = {"ok": True, "draft": draft}
+    if export_result is not None:
+        response["mission_export"] = export_result
+    return JSONResponse(response)
 
 
 @app.post("/api/ai/mission-drafts/{draft_id}/reject")

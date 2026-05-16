@@ -15,6 +15,7 @@ DRAFT_STATUSES = frozenset({
     "validation_failed",
     "awaiting_approval",
     "approved",
+    "exported",
     "rejected",
     "superseded",
 })
@@ -269,6 +270,34 @@ class MissionDraftService:
                 WHERE id = ? AND status IN ('awaiting_approval', 'needs_clarification')
                 """,
                 (now, now, str(note or ""), draft_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_draft(draft_id)
+
+    def mark_exported(self, draft_id: str, *, export_result: dict[str, Any]) -> dict[str, Any] | None:
+        current = self.get_draft(draft_id)
+        if current is None or current.get("status") not in ("approved", "exported"):
+            return None
+
+        draft_payload = dict(current.get("draft") or {})
+        draft_payload["mission_export"] = {
+            "file_path": str(export_result.get("file_path") or ""),
+            "waypoint_count": int(export_result.get("waypoint_count") or 0),
+            "vehicle_type": int(export_result.get("vehicle_type") or 0),
+            "exported_at": time.time(),
+        }
+
+        now = time.time()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE ai_mission_drafts
+                SET status = 'exported', draft_json = ?, updated_at = ?
+                WHERE id = ? AND status IN ('approved', 'exported')
+                """,
+                (_json(draft_payload), now, draft_id),
             )
             conn.commit()
         if cursor.rowcount == 0:

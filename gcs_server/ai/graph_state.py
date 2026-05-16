@@ -68,6 +68,7 @@ class WorkbenchGraphState(TypedDict, total=False):
     use_planner_loop: bool          # True when ai_use_planner_loop flag is set
     planner_agent_stop_reason: str  # stop reason from AgentLoopRuntime run
     planner_agent_iterations: int   # iteration count from AgentLoopRuntime run
+    planner_agent_trace_id: str     # durable AgentLoopRuntime JSONL trace ID
     planner_loop_fallback: bool     # True when planner loop failed and fell back to legacy path
 
     # ── Append-only traces — LangGraph concatenates via add reducer ───────────

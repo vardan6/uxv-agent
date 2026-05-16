@@ -1337,6 +1337,12 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
   const goal = escapeHtml(String(payload.goal || payload.summary || ''));
   const draftId = escapeHtml(String(payload.draft_id || ''));
   const risks = Array.isArray(payload.risks) ? payload.risks : [];
+  const routeSummary = payload.route_summary && typeof payload.route_summary === 'object' ? payload.route_summary : {};
+  const waypointCount = Number(routeSummary.waypoint_count || 0);
+  const distanceM = Number(routeSummary.total_distance_m || 0);
+  const routeLabel = waypointCount > 0
+    ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}${distanceM > 0 ? ` · ${distanceM.toFixed(1)} m` : ''}`
+    : '';
   const riskItems = risks.length
     ? `<ul class="ai-approval-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
     : '';
@@ -1345,6 +1351,7 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
       <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
       ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
       ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
+      ${routeLabel ? `<div class="ai-approval-row"><span class="ai-approval-label">Route</span><span class="ai-approval-value">${escapeHtml(routeLabel)}</span></div>` : ''}
       ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
       <div class="ai-approval-note-row">
         <label class="ai-approval-note-label" for="ai-approval-note-input">Note (optional)</label>

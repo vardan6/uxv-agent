@@ -77,6 +77,7 @@ try:
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.graph_state import WorkbenchGraphState
+    from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai.mission_draft_service import validate_draft_payload
     from gcs_server.ai.provider_registry import resolve_intent_provider, resolve_provider
     from gcs_server.ai.retrieval import (
@@ -92,6 +93,7 @@ except ModuleNotFoundError:
     from ai.data_access import build_data_access_manifest
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.graph_state import WorkbenchGraphState
+    from ai.mission_export_service import MissionExportService
     from ai.mission_draft_service import validate_draft_payload
     from ai.provider_registry import resolve_intent_provider, resolve_provider
     from ai.retrieval import (
@@ -177,6 +179,73 @@ def _node_entry(name: str, **extra: Any) -> dict:
 
 def _tool_entry(name: str, args: dict, result: Any) -> dict:
     return {"tool": name, "args": args, "result": result, "ts": time.time()}
+
+
+def _route_summary_for_approval(draft: dict[str, Any]) -> dict[str, Any]:
+    waypoint_count = 0
+    total_distance_m = 0.0
+    artifact_count = 0
+    route_hashes: list[str] = []
+
+    if isinstance(draft.get("waypoints"), list):
+        waypoint_count += len(draft["waypoints"])
+        return {
+            "artifact_count": 0,
+            "waypoint_count": waypoint_count,
+            "total_distance_m": 0.0,
+            "route_hashes": route_hashes,
+        }
+
+    for artifact in draft.get("route_artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_count += 1
+        artifact_waypoints = artifact.get("waypoints")
+        if isinstance(artifact_waypoints, list):
+            waypoint_count += len(artifact_waypoints)
+        else:
+            waypoint_count += int(artifact.get("waypoint_count") or 0)
+        total_distance_m += float(artifact.get("total_distance_m") or 0.0)
+        route_hash = str(artifact.get("route_hash") or "").strip()
+        if route_hash:
+            route_hashes.append(route_hash)
+    if waypoint_count:
+        return {
+            "artifact_count": artifact_count,
+            "waypoint_count": waypoint_count,
+            "total_distance_m": round(total_distance_m, 1),
+            "route_hashes": route_hashes,
+        }
+
+    for step in draft.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if isinstance(step.get("waypoints"), list):
+            waypoint_count += len(step["waypoints"])
+        summary = step.get("route_summary")
+        if isinstance(summary, dict):
+            total_distance_m += float(summary.get("total_distance_m") or 0.0)
+
+    return {
+        "artifact_count": artifact_count,
+        "waypoint_count": waypoint_count,
+        "total_distance_m": round(total_distance_m, 1),
+        "route_hashes": route_hashes,
+    }
+
+
+def _home_position_from_rover_state(rover_state: dict[str, Any]) -> dict[str, float] | None:
+    gps = rover_state.get("gps") if isinstance(rover_state, dict) else None
+    if not isinstance(gps, dict) or gps.get("lat") is None or gps.get("lon") is None:
+        return None
+    try:
+        return {
+            "latitude": float(gps["lat"]),
+            "longitude": float(gps["lon"]),
+            "altitude": float(gps.get("alt") or 0.0),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 def _json_line(data: dict) -> str:
@@ -935,6 +1004,9 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         elif approval_status == "approved":
             note = state.get("approval_note", "")
             parts.append("Mission draft approved as a planning artifact.")
+            mission_export = state.get("mission_export") or {}
+            if mission_export.get("file_path"):
+                parts.append(f"Mission exported: {mission_export.get('file_path')}.")
             if note:
                 parts.append(f"Operator note: {note}")
         elif approval_status == "rejected":
@@ -965,6 +1037,7 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         "draft_id": draft_id,
         "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
+        "mission_export": state.get("mission_export") or {},
         "tool_trace": state.get("tool_trace") or [],
         "retrieval_request": retrieval_request,
         "retrieved_sources": retrieved_sources,
@@ -976,6 +1049,7 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     if state.get("use_planner_loop"):
         meta["planner_agent_stop_reason"] = str(state.get("planner_agent_stop_reason") or "")
         meta["planner_agent_iterations"] = int(state.get("planner_agent_iterations") or 0)
+        meta["planner_agent_trace_id"] = str(state.get("planner_agent_trace_id") or "")
         if state.get("planner_loop_fallback"):
             meta["planner_loop_fallback"] = True
     usage_metadata = _merge_usage_metadata(
@@ -1137,6 +1211,7 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         response_content=lambda r: str(getattr(r, "content", r) or ""),
         usage_metadata=lambda r: (getattr(r, "usage_metadata", {}) or {}),
         tool_calling_unsupported=_is_tool_calling_unsupported_error,
+        trace_store=rt.trace_store,
     )
 
     context_snapshot = _build_planner_context_snapshot(state)
@@ -1201,12 +1276,14 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     node_update: dict = {
         "planner_agent_stop_reason": result.stop_reason,
         "planner_agent_iterations": result.iterations,
+        "planner_agent_trace_id": result.trace_id,
         "tool_trace": tool_trace_entries,
         "node_trace": [_node_entry(
             "planner_loop_node",
             ok=result.stop_reason in ("draft_proposed", "clarification_requested", "final_answer"),
             stop_reason=result.stop_reason,
             iterations=result.iterations,
+            trace_id=result.trace_id,
             has_intent=bool(intent),
             has_draft=bool(draft_raw),
             route_artifact_count=len(route_artifacts),
@@ -1276,6 +1353,7 @@ def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfi
         "draft_id": draft_id,
         "goal": draft.get("goal", ""),
         "risks": draft.get("risks") or [],
+        "route_summary": _route_summary_for_approval(draft),
         "execution_allowed": False,
         "approval_scope": "planning_artifact_only",
     }
@@ -1303,7 +1381,7 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
     draft_id = state.get("draft_id", "")
     note = state.get("approval_note", "")
     try:
-        rt.draft_service.approve_draft(draft_id, note=note)
+        approved = rt.draft_service.approve_draft(draft_id, note=note)
     except Exception as exc:
         return {
             "approval_status": "approved",
@@ -1313,9 +1391,45 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             }],
             "node_trace": [_node_entry("record_approval", ok=False, reason=str(exc))],
         }
+    mission_export: dict[str, Any] = {}
+    export_error = ""
+    if approved and _route_summary_for_approval(approved.get("draft") or {}).get("waypoint_count"):
+        try:
+            result = MissionExportService().export(
+                approved,
+                home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
+            )
+            if result.get("ok"):
+                updated = rt.draft_service.mark_exported(draft_id, export_result=result)
+                mission_export = (updated or {}).get("draft", {}).get("mission_export") or {
+                    "file_path": result.get("file_path", ""),
+                    "waypoint_count": result.get("waypoint_count", 0),
+                    "vehicle_type": result.get("vehicle_type", 0),
+                }
+            else:
+                export_error = str(result.get("error") or "mission export failed")
+        except Exception as exc:
+            export_error = str(exc)
+    errors = []
+    if export_error:
+        errors.append({
+            "node": "record_approval",
+            "code": "mission_export_failed",
+            "severity": "warning",
+            "message": export_error,
+            "recoverable": True,
+        })
     return {
         "approval_status": "approved",
-        "node_trace": [_node_entry("record_approval", ok=True, draft_id=draft_id)],
+        "mission_export": mission_export,
+        "errors": errors,
+        "node_trace": [_node_entry(
+            "record_approval",
+            ok=not export_error,
+            draft_id=draft_id,
+            mission_export=mission_export,
+            export_error=export_error or None,
+        )],
     }
 
 
