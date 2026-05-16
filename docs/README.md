@@ -23,6 +23,7 @@ What the project is, what users see, what the system must do.
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
 | [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Canonical AI agent product requirements, safety boundaries, capability ladder, fixed decisions |
 | [product/route-planning-and-mission-export-prd.md](./product/route-planning-and-mission-export-prd.md) | PRD for route planning, mission generation, and QGC `.plan` export |
+| [product/rover-physics-tuning-prd.md](./product/rover-physics-tuning-prd.md) | PRD for realistic, operator-stable rover dynamics tuning in the simulator |
 
 ## Technical (Implementation)
 
@@ -54,6 +55,7 @@ How the system is built.
 | [technical/simulator/terrain-scene.md](./technical/simulator/terrain-scene.md) | Source-of-truth terrain/object manifest |
 | [technical/simulator/platform-plan.md](./technical/simulator/platform-plan.md) | Simulator transition plan |
 | [technical/simulator/rover-sim-next-phase-1.md](./technical/simulator/rover-sim-next-phase-1.md) | Concrete first implementation checklist for the successor simulator |
+| [technical/simulator/rover-physics-tuning.md](./technical/simulator/rover-physics-tuning.md) | Manual route, acceptance behavior, and tuning order for rover dynamics work |
 
 ### AI
 

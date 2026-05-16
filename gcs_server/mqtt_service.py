@@ -123,7 +123,9 @@ class MQTTRuntime:
             return
         browser_count = await self._ws_manager.connection_count()
         controller = await self._state_store.controller_snapshot()
-        is_active = browser_count > 0 if force_active is None else bool(force_active)
+        # Presence should reflect GCS service availability, not whether a UI page
+        # is currently open. UI state is still included via browser_count.
+        is_active = self._started if force_active is None else bool(force_active)
         payload = self._presence_payload(
             is_active,
             browser_count=browser_count,

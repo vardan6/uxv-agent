@@ -119,6 +119,26 @@ def gaussian_2d(x: float, y: float, cx: float, cy: float, sigma: float) -> float
     return math.exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma))
 
 
+def rect_plateau_blend(
+    x: float,
+    y: float,
+    cx: float,
+    cy: float,
+    hx: float,
+    hy: float,
+    transition_width: float,
+) -> float:
+    """Return 1 inside a rectangle, falling smoothly to 0 outside it."""
+    dx = abs(x - cx) - hx
+    dy = abs(y - cy) - hy
+    outside_x = max(dx, 0.0)
+    outside_y = max(dy, 0.0)
+    outside_dist = math.hypot(outside_x, outside_y)
+    if outside_dist <= 0.0:
+        return 1.0
+    return 1.0 - smoothstep(0.0, transition_width, outside_dist)
+
+
 def base_height(x: float, y: float, terrain_size: float, valleys: list[list[float]], hills: list[list[float]]) -> float:
     xn = x / terrain_size
     yn = y / terrain_size
@@ -143,7 +163,7 @@ def height_at_raw(
     roads: list[dict[str, Any]],
 ) -> float:
     h = base_height(x, y, terrain_size, valleys, hills)
-    for key in ("plant_a", "plant_b", "building", "start_hub"):
+    for key in ("plant_a", "plant_b", "building"):
         spec = scene_layout[key]
         cx, cy = spec["center"]
         hx, hy = spec["pad_half_extents"]
@@ -172,6 +192,14 @@ def height_at_raw(
     blend = smoothstep(road_cfg["feather"], road_cfg["width"], best_dist)
     if blend > 0.0:
         h = h * (1.0 - blend * 0.92) + best_target * (blend * 0.92)
+
+    hub = scene_layout["start_hub"]
+    cx, cy = hub["center"]
+    ahx, ahy = hub.get("apron_half_extents", hub["pad_half_extents"])
+    transition_width = float(hub.get("transition_width", 12.0))
+    apron = rect_plateau_blend(x, y, cx, cy, ahx, ahy, transition_width)
+    if apron > 0.0:
+        h = h * (1.0 - apron) + hub["floor_z"] * apron
     return h
 
 
@@ -272,7 +300,7 @@ def build_scene(config: dict[str, Any]) -> dict[str, Any]:
 
     for key in ("plant_a", "plant_b", "building", "start_hub"):
         spec = scene_layout[key]
-        hx, hy = spec["pad_half_extents"]
+        hx, hy = spec.get("apron_half_extents", spec["pad_half_extents"])
         register_keepout(spec["center"][0], spec["center"][1], math.sqrt(hx * hx + hy * hy) + 3.0)
 
     for idx, key in enumerate(("plant_a", "plant_b")):
@@ -308,16 +336,15 @@ def build_scene(config: dict[str, Any]) -> dict[str, Any]:
     cx, cy = hub["center"]
     floor_z = hub["floor_z"]
     hx, hy = hub["pad_half_extents"]
-    add_box(objects, "start_hub_pad", "pad", [cx, cy, floor_z + 0.22], [hx, hy, 0.22], [0.52, 0.53, 0.54], metadata={"label": hub["label"], "parent": "start_hub"})
-    add_box(objects, "start_hub_pad_collider", "collision_proxy", [cx, cy, floor_z + 0.22], [hx, hy, 0.22], [0.0, 0.0, 0.0], collision=True, metadata={"parent": "start_hub", "visible": False})
-    add_box(objects, "charger_base", "charger", [cx + 8.4, cy - 5.4, floor_z + 0.30], [1.15, 0.72, 0.30], [0.28, 0.30, 0.33], metadata={"parent": "start_hub"})
-    add_box(objects, "charger_post", "charger", [cx + 8.4, cy - 5.4, floor_z + 1.45], [0.22, 0.22, 1.15], [0.70, 0.72, 0.74], metadata={"parent": "start_hub"})
-    add_box(objects, "charger_head", "charger", [cx + 8.4, cy - 5.2, floor_z + 2.38], [0.36, 0.20, 0.18], [0.19, 0.52, 0.36], metadata={"parent": "start_hub"})
-    add_box(objects, "hub_guard_rail", "guard_rail", [cx + hx - 0.8, cy, floor_z + 0.42], [0.12, 4.1, 0.42], [0.78, 0.79, 0.80], metadata={"parent": "start_hub"})
-    add_box(objects, "charger_collider", "collision_proxy", [cx + 8.4, cy - 5.4, floor_z + 0.95], [0.85, 0.55, 0.95], [0.0, 0.0, 0.0], collision=True, metadata={"parent": "start_hub", "visible": False})
+    add_box(objects, "start_hub_pad", "pad", [cx, cy, floor_z + 0.035], [hx, hy, 0.035], [0.48, 0.49, 0.48], metadata={"label": hub["label"], "parent": "start_hub"})
+    add_box(objects, "start_hub_docking_mark", "pad", [cx + 6.1, cy - 3.1, floor_z + 0.045], [2.0, 1.2, 0.012], [0.18, 0.50, 0.34], metadata={"label": "Docking bay", "parent": "start_hub"})
+    add_box(objects, "charger_base", "charger", [cx + 8.6, cy - 3.1, floor_z + 0.18], [0.85, 0.55, 0.18], [0.28, 0.30, 0.33], collision=True, metadata={"parent": "start_hub"})
+    add_box(objects, "charger_post", "charger", [cx + 8.6, cy - 3.1, floor_z + 0.88], [0.18, 0.18, 0.70], [0.70, 0.72, 0.74], collision=True, metadata={"parent": "start_hub"})
+    add_box(objects, "charger_head", "charger", [cx + 8.0, cy - 3.1, floor_z + 1.28], [0.42, 0.28, 0.20], [0.19, 0.52, 0.36], collision=True, metadata={"parent": "start_hub"})
+    add_box(objects, "charger_contact_plate", "charger", [cx + 7.5, cy - 3.1, floor_z + 0.38], [0.08, 0.48, 0.24], [0.09, 0.62, 0.34], collision=True, metadata={"label": "Charging contact point", "parent": "start_hub", "dock_contact": True})
 
     spawn_xy = scene_layout["spawn"]["xy"]
-    spawn_z = terrain_height(spawn_xy[0], spawn_xy[1]) + 2.2
+    spawn_z = terrain_height(spawn_xy[0], spawn_xy[1]) + 0.55
 
     rng = random.Random(42)
     placed = 0
