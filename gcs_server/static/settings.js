@@ -229,6 +229,7 @@ let modelRouting = {};
 let editingFallbackPurpose = null;
 let pendingJsonImport = null;
 let llmProviderSort = { key: 'display_name', direction: 'asc' };
+let editingProviderId = '';
 
 function setSetupStatus(text) {
   if (settingsEls.setupStatus) settingsEls.setupStatus.textContent = text;
@@ -825,7 +826,7 @@ function providerOptions(selectedId = '', category = '') {
 function readProviderForm() {
   const authMode = settingsEls.llmAuthMode.value;
   const payload = {
-    id: settingsEls.llmProviderId.value || undefined,
+    id: editingProviderId || undefined,
     display_name: settingsEls.llmDisplayName.value.trim(),
     provider_type: settingsEls.llmProviderType.value,
     auth_mode: authMode,
@@ -853,7 +854,8 @@ function templateKeyForProvider(provider = {}) {
 }
 
 function fillProviderForm(provider = {}) {
-  settingsEls.llmProviderId.value = provider.id || '';
+  editingProviderId = provider.id || '';
+  settingsEls.llmProviderId.value = editingProviderId;
   settingsEls.llmProviderTemplate.value = templateKeyForProvider(provider);
   settingsEls.llmDisplayName.value = provider.display_name || '';
   settingsEls.llmProviderType.value = provider.provider_type || 'openai_compatible';
@@ -1071,8 +1073,10 @@ async function loadLlmSettings() {
 async function saveProvider(event) {
   event.preventDefault();
   const provider = readProviderForm();
-  const url = provider.id ? `/api/llm-providers/${encodeURIComponent(provider.id)}` : '/api/llm-providers';
-  const method = provider.id ? 'PUT' : 'POST';
+  const providerExists = provider.id && llmProviders.some((item) => item.id === provider.id);
+  const url = providerExists ? `/api/llm-providers/${encodeURIComponent(provider.id)}` : '/api/llm-providers';
+  const method = providerExists ? 'PUT' : 'POST';
+  if (!providerExists) delete provider.id;
   const result = await readJson(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
