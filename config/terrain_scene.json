@@ -33,8 +33,9 @@
       "kind": "hub",
       "model_ref": "start_hub",
       "center": [0.0, 20.0],
-      "pad_half_extents": [13.0, 9.0],
-      "surround_half_extents": [40.0, 30.0],
+      "pad_half_extents": [10.0, 6.5],
+      "apron_half_extents": [22.0, 16.0],
+      "transition_width": 16.0,
       "floor_z": -0.8
     },
     "roads": {
