@@ -619,6 +619,7 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
             minimum=4000,
             maximum=200000,
         ),
+        "ai_use_planner_loop": _bool_setting(source.get("ai_use_planner_loop", False), default=False),
     }
 
 
@@ -1035,7 +1036,22 @@ def _format_retrieval_surfaces_markdown(
     return "\n".join(lines).strip()
 
 
-def _format_tool_catalog_markdown(
+def _format_tool_catalog_markdown_brief(
+    tool_registry: ToolRegistry,
+    *,
+    source_controls: dict[str, Any] | None = None,
+) -> str:
+    allowed_tool_names = allowed_tool_names_for_source_controls(source_controls)
+    definitions = [definition for definition in tool_registry.definitions() if definition.name in allowed_tool_names]
+    count = len(definitions)
+    noun = "tool" if count == 1 else "tools"
+    lines = ["## Agent Tools", "", f"{count} {noun} available in agent mode.", ""]
+    for definition in definitions:
+        lines.append(f"- **`{definition.name}`**: {definition.description}")
+    return "\n".join(lines).strip()
+
+
+def _format_tool_catalog_markdown_full(
     tool_registry: ToolRegistry,
     *,
     source_controls: dict[str, Any] | None = None,
@@ -1126,14 +1142,16 @@ def _build_ai_session_command_response(
     normalized = str(command or "").strip().lower()
     if normalized == "retrieval-surfaces":
         return "/retrieval-surfaces", _format_retrieval_surfaces_markdown(session_id, source_controls)
-    if normalized == "tools":
-        return "/tools", _format_tool_catalog_markdown(tool_registry, source_controls=source_controls)
     if normalized == "tool-activity":
         return "/tool-activity", _format_agent_tool_activity_markdown(session)
-    if normalized == "capabilities":
+    if normalized == "capabilities brief":
         retrieval = _format_retrieval_surfaces_markdown(session_id, source_controls)
-        tools = _format_tool_catalog_markdown(tool_registry, source_controls=source_controls)
-        return "/capabilities", f"{retrieval}\n\n{tools}"
+        tools = _format_tool_catalog_markdown_brief(tool_registry, source_controls=source_controls)
+        return "/capabilities brief", f"{retrieval}\n\n{tools}"
+    if normalized == "capabilities full":
+        retrieval = _format_retrieval_surfaces_markdown(session_id, source_controls)
+        tools = _format_tool_catalog_markdown_full(tool_registry, source_controls=source_controls)
+        return "/capabilities full", f"{retrieval}\n\n{tools}"
     raise ValueError(f"unsupported command '{command}'")
 
 

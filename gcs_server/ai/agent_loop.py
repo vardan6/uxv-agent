@@ -176,7 +176,21 @@ class AgentLoopRuntime:
                         "policy_decision": policy_decision.as_trace_dict(),
                     },
                 })
-                if policy_decision.action != "allow":
+                definition = runtime.tool_definitions.get(tool_name)
+                if definition is not None and getattr(definition, "is_terminal", False):
+                    _handoff_type = (
+                        isinstance(tool_result, dict)
+                        and isinstance(tool_result.get("handoff"), dict)
+                        and tool_result["handoff"].get("type")
+                    )
+                    if _handoff_type == "clarification_request":
+                        stop_reason = "clarification_requested"
+                    elif isinstance(tool_result, dict) and tool_result.get("ok") is False:
+                        stop_reason = "terminal_tool_failed"
+                    else:
+                        stop_reason = "draft_proposed"
+                    should_stop = True
+                elif policy_decision.action != "allow":
                     stop_reason = policy_decision.stop_reason or POLICY_DENIED_STOP_REASON
                     should_stop = True
                     terminal_tool_error = {
@@ -334,7 +348,21 @@ class AgentLoopRuntime:
                     "tool_call": dict(executed_tool_call),
                 })
                 yield trace_events[-1]
-                if policy_decision.action != "allow":
+                definition = runtime.tool_definitions.get(tool_name)
+                if definition is not None and getattr(definition, "is_terminal", False):
+                    _handoff_type = (
+                        isinstance(tool_result, dict)
+                        and isinstance(tool_result.get("handoff"), dict)
+                        and tool_result["handoff"].get("type")
+                    )
+                    if _handoff_type == "clarification_request":
+                        stop_reason = "clarification_requested"
+                    elif isinstance(tool_result, dict) and tool_result.get("ok") is False:
+                        stop_reason = "terminal_tool_failed"
+                    else:
+                        stop_reason = "draft_proposed"
+                    should_stop = True
+                elif policy_decision.action != "allow":
                     stop_reason = policy_decision.stop_reason or POLICY_DENIED_STOP_REASON
                     should_stop = True
                     terminal_tool_error = {

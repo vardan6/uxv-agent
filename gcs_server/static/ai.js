@@ -1066,7 +1066,19 @@ function allowedToolNamesForSourceControls(sourceControls) {
   return allowed;
 }
 
-function formatToolCatalogMarkdown(session) {
+function formatToolCatalogMarkdownBrief(session) {
+  const allowed = allowedToolNamesForSourceControls(session?.source_controls);
+  const tools = AI_AGENT_TOOL_DEFINITIONS.filter((tool) => allowed.has(tool.name));
+  const count = tools.length;
+  const noun = count === 1 ? 'tool' : 'tools';
+  const lines = ['## Agent Tools', '', `${count} ${noun} available in agent mode.`, ''];
+  tools.forEach((tool) => {
+    lines.push(`- **\`${tool.name}\`**: ${tool.description}`);
+  });
+  return lines.join('\n').trim();
+}
+
+function formatToolCatalogMarkdownFull(session) {
   const allowed = allowedToolNamesForSourceControls(session?.source_controls);
   const tools = AI_AGENT_TOOL_DEFINITIONS.filter((tool) => allowed.has(tool.name));
   const count = tools.length;
@@ -1121,16 +1133,19 @@ function buildLocalSessionCommandResponse(sessionId, command) {
   if (normalized === 'retrieval-surfaces') {
     return { rawCommand: '/retrieval-surfaces', assistantContent: formatRetrievalSurfacesMarkdown(session) };
   }
-  if (normalized === 'tools') {
-    return { rawCommand: '/tools', assistantContent: formatToolCatalogMarkdown(session) };
-  }
   if (normalized === 'tool-activity') {
     return { rawCommand: '/tool-activity', assistantContent: formatAgentToolActivityMarkdown(sessionId) };
   }
-  if (normalized === 'capabilities') {
+  if (normalized === 'capabilities brief') {
     return {
-      rawCommand: '/capabilities',
-      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdown(session)}`,
+      rawCommand: '/capabilities brief',
+      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdownBrief(session)}`,
+    };
+  }
+  if (normalized === 'capabilities full') {
+    return {
+      rawCommand: '/capabilities full',
+      assistantContent: `${formatRetrievalSurfacesMarkdown(session)}\n\n${formatToolCatalogMarkdownFull(session)}`,
     };
   }
   throw new Error(`unsupported command '${command}'`);
@@ -2596,22 +2611,22 @@ async function updateSessionSourceControl(key, enabled) {
 
 const AI_SLASH_COMMANDS = [
   {
-    command: '/capabilities',
+    command: '/capabilities brief',
     kind: 'session_command',
-    serverCommand: 'capabilities',
-    description: 'Show this session\'s retrieval surfaces and available agent tools.',
+    serverCommand: 'capabilities brief',
+    description: 'List retrieval surfaces and available tools with one-line descriptions.',
+  },
+  {
+    command: '/capabilities full',
+    kind: 'session_command',
+    serverCommand: 'capabilities full',
+    description: 'Show retrieval surfaces and tools with all attributes and contract details.',
   },
   {
     command: '/retrieval-surfaces',
     kind: 'session_command',
     serverCommand: 'retrieval-surfaces',
     description: 'Show enabled retrieval surfaces and their current availability.',
-  },
-  {
-    command: '/tools',
-    kind: 'session_command',
-    serverCommand: 'tools',
-    description: 'List the read-only and analysis tools exposed to agent mode.',
   },
   {
     command: '/tool-activity',
@@ -2639,6 +2654,15 @@ function slashCommandDefinition(command) {
 }
 
 function parseSlashCommand(rawContent) {
+  const twoWordMatch = rawContent.match(/^(\/[a-zA-Z-]+ [a-zA-Z-]+)(\s+([\s\S]+))?$/);
+  if (twoWordMatch) {
+    const command = twoWordMatch[1].toLowerCase();
+    const definition = slashCommandDefinition(command);
+    if (definition) {
+      const body = (twoWordMatch[3] || '').trim();
+      return { definition, runMode: null, content: body, command };
+    }
+  }
   const match = rawContent.match(/^(\/[a-zA-Z-]+)(\s+([\s\S]+))?$/);
   if (!match) return { definition: null, runMode: null, content: rawContent };
   const command = match[1].toLowerCase();
@@ -2659,10 +2683,11 @@ function slashQueryState() {
   const cursor = aiEls.messageInput.selectionStart ?? value.length;
   const head = value.slice(0, cursor);
   if (!head.startsWith('/')) return null;
-  if (/\s/.test(head)) return null;
+  const spaceCount = (head.match(/ /g) || []).length;
+  if (spaceCount > 1) return null;
   const query = head.toLowerCase();
   const items = AI_SLASH_COMMANDS.filter((item) => item.command.startsWith(query));
-  return { query, items };
+  return items.length ? { query, items } : null;
 }
 
 function isSlashMenuOpen() {

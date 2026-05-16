@@ -1,4 +1,4 @@
-"""Workbench planning graph (Phase 1 + Phase 2 + Phase 3 + Phase 4).
+"""Workbench planning graph (Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5).
 
 Phase 1: Linear deterministic graph, REST-only approval.
 Phase 2: Adds durable checkpointer and interrupt() at request_workbench_approval.
@@ -8,8 +8,13 @@ Phase 4: classify_request_scope node + lazy data branch nodes
          (retrieve_replay_context, retrieve_application_memory,
           retrieve_settings_context, retrieve_sensor_context);
          conditional routing driven by request_scope and source-control flags.
+Phase 5: planner_loop_node added behind ai_use_planner_loop=false flag.
+         When enabled, replaces the Phase 4 middle DAG with a single
+         AgentLoopRuntime node that calls parse_rover_intent,
+         resolve_spatial_target, lazy-load tools, and propose_mission_draft
+         as agent tools. Legacy path remains available when flag is off.
 
-Node order:
+Node order (legacy path, ai_use_planner_loop=false):
     capture_request
     retrieve_current_context
     classify_request_scope      (Phase 4)
@@ -24,6 +29,16 @@ Node order:
     validate_draft
     store_draft
     request_workbench_approval  (Phase 2: interrupt(); Phase 1 fallback: REST-only)
+    record_approval | record_rejection
+    finalize_response
+
+Node order (planner loop path, ai_use_planner_loop=true):
+    capture_request
+    retrieve_current_context
+    planner_loop_node           (Phase 5: AgentLoopRuntime with planner tools)
+    validate_draft
+    store_draft
+    request_workbench_approval
     record_approval | record_rejection
     finalize_response
 
@@ -58,6 +73,7 @@ except ImportError:
     _INTERRUPT_AVAILABLE = False
 
 try:
+    from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
     from gcs_server.ai.graph_state import WorkbenchGraphState
@@ -70,8 +86,9 @@ try:
         normalize_retrieval_request,
     )
     from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls
+    from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
 except ModuleNotFoundError:
+    from ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
     from ai.data_access import build_data_access_manifest
     from ai.graph_runtime import WorkbenchGraphRuntime
     from ai.graph_state import WorkbenchGraphState
@@ -84,12 +101,44 @@ except ModuleNotFoundError:
         normalize_retrieval_request,
     )
     from ai.session_store import normalize_source_controls
-    from ai.tool_registry import allowed_tool_names_for_source_controls
+    from ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _PLANNING_INTENT_TYPES = frozenset({"navigate_to_object", "inspect_area", "search_area"})
+
+_PLANNER_TOOL_NAMES = frozenset({
+    "parse_rover_intent",
+    "lazy_load_replay",
+    "lazy_load_ai_memory",
+    "lazy_load_settings",
+    "lazy_load_sensor",
+    "request_clarification",
+    "resolve_spatial_target",
+    "get_current_rover_state",
+    "get_scene_summary",
+    "plan_route_around_group",
+    "plan_route_between",
+    "propose_mission_draft",
+})
+
+_PLANNER_SYSTEM_PROMPT = (
+    "You are a rover mission planning agent for Remote Rover GCS.\n\n"
+    "Your task is to plan a mission draft from the operator's request.\n\n"
+    "Workflow:\n"
+    "1. Call parse_rover_intent to extract structured intent from the user prompt.\n"
+    "2. If the intent has a spatial target, call resolve_spatial_target.\n"
+    "3. If missing_information is non-empty and critical, call request_clarification once.\n"
+    "4. Call propose_mission_draft with the intent and resolved target to finalize the plan.\n\n"
+    "Hard rules:\n"
+    "- Never call propose_mission_draft without first calling parse_rover_intent.\n"
+    "- Never generate motion commands, MQTT payloads, or control values.\n"
+    "- execution_allowed must always remain false in any draft.\n"
+    "- required_operator_approval must always be true.\n"
+    "- If the intent is not a rover planning task (navigate, inspect, search), "
+    "call propose_mission_draft with a minimal draft explaining why the request is out of scope.\n"
+)
 
 _DRAFT_SYSTEM_PROMPT = (
     "You are a mission planning assistant for a remote rover GCS.\n"
@@ -254,6 +303,100 @@ def _normalize_retrieval_request(value: Any, *, user_prompt: str = "", session_i
     return normalize_retrieval_request(value, user_prompt=user_prompt, session_id=session_id)
 
 
+# ── Planner loop helpers (Phase 5) ────────────────────────────────────────────
+
+def _planner_system_prompt_for_mode(run_mode: str) -> str:
+    return _PLANNER_SYSTEM_PROMPT
+
+
+def _planner_prompt_builder(
+    context_snapshot: dict | None,
+    run_mode: str,
+    tool_calls: list,
+    tools: list | None = None,
+    data_access_manifest: dict | None = None,
+) -> str:
+    ctx = (context_snapshot or {}).get("meta", {}).get("context_snapshot") or {}
+    context_text = (context_snapshot or {}).get("meta", {}).get("context_text", "")
+    lines = [
+        "You are planning a rover mission. Use the tools in sequence: "
+        "parse_rover_intent → (resolve_spatial_target) → propose_mission_draft.",
+    ]
+    if context_text:
+        lines.append(f"Current rover context:\n{context_text}")
+    rover = ctx.get("rover") or {}
+    if rover.get("position"):
+        lines.append(f"Rover position: {json.dumps(rover['position'])}")
+    return "\n".join(lines)
+
+
+def _planner_allowed_tool_names(context_snapshot: dict | None) -> set[str] | None:
+    allowed = set(_PLANNER_TOOL_NAMES)
+    meta = (context_snapshot or {}).get("meta") or {}
+    source_controls = normalize_source_controls(meta.get("source_controls"))
+    if not source_controls.get("replay_reports", True):
+        allowed.discard("lazy_load_replay")
+    if not source_controls.get("ai_chat_history", False):
+        allowed.discard("lazy_load_ai_memory")
+    if not source_controls.get("settings_config", False):
+        allowed.discard("lazy_load_settings")
+    if not source_controls.get("sensor_context", False):
+        allowed.discard("lazy_load_sensor")
+    return allowed
+
+
+def _is_tool_calling_unsupported_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "tool" in msg and ("unsupported" in msg or "not support" in msg or "bind_tools" in msg)
+
+
+def _build_planner_context_snapshot(state: WorkbenchGraphState) -> dict:
+    """Build a context_snapshot suitable for the planner AgentLoopRuntime.
+
+    Includes all retrieved data (replay, memory, settings) so lazy-load tools
+    can return it without needing extra service calls. Source controls are carried
+    into meta so _snapshot_source_controls and lazy tool handlers enforce them.
+    """
+    source_controls = normalize_source_controls(
+        (state.get("retrieval_request") or {}).get("source_controls")
+    )
+    return {
+        "meta": {
+            "context_snapshot": {
+                "rover": state.get("rover_state") or {},
+                "scene": state.get("scene_summary") or {},
+                "mission": {},
+                "runtime": state.get("runtime_summary") or {},
+                "details": {
+                    "current_replay": state.get("replay_summary") or {},
+                    "ai_chat_history": state.get("chat_history_summary") or {},
+                },
+                "settings": state.get("settings_summary") or {},
+                "llm": state.get("llm_summary") or {},
+            },
+            "context_text": (state.get("context_metadata") or {}).get("context_text", ""),
+            "source_controls": source_controls,
+        }
+    }
+
+
+def _extract_planner_tool_result(
+    tool_calls: list[dict],
+    tool_name: str,
+    result_key: str = "",
+) -> Any:
+    """Return the result (or result[result_key]) from the last call to tool_name."""
+    for call in reversed(tool_calls):
+        if call.get("name") == tool_name:
+            result = call.get("result") or {}
+            if not isinstance(result, dict) or not result.get("ok"):
+                return None
+            if result_key:
+                return result.get(result_key)
+            return result
+    return None
+
+
 def _build_retrieved_sources(state: WorkbenchGraphState) -> list[dict[str, Any]]:
     return build_retrieved_sources(
         retrieval_request=_normalize_retrieval_request(
@@ -309,8 +452,10 @@ def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                 "severity": "warning", "message": str(exc), "recoverable": True,
             })
 
+    use_planner_loop = bool(getattr(rt.app_runtime.config, "ai_use_planner_loop", False))
     return {
         "source_message_id": source_message_id,
+        "use_planner_loop": use_planner_loop,
         "retrieval_request": _normalize_retrieval_request(
             state.get("retrieval_request") or {},
             user_prompt=user_prompt,
@@ -826,7 +971,13 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         "retrieval_citations": state.get("retrieval_citations") or [],
         "loaded_data_refs": state.get("loaded_data_refs") or [],
         "node_count": len(state.get("node_trace") or []),
+        "planner_loop_enabled": bool(state.get("use_planner_loop")),
     }
+    if state.get("use_planner_loop"):
+        meta["planner_agent_stop_reason"] = str(state.get("planner_agent_stop_reason") or "")
+        meta["planner_agent_iterations"] = int(state.get("planner_agent_iterations") or 0)
+        if state.get("planner_loop_fallback"):
+            meta["planner_loop_fallback"] = True
     usage_metadata = _merge_usage_metadata(
         state.get("intent_usage_metadata") or {},
         state.get("draft_usage_metadata") or {},
@@ -943,6 +1094,170 @@ def _route_after_settings_branch(state: WorkbenchGraphState) -> str:
     return _route_after_lazy_branch(state, "retrieve_settings_context")
 
 
+# ── Phase 5 nodes ─────────────────────────────────────────────────────────────
+
+def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+    """Run AgentLoopRuntime as a single planner node (Phase 5, behind ai_use_planner_loop flag).
+
+    Replaces the classify_request_scope → lazy branches → parse_intent →
+    prepare_clarification → resolve_target → generate_mission_draft DAG with a
+    single agentic loop that calls those operations as tools.
+    """
+    rt = _runtime(config)
+
+    resolved = None
+    for purpose in ("mission_planner", "general_chat"):
+        try:
+            resolved = resolve_provider(
+                rt.app_runtime.config,
+                purpose=purpose,
+                secret_resolver=rt.secret_resolver,
+            )
+            break
+        except Exception:
+            continue
+
+    if resolved is None:
+        return {
+            "planner_loop_fallback": True,
+            "errors": [{
+                "node": "planner_loop_node", "code": "no_provider",
+                "severity": "warning",
+                "message": "no LLM provider available for planner loop; falling back to legacy path",
+                "recoverable": True,
+            }],
+            "node_trace": [_node_entry("planner_loop_node", ok=False, reason="no_provider", fallback=True)],
+        }
+
+    agent_loop = AgentLoopRuntime(
+        tool_registry=rt.tool_registry,
+        prompt_builder=_planner_prompt_builder,
+        system_prompt_for_mode=_planner_system_prompt_for_mode,
+        allowed_tool_names=_planner_allowed_tool_names,
+        response_content=lambda r: str(getattr(r, "content", r) or ""),
+        usage_metadata=lambda r: (getattr(r, "usage_metadata", {}) or {}),
+        tool_calling_unsupported=_is_tool_calling_unsupported_error,
+    )
+
+    context_snapshot = _build_planner_context_snapshot(state)
+    messages = [{"role": "user", "content": state.get("user_prompt", "")}]
+
+    result: AgentInvokeResult | None = agent_loop.invoke_with_tools(
+        resolved.model,
+        messages=messages,
+        context_snapshot=context_snapshot,
+        prompt_tool_calls=[],
+        tool_context={
+            "runtime": rt.app_runtime,
+            "timezone_name": state.get("operator_timezone", ""),
+        },
+        run_mode="planner",
+    )
+
+    if result is None:
+        return {
+            "planner_loop_fallback": True,
+            "errors": [{
+                "node": "planner_loop_node", "code": "tool_calling_unsupported",
+                "severity": "warning",
+                "message": "planner model does not support tool calling; falling back to legacy path",
+                "recoverable": True,
+            }],
+            "node_trace": [_node_entry("planner_loop_node", ok=False, reason="tool_calling_unsupported", fallback=True)],
+        }
+
+    intent = _extract_planner_tool_result(result.tool_calls, "parse_rover_intent", "intent") or {}
+    target_result = _extract_planner_tool_result(result.tool_calls, "resolve_spatial_target") or {}
+    draft_raw = _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "draft") or {}
+
+    # Collect route artifacts from any route-planning tool calls so they survive draft storage.
+    route_artifacts: list[dict[str, Any]] = []
+    for tc in result.tool_calls:
+        if tc.get("name") in ("plan_route_around_group", "plan_route_between"):
+            res = tc.get("result") or {}
+            if isinstance(res, dict) and res.get("ok"):
+                waypoints = res.get("waypoints") or []
+                route_artifacts.append({
+                    "tool": tc["name"],
+                    "args": tc.get("args") or {},
+                    "route_hash": res.get("route_hash", ""),
+                    "waypoint_count": res.get("waypoint_count", len(waypoints)),
+                    "total_distance_m": res.get("total_distance_m", 0.0),
+                    "waypoints": waypoints,
+                    "summary": {k: v for k, v in res.items() if k not in ("waypoints", "ok", "known_groups")},
+                })
+
+    draft_repairs: list[str] = []
+    if draft_raw:
+        if route_artifacts and "route_artifacts" not in draft_raw:
+            draft_raw["route_artifacts"] = route_artifacts
+        draft_raw, draft_repairs = normalize_mission_draft_payload(draft_raw)
+
+    tool_trace_entries = [
+        _tool_entry(tc["name"], tc.get("args") or {}, tc.get("result") or {})
+        for tc in result.tool_calls
+    ]
+
+    node_update: dict = {
+        "planner_agent_stop_reason": result.stop_reason,
+        "planner_agent_iterations": result.iterations,
+        "tool_trace": tool_trace_entries,
+        "node_trace": [_node_entry(
+            "planner_loop_node",
+            ok=result.stop_reason in ("draft_proposed", "clarification_requested", "final_answer"),
+            stop_reason=result.stop_reason,
+            iterations=result.iterations,
+            has_intent=bool(intent),
+            has_draft=bool(draft_raw),
+            route_artifact_count=len(route_artifacts),
+            draft_repairs=draft_repairs if draft_repairs else None,
+        )],
+    }
+    if intent:
+        node_update["intent"] = intent
+        node_update["intent_usage_metadata"] = result.usage_metadata
+        node_update["intent_response_metadata"] = result.response_metadata
+    if target_result:
+        node_update["target_resolution"] = target_result
+        node_update["target_candidates"] = target_result.get("candidates") or []
+    if draft_raw:
+        node_update["draft"] = draft_raw
+        node_update["draft_usage_metadata"] = result.usage_metadata
+        node_update["draft_response_metadata"] = result.response_metadata
+
+    # Clarification handoff: extract questions from the request_clarification tool result
+    # and set clarification_request in state so _route_after_planner_loop routes to
+    # prepare_clarification, which surfaces the card and bridges to legacy draft generation.
+    if result.stop_reason == "clarification_requested":
+        clar_result = _extract_planner_tool_result(result.tool_calls, "request_clarification") or {}
+        handoff = (clar_result.get("handoff") or {}) if isinstance(clar_result, dict) else {}
+        node_update["clarification_request"] = {
+            "type": "clarification_request",
+            "questions": list(handoff.get("questions") or []),
+            "intent_summary": str(handoff.get("intent_summary") or intent.get("summary", "")),
+        }
+
+    return node_update
+
+
+def _route_after_context(state: WorkbenchGraphState) -> str:
+    if state.get("use_planner_loop"):
+        return "planner_loop_node"
+    return "classify_request_scope"
+
+
+def _route_after_planner_loop(state: WorkbenchGraphState) -> str:
+    # Setup/runtime failure: fall back to legacy classify → parse_intent → generate path.
+    if state.get("planner_loop_fallback"):
+        return "classify_request_scope"
+    # Clarification needed: bridge to prepare_clarification (legacy path handles resume).
+    if state.get("clarification_request") and not state.get("clarification_response"):
+        return "prepare_clarification"
+    if state.get("draft"):
+        return "validate_draft"
+    return "finalize_response"
+
+
 # ── Phase 2 nodes ─────────────────────────────────────────────────────────────
 
 def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
@@ -1033,15 +1348,22 @@ async def prepare_clarification(state: WorkbenchGraphState, config: RunnableConf
 
     Phase 3 constraint: rover pose and scene are re-fetched after the operator answers
     so the subsequent draft uses the freshest available state.
+
+    Phase 5 bridge: when called from the planner-loop path, prefer questions and
+    intent_summary from the clarification_request set by planner_loop_node over
+    intent.missing_information, since the planner may refine the question list.
     """
     rt = _runtime(config)
     intent = state.get("intent") or {}
-    missing = intent.get("missing_information") or []
+    # Prefer clarification_request set by planner_loop_node (planner path) when present.
+    existing_clar = state.get("clarification_request") or {}
+    questions = list(existing_clar.get("questions") or intent.get("missing_information") or [])
+    intent_summary = str(existing_clar.get("intent_summary") or intent.get("summary", ""))
 
     clarification_payload = {
         "type": "clarification_request",
-        "questions": missing,
-        "intent_summary": intent.get("summary", ""),
+        "questions": questions,
+        "intent_summary": intent_summary,
     }
 
     if _INTERRUPT_AVAILABLE and rt.checkpointer is not None:
@@ -1132,6 +1454,7 @@ def build_workbench_graph(checkpointer: Any = None):
 
     graph.add_node("capture_request", capture_request)
     graph.add_node("retrieve_current_context", retrieve_current_context)
+    graph.add_node("planner_loop_node", planner_loop_node)
     graph.add_node("classify_request_scope", classify_request_scope)
     graph.add_node("retrieve_replay_context", retrieve_replay_context)
     graph.add_node("retrieve_application_memory", retrieve_application_memory)
@@ -1155,7 +1478,21 @@ def build_workbench_graph(checkpointer: Any = None):
         _route_after_capture,
         {"retrieve_current_context": "retrieve_current_context", "finalize_error": "finalize_error"},
     )
-    graph.add_edge("retrieve_current_context", "classify_request_scope")
+    graph.add_conditional_edges(
+        "retrieve_current_context",
+        _route_after_context,
+        {"planner_loop_node": "planner_loop_node", "classify_request_scope": "classify_request_scope"},
+    )
+    graph.add_conditional_edges(
+        "planner_loop_node",
+        _route_after_planner_loop,
+        {
+            "classify_request_scope": "classify_request_scope",
+            "prepare_clarification": "prepare_clarification",
+            "validate_draft": "validate_draft",
+            "finalize_response": "finalize_response",
+        },
+    )
     graph.add_conditional_edges(
         "classify_request_scope",
         _route_after_scope,
@@ -1375,6 +1712,7 @@ async def stream_workbench_graph(
         "run_id": run_id,
         "thread_id": thread_id,
         "session_id": session_id,
+        "planner_loop_enabled": bool(getattr(runtime.app_runtime.config, "ai_use_planner_loop", False)),
         "ts": time.time(),
     })
 

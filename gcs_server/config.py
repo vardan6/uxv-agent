@@ -29,6 +29,7 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
+        "ai_use_planner_loop": False,
     },
     "llm_providers": [
         {
@@ -119,6 +120,10 @@ class AppConfig:
     def model_routing(self) -> dict[str, Any]:
         routing = self.raw.get("model_routing", {})
         return routing if isinstance(routing, dict) else {}
+
+    @property
+    def ai_use_planner_loop(self) -> bool:
+        return bool(self.ai_settings.get("ai_use_planner_loop", False))
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

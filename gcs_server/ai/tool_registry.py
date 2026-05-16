@@ -5,11 +5,17 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+import json
+import re as _re
+
 try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.data_access import build_data_access_manifest
+    from gcs_server.ai.intent_service import IntentService as _IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService
     from gcs_server.ai.mission_export_service import MissionExportService
+    from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
+    from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
     from gcs_server.ai.road_graph_service import RoadGraphService
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.spatial_query_service import SpatialQueryService
@@ -17,8 +23,11 @@ try:
 except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.data_access import build_data_access_manifest
+    from ai.intent_service import IntentService as _IntentService
     from ai.mission_draft_service import MissionDraftService
     from ai.mission_export_service import MissionExportService
+    from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
+    from ai.provider_registry import resolve_provider as _resolve_provider
     from ai.road_graph_service import RoadGraphService
     from ai.session_store import normalize_source_controls
     from ai.spatial_query_service import SpatialQueryService
@@ -33,6 +42,74 @@ EXECUTION = "execution"
 DEFAULT_PERMISSIONS = frozenset({READ_ONLY, ANALYSIS, PLANNING})
 DISABLED_PERMISSIONS = frozenset({COMMAND_STAGING, EXECUTION})
 
+_PLANNER_DRAFT_SYSTEM_PROMPT = (
+    "You are a mission planning assistant for a remote rover GCS.\n"
+    "Generate a structured mission draft from the provided rover intent and resolved target.\n\n"
+    "Hard rules:\n"
+    "- required_operator_approval MUST be true\n"
+    "- execution_allowed MUST be false\n"
+    "- Do NOT include MQTT topics, motor values, command payloads, or control fields\n"
+    "- Step types must be one of: navigate, inspect, search, report\n"
+    "- Return ONLY a valid JSON object with no markdown or extra text\n\n"
+    "Required JSON schema:\n"
+    '{\n'
+    '  "goal": "clear mission goal",\n'
+    '  "target": {},\n'
+    '  "steps": [\n'
+    '    {"type": "navigate|inspect|search|report", "description": "...", "target": {}, "success_condition": "..."}\n'
+    '  ],\n'
+    '  "constraints": ["string"],\n'
+    '  "assumptions": ["string"],\n'
+    '  "risks": ["string"],\n'
+    '  "required_operator_approval": true,\n'
+    '  "execution_allowed": false\n'
+    '}'
+)
+
+_ALLOWED_DRAFT_STEP_TYPES = frozenset({"navigate", "inspect", "search", "report"})
+_EXECUTION_FIELDS = frozenset({
+    "mqtt_topic", "mqtt_payload", "command", "control_command",
+    "motor_values", "velocity", "speed_command",
+})
+
+
+def normalize_mission_draft_payload(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Normalize and repair a draft payload. Returns (normalized_draft, repairs).
+
+    Enforces safety invariants regardless of model output. Call before storing
+    any draft produced by a planner or LLM to guarantee execution safety.
+    """
+    repairs: list[str] = []
+    out: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+
+    out["execution_allowed"] = False
+    out["required_operator_approval"] = True
+
+    for key in ("steps", "constraints", "assumptions", "risks"):
+        if not isinstance(out.get(key), list):
+            if key in out:
+                repairs.append(f"reset invalid '{key}' field to []")
+            out[key] = []
+
+    clean_steps: list[dict[str, Any]] = []
+    for i, step in enumerate(out["steps"]):
+        if not isinstance(step, dict):
+            repairs.append(f"step[{i}] was not a dict; dropped")
+            continue
+        step_type = str(step.get("type") or "").strip().lower()
+        if step_type not in _ALLOWED_DRAFT_STEP_TYPES:
+            repairs.append(f"step[{i}] type '{step_type}' converted to 'report'")
+            step = {**step, "type": "report", "description": f"[converted from '{step_type}'] {step.get('description', '')}"}
+        clean_steps.append(step)
+    out["steps"] = clean_steps
+
+    for field in _EXECUTION_FIELDS:
+        if field in out:
+            del out[field]
+            repairs.append(f"stripped execution field '{field}'")
+
+    return out, repairs
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
@@ -46,6 +123,7 @@ class ToolDefinition:
     output_schema: dict[str, Any]
     handler: Callable[..., Any]
     contract: dict[str, Any] = field(default_factory=dict)
+    is_terminal: bool = False
 
 
 @dataclass(frozen=True)
@@ -181,6 +259,7 @@ class ToolRegistry:
             *,
             required_scopes: frozenset[str] | None = None,
             side_effects: frozenset[str] | None = None,
+            is_terminal: bool = False,
         ) -> ToolDefinition:
             return ToolDefinition(
                 name=name,
@@ -192,6 +271,7 @@ class ToolRegistry:
                 input_schema={},
                 output_schema={},
                 handler=handler,
+                is_terminal=is_terminal,
             )
 
         definitions = [
@@ -295,6 +375,51 @@ class ToolRegistry:
                 "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. Returns file_path, waypoint_count, and the plan structure.",
                 PLANNING,
                 self._export_mission,
+            ),
+            # ── Planner loop tools (Phase 5) ──────────────────────────────────
+            tool(
+                "parse_rover_intent",
+                "Parse the operator's mission request into a structured RoverIntent. Call this first in the planner loop to extract intent_type, target, requested_actions, constraints, and missing_information. Pass the original user prompt and the compact context_summary from retrieve_initial_context.",
+                READ_ONLY,
+                self._parse_rover_intent,
+            ),
+            tool(
+                "lazy_load_replay",
+                "Load the active replay session summary for the current request. Returns replay_summary with the most recent session metadata. Call this when the operator's request references prior missions, replay sessions, or recorded data. Available only when replay_reports source control is enabled.",
+                READ_ONLY,
+                self._lazy_load_replay,
+            ),
+            tool(
+                "lazy_load_ai_memory",
+                "Load the AI chat history summary for the current session. Returns chat_history_summary with a bounded view of recent AI conversation context. Call this when the operator references earlier discussions or prior planning sessions.",
+                READ_ONLY,
+                self._lazy_load_ai_memory,
+            ),
+            tool(
+                "lazy_load_settings",
+                "Load the GCS settings summary for the current request. Returns settings_summary with safe configuration metadata. Call this when the operator references configuration, provider routing, or enabled capabilities.",
+                READ_ONLY,
+                self._lazy_load_settings,
+            ),
+            tool(
+                "lazy_load_sensor",
+                "Load sensor and telemetry freshness status. Returns telemetry_fresh and camera_fresh flags. Call this when the operator's request depends on live sensor availability or to flag staleness constraints in the mission draft.",
+                READ_ONLY,
+                self._lazy_load_sensor,
+            ),
+            tool(
+                "request_clarification",
+                "Ask the operator for missing information before drafting a mission. Pass the questions list from parse_rover_intent's missing_information field. Calling this tool signals the graph to pause and surface a clarification card to the operator. Only call this once per planning run.",
+                READ_ONLY,
+                self._request_clarification,
+                is_terminal=True,
+            ),
+            tool(
+                "propose_mission_draft",
+                "Submit the final mission draft. Terminal planning action — call after parse_rover_intent and optional route-planning tools. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. The draft always has execution_allowed=false and required_operator_approval=true.",
+                PLANNING,
+                self._propose_mission_draft,
+                is_terminal=True,
             ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
@@ -850,6 +975,144 @@ class ToolRegistry:
             }
         return self._exporter.export(draft, profile=profile, home_position=home)
 
+    # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
+
+    def _parse_rover_intent(
+        self,
+        context: ToolInvocationContext,
+        prompt: str,
+        context_summary: str = "",
+    ) -> dict[str, Any]:
+        secret_resolver = getattr(getattr(context.runtime, "secret_store", None), "get_secret", None)
+        try:
+            resolved = _resolve_intent_provider(
+                context.runtime.config,
+                secret_resolver=secret_resolver,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"no intent provider: {exc}"}
+        try:
+            result = _IntentService().parse(
+                str(prompt or "").strip(),
+                model=resolved.model,
+                context_summary=str(context_summary or ""),
+                timezone_name=context.timezone_name,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "intent": result["intent"],
+            "parse_errors": result.get("parse_errors") or [],
+        }
+
+    def _lazy_load_replay(self, context: ToolInvocationContext) -> dict[str, Any]:
+        if not context.source_controls.get("replay_reports", True):
+            return {"ok": False, "error": "source_disabled", "source": "replay_reports"}
+        details = context.context_snapshot.get("details") or {}
+        replay = details.get("current_replay") or {}
+        return {"ok": True, "replay_summary": replay, "available": bool(replay)}
+
+    def _lazy_load_ai_memory(self, context: ToolInvocationContext) -> dict[str, Any]:
+        if not context.source_controls.get("ai_chat_history", False):
+            return {"ok": False, "error": "source_disabled", "source": "ai_chat_history"}
+        details = context.context_snapshot.get("details") or {}
+        history = details.get("ai_chat_history") or {}
+        return {"ok": True, "chat_history_summary": history, "available": bool(history)}
+
+    def _lazy_load_settings(self, context: ToolInvocationContext) -> dict[str, Any]:
+        if not context.source_controls.get("settings_config", False):
+            return {"ok": False, "error": "source_disabled", "source": "settings_config"}
+        settings = context.context_snapshot.get("settings") or {}
+        return {"ok": True, "settings_summary": settings, "available": bool(settings)}
+
+    def _lazy_load_sensor(self, context: ToolInvocationContext) -> dict[str, Any]:
+        if not context.source_controls.get("sensor_context", False):
+            return {"ok": False, "error": "source_disabled", "source": "sensor_context"}
+        rover = context.context_snapshot.get("rover") or {}
+        return {
+            "ok": True,
+            "telemetry_fresh": rover.get("telemetry_fresh"),
+            "camera_fresh": rover.get("camera_fresh"),
+            "available": bool(rover),
+        }
+
+    def _request_clarification(
+        self,
+        context: ToolInvocationContext,
+        questions: list,
+        intent_summary: str = "",
+    ) -> dict[str, Any]:
+        # Terminal tool: returning a handoff causes the agent loop to stop with
+        # stop_reason="clarification_requested". The graph routes to prepare_clarification,
+        # which surfaces the card to the operator via interrupt() and then bridges to the
+        # legacy draft generation path on resume.
+        return {
+            "ok": True,
+            "handoff": {
+                "type": "clarification_request",
+                "questions": list(questions or []),
+                "intent_summary": str(intent_summary or ""),
+            },
+        }
+
+    def _propose_mission_draft(
+        self,
+        context: ToolInvocationContext,
+        intent: dict,
+        target_resolution: dict | None = None,
+        rover_position: dict | None = None,
+        draft: dict | None = None,
+        route_artifacts: list | None = None,
+    ) -> dict[str, Any]:
+        # Pure artifact submitter mode: planner provides the draft directly.
+        # Preferred when route-planning tools were called so waypoints are preserved.
+        if draft and isinstance(draft, dict):
+            normalized, repairs = normalize_mission_draft_payload(draft)
+            if route_artifacts and isinstance(route_artifacts, list):
+                normalized["route_artifacts"] = list(route_artifacts)
+            return {
+                "ok": True,
+                "draft": normalized,
+                "repairs": repairs,
+                "source": "planner_submitted",
+            }
+
+        # LLM generation mode: second model generates draft from intent summary.
+        secret_resolver = getattr(getattr(context.runtime, "secret_store", None), "get_secret", None)
+        resolved = None
+        for purpose in ("mission_planner", "general_chat"):
+            try:
+                resolved = _resolve_provider(
+                    context.runtime.config,
+                    purpose=purpose,
+                    secret_resolver=secret_resolver,
+                )
+                break
+            except Exception:
+                continue
+        if resolved is None:
+            return {"ok": False, "error": "no LLM provider available for draft generation"}
+        prompt = _planner_draft_prompt(
+            intent or {},
+            target_resolution or {},
+            rover_position or {},
+        )
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            response = resolved.model.invoke([
+                SystemMessage(content=_PLANNER_DRAFT_SYSTEM_PROMPT),
+                HumanMessage(content=prompt),
+            ])
+            raw_text = str(getattr(response, "content", response) or "")
+            raw_draft = _parse_planner_draft_json(raw_text)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        normalized, repairs = normalize_mission_draft_payload(raw_draft)
+        if route_artifacts and isinstance(route_artifacts, list):
+            normalized["route_artifacts"] = list(route_artifacts)
+        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated"}
+
 
 def _route_hash(waypoints: list[dict[str, Any]]) -> str:
     import hashlib
@@ -865,6 +1128,45 @@ def _snapshot_context(context_snapshot: dict[str, Any] | None) -> dict[str, Any]
         return {}
     snapshot = meta.get("context_snapshot")
     return snapshot if isinstance(snapshot, dict) else {}
+
+
+def _planner_draft_prompt(intent: dict, target_resolution: dict, rover_position: dict) -> str:
+    parts: list[str] = [
+        f"Intent type: {intent.get('intent_type', 'unknown')}",
+        f"Summary: {intent.get('summary', '')}",
+    ]
+    target = intent.get("target") or {}
+    if any(target.get(k) for k in ("description", "kind", "side")):
+        parts.append(f"Requested target: {json.dumps(target)}")
+    if target_resolution.get("ok"):
+        candidates = target_resolution.get("candidates") or target_resolution.get("objects") or []
+        if candidates:
+            parts.append(f"Resolved target candidates (top 3): {json.dumps(candidates[:3])}")
+    actions = intent.get("requested_actions") or []
+    if actions:
+        parts.append(f"Requested actions: {', '.join(str(a) for a in actions)}")
+    constraints = intent.get("constraints") or []
+    if constraints:
+        parts.append(f"Constraints: {', '.join(str(c) for c in constraints)}")
+    missing = intent.get("missing_information") or []
+    if missing:
+        parts.append(f"Missing information (flag as assumption): {', '.join(str(m) for m in missing)}")
+    if rover_position:
+        parts.append(f"Current rover position: {json.dumps(rover_position)}")
+    return "\n".join(parts)
+
+
+def _parse_planner_draft_json(text: str) -> dict:
+    clean = _re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=_re.MULTILINE)
+    clean = _re.sub(r"\s*```$", "", clean, flags=_re.MULTILINE).strip()
+    match = _re.search(r"\{.*\}", clean, _re.DOTALL)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(0))
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
 def _snapshot_source_controls(context_snapshot: dict[str, Any] | None) -> dict[str, bool]:
@@ -994,6 +1296,7 @@ def _with_tool_contract(definition: ToolDefinition) -> ToolDefinition:
         output_schema=dict(contract.get("returns") or {}),
         handler=definition.handler,
         contract=contract,
+        is_terminal=definition.is_terminal,
     )
 
 
@@ -1253,6 +1556,19 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": ["draft_id"],
         "upstream_from_tools": ["plan_route_around_group or plan_route_between (to populate draft waypoints)", "approval interrupt (draft must be approved before calling)"],
         "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},
+        "next_tools": [],
+    },
+    "propose_mission_draft": {
+        "inputs": {
+            "intent": "object — from parse_rover_intent.intent",
+            "target_resolution": "object — from resolve_spatial_target (optional)",
+            "rover_position": "object — rover position override (optional)",
+            "draft": "object — complete draft to submit directly; preferred when route-planning was done (optional)",
+            "route_artifacts": "object[] — route artifacts from plan_route_* tools (optional)",
+        },
+        "required_inputs": ["intent"],
+        "upstream_from_tools": ["parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"],
+        "returns": {"ok": "boolean", "draft": "mission_draft", "repairs": "string[]", "source": "planner_submitted|llm_generated"},
         "next_tools": [],
     },
 }
