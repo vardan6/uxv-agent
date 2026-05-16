@@ -216,7 +216,8 @@ const ROUTING_LABELS = {
 };
 
 const JSON_SECTION_LABELS = {
-  connectivity: 'Connectivity',
+  mqtt: 'MQTT',
+  simulation: 'Simulation',
   video: 'Video',
   appearance: 'Appearance',
   ai_settings: 'AI Settings',
@@ -350,19 +351,6 @@ function readConnectivityFromForm() {
   };
 }
 
-function applyConnectivityPayload(payload = {}) {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Connectivity payload must be a JSON object.');
-  }
-  if (!payload.mqtt || typeof payload.mqtt !== 'object') {
-    throw new Error('Connectivity payload must include an "mqtt" object.');
-  }
-  const simulation = payload.simulation && typeof payload.simulation === 'object' ? payload.simulation : {};
-  fillForm(payload.mqtt, {
-    backend: simulation.backend || settingsEls.simulationBackend.value || '3d-env',
-  });
-}
-
 function fillVideoSettings(video = {}) {
   settingsEls.ingestMode.value = video.ingest_mode || 'mqtt_frames';
   settingsEls.deliveryMode.value = video.delivery_mode || 'websocket_mjpeg';
@@ -418,7 +406,7 @@ async function loadConnectivity() {
   }
   updateSetupBrokerPill(snapshot.broker || { status: 'disconnected', connected: false });
   setSetupStatus(`Current broker target: ${config.mqtt.broker_host}:${config.mqtt.broker_port}.`);
-  setJsonStatus(`Runtime settings file: ${config.settings_path || '-'}. Backend path load/save does not change active runtime settings until Connectivity is saved.`);
+  setJsonStatus(`Runtime settings file: ${config.settings_path || '-'}. Backend path load/save does not change active runtime settings until MQTT or Simulation is saved.`);
 }
 
 async function loadVideoSettings() {
@@ -633,16 +621,6 @@ function setScopePills(toggles) {
 
 function importedSectionPayload(settings, section) {
   if (!settings || typeof settings !== 'object') return undefined;
-  if (section === 'connectivity') {
-    if (settings.connectivity && typeof settings.connectivity === 'object') return settings.connectivity;
-    if (settings.mqtt && typeof settings.mqtt === 'object') {
-      return {
-        mqtt: settings.mqtt,
-        simulation: settings.simulation && typeof settings.simulation === 'object' ? settings.simulation : {},
-      };
-    }
-    return undefined;
-  }
   return Object.prototype.hasOwnProperty.call(settings, section) ? settings[section] : undefined;
 }
 

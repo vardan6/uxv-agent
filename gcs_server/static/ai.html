@@ -51,8 +51,46 @@
             </div>
             <div class="ai-chat-actions">
               <select id="ai-provider-select" title="Chat provider"></select>
-              <button id="ai-rename-session" class="ghost" type="button">Rename</button>
-              <button id="ai-archive-session" class="ghost" type="button">Archive</button>
+              <button
+                id="ai-rename-session"
+                class="ghost ai-chat-icon-btn"
+                type="button"
+                data-tooltip="Rename chat"
+                title="Rename chat"
+                aria-label="Rename chat"
+              >
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 20h9"/>
+                  <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                </svg>
+              </button>
+              <button
+                id="ai-archive-session"
+                class="ghost ai-chat-icon-btn"
+                type="button"
+                data-tooltip="Archive chat"
+                title="Archive chat"
+                aria-label="Archive chat"
+              >
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="3" y="3" width="18" height="5" rx="1"/>
+                  <path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
+                  <path d="M10 12h4"/>
+                </svg>
+              </button>
+              <button
+                id="ai-copy-chat"
+                class="ghost ai-chat-icon-btn"
+                type="button"
+                data-tooltip="Copy chat as markdown (Shift-click for diagnostics)"
+                title="Copy chat as markdown (Shift-click for diagnostics)"
+                aria-label="Copy chat as markdown"
+              >
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="9" y="2" width="10" height="14" rx="2"/>
+                  <path d="M5 6H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/>
+                </svg>
+              </button>
             </div>
           </div>
 

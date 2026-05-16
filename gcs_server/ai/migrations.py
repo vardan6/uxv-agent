@@ -94,10 +94,58 @@ def _migration_002_add_ai_session_meta_json(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE ai_sessions ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
 
 
+def _migration_004_create_ai_mission_controller_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_controller_state (
+          controller_id TEXT PRIMARY KEY,
+          current_version INTEGER NOT NULL DEFAULT 0,
+          active_operation_id TEXT NOT NULL DEFAULT '',
+          active_revision_id TEXT NOT NULL DEFAULT '',
+          active_draft_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'idle',
+          verified_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          previous_verified_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          pending_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          last_cutover_attempt_json TEXT NOT NULL DEFAULT '{}',
+          last_error TEXT NOT NULL DEFAULT '',
+          last_cutover_at REAL,
+          verified_at REAL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_execution_attempts (
+          id TEXT PRIMARY KEY,
+          operation_id TEXT NOT NULL DEFAULT '',
+          revision_id TEXT NOT NULL DEFAULT '',
+          expected_controller_version INTEGER,
+          observed_controller_version INTEGER NOT NULL DEFAULT 0,
+          installed_controller_version INTEGER,
+          status TEXT NOT NULL,
+          error_text TEXT NOT NULL DEFAULT '',
+          request_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_execution_attempts_revision ON ai_mission_execution_attempts(revision_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_execution_attempts_operation ON ai_mission_execution_attempts(operation_id, created_at DESC)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
     (3, "create_ai_mission_execution_tables", _migration_003_create_ai_mission_execution_tables),
+    (4, "create_ai_mission_controller_tables", _migration_004_create_ai_mission_controller_tables),
 )
 
 

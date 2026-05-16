@@ -8,6 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .controller_mission_adapter import (
+    ControllerMissionAdapter,
+    ControllerMissionAdapterState,
+    JsonFileControllerMissionAdapter,
+)
 from .migrations import apply_ai_store_migrations
 
 
@@ -16,7 +21,12 @@ MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
     "awaiting_approval",
     "approved",
     "exported",
+    "cutover_pending",
+    "executing",
 })
+
+MISSION_EXECUTION_READY_STATUSES = frozenset({"approved", "exported", "executing"})
+MISSION_CONTROLLER_ID = "primary"
 
 
 def _json(data: Any) -> str:
@@ -31,6 +41,13 @@ def _load_json(value: str | None) -> Any:
     try:
         return json.loads(value)
     except json.JSONDecodeError:
+        return {}
+
+
+def _load_json_file(path: str) -> Any:
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
         return {}
 
 
@@ -63,7 +80,16 @@ def _canonicalize_mission_payload(draft_payload: dict[str, Any]) -> dict[str, An
 
 def _operation_status_from_revision(status: str) -> str:
     clean = str(status or "").strip().lower()
-    if clean in {"awaiting_approval", "approved", "exported", "rejected", "validation_failed", "needs_clarification"}:
+    if clean in {
+        "awaiting_approval",
+        "approved",
+        "exported",
+        "cutover_pending",
+        "executing",
+        "rejected",
+        "validation_failed",
+        "needs_clarification",
+    }:
         return clean
     return "planning"
 
@@ -217,17 +243,40 @@ def _build_mission_overlay_payload(revision: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class MissionExecutionService:
-    """First backend-owned mission lifecycle boundary.
+def _controller_snapshot_to_public(snapshot: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(snapshot, dict) or not snapshot:
+        return {}
+    return {
+        "controller_version": int(snapshot.get("controller_version") or 0),
+        "operation_id": str(snapshot.get("operation_id") or ""),
+        "revision_id": str(snapshot.get("revision_id") or ""),
+        "draft_id": str(snapshot.get("draft_id") or ""),
+        "captured_at": snapshot.get("captured_at"),
+        "mission_export": snapshot.get("mission_export") if isinstance(snapshot.get("mission_export"), dict) else {},
+        "mission": snapshot.get("mission") if isinstance(snapshot.get("mission"), dict) else {},
+        "plan": snapshot.get("plan") if isinstance(snapshot.get("plan"), dict) else {},
+    }
 
-    This service does not perform controller handoff yet. It owns canonical
-    proposal/revision storage so planning output can move away from draft-only
-    ownership before execution integration lands.
+
+class MissionExecutionService:
+    """Backend-owned mission lifecycle and controller handoff boundary.
+
+    Planning produces semantic proposal artifacts. This service owns the
+    authoritative revision lifecycle, exported mission cutover, controller
+    version checks, and durable verification state.
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        controller_adapter: ControllerMissionAdapter | None = None,
+    ):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
+            self._db_path.parent / "controller_mission_adapter.json"
+        )
         self._init_db()
 
     def create_proposal(
@@ -424,6 +473,401 @@ class MissionExecutionService:
             conn.commit()
         return self.get_revision(revision["id"])
 
+    def execute_revision(
+        self,
+        revision_id: str,
+        *,
+        expected_controller_version: int | None = None,
+    ) -> dict[str, Any]:
+        revision = self.get_revision(str(revision_id or "").strip())
+        if revision is None:
+            return {"ok": False, "status": "revision_not_found", "error": "mission revision not found"}
+
+        status = str(revision.get("status") or "")
+        if status not in MISSION_EXECUTION_READY_STATUSES:
+            return {
+                "ok": False,
+                "status": "revision_not_ready",
+                "error": f"mission revision '{revision['id']}' is not ready for execution (status='{status}')",
+                "revision": revision,
+            }
+
+        mission = dict(revision.get("mission") or {})
+        mission_export = mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {}
+        export_path = str(mission_export.get("file_path") or "").strip()
+        if not export_path:
+            return {
+                "ok": False,
+                "status": "mission_export_missing",
+                "error": "mission revision is missing an exported controller-ready plan",
+                "revision": revision,
+            }
+        plan_file = Path(export_path)
+        if not plan_file.exists():
+            return {
+                "ok": False,
+                "status": "mission_export_missing",
+                "error": f"mission export file does not exist: {export_path}",
+                "revision": revision,
+            }
+
+        plan = _load_json_file(export_path)
+        if not isinstance(plan, dict) or not plan:
+            return {
+                "ok": False,
+                "status": "mission_export_invalid",
+                "error": f"mission export file is not valid JSON plan data: {export_path}",
+                "revision": revision,
+            }
+
+        now = time.time()
+        attempt_id = f"mission-cutover-{uuid.uuid4().hex[:12]}"
+        request_payload = {
+            "revision_id": revision["id"],
+            "operation_id": revision["operation_id"],
+            "draft_id": revision.get("draft_id", ""),
+            "expected_controller_version": expected_controller_version,
+            "adapter": self._controller_adapter.adapter_name,
+        }
+
+        try:
+            adapter_state = self._controller_adapter.get_controller_state()
+        except Exception as exc:
+            adapter_state = ControllerMissionAdapterState(status="unavailable")
+            with self._connect() as conn:
+                controller_row = self._ensure_controller_state_row(conn)
+                observed_version = int(controller_row["current_version"] or 0)
+                self._insert_execution_attempt(
+                    conn,
+                    attempt_id=attempt_id,
+                    revision=revision,
+                    expected_controller_version=expected_controller_version,
+                    observed_controller_version=observed_version,
+                    installed_controller_version=None,
+                    status="cutover_failed",
+                    request_payload=request_payload,
+                    result_payload={"adapter": self._controller_adapter.adapter_name, "stage": "get_controller_state"},
+                    error_text=str(exc),
+                    now=now,
+                )
+                conn.commit()
+            return {
+                "ok": False,
+                "status": "cutover_failed",
+                "error": str(exc),
+                "attempt_id": attempt_id,
+                "revision": revision,
+                "controller_state": self.get_controller_state(),
+            }
+
+        observed_version = int(adapter_state.controller_version or 0)
+        observed_snapshot = adapter_state.to_snapshot()
+
+        with self._connect() as conn:
+            controller_row = self._ensure_controller_state_row(conn)
+            verified_snapshot = observed_snapshot or _load_json(controller_row["verified_snapshot_json"])
+            previous_verified_snapshot = _load_json(controller_row["previous_verified_snapshot_json"])
+
+            if expected_controller_version is not None and int(expected_controller_version) != observed_version:
+                self._project_controller_state(
+                    conn,
+                    adapter_state=adapter_state,
+                    verified_snapshot=verified_snapshot,
+                    previous_verified_snapshot=previous_verified_snapshot,
+                    pending_snapshot={},
+                    last_cutover_attempt={
+                        "attempt_id": attempt_id,
+                        "requested_at": now,
+                        "expected_controller_version": expected_controller_version,
+                        "adapter": self._controller_adapter.adapter_name,
+                    },
+                    last_error="",
+                    last_cutover_at=now,
+                )
+                self._insert_execution_attempt(
+                    conn,
+                    attempt_id=attempt_id,
+                    revision=revision,
+                    expected_controller_version=expected_controller_version,
+                    observed_controller_version=observed_version,
+                    installed_controller_version=None,
+                    status="stale_controller_version",
+                    request_payload=request_payload,
+                    result_payload={
+                        "controller_version": observed_version,
+                        "active_revision_id": adapter_state.revision_id,
+                        "adapter": self._controller_adapter.adapter_name,
+                    },
+                    error_text="expected controller mission version does not match the latest verified version",
+                    now=now,
+                )
+                conn.commit()
+                return {
+                    "ok": False,
+                    "status": "stale_controller_version",
+                    "error": "expected controller mission version does not match the latest verified version",
+                    "controller_state": self.get_controller_state(),
+                    "attempt_id": attempt_id,
+                    "revision": revision,
+                }
+
+            next_version = observed_version + 1
+            pending_snapshot = {
+                "controller_version": next_version,
+                "operation_id": revision["operation_id"],
+                "revision_id": revision["id"],
+                "draft_id": revision.get("draft_id", ""),
+                "captured_at": now,
+                "mission_export": mission_export,
+                "mission": mission,
+                "plan": plan,
+            }
+
+            conn.execute(
+                """
+                UPDATE ai_mission_controller_state
+                SET status = 'verifying',
+                    active_operation_id = ?,
+                    active_revision_id = ?,
+                    active_draft_id = ?,
+                    pending_snapshot_json = ?,
+                    last_cutover_attempt_json = ?,
+                    last_error = '',
+                    last_cutover_at = ?,
+                    updated_at = ?
+                WHERE controller_id = ?
+                """,
+                (
+                    revision["operation_id"],
+                    revision["id"],
+                    revision.get("draft_id", ""),
+                    _json(pending_snapshot),
+                    _json({
+                        "attempt_id": attempt_id,
+                        "requested_at": now,
+                        "expected_controller_version": expected_controller_version,
+                        "adapter": self._controller_adapter.adapter_name,
+                    }),
+                    now,
+                    now,
+                    MISSION_CONTROLLER_ID,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE ai_mission_revisions
+                SET status = 'cutover_pending', updated_at = ?
+                WHERE id = ?
+                """,
+                (now, revision["id"]),
+            )
+            conn.execute(
+                """
+                UPDATE ai_mission_operations
+                SET status = 'cutover_pending', active_revision_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (revision["id"], now, revision["operation_id"]),
+            )
+            conn.commit()
+
+        try:
+            install_result = self._controller_adapter.install_mission(
+                pending_snapshot=pending_snapshot,
+                expected_controller_version=observed_version,
+            )
+        except Exception as exc:
+            install_result = None
+            install_error = str(exc)
+        else:
+            install_error = ""
+
+        final_now = time.time()
+        if install_result is None:
+            with self._connect() as conn:
+                self._project_controller_state(
+                    conn,
+                    adapter_state=adapter_state,
+                    verified_snapshot=verified_snapshot,
+                    previous_verified_snapshot=previous_verified_snapshot,
+                    pending_snapshot={},
+                    last_cutover_attempt={
+                        "attempt_id": attempt_id,
+                        "requested_at": now,
+                        "expected_controller_version": expected_controller_version,
+                        "adapter": self._controller_adapter.adapter_name,
+                    },
+                    last_error=install_error,
+                    last_cutover_at=final_now,
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_revisions
+                    SET status = 'exported', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_now, revision["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_operations
+                    SET status = 'exported', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_now, revision["operation_id"]),
+                )
+                self._insert_execution_attempt(
+                    conn,
+                    attempt_id=attempt_id,
+                    revision=revision,
+                    expected_controller_version=expected_controller_version,
+                    observed_controller_version=observed_version,
+                    installed_controller_version=None,
+                    status="cutover_failed",
+                    request_payload=request_payload,
+                    result_payload={"adapter": self._controller_adapter.adapter_name, "stage": "install_mission"},
+                    error_text=install_error,
+                    now=final_now,
+                )
+                conn.commit()
+            return {
+                "ok": False,
+                "status": "cutover_failed",
+                "error": install_error,
+                "attempt_id": attempt_id,
+                "revision": self.get_revision(revision["id"]),
+                "controller_state": self.get_controller_state(),
+            }
+
+        final_adapter_state = install_result.controller_state
+        final_snapshot = final_adapter_state.to_snapshot() or verified_snapshot
+        result_payload = {
+            "adapter": self._controller_adapter.adapter_name,
+            "verified": bool(install_result.ok),
+            "controller_state": final_adapter_state.to_public_dict(),
+            "adapter_result": install_result.raw_result,
+        }
+
+        if install_result.ok:
+            with self._connect() as conn:
+                self._project_controller_state(
+                    conn,
+                    adapter_state=final_adapter_state,
+                    verified_snapshot=final_snapshot,
+                    previous_verified_snapshot=verified_snapshot,
+                    pending_snapshot={},
+                    last_cutover_attempt={
+                        "attempt_id": attempt_id,
+                        "requested_at": now,
+                        "expected_controller_version": expected_controller_version,
+                        "adapter": self._controller_adapter.adapter_name,
+                    },
+                    last_error="",
+                    last_cutover_at=final_now,
+                    verified_at=final_now,
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_revisions
+                    SET status = 'executing', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_now, revision["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_operations
+                    SET status = 'executing', active_revision_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (revision["id"], final_now, revision["operation_id"]),
+                )
+                self._insert_execution_attempt(
+                    conn,
+                    attempt_id=attempt_id,
+                    revision=revision,
+                    expected_controller_version=expected_controller_version,
+                    observed_controller_version=observed_version,
+                    installed_controller_version=int(final_adapter_state.controller_version or next_version),
+                    status="executing",
+                    request_payload=request_payload,
+                    result_payload=result_payload,
+                    error_text="",
+                    now=final_now,
+                )
+                conn.commit()
+        else:
+            rollback_status = "exported" if install_result.status == "stale_controller_version" else install_result.status
+            with self._connect() as conn:
+                self._project_controller_state(
+                    conn,
+                    adapter_state=final_adapter_state,
+                    verified_snapshot=final_snapshot,
+                    previous_verified_snapshot=previous_verified_snapshot,
+                    pending_snapshot={},
+                    last_cutover_attempt={
+                        "attempt_id": attempt_id,
+                        "requested_at": now,
+                        "expected_controller_version": expected_controller_version,
+                        "adapter": self._controller_adapter.adapter_name,
+                    },
+                    last_error=install_result.error,
+                    last_cutover_at=final_now,
+                    verified_at=final_now if final_snapshot else None,
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_revisions
+                    SET status = 'exported', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_now, revision["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE ai_mission_operations
+                    SET status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (rollback_status, final_now, revision["operation_id"]),
+                )
+                self._insert_execution_attempt(
+                    conn,
+                    attempt_id=attempt_id,
+                    revision=revision,
+                    expected_controller_version=expected_controller_version,
+                    observed_controller_version=observed_version,
+                    installed_controller_version=None,
+                    status=install_result.status,
+                    request_payload=request_payload,
+                    result_payload=result_payload,
+                    error_text=install_result.error or "controller mission read-back verification failed",
+                    now=final_now,
+                )
+                conn.commit()
+            return {
+                "ok": False,
+                "status": install_result.status,
+                "error": install_result.error or "controller mission read-back verification failed",
+                "attempt_id": attempt_id,
+                "revision": self.get_revision(revision["id"]),
+                "controller_state": self.get_controller_state(),
+            }
+
+        return {
+            "ok": True,
+            "status": "executing",
+            "attempt_id": attempt_id,
+            "revision": self.get_revision(revision["id"]),
+            "controller_state": self.get_controller_state(),
+        }
+
+    def get_controller_state(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = self._ensure_controller_state_row(conn)
+            conn.commit()
+        return self._controller_state_from_row(row)
+
     def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -485,6 +929,14 @@ class MissionExecutionService:
             summary = f"{summary} Goal: {goal}."
         if waypoint_count:
             summary = f"{summary} Route waypoints: {waypoint_count}."
+        controller_state = self.get_controller_state()
+        controller_version = int(controller_state.get("controller_version") or 0)
+        controller_status = str(controller_state.get("status") or "")
+        executing_revision_id = str(controller_state.get("active_revision_id") or "")
+        if controller_status:
+            summary = f"{summary} Controller status: {controller_status}."
+        if controller_version:
+            summary = f"{summary} Controller mission version: {controller_version}."
 
         return {
             "active": active,
@@ -503,6 +955,10 @@ class MissionExecutionService:
             "updated_at": row["operation_updated_at"],
             "approved_at": row["approved_at"],
             "rejected_at": row["rejected_at"],
+            "controller_state": controller_state,
+            "controller_status": controller_status,
+            "controller_version": controller_version,
+            "executing_revision_id": executing_revision_id,
         }
 
     def get_revision_overlay(
@@ -563,6 +1019,161 @@ class MissionExecutionService:
             )
             conn.commit()
         return self.get_revision(revision["id"])
+
+    def _ensure_controller_state_row(self, conn: sqlite3.Connection) -> sqlite3.Row:
+        now = time.time()
+        row = conn.execute(
+            """
+            SELECT * FROM ai_mission_controller_state
+            WHERE controller_id = ?
+            """,
+            (MISSION_CONTROLLER_ID,),
+        ).fetchone()
+        if row is not None:
+            return row
+        conn.execute(
+            """
+            INSERT INTO ai_mission_controller_state (
+              controller_id, current_version, active_operation_id, active_revision_id,
+              active_draft_id, status, verified_snapshot_json,
+              previous_verified_snapshot_json, pending_snapshot_json,
+              last_cutover_attempt_json, last_error, last_cutover_at,
+              verified_at, updated_at
+            ) VALUES (?, 0, '', '', '', 'idle', '{}', '{}', '{}', '{}', '', NULL, NULL, ?)
+            """,
+            (MISSION_CONTROLLER_ID, now),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM ai_mission_controller_state
+            WHERE controller_id = ?
+            """,
+            (MISSION_CONTROLLER_ID,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to initialize mission controller state")
+        return row
+
+    def _controller_state_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        verified_snapshot = _load_json(row["verified_snapshot_json"])
+        previous_verified_snapshot = _load_json(row["previous_verified_snapshot_json"])
+        pending_snapshot = _load_json(row["pending_snapshot_json"])
+        last_cutover_attempt = _load_json(row["last_cutover_attempt_json"])
+        version = int(row["current_version"] or 0)
+        status = str(row["status"] or "idle")
+        active_revision_id = str(row["active_revision_id"] or "")
+        summary = f"Controller mission state: {status}."
+        if version:
+            summary = f"{summary} Version: {version}."
+        if active_revision_id:
+            summary = f"{summary} Active revision: {active_revision_id}."
+        return {
+            "available": True,
+            "controller_id": str(row["controller_id"] or MISSION_CONTROLLER_ID),
+            "controller_version": version,
+            "active_operation_id": str(row["active_operation_id"] or ""),
+            "active_revision_id": active_revision_id,
+            "active_draft_id": str(row["active_draft_id"] or ""),
+            "status": status,
+            "summary": summary,
+            "verified_snapshot": _controller_snapshot_to_public(verified_snapshot),
+            "previous_verified_snapshot": _controller_snapshot_to_public(previous_verified_snapshot),
+            "pending_snapshot": _controller_snapshot_to_public(pending_snapshot),
+            "last_cutover_attempt": last_cutover_attempt if isinstance(last_cutover_attempt, dict) else {},
+            "last_error": str(row["last_error"] or ""),
+            "last_cutover_at": row["last_cutover_at"],
+            "verified_at": row["verified_at"],
+            "updated_at": row["updated_at"],
+            "adapter": self._controller_adapter.adapter_name,
+        }
+
+    def _project_controller_state(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        adapter_state: ControllerMissionAdapterState,
+        verified_snapshot: dict[str, Any],
+        previous_verified_snapshot: dict[str, Any],
+        pending_snapshot: dict[str, Any],
+        last_cutover_attempt: dict[str, Any],
+        last_error: str,
+        last_cutover_at: float,
+        verified_at: float | None = None,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE ai_mission_controller_state
+            SET current_version = ?,
+                active_operation_id = ?,
+                active_revision_id = ?,
+                active_draft_id = ?,
+                status = ?,
+                verified_snapshot_json = ?,
+                previous_verified_snapshot_json = ?,
+                pending_snapshot_json = ?,
+                last_cutover_attempt_json = ?,
+                last_error = ?,
+                last_cutover_at = ?,
+                verified_at = ?,
+                updated_at = ?
+            WHERE controller_id = ?
+            """,
+            (
+                int(adapter_state.controller_version or 0),
+                adapter_state.operation_id,
+                adapter_state.revision_id,
+                adapter_state.draft_id,
+                str(adapter_state.status or "idle"),
+                _json(verified_snapshot),
+                _json(previous_verified_snapshot),
+                _json(pending_snapshot),
+                _json(last_cutover_attempt),
+                str(last_error or ""),
+                last_cutover_at,
+                verified_at,
+                time.time(),
+                MISSION_CONTROLLER_ID,
+            ),
+        )
+
+    def _insert_execution_attempt(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        attempt_id: str,
+        revision: dict[str, Any],
+        expected_controller_version: int | None,
+        observed_controller_version: int,
+        installed_controller_version: int | None,
+        status: str,
+        request_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+        error_text: str,
+        now: float,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO ai_mission_execution_attempts (
+              id, operation_id, revision_id, expected_controller_version,
+              observed_controller_version, installed_controller_version, status,
+              error_text, request_json, result_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt_id,
+                revision.get("operation_id", ""),
+                revision.get("id", ""),
+                expected_controller_version,
+                observed_controller_version,
+                installed_controller_version,
+                status,
+                error_text,
+                _json(request_payload),
+                _json(result_payload),
+                now,
+                now,
+            ),
+        )
 
     def _init_db(self) -> None:
         with self._connect() as conn:

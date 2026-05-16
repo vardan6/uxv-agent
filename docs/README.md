@@ -67,6 +67,7 @@ How the system is built.
 | [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
 | [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
 | [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
+| [technical/ai/mission-execution-implementation.md](./technical/ai/mission-execution-implementation.md) | Current `mission_execution` implementation: data model, APIs, execution transition, and remaining gaps |
 | [technical/ai/tool-contract-standard.md](./technical/ai/tool-contract-standard.md) | Mandatory contract fields and rules for every tool in `tool_registry.py` |
 | [technical/ai/route-planning-mission-export-validation.md](./technical/ai/route-planning-mission-export-validation.md) | Manual validation checklist for route planning, approval, and QGC `.plan` export |
 | [other/rover-route-planning-and-mission-export.md](./other/rover-route-planning-and-mission-export.md) | Technical design: VehicleProfile, RoadGraphService, route planning tools, QGC exporter |

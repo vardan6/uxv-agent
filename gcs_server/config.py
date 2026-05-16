@@ -59,6 +59,7 @@ DEFAULT_GCS_SETTINGS["logging"] = {
     "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
     "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
     "agent_trace_dir": "data/agent_traces",
+    "controller_mission_state_path": "data/controller_mission_adapter.json",
     "auto_start_session": True,
 }
 
@@ -144,6 +145,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
 def save_config(config: AppConfig) -> None:
     config.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = copy.deepcopy(config.raw)
+    payload.pop("connectivity", None)
     with open(config.settings_path, "w", encoding="utf-8") as fh:
-        json.dump(config.raw, fh, indent=2)
+        json.dump(payload, fh, indent=2)
         fh.write("\n")
