@@ -33,6 +33,9 @@ const aiState = {
   messageActivityOpen: {},
 };
 
+// Exposed so the map widget module can read the active session without depending on ai.js internals.
+window.__aiGetActiveSessionId = () => aiState.activeSession?.id || '';
+
 const AI_SOURCE_CONTROL_META = {
   project_docs: {
     label: 'Project docs',
@@ -2446,6 +2449,7 @@ async function openSession(sessionId) {
       restoreScrollTop: shouldRestoreScroll ? live.scrollTop : null,
     });
     setAiStatus('Response in progress…', 'ok');
+    document.dispatchEvent(new CustomEvent('ai:session-open', { detail: { sessionId } }));
     return;
   }
 
@@ -2461,6 +2465,7 @@ async function openSession(sessionId) {
     restoreScrollTop: shouldRestoreScroll ? live.scrollTop : null,
   });
   setAiStatus('Ready.', 'ok');
+  document.dispatchEvent(new CustomEvent('ai:session-open', { detail: { sessionId } }));
 }
 
 // Fetch a session's latest data from the server and update its live state and
@@ -2480,6 +2485,7 @@ async function refreshSessionLive(sessionId) {
       restoreScrollTop: live.pinnedToBottom ? null : live.scrollTop,
     });
   }
+  document.dispatchEvent(new CustomEvent('ai:session-refreshed', { detail: { sessionId } }));
   return result.session;
 }
 
