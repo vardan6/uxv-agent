@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
@@ -9,11 +10,49 @@ from uuid import uuid4
 from .data_access import build_data_access_manifest
 from .policy_engine import POLICY_DENIED_STOP_REASON, PolicyEngine
 from .tool_registry import DEFAULT_PERMISSIONS
+from .tool_result_cache import CACHEABLE_TOOL_NAMES, ToolResultCache
 
 
 AI_AGENT_MAX_TOOL_ITERATIONS = 6
 AI_AGENT_MAX_REPEATED_TOOL_FAILURES = 2
 AI_AGENT_REPEATED_TOOL_FAILURE_MESSAGE = "I stopped because the same tool call failed repeatedly."
+
+
+def _prompt_cache_enabled() -> bool:
+    return os.getenv("AI_PROMPT_CACHE_DISABLED", "").strip().lower() not in {"1", "true", "yes"}
+
+
+def _is_anthropic_model(model: Any) -> bool:
+    """Detect ChatAnthropic (possibly wrapped by bind_tools) without importing langchain_anthropic."""
+    candidate = model
+    for attr in ("bound", "llm", "_llm", "model"):
+        inner = getattr(candidate, attr, None)
+        if inner is not None and inner is not candidate:
+            candidate = inner
+            break
+    cls = type(candidate)
+    if cls.__name__ == "ChatAnthropic":
+        return True
+    module = getattr(cls, "__module__", "") or ""
+    return module.startswith("langchain_anthropic")
+
+
+def _build_system_message(system_message_cls: Any, text: str, model: Any) -> Any:
+    """Build a SystemMessage; mark it for Anthropic prompt caching when applicable.
+
+    Anthropic charges full price on the first request and ~10% on subsequent requests
+    that match the cached prefix (5-minute TTL). Marking the first system message with
+    cache_control causes the entire prefix (tools + system) to be cached.
+    OpenAI auto-caches identical prefixes server-side; no marker needed.
+    Other providers receive a plain SystemMessage.
+    """
+    if not text:
+        return system_message_cls(content="")
+    if _prompt_cache_enabled() and _is_anthropic_model(model):
+        return system_message_cls(
+            content=[{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+        )
+    return system_message_cls(content=text)
 
 
 @dataclass(slots=True)
@@ -40,6 +79,7 @@ class AgentToolRuntime:
     data_access_manifest: dict[str, Any]
     granted_scopes: frozenset[str]
     run_mode: str
+    session_id: str = ""
 
 
 class AgentLoopRuntime:
@@ -65,6 +105,11 @@ class AgentLoopRuntime:
         self._tool_calling_unsupported = tool_calling_unsupported
         self._trace_store = trace_store
         self._policy_engine = policy_engine or PolicyEngine()
+        self._tool_result_cache = ToolResultCache()
+
+    @property
+    def tool_result_cache(self) -> ToolResultCache:
+        return self._tool_result_cache
 
     def invoke_with_tools(
         self,
@@ -468,9 +513,12 @@ class AgentLoopRuntime:
                 return None
             raise
 
-        langchain_messages = [SystemMessage(content=self._system_prompt_for_mode(run_mode))]
+        langchain_messages = [
+            _build_system_message(SystemMessage, self._system_prompt_for_mode(run_mode), model)
+        ]
         context_prompt = self._prompt_builder(context_snapshot, run_mode, prompt_tool_calls, tools, manifest)
         if context_prompt:
+            # Per-turn dynamic context (rover pose, telemetry, tool results); not cached.
             langchain_messages.append(SystemMessage(content=context_prompt))
         for message in messages:
             role = message.get("role")
@@ -480,6 +528,7 @@ class AgentLoopRuntime:
             elif role == "assistant":
                 langchain_messages.append(AIMessage(content=content))
 
+        session_id = str(ctx.get("session_id") or "").strip()
         return AgentToolRuntime(
             bound_model=bound_model,
             tool_map={str(tool.name): tool for tool in tools},
@@ -490,6 +539,7 @@ class AgentLoopRuntime:
             data_access_manifest=manifest,
             granted_scopes=frozenset(),
             run_mode=run_mode,
+            session_id=session_id,
         )
 
     def _invoke_tool(self, runtime: AgentToolRuntime, tool_name: str, tool_args: dict[str, Any]) -> tuple[Any, Any]:
@@ -513,10 +563,18 @@ class AgentLoopRuntime:
                 run_mode=runtime.run_mode,
             )
             return {"ok": False, "error": f"tool '{tool_name}' is not available"}, fallback
+        # Cache lookup for read-only, session-stable tools (see tool_result_cache.CACHEABLE_TOOL_NAMES).
+        if tool_name in CACHEABLE_TOOL_NAMES and runtime.session_id:
+            cached = self._tool_result_cache.get(runtime.session_id, tool_name, tool_args)
+            if cached is not None:
+                return cached, policy_decision
         try:
-            return tool.invoke(tool_args), policy_decision
+            result = tool.invoke(tool_args)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}, policy_decision
+        if tool_name in CACHEABLE_TOOL_NAMES and runtime.session_id:
+            self._tool_result_cache.set(runtime.session_id, tool_name, tool_args, result)
+        return result, policy_decision
 
     def _result_from_response(
         self,

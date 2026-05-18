@@ -57,6 +57,8 @@ class WorkbenchGraphState(TypedDict, total=False):
     # ── Draft layer ───────────────────────────────────────────────────────────
     draft: dict
     draft_id: str
+    mission_operation_id: str
+    mission_revision_id: str
     validation: dict
     draft_usage_metadata: dict
     draft_response_metadata: dict

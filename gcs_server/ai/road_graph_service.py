@@ -27,6 +27,21 @@ _COST_MULTIPLIERS: dict[str, float] = {
 }
 
 
+def _group_from_road_id(road_id: str) -> str:
+    clean = str(road_id or "")
+    if clean.startswith("road_plant_a_loop_"):
+        return "plant_a"
+    if clean.startswith("road_plant_b_loop_"):
+        return "plant_b"
+    if clean.startswith("road_plants_connector_"):
+        return "connector"
+    if clean.startswith("road_building_to_plant_"):
+        return "building"
+    if clean.startswith("road_start_hub_to_building_"):
+        return "start_hub"
+    return ""
+
+
 def _dist2d(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
@@ -321,7 +336,7 @@ class RoadGraphService:
                 "b": tuple(float(v) for v in r["centerline"][1]),
                 "width": float(r.get("geometry", {}).get("width", 4.0)),
                 "cost_mult": _COST_MULTIPLIERS.get(cost_key, 1.5),
-                "group": str(r.get("metadata", {}).get("group", "")),
+                "group": str(r.get("metadata", {}).get("group", "")).strip() or _group_from_road_id(str(r.get("id", ""))),
             })
         return roads
 

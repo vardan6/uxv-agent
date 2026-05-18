@@ -103116,7 +103116,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_a"
       }
     },
     {
@@ -103141,7 +103142,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_a"
       }
     },
     {
@@ -103166,7 +103168,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_a"
       }
     },
     {
@@ -103191,7 +103194,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_a"
       }
     },
     {
@@ -103216,7 +103220,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_b"
       }
     },
     {
@@ -103241,7 +103246,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_b"
       }
     },
     {
@@ -103266,7 +103272,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_b"
       }
     },
     {
@@ -103291,7 +103298,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "plant_b"
       }
     },
     {
@@ -103316,7 +103324,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "connector"
       }
     },
     {
@@ -103341,7 +103350,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "connector"
       }
     },
     {
@@ -103366,7 +103376,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "building"
       }
     },
     {
@@ -103391,7 +103402,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "building"
       }
     },
     {
@@ -103416,7 +103428,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "building"
       }
     },
     {
@@ -103441,7 +103454,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "building"
       }
     },
     {
@@ -103466,7 +103480,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "start_hub"
       }
     },
     {
@@ -103491,7 +103506,8 @@
       ],
       "metadata": {
         "drivable": true,
-        "route_planning_cost": "preferred"
+        "route_planning_cost": "preferred",
+        "group": "start_hub"
       }
     }
   ],

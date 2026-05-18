@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import os
 import re
@@ -292,26 +293,6 @@ def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
 
 def _ai_inflight_streams(request_or_socket: Request | WebSocket) -> AIInflightStreamManager:
     return request_or_socket.app.state.ai_inflight_streams
-
-
-def _connectivity_payload(config) -> dict[str, Any]:
-    rover_availability = _rover_availability_policy(config)
-    return {
-        "mqtt": {
-            "broker_host": config.mqtt.get("broker_host", ""),
-            "broker_port": int(config.mqtt.get("broker_port", 1883)),
-            "topic_prefix": config.mqtt.get("topic_prefix", ""),
-            "client_id": config.mqtt.get("client_id", ""),
-            "control_topic": config.mqtt.get("control_topic", "control/manual"),
-            "state_topic": config.mqtt.get("state_topic", "telemetry/state"),
-            "camera_topic": config.mqtt.get("camera_topic", "camera-feed"),
-            "control_hz": int(config.mqtt.get("control_hz", 20)),
-            "rover_availability": rover_availability,
-        },
-        "simulation": {
-            "backend": str(config.simulation.get("backend", "3d-env")) or "3d-env",
-        },
-    }
 
 
 def _resolve_backend_config_path(path_text: str) -> Path:
@@ -680,7 +661,7 @@ def _selected_sections(payload: dict[str, Any]) -> list[str]:
     raw_sections = payload.get("sections", [])
     if not isinstance(raw_sections, list):
         raise HTTPException(status_code=400, detail="sections must be a list")
-    allowed = {"connectivity", "video", "appearance", "ai_settings", "llm_providers", "model_routing"}
+    allowed = {"mqtt", "simulation", "video", "appearance", "ai_settings", "llm_providers", "model_routing"}
     sections = []
     for raw_section in raw_sections:
         section = str(raw_section)
@@ -693,8 +674,10 @@ def _selected_sections(payload: dict[str, Any]) -> list[str]:
 
 def _settings_export_payload(config, sections: list[str]) -> dict[str, Any]:
     out: dict[str, Any] = {"schema_version": 1}
-    if "connectivity" in sections:
-        out["connectivity"] = _connectivity_payload(config)
+    if "mqtt" in sections:
+        out["mqtt"] = dict(config.mqtt)
+    if "simulation" in sections:
+        out["simulation"] = dict(config.simulation)
     if "video" in sections:
         out["video"] = dict(config.video)
     if "appearance" in sections:
@@ -710,25 +693,21 @@ def _settings_export_payload(config, sections: list[str]) -> dict[str, Any]:
 
 
 def _extract_section_payload(payload: dict[str, Any], section: str) -> Any:
-    if section == "connectivity":
-        if "connectivity" in payload and isinstance(payload["connectivity"], dict):
-            return payload["connectivity"]
-        if "mqtt" in payload:
-            return {"mqtt": payload.get("mqtt"), "simulation": payload.get("simulation", {})}
-        return None
     return payload.get(section)
 
 
 def _apply_settings_sections(config, payload: dict[str, Any], sections: list[str]) -> list[str]:
     applied: list[str] = []
-    if "connectivity" in sections:
-        connectivity = _extract_section_payload(payload, "connectivity")
-        if isinstance(connectivity, dict) and isinstance(connectivity.get("mqtt"), dict):
-            config.raw["mqtt"] = dict(connectivity["mqtt"])
-            simulation = connectivity.get("simulation", {})
-            if isinstance(simulation, dict):
-                config.raw.setdefault("simulation", {}).update(simulation)
-            applied.append("connectivity")
+    if "mqtt" in sections:
+        mqtt = _extract_section_payload(payload, "mqtt")
+        if isinstance(mqtt, dict):
+            config.raw["mqtt"] = dict(mqtt)
+            applied.append("mqtt")
+    if "simulation" in sections:
+        simulation = _extract_section_payload(payload, "simulation")
+        if isinstance(simulation, dict):
+            config.raw["simulation"] = dict(simulation)
+            applied.append("simulation")
     if "video" in sections:
         video = _extract_section_payload(payload, "video")
         if isinstance(video, dict):
@@ -990,11 +969,50 @@ async def set_llm_settings(request: Request) -> JSONResponse:
     })
 
 
-def _public_ai_session(session: dict[str, Any], include_messages: bool = False) -> dict[str, Any]:
+def _session_mission_snapshot(runtime: AppRuntime, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None or not str(session_id or "").strip():
+        return (
+            {"active": False, "status": "no_active_mission", "summary": "No backend-owned mission proposal is stored yet."},
+            {"available": False, "status": "no_mission_overlay", "summary": "No mission overlay is available.", "features": [], "waypoint_count": 0, "bounds": None},
+        )
+    try:
+        mission_state = mission_execution.get_current_mission_state(session_id=session_id)
+    except Exception as exc:
+        mission_state = {
+            "active": False,
+            "status": "mission_state_unavailable",
+            "summary": f"Mission state unavailable: {exc}",
+        }
+    try:
+        mission_overlay = mission_execution.get_revision_overlay(session_id=session_id)
+    except Exception as exc:
+        mission_overlay = {
+            "available": False,
+            "status": "mission_overlay_unavailable",
+            "summary": f"Mission overlay unavailable: {exc}",
+            "features": [],
+            "waypoint_count": 0,
+            "bounds": None,
+        }
+    return mission_state, mission_overlay
+
+
+def _public_ai_session(
+    runtime: AppRuntime,
+    session: dict[str, Any],
+    include_messages: bool = False,
+    include_mission_overlay: bool = False,
+) -> dict[str, Any]:
     out = dict(session)
     if not include_messages:
         out.pop("messages", None)
     out["source_controls"] = normalize_source_controls(out.get("source_controls"))
+    session_id = str(out.get("id") or "")
+    mission_state, mission_overlay = _session_mission_snapshot(runtime, session_id)
+    out["mission_state"] = mission_state
+    if include_mission_overlay:
+        out["mission_overlay"] = mission_overlay
     return out
 
 
@@ -1400,7 +1418,7 @@ async def list_ai_sessions(
         include_archived=include_archived,
         archived_only=archived_only,
     )
-    return {"sessions": [_public_ai_session(session) for session in sessions]}
+    return {"sessions": [_public_ai_session(runtime, session) for session in sessions]}
 
 
 @app.post("/api/ai/sessions")
@@ -1415,7 +1433,7 @@ async def create_ai_session(request: Request) -> JSONResponse:
         provider_id=str(payload.get("provider_id", "")),
         source_controls=payload.get("source_controls"),
     )
-    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session)})
 
 
 @app.get("/api/ai/sessions/{session_id}")
@@ -1426,7 +1444,7 @@ async def get_ai_session(session_id: str, request: Request, include_archived: bo
         raise HTTPException(status_code=404, detail="AI session not found")
     if session.get("archived_at") is not None and not include_archived:
         raise HTTPException(status_code=404, detail="AI session not found")
-    return {"session": _public_ai_session(session, include_messages=True)}
+    return {"session": _public_ai_session(runtime, session, include_messages=True, include_mission_overlay=True)}
 
 
 @app.post("/api/ai/sessions/{session_id}/commands")
@@ -1481,7 +1499,7 @@ async def update_ai_session(session_id: str, request: Request) -> JSONResponse:
     )
     if session is None:
         raise HTTPException(status_code=404, detail="AI session not found")
-    return JSONResponse({"ok": True, "session": _public_ai_session(session)})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session)})
 
 
 @app.delete("/api/ai/sessions/{session_id}")
@@ -1498,7 +1516,7 @@ async def restore_ai_session(session_id: str, request: Request) -> JSONResponse:
     if not runtime.ai_store.restore_session(session_id):
         raise HTTPException(status_code=404, detail="AI session not found")
     session = runtime.ai_store.get_session(session_id, include_messages=False)
-    return JSONResponse({"ok": True, "session": _public_ai_session(session or {})})
+    return JSONResponse({"ok": True, "session": _public_ai_session(runtime, session or {})})
 
 
 @app.delete("/api/ai/sessions/{session_id}/purge")
@@ -1827,7 +1845,7 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
         "tool_calls": tool_calls,
         "user_message": user_message,
         "assistant_message": assistant_message,
-        "session": _public_ai_session(session),
+        "session": _public_ai_session(runtime, session),
     })
 
 
@@ -1896,6 +1914,116 @@ async def get_mission_draft(draft_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "draft": draft})
 
 
+@app.get("/api/ai/mission-revisions")
+async def list_mission_revisions(
+    request: Request,
+    session_id: str | None = None,
+    operation_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revisions = mission_execution.list_revisions(
+        session_id=session_id,
+        operation_id=operation_id,
+        status_filter=status,
+        limit=max(1, min(200, limit)),
+    )
+    return JSONResponse({"ok": True, "revisions": revisions, "count": len(revisions)})
+
+
+@app.get("/api/ai/mission-revisions/current")
+async def get_current_mission_revision(request: Request, session_id: str = "") -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    state = mission_execution.get_current_mission_state(session_id=session_id)
+    revision_id = str(state.get("revision_id") or "").strip()
+    revision = mission_execution.get_revision(revision_id) if revision_id else None
+    overlay = mission_execution.get_revision_overlay(session_id=session_id)
+    return JSONResponse({"ok": True, "mission_state": state, "revision": revision, "overlay": overlay})
+
+
+@app.get("/api/ai/mission-revisions/{revision_id}")
+async def get_mission_revision(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revision = mission_execution.get_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="mission revision not found")
+    return JSONResponse({"ok": True, "revision": revision})
+
+
+@app.get("/api/ai/mission-revisions/{revision_id}/overlay")
+async def get_mission_revision_overlay(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revision = mission_execution.get_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="mission revision not found")
+    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(revision_id=revision_id)})
+
+
+@app.get("/api/ai/mission-overlays/current")
+async def get_current_mission_overlay(request: Request, session_id: str = "") -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
+
+
+@app.get("/api/ai/controller-mission")
+async def get_controller_mission_state(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    return JSONResponse({"ok": True, "controller_state": mission_execution.get_controller_state()})
+
+
+@app.post("/api/ai/mission-revisions/{revision_id}/execute")
+async def execute_mission_revision(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    expected_controller_version_raw = payload.get("expected_controller_version") if isinstance(payload, dict) else None
+    expected_controller_version = None
+    if expected_controller_version_raw is not None:
+        try:
+            expected_controller_version = int(expected_controller_version_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_controller_version must be an integer") from None
+    result = mission_execution.execute_revision(
+        revision_id,
+        expected_controller_version=expected_controller_version,
+    )
+    runtime.replay_store.log_runtime_event(
+        "mission_execution_cutover",
+        {
+            "revision_id": revision_id,
+            "status": result.get("status", ""),
+            "ok": bool(result.get("ok")),
+            "attempt_id": result.get("attempt_id", ""),
+            "expected_controller_version": expected_controller_version,
+        },
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
 @app.post("/api/ai/mission-drafts/{draft_id}/approve")
 async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -1904,12 +2032,23 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
     except Exception:
         payload = {}
     note = str(payload.get("note", "") if isinstance(payload, dict) else "")
+    execute_after_approval = bool(payload.get("execute_after_approval", False)) if isinstance(payload, dict) else False
+    expected_controller_version_raw = payload.get("expected_controller_version") if isinstance(payload, dict) else None
+    expected_controller_version = None
+    if expected_controller_version_raw is not None:
+        try:
+            expected_controller_version = int(expected_controller_version_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_controller_version must be an integer") from None
     draft = runtime.mission_draft_service.approve_draft(draft_id, note=note)
     if draft is None:
         raise HTTPException(
             status_code=409,
             detail="draft not found or not in awaiting_approval status",
         )
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is not None:
+        mission_execution.approve_revision_for_draft(draft_id, note=note)
     export_result: dict[str, Any] | None = None
     try:
         result = MissionExportService().export(draft)
@@ -1917,6 +2056,8 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             updated = runtime.mission_draft_service.mark_exported(draft_id, export_result=result)
             if updated is not None:
                 draft = updated
+            if mission_execution is not None:
+                mission_execution.mark_revision_exported(draft_id, export_result=result)
             export_result = {
                 "ok": True,
                 "file_path": result.get("file_path", ""),
@@ -1930,6 +2071,31 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
     response = {"ok": True, "draft": draft}
     if export_result is not None:
         response["mission_export"] = export_result
+    if execute_after_approval:
+        revision = mission_execution.get_revision_by_draft_id(draft_id) if mission_execution is not None else None
+        if revision is None:
+            response["mission_execution"] = {
+                "ok": False,
+                "status": "revision_not_found",
+                "error": "approved draft does not have a mission revision to execute",
+            }
+        else:
+            execution_result = mission_execution.execute_revision(
+                str(revision.get("id") or ""),
+                expected_controller_version=expected_controller_version,
+            )
+            runtime.replay_store.log_runtime_event(
+                "mission_execution_cutover",
+                {
+                    "revision_id": revision.get("id", ""),
+                    "draft_id": draft_id,
+                    "status": execution_result.get("status", ""),
+                    "ok": bool(execution_result.get("ok")),
+                    "attempt_id": execution_result.get("attempt_id", ""),
+                    "expected_controller_version": expected_controller_version,
+                },
+            )
+            response["mission_execution"] = execution_result
     return JSONResponse(response)
 
 
@@ -1947,6 +2113,9 @@ async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
             status_code=409,
             detail="draft not found or not in a rejectable status",
         )
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is not None:
+        mission_execution.reject_revision_for_draft(draft_id, note=note)
     return JSONResponse({"ok": True, "draft": draft})
 
 
@@ -2095,14 +2264,9 @@ async def save_settings_sections_to_path(request: Request) -> JSONResponse:
         section_payload = _extract_section_payload(settings_payload, section)
         if section_payload is None:
             continue
-        if section == "connectivity":
-            if isinstance(section_payload, dict) and isinstance(section_payload.get("mqtt"), dict):
-                merged["mqtt"] = section_payload["mqtt"]
-                if isinstance(section_payload.get("simulation"), dict):
-                    merged["simulation"] = section_payload["simulation"]
-            merged["connectivity"] = section_payload
-        else:
-            merged[section] = section_payload
+        merged[section] = section_payload
+    if "mqtt" in sections or "simulation" in sections:
+        merged.pop("connectivity", None)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     with open(resolved_path, "w", encoding="utf-8") as fh:
         json.dump(merged, fh, indent=2)
@@ -2122,8 +2286,17 @@ async def apply_settings_sections(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="settings object is required")
     applied = _apply_settings_sections(runtime.config, settings_payload, sections)
     save_config(runtime.config)
-    if "connectivity" in applied:
+    if "mqtt" in applied:
         await runtime.reconfigure_mqtt(runtime.config.mqtt)
+    if "simulation" in applied:
+        simulation = runtime.config.simulation
+        runtime.replay_store.update_backend(
+            str(simulation.get("backend", "3d-env")),
+            str(simulation.get("backend_version", "dev")),
+        )
+        runtime.replay_store.rollover_session(reason=f"backend_change:{simulation.get('backend', '3d-env')}")
+        runtime.replay_store.log_runtime_event("simulation_backend_changed", dict(simulation))
+        await runtime.ws_manager.broadcast({"type": "simulation_config", "data": simulation})
     if "video" in applied:
         video = runtime.config.video
         await runtime.state_store.set_video_modes(
@@ -2288,65 +2461,6 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         "mqtt": runtime.config.mqtt,
         "settings_path": str(runtime.config.settings_path),
     })
-
-
-@app.post("/api/connectivity/load-from-path")
-async def load_connectivity_from_path(request: Request) -> JSONResponse:
-    payload = await request.json()
-    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
-    if not resolved_path.exists():
-        raise HTTPException(status_code=404, detail="config file not found")
-
-    config = load_config(resolved_path)
-    result = _connectivity_payload(config)
-    result["resolved_path"] = str(resolved_path)
-    return JSONResponse(result)
-
-
-@app.post("/api/connectivity/save-to-path")
-async def save_connectivity_to_path(request: Request) -> JSONResponse:
-    payload = await request.json()
-    resolved_path = _resolve_backend_config_path(str(payload.get("path", "")))
-
-    mqtt_payload = payload.get("mqtt")
-    simulation_payload = payload.get("simulation")
-    if not isinstance(mqtt_payload, dict):
-        raise HTTPException(status_code=400, detail="mqtt object is required")
-    if simulation_payload is not None and not isinstance(simulation_payload, dict):
-        raise HTTPException(status_code=400, detail="simulation must be an object")
-
-    existing = _load_existing_json_dict(resolved_path)
-    mqtt_out = dict(existing.get("mqtt", {})) if isinstance(existing.get("mqtt"), dict) else {}
-    mqtt_out.update({
-        "broker_host": str(mqtt_payload.get("broker_host", "")).strip(),
-        "broker_port": _parse_int_field(mqtt_payload.get("broker_port", 1883), "broker_port"),
-        "topic_prefix": str(mqtt_payload.get("topic_prefix", "")).strip(),
-        "client_id": str(mqtt_payload.get("client_id", "")).strip(),
-        "control_topic": str(mqtt_payload.get("control_topic", "control/manual")).strip(),
-        "state_topic": str(mqtt_payload.get("state_topic", "telemetry/state")).strip(),
-        "camera_topic": str(mqtt_payload.get("camera_topic", "camera-feed")).strip(),
-        "control_hz": _parse_int_field(mqtt_payload.get("control_hz", 20), "control_hz"),
-    })
-    mqtt_out["rover_availability"] = _rover_availability_policy_from_mqtt(mqtt_payload)
-    existing["mqtt"] = mqtt_out
-
-    simulation_out = dict(existing.get("simulation", {})) if isinstance(existing.get("simulation"), dict) else {}
-    simulation_backend = str((simulation_payload or {}).get("backend", simulation_out.get("backend", "3d-env"))).strip() or "3d-env"
-    simulation_out["backend"] = simulation_backend
-    existing["simulation"] = simulation_out
-
-    resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(resolved_path, "w", encoding="utf-8") as fh:
-        json.dump(existing, fh, indent=2)
-        fh.write("\n")
-
-    return JSONResponse({
-        "ok": True,
-        "resolved_path": str(resolved_path),
-        "mqtt": mqtt_out,
-        "simulation": {"backend": simulation_backend},
-    })
-
 
 @app.get("/api/replay/sessions")
 async def replay_sessions(
@@ -2609,6 +2723,7 @@ async def replay_page() -> FileResponse:
 
 if __name__ == "__main__":
     config = load_config()
+    print(f"[gcs_server] Starting at {datetime.now().astimezone().isoformat()}", flush=True)
     uvicorn.run(
         app,
         host=str(config.gcs["host"]),

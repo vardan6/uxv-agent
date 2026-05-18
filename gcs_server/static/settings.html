@@ -423,8 +423,13 @@
                     <p class="settings-note">Export sections</p>
                     <div class="json-scope-list" aria-label="Export JSON sections">
                       <label class="json-scope-item">
-                        <input class="json-export-toggle" type="checkbox" value="connectivity" checked>
-                        <span><strong>Connectivity</strong><span>MQTT and simulator backend.</span></span>
+                        <input class="json-export-toggle" type="checkbox" value="mqtt" checked>
+                        <span><strong>MQTT</strong><span>Broker, topic, and control-loop settings.</span></span>
+                        <span class="pill">on</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-export-toggle" type="checkbox" value="simulation" checked>
+                        <span><strong>Simulation</strong><span>Backend identity and backend metadata.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
@@ -463,8 +468,13 @@
                     <p class="settings-note">Import and apply sections</p>
                     <div class="json-scope-list" aria-label="Import JSON sections">
                       <label class="json-scope-item">
-                        <input class="json-import-toggle" type="checkbox" value="connectivity" checked>
-                        <span><strong>Connectivity</strong><span>Unchecked or missing sections stay unchanged.</span></span>
+                        <input class="json-import-toggle" type="checkbox" value="mqtt" checked>
+                        <span><strong>MQTT</strong><span>Unchecked or missing sections stay unchanged.</span></span>
+                        <span class="pill">safe</span>
+                      </label>
+                      <label class="json-scope-item">
+                        <input class="json-import-toggle" type="checkbox" value="simulation" checked>
+                        <span><strong>Simulation</strong><span>Apply only when backend settings exist in the loaded file.</span></span>
                         <span class="pill">safe</span>
                       </label>
                       <label class="json-scope-item">

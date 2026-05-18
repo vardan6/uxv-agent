@@ -1,155 +1,268 @@
 # Glossary
 
-Shared vocabulary used across Remote Rover docs and code. When the same term appears in multiple docs, this is the canonical definition.
+Shared vocabulary used across Remote Rover docs and code. When the same
+term appears in multiple docs, this is the canonical definition.
 
 ## Active GCS Presence
 
-A retained MQTT presence record published by a GCS instance with a recent timestamp. The simulator uses these records to decide whether to publish telemetry in `auto` mode. See [Architecture](./technical/architecture.md#telemetry-publishing-policy).
+A retained MQTT presence record published by a GCS instance with a recent
+timestamp. The simulator uses these records to decide whether to publish
+telemetry in `auto` mode. See
+[Architecture](./technical/architecture.md#telemetry-publishing-policy).
 
 ## Agent Mode
 
-A `/ai` run mode where the model can call read-only tools (rover state, scene queries, replay analytics) before answering. No approval gate. See [AI Workbench Experience](./product/ai-experience.md#agent).
+The primary `/ai` operator mode. The model can use bounded tools, compact
+live context, and approval/clarification surfaces when needed. Over time
+this is intended to absorb most separate AI interactions that used to be
+framed as distinct modes.
 
 ## ADR (Architectural Decision Record)
 
-A short document recording a significant architectural choice, the alternatives considered, and the consequences. Stored in [decisions/](./decisions/).
+A short document recording a significant architectural choice, the
+alternatives considered, and the consequences. Stored in
+[decisions/](./decisions/).
 
 ## AI Session
 
-A persistent conversation with a configured LLM provider, identified by `session_id`. Stores messages, current-context snapshots, and provider metadata. Modes: Chat, Agent, Intent Test, Workbench.
-
-## Approval Gate
-
-A point in the LangGraph Workbench graph where execution pauses (via `interrupt()`) and waits for explicit operator approve / reject input.
+A persistent conversation with a configured LLM provider, identified by
+`session_id`. Stores messages, current-context snapshots, provider
+metadata, and source-control state. User-facing modes are Chat and Agent.
 
 ## Approval Card
 
-The amber UI element shown when the Workbench graph has paused at an approval gate. Contains the proposed draft and Approve / Reject buttons.
+The amber UI element shown when the planning shell has paused at a draft
+approval step. Contains the proposed draft and Approve / Reject buttons.
+
+## Approval Gate
+
+A durable human-in-the-loop pause where the system waits for explicit
+operator approve / reject input before continuing a planning flow.
 
 ## Backend Identity
 
-A configuration value identifying which simulator backend (`3d-env` or `rover-sim-next`) is currently active. Persisted in shared config and reflected in telemetry.
+A configuration value identifying which simulator backend (`3d-env` or
+`rover-sim-next`) is currently active. Persisted in shared config and
+reflected in telemetry.
 
 ## Bootstrap Video Path
 
-The current MQTT-frame → WebSocket-MJPEG video delivery path. Functional for development and demos; not the intended production media transport.
+The current MQTT-frame to WebSocket-MJPEG video delivery path. Functional
+for development and demos, but not the intended long-term media transport.
 
 ## Chat Mode
 
-A `/ai` run mode for plain conversation. No tools, no approval gate. Used for general questions and provider testing.
+A simpler `/ai` mode for plain conversation. No tools, no approval gates.
+Useful today for provider testing and lightweight fallback behavior. Long
+term it may remain as a narrow testing path while Agent becomes the main
+operator-facing mode.
 
 ## Checkpointer
 
-The LangGraph mechanism for persisting graph state at super-step boundaries. Required for durable human-in-the-loop resume. Currently `MemorySaver` (in-process). See [decisions/0004-langgraph-checkpointer-choice.md](./decisions/0004-langgraph-checkpointer-choice.md).
+The LangGraph mechanism for persisting graph state at super-step
+boundaries. Required for durable human-in-the-loop resume. Currently
+`MemorySaver` (in-process). See
+[decisions/0004-langgraph-checkpointer-choice.md](./decisions/0004-langgraph-checkpointer-choice.md).
 
 ## Clarification Card
 
-The amber UI element shown when the Workbench graph has paused at a clarification gate. Lists missing-information items with text-answer fields and Continue / Cancel buttons.
+The amber UI element shown when the planning shell has paused to ask for
+missing information. Lists missing-information items with Continue / Cancel
+controls.
 
 ## Clarification Gate
 
-A point in the LangGraph Workbench graph where execution pauses to ask the operator for missing information identified during intent parsing. Rover pose and scene are refreshed on resume.
+A durable human-in-the-loop pause used when the agent needs more operator
+input before it can continue safely or produce a valid draft.
 
 ## Command Staging
 
-A planned but not implemented step that would queue an approved mission's individual commands for explicit operator review before publication. Distinct from workbench draft approval. Requires a separate safety design.
+A planned but not implemented step that would queue an approved mission's
+individual commands for explicit operator review before publication.
+Distinct from draft approval. Requires a separate safety design.
+
+## Compact Context
+
+The small always-on live context block injected at the start of a run
+before larger retrieval surfaces are used.
 
 ## Controller Lock
 
-The single-controller ownership boundary. Only the focused, visible dashboard browser holds the lock and may publish control frames. Releasing focus releases the lock.
+The single-controller ownership boundary. Only the focused, visible
+dashboard browser holds the lock and may publish control frames. Releasing
+focus releases the lock.
 
 ## Current Context Layer
 
-The compact set of live structured facts (rover state, runtime, settings, scene summary, replay summary) injected into every AI prompt before any RAG retrieval. See [technical/ai/context-layer.md](./technical/ai/context-layer.md).
+The compact set of live structured facts (rover state, runtime, settings,
+scene summary, replay summary) injected into AI prompts before larger
+retrieval is used. See
+[technical/ai/context-layer.md](./technical/ai/context-layer.md).
+
+## Draft Approval
+
+Operator approval of a non-executing planning artifact. Distinct from any
+future execution approval.
 
 ## Execution Allowed
 
-A boolean field on mission drafts, forced to `false` by the service layer. No code path currently flips this to `true`. Distinct from `requires_operator_approval`.
+A boolean field on mission drafts, forced to `false` by the service layer.
+No code path currently flips this to `true`. Distinct from
+`requires_operator_approval`.
+
+## Execution Approval
+
+A separate future approval step that would authorize staged execution.
+Currently not implemented.
 
 ## GCS
 
-Ground Control Station — the FastAPI + browser application in `gcs_server/` that operators use to monitor and control the rover.
+Ground Control Station — the FastAPI + browser application in
+`gcs_server/` that operators use to monitor and control the rover.
 
 ## Intent
 
-A structured interpretation of a natural-language operator request, with fields like `intent_type`, `target`, `area`, `requires_rover_motion`, `missing_information`. Produced by `IntentService` from the operator's prompt.
+A structured interpretation of a natural-language operator request, with
+fields like `intent_type`, `target`, `area`, `requires_rover_motion`,
+`missing_information`. Produced by `IntentService` from the operator's
+prompt.
 
-## Intent Test Mode
+## Intent Test
 
-A `/ai` run mode that runs intent parsing and target resolution but takes no further action. Useful for debugging and operator pre-flight checks.
+A diagnostic parsing path that runs intent parsing and target resolution
+without taking further action. Useful for debugging and pre-flight checks.
+It should be treated as a tooling/debug surface, not a permanent primary
+mode of the product.
+
+## Lazy Retrieval
+
+On-demand loading of larger *stored* information (replay reports, AI
+memory, settings, sensor metadata) only when needed for the current run,
+instead of front-loading it into every prompt. A subset of [On-Demand
+Tools](#on-demand-tools), which also includes pure-computation tools that
+do not load stored data.
 
 ## Mission Draft
 
-A structured plan generated by Workbench. Always created with `execution_allowed: false`. Has an approval status (pending / approved / rejected / superseded).
+A structured non-executing plan produced by the planning capability of the
+agent. Always created with `execution_allowed: false`. Has an approval
+status such as pending, approved, rejected, or superseded.
 
 ## Model Routing
 
-The mapping from AI purpose (General Chat, Mission Planner, Rover Intent Parser, Reporter, Embeddings, Vision) to a primary and fallback LLM provider. Persisted in shared GCS config.
+The mapping from AI purpose (General Chat, Mission Planner, Rover Intent
+Parser, Reporter, Embeddings, Vision) to a primary and fallback LLM
+provider. Persisted in shared GCS config.
 
 ## NDJSON Stream
 
-The streaming response format for `/ai` Workbench and Agent endpoints. Each line is a JSON object describing one event (token delta, tool call, interrupt, final message).
+The streaming response format for AI endpoints. Each line is a JSON object
+describing one event such as a token delta, tool call, interrupt, or final
+message.
 
 ## On-Demand Tools
 
-Read-only tools the AI can call to retrieve larger or computed data not in the always-on context (object queries, replay analytics, scene details). Registered through `ToolRegistry`.
+Tools the AI can call to retrieve larger or computed data not kept in the
+always-on context. Registered through `ToolRegistry`.
 
 ## Permission Class
 
-A label on a registered tool indicating what category of action it represents: `read_only`, `analysis`, `planning`. The classes `command_staging` and `execution` are explicitly rejected by the registry.
+A label on a registered tool indicating what category of action it
+represents: `read_only`, `analysis`, `planning`. The classes
+`command_staging` and `execution` are explicitly rejected by the registry.
+
+## Planning Shell
+
+The durable wrapper around the shared agent runtime that handles
+clarification pauses, draft approval, and other human-in-the-loop workflow
+steps. Implemented in code under the `workbench_*` namespace
+(`workbench_graph.py`, `WorkbenchGraphState`, `WorkbenchGraphRuntime`,
+`/workbench/stream`) — the code identifiers are historical and not
+exposed in product surfaces.
 
 ## Presence Topic
 
-The MQTT topic where GCS instances publish retained presence records. Default: `{topic_prefix}/gcs/presence/{gcs_id}`.
+The MQTT topic where GCS instances publish retained presence records.
+Default: `{topic_prefix}/gcs/presence/{gcs_id}`.
 
 ## Provider
 
-A configured LLM endpoint (OpenAI, OpenAI-compatible, Ollama, Anthropic, Gemini, Mistral, NVIDIA NIM, OpenRouter, LM Studio, Custom HTTP). Each provider has a display name, base URL, model ID, secret reference, capabilities, and enabled state.
+A configured LLM endpoint (OpenAI, OpenAI-compatible, Ollama, Anthropic,
+Gemini, Mistral, NVIDIA NIM, OpenRouter, LM Studio, Custom HTTP). Each
+provider has a display name, base URL, model ID, secret reference,
+capabilities, and enabled state.
 
 ## Provider Override
 
-A per-session AI Chat setting that pins the session to a specific provider, ignoring the model routing for the session's purpose.
+A per-session AI setting that pins the session to a specific provider,
+ignoring normal routing for that session.
 
 ## Purpose
 
-A semantic role assigned to an LLM provider via model routing. Current purposes: General Chat, Rover Intent Parser, Mission Planner, Reporter, Embeddings, Vision / Object Description.
+A semantic role assigned to an LLM provider via model routing. Current
+purposes: General Chat, Rover Intent Parser, Mission Planner, Reporter,
+Embeddings, Vision / Object Description.
 
 ## RAG
 
-Retrieval-Augmented Generation. A planned but not implemented chat-grounding mechanism for project docs, mission history, semantic object definitions, reports, and operator notes. Reserved for semantic knowledge — never used for exact live state or map geometry. See [decisions/0003-rag-scope-vs-live-context.md](./decisions/0003-rag-scope-vs-live-context.md).
+Retrieval-Augmented Generation. A planned but not implemented
+chat-grounding mechanism for project docs, mission history, semantic object
+definitions, reports, and operator notes. Reserved for semantic knowledge,
+not exact live state or geometry. See
+[decisions/0003-rag-scope-vs-live-context.md](./decisions/0003-rag-scope-vs-live-context.md).
 
 ## Read-Only Agent
 
-Agent Mode operating with only `read_only` and `analysis` permission tools — no planning, no command staging, no execution.
+Agent behavior operating with only `read_only` and `analysis` permission
+tools — no planning, no command staging, no execution.
 
 ## Replay Session
 
-A recorded period of GCS runtime persisted in SQLite. Contains telemetry, control frames, runtime events, and camera timing metadata. Inspectable via the `/replay` page.
+A recorded period of GCS runtime persisted in SQLite. Contains telemetry,
+control frames, runtime events, and camera timing metadata. Inspectable
+via the `/replay` page.
 
 ## Rover Intent Parser
 
-The LLM purpose / service responsible for converting a natural-language operator prompt into a structured intent. Implemented as `IntentService` with structured-output parsing and a single repair attempt.
+The LLM purpose / service responsible for converting a natural-language
+operator prompt into a structured intent. Implemented as `IntentService`
+with structured-output parsing and a single repair attempt.
 
 ## Scene Map / Terrain Scene Manifest
 
-The single source of truth for static world geometry: terrain heightfield, roads, spawn points, pads, solar panels, building parts, trees, rocks. Stored at `config/terrain_scene.v1.json`. Consumed by both simulator and GCS.
+The single source of truth for static world geometry: terrain
+heightfield, roads, spawn points, pads, solar panels, building parts,
+trees, rocks. Stored at `config/terrain_scene.v1.json`. Consumed by both
+simulator and GCS.
 
 ## SpatialQueryService
 
-The deterministic geometry service that answers questions like "objects in front of the rover," "objects within radius," "nearest object by kind." Backed by the scene manifest and rover pose.
+The deterministic geometry service that answers questions like "objects in
+front of the rover," "objects within radius," and "nearest object by
+kind." Backed by the scene manifest and rover pose.
 
 ## Telemetry Policy
 
-The simulator's outbound publishing rule. Values: `auto` (publish only when an active GCS is fresh), `force_on`, `force_off`.
+The simulator's outbound publishing rule. Values: `auto` (publish only
+when an active GCS is fresh), `force_on`, `force_off`.
 
 ## Tool Registry
 
-The permissioned per-request registry that exposes read-only and planning tools to AI Chat / Agent / Workbench. Rejects `command_staging` and `execution` permission classes at registration time.
+The permissioned per-request registry that exposes tools to the AI
+runtime. Rejects `command_staging` and `execution` permission classes at
+registration time.
 
 ## Two-Approval Model
 
-The boundary that separates **workbench draft approval** (the operator says "this draft is acceptable") from **execution approval** (the operator says "publish these commands to the rover"). Currently only the first exists. See [decisions/0002-two-approval-model.md](./decisions/0002-two-approval-model.md).
+The boundary that separates draft approval ("this planning artifact is
+acceptable") from execution approval ("publish these commands to the
+rover"). Currently only the first exists. See
+[decisions/0002-two-approval-model.md](./decisions/0002-two-approval-model.md).
 
-## Workbench Mode
+## Universal Agent Runtime
 
-A `/ai` run mode that runs the LangGraph planning graph: capture → context → parse intent → (clarify) → resolve target → draft → validate → store → approval gate → finalize. Non-executing.
+The shared bounded reasoning loop that should power chat, grounded
+investigation, planning, and future specialist behaviors. Project-specific
+capabilities are added through tools, policy, memory, and workflow shells
+around this core.
+

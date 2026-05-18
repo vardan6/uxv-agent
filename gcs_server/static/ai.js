@@ -331,6 +331,7 @@ const aiEls = {
   sourcesPopoverCount: document.getElementById('ai-sources-popover-count'),
   renameSession: document.getElementById('ai-rename-session'),
   archiveSession: document.getElementById('ai-archive-session'),
+  copyChat: document.getElementById('ai-copy-chat'),
   messageList: document.getElementById('ai-message-list'),
   messageForm: document.getElementById('ai-message-form'),
   messageInput: document.getElementById('ai-message-input'),
@@ -584,6 +585,57 @@ function messageStats(message) {
   if (tokPerSec != null) parts.push(fmtTokPerSec(tokPerSec));
   if (showFinish) parts.push(`[${finishReason}]`);
   return parts.join(' · ');
+}
+
+function buildChatMarkdown(session, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const live = liveStateFor(session.id);
+  const messages = (live?.messages || []).filter((m) => String(m.content || '').trim());
+  const title = session.title || 'New chat';
+  const when = formatAiTime(session.updated_at || session.created_at) || '';
+  const lines = [`# Chat: ${title}${when ? ` — ${when}` : ''}`, ''];
+
+  for (const message of messages) {
+    if (message.role === 'user') {
+      lines.push('## You', '', String(message.content).trim(), '');
+      continue;
+    }
+    if (message.role === 'assistant') {
+      const provider = providerNameForMessage(message);
+      const mode = messageRunMode(message);
+      const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
+      let header = `## Assistant (${provider}${modeLabel})`;
+      if (includeDiagnostics) {
+        const diag = [];
+        if (message.model_id) diag.push(message.model_id);
+        if (message.latency_ms) diag.push(`${message.latency_ms} ms`);
+        const stats = messageStats(message);
+        if (stats) diag.push(stats);
+        if (diag.length) header += ` — ${diag.join(' · ')}`;
+      }
+      lines.push(header, '', String(message.content).trim(), '');
+
+      if (includeDiagnostics) {
+        const tools = agentToolCalls(message);
+        if (tools.length) {
+          lines.push('<details><summary>Agent activity</summary>', '');
+          for (const call of tools) {
+            const name = call.name || call.tool || 'tool';
+            const status = call.status ? ` [${call.status}]` : '';
+            const args = summarizeAgentToolArgs(call.args || call.arguments);
+            const result = summarizeAgentToolResult(call.result);
+            const argPart = args ? ` — ${args}` : '';
+            const resPart = result ? ` → ${result}` : '';
+            lines.push(`- ${name}${status}${argPart}${resPart}`);
+          }
+          lines.push('', '</details>', '');
+        }
+      }
+      continue;
+    }
+    lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
+  }
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
 function agentToolCalls(message) {
@@ -1336,6 +1388,7 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
   const safeThreadId = escapeHtml(threadId);
   const goal = escapeHtml(String(payload.goal || payload.summary || ''));
   const draftId = escapeHtml(String(payload.draft_id || ''));
+  const revisionId = escapeHtml(String(payload.mission_revision_id || ''));
   const risks = Array.isArray(payload.risks) ? payload.risks : [];
   const routeSummary = payload.route_summary && typeof payload.route_summary === 'object' ? payload.route_summary : {};
   const waypointCount = Number(routeSummary.waypoint_count || 0);
@@ -1350,6 +1403,7 @@ function renderWorkbenchApprovalCard(sessionId, interrupt) {
     <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
       <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
       ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
+      ${revisionId ? `<div class="ai-approval-row"><span class="ai-approval-label">Revision ID</span><span class="ai-approval-value">${revisionId}</span></div>` : ''}
       ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
       ${routeLabel ? `<div class="ai-approval-row"><span class="ai-approval-label">Route</span><span class="ai-approval-value">${escapeHtml(routeLabel)}</span></div>` : ''}
       ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
@@ -1859,8 +1913,17 @@ function renderSessionList() {
   }
   aiEls.sessionList.innerHTML = sessions.map((session) => {
     const active = aiState.activeSession?.id === session.id ? ' active' : '';
-    const preview = session.last_message || 'No messages yet';
+    const missionState = session.mission_state && typeof session.mission_state === 'object' ? session.mission_state : {};
+    const missionStatus = String(missionState.status || '').trim();
+    const missionGoal = String(missionState.goal || '').trim();
+    const missionPreview = missionStatus && missionStatus !== 'no_active_mission'
+      ? `Mission ${missionStatus.replace(/_/g, ' ')}${missionGoal ? ` · ${missionGoal}` : ''}`
+      : '';
+    const preview = missionPreview || session.last_message || 'No messages yet';
     const isEditing = aiState.editingSessionId === session.id;
+    const missionMeta = missionStatus && missionStatus !== 'no_active_mission'
+      ? ` · mission ${missionStatus.replace(/_/g, ' ')}`
+      : '';
     return `
       <div class="ai-session-row${active}" tabindex="0" data-session-id="${escapeHtml(session.id)}" aria-label="Open ${escapeHtml(session.title || 'New chat')}">
         <span class="ai-session-row-main">
@@ -1889,7 +1952,7 @@ function renderSessionList() {
             >✕</button>
           </span>
         </span>
-        <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg</span>
+        <span class="ai-session-row-meta">${escapeHtml(formatAiTime(session.updated_at))} · ${session.message_count || 0} msg${escapeHtml(missionMeta)}</span>
         <span class="ai-session-row-preview">${escapeHtml(preview)}</span>
       </div>
     `;
@@ -1939,8 +2002,26 @@ function renderMessages(options = {}) {
   aiEls.sessionTitle.textContent = aiState.activeSession?.title || 'New chat';
   aiEls.renameSession.disabled = !aiState.activeSession;
   aiEls.archiveSession.disabled = !aiState.activeSession;
-  aiEls.archiveSession.textContent = viewingArchived ? 'Restore' : 'Archive';
-  aiEls.archiveSession.title = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
+  const archiveSvg = `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="3" width="18" height="5" rx="1"/>
+      <path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
+      <path d="M10 12h4"/>
+    </svg>`;
+  const restoreSvg = `
+    <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 12a9 9 0 1 0 3-6.7"/>
+      <path d="M3 4v5h5"/>
+    </svg>`;
+  aiEls.archiveSession.innerHTML = viewingArchived ? restoreSvg : archiveSvg;
+  const archiveLabel = viewingArchived ? 'Restore this archived chat' : 'Archive this chat';
+  aiEls.archiveSession.title = archiveLabel;
+  aiEls.archiveSession.dataset.tooltip = archiveLabel;
+  aiEls.archiveSession.setAttribute('aria-label', archiveLabel);
+  if (aiEls.copyChat) {
+    const hasContent = messages.some((m) => String(m.content || '').trim());
+    aiEls.copyChat.disabled = !aiState.activeSession || !hasContent;
+  }
   aiEls.retryResponse.disabled = !aiState.activeSession || sending || !messages.length || viewingArchived;
   aiEls.stopMessage.disabled = !sending || !activeLive?.abortController;
   aiEls.retryResponse.title = 'Retry the last model response without adding a new user message.';
@@ -3231,6 +3312,30 @@ function bindAi() {
   });
   aiEls.renameSession.addEventListener('click', () => renameSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.archiveSession.addEventListener('click', () => archiveSession().catch((error) => setAiStatus(error.message, 'danger')));
+  aiEls.copyChat?.addEventListener('click', (event) => {
+    const session = aiState.activeSession;
+    if (!session) return;
+    const includeDiagnostics = Boolean(event.shiftKey || event.altKey);
+    const md = buildChatMarkdown(session, { includeDiagnostics });
+    if (!md.trim()) {
+      setAiStatus('Nothing to copy yet.', 'warn');
+      return;
+    }
+    navigator.clipboard.writeText(md).then(() => {
+      const live = liveStateFor(session.id);
+      const count = (live?.messages || []).filter((m) => String(m.content || '').trim()).length;
+      const flavor = includeDiagnostics ? ' with diagnostics' : '';
+      const originalHtml = aiEls.copyChat.innerHTML;
+      const originalTooltip = aiEls.copyChat.dataset.tooltip || '';
+      aiEls.copyChat.innerHTML = aiCheckIcon();
+      aiEls.copyChat.dataset.tooltip = 'Copied!';
+      setTimeout(() => {
+        aiEls.copyChat.innerHTML = originalHtml;
+        aiEls.copyChat.dataset.tooltip = originalTooltip;
+      }, 1500);
+      setAiStatus(`Copied ${count} message${count === 1 ? '' : 's'} as markdown${flavor}.`, 'ok');
+    }).catch((error) => setAiStatus(`Copy failed: ${error.message || error}`, 'danger'));
+  });
   aiEls.providerSelect.addEventListener('change', () => updateSessionProvider().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.sourceControls?.addEventListener('change', (event) => {
     const input = event.target.closest('[data-source-control]');

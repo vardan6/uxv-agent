@@ -216,7 +216,8 @@ const ROUTING_LABELS = {
 };
 
 const JSON_SECTION_LABELS = {
-  connectivity: 'Connectivity',
+  mqtt: 'MQTT',
+  simulation: 'Simulation',
   video: 'Video',
   appearance: 'Appearance',
   ai_settings: 'AI Settings',
@@ -229,6 +230,7 @@ let modelRouting = {};
 let editingFallbackPurpose = null;
 let pendingJsonImport = null;
 let llmProviderSort = { key: 'display_name', direction: 'asc' };
+let editingProviderId = '';
 
 function setSetupStatus(text) {
   if (settingsEls.setupStatus) settingsEls.setupStatus.textContent = text;
@@ -349,19 +351,6 @@ function readConnectivityFromForm() {
   };
 }
 
-function applyConnectivityPayload(payload = {}) {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Connectivity payload must be a JSON object.');
-  }
-  if (!payload.mqtt || typeof payload.mqtt !== 'object') {
-    throw new Error('Connectivity payload must include an "mqtt" object.');
-  }
-  const simulation = payload.simulation && typeof payload.simulation === 'object' ? payload.simulation : {};
-  fillForm(payload.mqtt, {
-    backend: simulation.backend || settingsEls.simulationBackend.value || '3d-env',
-  });
-}
-
 function fillVideoSettings(video = {}) {
   settingsEls.ingestMode.value = video.ingest_mode || 'mqtt_frames';
   settingsEls.deliveryMode.value = video.delivery_mode || 'websocket_mjpeg';
@@ -417,7 +406,7 @@ async function loadConnectivity() {
   }
   updateSetupBrokerPill(snapshot.broker || { status: 'disconnected', connected: false });
   setSetupStatus(`Current broker target: ${config.mqtt.broker_host}:${config.mqtt.broker_port}.`);
-  setJsonStatus(`Runtime settings file: ${config.settings_path || '-'}. Backend path load/save does not change active runtime settings until Connectivity is saved.`);
+  setJsonStatus(`Runtime settings file: ${config.settings_path || '-'}. Backend path load/save does not change active runtime settings until MQTT or Simulation is saved.`);
 }
 
 async function loadVideoSettings() {
@@ -632,16 +621,6 @@ function setScopePills(toggles) {
 
 function importedSectionPayload(settings, section) {
   if (!settings || typeof settings !== 'object') return undefined;
-  if (section === 'connectivity') {
-    if (settings.connectivity && typeof settings.connectivity === 'object') return settings.connectivity;
-    if (settings.mqtt && typeof settings.mqtt === 'object') {
-      return {
-        mqtt: settings.mqtt,
-        simulation: settings.simulation && typeof settings.simulation === 'object' ? settings.simulation : {},
-      };
-    }
-    return undefined;
-  }
   return Object.prototype.hasOwnProperty.call(settings, section) ? settings[section] : undefined;
 }
 
@@ -825,7 +804,7 @@ function providerOptions(selectedId = '', category = '') {
 function readProviderForm() {
   const authMode = settingsEls.llmAuthMode.value;
   const payload = {
-    id: settingsEls.llmProviderId.value || undefined,
+    id: editingProviderId || undefined,
     display_name: settingsEls.llmDisplayName.value.trim(),
     provider_type: settingsEls.llmProviderType.value,
     auth_mode: authMode,
@@ -853,7 +832,8 @@ function templateKeyForProvider(provider = {}) {
 }
 
 function fillProviderForm(provider = {}) {
-  settingsEls.llmProviderId.value = provider.id || '';
+  editingProviderId = provider.id || '';
+  settingsEls.llmProviderId.value = editingProviderId;
   settingsEls.llmProviderTemplate.value = templateKeyForProvider(provider);
   settingsEls.llmDisplayName.value = provider.display_name || '';
   settingsEls.llmProviderType.value = provider.provider_type || 'openai_compatible';
@@ -1071,8 +1051,10 @@ async function loadLlmSettings() {
 async function saveProvider(event) {
   event.preventDefault();
   const provider = readProviderForm();
-  const url = provider.id ? `/api/llm-providers/${encodeURIComponent(provider.id)}` : '/api/llm-providers';
-  const method = provider.id ? 'PUT' : 'POST';
+  const providerExists = provider.id && llmProviders.some((item) => item.id === provider.id);
+  const url = providerExists ? `/api/llm-providers/${encodeURIComponent(provider.id)}` : '/api/llm-providers';
+  const method = providerExists ? 'PUT' : 'POST';
+  if (!providerExists) delete provider.id;
   const result = await readJson(url, {
     method,
     headers: { 'Content-Type': 'application/json' },

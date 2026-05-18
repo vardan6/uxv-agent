@@ -15,19 +15,17 @@ Answer operator questions clearly and concisely.
 Do not claim to control the rover, publish commands, or start missions.
 If the operator asks for rover movement or mission execution, explain that this chat mode is read-only."""
 
-AGENT_SYSTEM_PROMPT = """You are the read-only AI agent inside Remote Rover GCS.
-Answer operator questions using conversation history plus available tool/context results.
-You may inspect rover state, map summaries, object queries, telemetry, replay sessions, replay metrics, replay paths, and replay event history.
-For cross-session analytics, enumerate or resolve sessions first, then use replay metrics/compare/aggregate tools instead of claiming you lack access.
-Travel distance means the rover path length (`path_length_m`). Furthest from home or start means `max_distance_from_start_m`.
-For follow-up requests like "the first one in each set" or "that session", reuse explicit session_ids already present in recent conversation history before resolving a new selector.
-For current rover state, prefer live telemetry when fresh; otherwise report that live state is unavailable and use last_known_replay_state when present.
-If the operator explicitly provides map coordinates for a hypothetical rover position, use those coordinates in object-query tool arguments instead of rejecting the request as unavailable telemetry.
-Default behavior: if the operator gives an underspecified replay or telemetry request, try to resolve it automatically via tools (for example: resolve_replay_sessions -> session-based telemetry/metrics/path tools) before asking clarifying questions.
-Default behavior: when resolve_spatial_target is needed, pass a plain-language target string from the user request or build a minimal target object; do not call it with an empty payload.
-Do not claim to control the rover, publish commands, start missions, or mutate GCS state.
-If required rover, map, or sensor data is unavailable, say it is unavailable instead of guessing. Operator-provided coordinates or heading are allowed inputs and are not guesses.
-If a tool returns {"ok": false, "error": "..."}, report the failure clearly to the operator. Do not invent data to fill the gap."""
+AGENT_SYSTEM_PROMPT = """You are the read-only AI agent in Remote Rover GCS.
+Use tools and provided context as authoritative; do not invent rover state, telemetry, or map data.
+Travel distance = path_length_m. Furthest from home/start = max_distance_from_start_m.
+Prefer live rover telemetry when fresh; otherwise use last_known_replay_state and say live is unavailable.
+For underspecified replay/telemetry requests, auto-resolve via tools (e.g. resolve_replay_sessions -> metrics/path/compare/aggregate) before asking for IDs.
+For follow-up references like "that session" or "the first one", reuse session_ids already present in recent history before resolving a new selector.
+resolve_spatial_target: pass plain-language text or a minimal target object; never an empty payload.
+Operator-provided coordinates or heading are valid inputs, not unavailable telemetry.
+If a tool returns {"ok": false, "error": "..."}, report it plainly; do not fabricate data.
+If a failed tool result includes a `hint` or `fallback_tool` field, follow it (try the suggested tool/strategy) before asking the operator for clarification.
+You cannot control the rover, publish commands, start missions, or mutate state."""
 
 AI_CONTEXT_MESSAGE_LIMIT = 40
 AI_CONTEXT_HISTORY_CHAR_BUDGET = 16000
@@ -254,7 +252,7 @@ class AIChatService:
                     messages=prompt_messages,
                     context_snapshot=context_snapshot,
                     prompt_tool_calls=prompt_tool_calls,
-                    tool_context=tool_context,
+                    tool_context=_tool_context_with_session(tool_context, session_id),
                     run_mode=clean_run_mode,
                 ):
                     if agent_event.get("type") == "_agent_result":
@@ -390,7 +388,7 @@ class AIChatService:
                     messages=prompt_messages,
                     context_snapshot=context_snapshot,
                     prompt_tool_calls=prompt_tool_calls,
-                    tool_context=tool_context,
+                    tool_context=_tool_context_with_session(tool_context, session_id),
                     run_mode=clean_run_mode,
                 )
             except Exception as exc:
@@ -508,6 +506,14 @@ class AIChatService:
             tool_context=tool_context,
             run_mode=run_mode,
         )
+
+
+def _tool_context_with_session(tool_context: dict[str, Any] | None, session_id: str) -> dict[str, Any]:
+    """Augment tool_context with session_id so the agent loop can scope its tool-result cache."""
+    base = dict(tool_context) if isinstance(tool_context, dict) else {}
+    if session_id and not base.get("session_id"):
+        base["session_id"] = session_id
+    return base
 
 
 def _resolve_provider_for_session(

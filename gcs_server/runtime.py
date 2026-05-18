@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
+    from gcs_server.ai.controller_mission_adapter import JsonFileControllerMissionAdapter
     from gcs_server.ai.mission_draft_service import MissionDraftService
+    from gcs_server.ai.mission_execution_service import MissionExecutionService
     from gcs_server.ai.secret_store import SecretStore
     from gcs_server.ai.session_store import AISessionStore
     from gcs_server.config import AppConfig, ROOT_DIR
@@ -17,7 +19,9 @@ try:
     from gcs_server.telemetry import normalize_telemetry
     from gcs_server.ws import WebSocketManager
 except ModuleNotFoundError:
+    from ai.controller_mission_adapter import JsonFileControllerMissionAdapter
     from ai.mission_draft_service import MissionDraftService
+    from ai.mission_execution_service import MissionExecutionService
     from ai.secret_store import SecretStore
     from ai.session_store import AISessionStore
     from config import AppConfig, ROOT_DIR
@@ -60,6 +64,7 @@ class AppRuntime:
     replay_analytics: ReplayAnalyticsService
     ai_store: AISessionStore
     mission_draft_service: MissionDraftService
+    mission_execution_service: MissionExecutionService
     secret_store: SecretStore
     ai_executor: ThreadPoolExecutor
 
@@ -86,6 +91,15 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     )
     ai_store = AISessionStore(db_path=ai_sessions_db_path)
     mission_draft_service = MissionDraftService(db_path=ai_sessions_db_path)
+    controller_mission_adapter = JsonFileControllerMissionAdapter(
+        state_path=_resolve_replay_db_path(
+            config.logging.get("controller_mission_state_path", "data/controller_mission_adapter.json")
+        )
+    )
+    mission_execution_service = MissionExecutionService(
+        db_path=ai_sessions_db_path,
+        controller_adapter=controller_mission_adapter,
+    )
     replay_analytics = ReplayAnalyticsService(replay_store)
     secret_store = SecretStore(
         db_path=_resolve_replay_db_path(config.logging.get("llm_secrets_db_path", "data/gcs_llm_secrets.sqlite3")),
@@ -129,6 +143,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         replay_analytics=replay_analytics,
         ai_store=ai_store,
         mission_draft_service=mission_draft_service,
+        mission_execution_service=mission_execution_service,
         secret_store=secret_store,
         ai_executor=ai_executor,
     )

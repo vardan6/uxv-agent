@@ -954,13 +954,50 @@ def store_draft(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="store_exception")],
         }
 
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    mission_operation_id = ""
+    mission_revision_id = ""
+    mission_errors: list[dict[str, Any]] = []
+    if mission_execution is not None:
+        try:
+            revision = mission_execution.create_proposal(
+                session_id=state.get("session_id", ""),
+                source_message_id=state.get("source_message_id", ""),
+                draft_id=stored.get("id", ""),
+                intent=intent,
+                target_resolution=state.get("target_resolution") or {},
+                draft_payload=stored.get("draft") or draft,
+                validation=stored.get("validation") or state.get("validation") or {},
+                draft_status=stored.get("status", ""),
+                review_context={
+                    "goal": (stored.get("draft") or draft).get("goal", ""),
+                    "risks": (stored.get("draft") or draft).get("risks") or [],
+                    "approval_scope": "planning_artifact_only",
+                },
+            )
+            mission_operation_id = str(revision.get("operation_id") or "")
+            mission_revision_id = str(revision.get("id") or "")
+        except Exception as exc:
+            mission_errors.append({
+                "node": "store_draft",
+                "code": "mission_execution_store_error",
+                "severity": "warning",
+                "message": str(exc),
+                "recoverable": True,
+            })
+
     return {
         "draft_id": stored.get("id", ""),
+        "mission_operation_id": mission_operation_id,
+        "mission_revision_id": mission_revision_id,
         "approval_status": stored.get("status", ""),
+        "errors": mission_errors,
         "node_trace": [_node_entry(
             "store_draft", ok=True,
             draft_id=stored.get("id", ""),
             status=stored.get("status", ""),
+            mission_operation_id=mission_operation_id or None,
+            mission_revision_id=mission_revision_id or None,
         )],
     }
 
@@ -1351,6 +1388,8 @@ def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfi
     approval_payload = {
         "type": "workbench_draft_approval",
         "draft_id": draft_id,
+        "mission_operation_id": state.get("mission_operation_id", ""),
+        "mission_revision_id": state.get("mission_revision_id", ""),
         "goal": draft.get("goal", ""),
         "risks": draft.get("risks") or [],
         "route_summary": _route_summary_for_approval(draft),
@@ -1391,6 +1430,19 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             }],
             "node_trace": [_node_entry("record_approval", ok=False, reason=str(exc))],
         }
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    mission_errors: list[dict[str, Any]] = []
+    if mission_execution is not None:
+        try:
+            mission_execution.approve_revision_for_draft(draft_id, note=note)
+        except Exception as exc:
+            mission_errors.append({
+                "node": "record_approval",
+                "code": "mission_execution_approval_error",
+                "severity": "warning",
+                "message": str(exc),
+                "recoverable": True,
+            })
     mission_export: dict[str, Any] = {}
     export_error = ""
     if approved and _route_summary_for_approval(approved.get("draft") or {}).get("waypoint_count"):
@@ -1406,11 +1458,22 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                     "waypoint_count": result.get("waypoint_count", 0),
                     "vehicle_type": result.get("vehicle_type", 0),
                 }
+                if mission_execution is not None:
+                    try:
+                        mission_execution.mark_revision_exported(draft_id, export_result=result)
+                    except Exception as exc:
+                        mission_errors.append({
+                            "node": "record_approval",
+                            "code": "mission_execution_export_sync_error",
+                            "severity": "warning",
+                            "message": str(exc),
+                            "recoverable": True,
+                        })
             else:
                 export_error = str(result.get("error") or "mission export failed")
         except Exception as exc:
             export_error = str(exc)
-    errors = []
+    errors = mission_errors
     if export_error:
         errors.append({
             "node": "record_approval",
@@ -1449,8 +1512,22 @@ def record_rejection(state: WorkbenchGraphState, config: RunnableConfig) -> dict
             }],
             "node_trace": [_node_entry("record_rejection", ok=False, reason=str(exc))],
         }
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    mission_errors: list[dict[str, Any]] = []
+    if mission_execution is not None:
+        try:
+            mission_execution.reject_revision_for_draft(draft_id, note=note)
+        except Exception as exc:
+            mission_errors.append({
+                "node": "record_rejection",
+                "code": "mission_execution_rejection_error",
+                "severity": "warning",
+                "message": str(exc),
+                "recoverable": True,
+            })
     return {
         "approval_status": "rejected",
+        "errors": mission_errors,
         "node_trace": [_node_entry("record_rejection", ok=True, draft_id=draft_id)],
     }
 

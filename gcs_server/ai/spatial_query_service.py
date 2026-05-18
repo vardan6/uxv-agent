@@ -12,6 +12,11 @@ class SpatialQueryService:
         for obj in _objects(scene):
             kind = str(obj.get("kind") or "unknown")
             kinds[kind] = kinds.get(kind, 0) + 1
+        route_groups = sorted({
+            str(road.get("group") or "").strip()
+            for road in list(scene.get("roads") or [])
+            if isinstance(road, dict) and str(road.get("group") or "").strip()
+        })
         return {
             "available": True,
             "backend": scene.get("backend"),
@@ -19,6 +24,7 @@ class SpatialQueryService:
             "terrain_size": scene.get("terrain_size"),
             "bounds": scene.get("bounds"),
             "road_count": len(scene.get("roads") or []),
+            "route_groups": route_groups,
             "object_count": len(_objects(scene)),
             "object_kinds": kinds,
             "spawn": scene.get("spawn"),

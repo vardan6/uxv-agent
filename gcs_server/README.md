@@ -10,6 +10,18 @@
 
 It is a Python FastAPI application with a static frontend. It connects to the same MQTT broker as the simulator, subscribes to rover telemetry and camera topics, publishes control commands, and serves a browser UI for monitoring and manual driving.
 
+## AI Status
+
+Current implementation reality:
+- the live `/ai` product still exposes separate Chat and read-only Agent modes
+- planning still uses a legacy Workbench-named shell for non-executing mission drafts
+- `/intent <prompt>` and `/plan <prompt>` remain compatibility entry points for older intent/planning flows
+- `AgentLoopRuntime` exists and powers Agent chat now
+- backend-owned mission revision storage, overlay APIs, controller-version tracking, and execution-transition APIs now exist under `mission_execution`
+- the new execution boundary now uses an injected controller adapter seam for install/read-back verification while SQLite remains the durable audit/projection store
+- the default adapter is still local file-backed rather than MAVLink/autopilot-backed; real external controller transport is still the next slice
+- the broader "one universal Agent" architecture is the target direction, not the fully completed default state yet
+
 ## Current Features
 
 - Live telemetry dashboard
@@ -31,17 +43,20 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - Theme controls with persisted mode + light/dark theme variants
 - LLM provider settings, provider checks, and purpose-based model routing
 - `/ai` provider-backed Chat and read-only Agent modes with persistent SQLite sessions
-- `/ai` `Intent Test` mode for non-executing structured rover-task parsing
-- `/ai` Workbench mode for non-executing mission-draft planning and approval (see `../docs/technical/gcs/workbench-mode.md`)
+- `/ai` structured rover-task intent parsing via `/intent <prompt>`
+- `/ai` legacy Workbench-named planning shell for non-executing mission-draft planning and approval via `/plan <prompt>` (see `../docs/technical/gcs/workbench-mode.md`)
+- backend-owned mission revision APIs, mission overlay APIs, and controller-mission state APIs
+- mission execution cutover API with optimistic controller-version checks and durable verification/rollback state
 - Streaming AI chat responses, retry, archive/restore, purge, session search, and per-session provider override
-- AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, and mission placeholder state
-- Chat/Agent/Intent Test/Workbench composer mode toggle
+- AI Chat live current-context injection for rover telemetry, runtime state, settings, LLM provider/routing summaries, scene-map facts, replay summaries, mission revision state, and controller mission state
+- Chat/Agent composer mode toggle
 - Read-only Agent mode tools for current rover state, scene summary, front/near/by-kind object queries, mission state, and replay analytics
 - Source-controlled bounded retrieval surfaces for replay reports, AI chat history, safe settings/config sections, and sensor/video metadata
 - Shared AI-agent data-access manifest across Agent chat and Workbench planning
 - Thin `PolicyEngine` seam for tool-call evaluation with trace-visible policy decisions
 - Foldable in-message Agent activity panel showing live thinking/activity state, bounded iteration trace, tool calls, tool arguments/results, policy decisions, and prompt-context injections
 - Structured rover intent parsing, target resolution hints, and mission-draft approval foundation
+- SQLite-backed `mission_execution` subsystem with canonical mission revisions, controller mission snapshot state, execution attempts, compare-and-swap version checks, and a first durable execution transition
 
 ## Current Limitations
 
@@ -51,7 +66,8 @@ It is a Python FastAPI application with a static frontend. It connects to the sa
 - MQTT settings are persisted to local shared config only (no secrets manager)
 - Live dashboard map is not implemented yet
 - Replay currently covers telemetry, control, runtime events, and camera timing metadata; recorded video playback is not implemented yet
-- AI Chat, Agent, Intent Test, and Workbench are non-executing today; intent parsing, mission-draft approval foundation, shared agent traces, shared data-access manifest, Phase 3 policy seam, and Phase 4 bounded non-RAG lazy retrieval/source controls are implemented, while RAG/web-grounding and rover-agent command workflows remain deferred
+- AI Chat and Agent remain non-executing today; Workbench planning remains draft-first; `mission_execution` now owns backend mission lifecycle and a local execution-transition boundary, but external controller/MAVLink handoff is still not implemented
+- the newer universal-agent design is only partially migrated into the default runtime; legacy planning-shell behavior still exists and has not yet been fully retired
 
 ## Dependencies
 
@@ -130,7 +146,8 @@ Main config sections it consumes:
   },
   "logging": {
     "replay_db_path": "data/gcs_replay.sqlite3",
-    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3"
+    "ai_sessions_db_path": "data/gcs_ai_sessions.sqlite3",
+    "controller_mission_state_path": "data/controller_mission_adapter.json"
   },
   "llm_providers": [],
   "model_routing": {}

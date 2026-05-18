@@ -10,6 +10,24 @@ SCENE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "terrain
 DEFAULT_GRID_SIZE = 128
 
 
+def _road_group(road: dict[str, Any]) -> str:
+    metadata_group = str(road.get("metadata", {}).get("group", "")).strip()
+    if metadata_group:
+        return metadata_group
+    road_id = str(road.get("id", ""))
+    if road_id.startswith("road_plant_a_loop_"):
+        return "plant_a"
+    if road_id.startswith("road_plant_b_loop_"):
+        return "plant_b"
+    if road_id.startswith("road_plants_connector_"):
+        return "connector"
+    if road_id.startswith("road_building_to_plant_"):
+        return "building"
+    if road_id.startswith("road_start_hub_to_building_"):
+        return "start_hub"
+    return ""
+
+
 def _to_tuples(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_to_tuples(item) for item in value)
@@ -134,6 +152,7 @@ def get_scene_map_payload(backend: str = "3d-env", grid_size: int = DEFAULT_GRID
                 "from": {"x": road["centerline"][0][0], "y": road["centerline"][0][1], "z": road["centerline"][0][2]},
                 "to": {"x": road["centerline"][1][0], "y": road["centerline"][1][1], "z": road["centerline"][1][2]},
                 "width": road["geometry"]["width"],
+                "group": _road_group(road),
             }
             for road in config["roads"]
         ],

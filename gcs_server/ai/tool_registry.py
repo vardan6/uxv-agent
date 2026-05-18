@@ -632,7 +632,11 @@ class ToolRegistry:
 
     def _get_current_mission_state(self, context: ToolInvocationContext) -> dict[str, Any]:
         mission = context.context_snapshot.get("mission")
-        return dict(mission) if isinstance(mission, dict) else AIContextService(context.runtime).get_current_mission_state()
+        return (
+            dict(mission)
+            if isinstance(mission, dict)
+            else AIContextService(context.runtime).get_current_mission_state(session_id=context.session_id)
+        )
 
     def _get_current_replay_summary(self, context: ToolInvocationContext) -> dict[str, Any]:
         return AIContextService(context.runtime).get_current_replay_summary()
@@ -904,7 +908,26 @@ class ToolRegistry:
         known = self._road_graph.known_groups()
         clean_group = str(group_id).strip()
         if clean_group not in known:
-            return {"ok": False, "error": f"unknown group '{clean_group}'; known groups: {known}"}
+            scene_may_be_loading = not known
+            if scene_may_be_loading:
+                hint = (
+                    "No route groups are registered for this scene yet — the road graph may still be "
+                    "building. Either retry once, or use plan_route_between with explicit start/goal "
+                    "targets resolved via resolve_spatial_target."
+                )
+            else:
+                hint = (
+                    f"'{clean_group}' is not a registered route group. Pick one of known_groups, "
+                    "or use plan_route_between with explicit targets."
+                )
+            return {
+                "ok": False,
+                "error": f"unknown group '{clean_group}'",
+                "known_groups": known,
+                "scene_may_be_loading": scene_may_be_loading,
+                "fallback_tool": "plan_route_between",
+                "hint": hint,
+            }
         result = self._road_graph.route_to_then_around_then_back(x, y, clean_group)
         if result.get("ok"):
             result["route_hash"] = _route_hash(result.get("waypoints", []))

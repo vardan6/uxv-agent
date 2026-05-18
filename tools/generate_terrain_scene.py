@@ -85,30 +85,38 @@ def road_segments(scene_layout: dict[str, Any]) -> list[dict[str, Any]]:
 
     roads: list[dict[str, Any]] = []
 
-    def add_segment(road_id: str, p0: list[float], p1: list[float], z0: float, z1: float) -> None:
+    def add_segment(
+        road_id: str,
+        p0: list[float],
+        p1: list[float],
+        z0: float,
+        z1: float,
+        *,
+        group: str,
+    ) -> None:
         roads.append({
             "id": road_id,
             "kind": "road",
             "geometry": {"type": "corridor", "width": scene_layout["roads"]["width"], "feather": scene_layout["roads"]["feather"]},
             "centerline": [[round(p0[0], 6), round(p0[1], 6), round(z0, 6)], [round(p1[0], 6), round(p1[1], 6), round(z1, 6)]],
-            "metadata": {"drivable": True, "route_planning_cost": "preferred"},
+            "metadata": {"drivable": True, "route_planning_cost": "preferred", "group": group},
         })
 
     for idx, (p0, p1) in enumerate(polyline_segments(loop_a)):
-        add_segment(f"road_plant_a_loop_{idx}", p0, p1, pa["floor_z"], pa["floor_z"])
+        add_segment(f"road_plant_a_loop_{idx}", p0, p1, pa["floor_z"], pa["floor_z"], group="plant_a")
     for idx, (p0, p1) in enumerate(polyline_segments(loop_b)):
-        add_segment(f"road_plant_b_loop_{idx}", p0, p1, pb["floor_z"], pb["floor_z"])
+        add_segment(f"road_plant_b_loop_{idx}", p0, p1, pb["floor_z"], pb["floor_z"], group="plant_b")
 
-    for prefix, nodes in (
-        ("road_plants_connector", [(connect_plants[0], pa["floor_z"]), (connect_plants[1], -2.3), (connect_plants[2], pb["floor_z"])]),
-        ("road_building_to_plant_a", [(connect_building_a[0], bld["floor_z"]), (connect_building_a[1], -2.5), (connect_building_a[2], pa["floor_z"])]),
-        ("road_building_to_plant_b", [(connect_building_b[0], bld["floor_z"]), (connect_building_b[1], -2.2), (connect_building_b[2], pb["floor_z"])]),
-        ("road_start_hub_to_building", [(connect_start_hub[0], hub["floor_z"]), (connect_start_hub[1], -1.2), (connect_start_hub[2], bld["floor_z"])]),
+    for prefix, group, nodes in (
+        ("road_plants_connector", "connector", [(connect_plants[0], pa["floor_z"]), (connect_plants[1], -2.3), (connect_plants[2], pb["floor_z"])]),
+        ("road_building_to_plant_a", "building", [(connect_building_a[0], bld["floor_z"]), (connect_building_a[1], -2.5), (connect_building_a[2], pa["floor_z"])]),
+        ("road_building_to_plant_b", "building", [(connect_building_b[0], bld["floor_z"]), (connect_building_b[1], -2.2), (connect_building_b[2], pb["floor_z"])]),
+        ("road_start_hub_to_building", "start_hub", [(connect_start_hub[0], hub["floor_z"]), (connect_start_hub[1], -1.2), (connect_start_hub[2], bld["floor_z"])]),
     ):
         for idx in range(len(nodes) - 1):
             p0, z0 = nodes[idx]
             p1, z1 = nodes[idx + 1]
-            add_segment(f"{prefix}_{idx}", p0, p1, z0, z1)
+            add_segment(f"{prefix}_{idx}", p0, p1, z0, z1, group=group)
 
     return roads
 
