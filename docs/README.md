@@ -17,7 +17,7 @@ What the project is, what users see, what the system must do.
 
 | Doc | Purpose |
 |---|---|
-| [product/vision.md](./product/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
+| [product/vision.md](./cross-cutting/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
 | [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
 | [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: current Chat/Agent experience and the long-term single-Agent direction |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
@@ -33,7 +33,7 @@ How the system is built.
 
 | Doc | Purpose |
 |---|---|
-| [technical/architecture.md](./technical/architecture.md) | Components, data flows, MQTT contract, runtime boundaries |
+| [technical/architecture.md](./cross-cutting/architecture.md) | Components, data flows, MQTT contract, runtime boundaries |
 
 ### GCS Server
 
@@ -78,16 +78,16 @@ Non-obvious architectural choices and the reasoning behind them.
 
 | ADR | Title |
 |---|---|
-| [0001](./decisions/0001-no-retained-current-state-topic.md) | No Retained MQTT Current-State Topic |
-| [0002](./decisions/0002-two-approval-model.md) | Two-Approval Model: Draft Approval ≠ Execution Approval |
-| [0003](./decisions/0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
-| [0004](./decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Planning Shell Checkpointer: MemorySaver For Now |
+| [0001](./cross-cutting/decisions/0001-no-retained-current-state-topic.md) | No Retained MQTT Current-State Topic |
+| [0002](./cross-cutting/decisions/0002-two-approval-model.md) | Two-Approval Model: Draft Approval ≠ Execution Approval |
+| [0003](./cross-cutting/decisions/0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
+| [0004](./cross-cutting/decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Planning Shell Checkpointer: MemorySaver For Now |
 
 ## Operations
 
 | Doc | Purpose |
 |---|---|
-| [operations/run-and-config.md](./operations/run-and-config.md) | How to run the simulator and GCS, where runtime config lives |
+| [operations/run-and-config.md](./cross-cutting/operations/run-and-config.md) | How to run the simulator and GCS, where runtime config lives |
 
 ## Reference
 
@@ -104,7 +104,7 @@ Older planning, completed feature plans, code review session output, and superse
 
 For a general or product-focused audience:
 
-1. [product/vision.md](./product/vision.md)
+1. [product/vision.md](./cross-cutting/vision.md)
 2. [current-state.md](./current-state.md)
 3. [product/operator-experience.md](./product/operator-experience.md)
 4. [product/ai-experience.md](./product/ai-experience.md)
@@ -112,11 +112,11 @@ For a general or product-focused audience:
 
 For technical readers:
 
-1. [technical/architecture.md](./technical/architecture.md)
+1. [technical/architecture.md](./cross-cutting/architecture.md)
 2. [technical/gcs/overview.md](./technical/gcs/overview.md)
 3. [product/ai-agent-requirements.md](./product/ai-agent-requirements.md)
 4. [technical/ai/ai-agent-functional-spec.md](./technical/ai/ai-agent-functional-spec.md)
 5. [technical/ai/ai-agent-graph-spec.md](./technical/ai/ai-agent-graph-spec.md)
 6. [technical/ai/context-layer.md](./technical/ai/context-layer.md)
-7. [decisions/](./decisions/) — read all ADRs
-8. [operations/run-and-config.md](./operations/run-and-config.md)
+7. [decisions/](./cross-cutting/decisions/) — read all ADRs
+8. [operations/run-and-config.md](./cross-cutting/operations/run-and-config.md)

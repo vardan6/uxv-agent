@@ -8,7 +8,7 @@ term appears in multiple docs, this is the canonical definition.
 A retained MQTT presence record published by a GCS instance with a recent
 timestamp. The simulator uses these records to decide whether to publish
 telemetry in `auto` mode. See
-[Architecture](./technical/architecture.md#telemetry-publishing-policy).
+[Architecture](./cross-cutting/architecture.md#telemetry-publishing-policy).
 
 ## Agent Mode
 
@@ -21,7 +21,7 @@ framed as distinct modes.
 
 A short document recording a significant architectural choice, the
 alternatives considered, and the consequences. Stored in
-[decisions/](./decisions/).
+[decisions/](./cross-cutting/decisions/).
 
 ## AI Session
 
@@ -62,7 +62,7 @@ operator-facing mode.
 The LangGraph mechanism for persisting graph state at super-step
 boundaries. Required for durable human-in-the-loop resume. Currently
 `MemorySaver` (in-process). See
-[decisions/0004-langgraph-checkpointer-choice.md](./decisions/0004-langgraph-checkpointer-choice.md).
+[decisions/0004-langgraph-checkpointer-choice.md](./cross-cutting/decisions/0004-langgraph-checkpointer-choice.md).
 
 ## Clarification Card
 
@@ -209,7 +209,7 @@ Retrieval-Augmented Generation. A planned but not implemented
 chat-grounding mechanism for project docs, mission history, semantic object
 definitions, reports, and operator notes. Reserved for semantic knowledge,
 not exact live state or geometry. See
-[decisions/0003-rag-scope-vs-live-context.md](./decisions/0003-rag-scope-vs-live-context.md).
+[decisions/0003-rag-scope-vs-live-context.md](./cross-cutting/decisions/0003-rag-scope-vs-live-context.md).
 
 ## Read-Only Agent
 
@@ -257,7 +257,7 @@ registration time.
 The boundary that separates draft approval ("this planning artifact is
 acceptable") from execution approval ("publish these commands to the
 rover"). Currently only the first exists. See
-[decisions/0002-two-approval-model.md](./decisions/0002-two-approval-model.md).
+[decisions/0002-two-approval-model.md](./cross-cutting/decisions/0002-two-approval-model.md).
 
 ## Universal Agent Runtime
 
