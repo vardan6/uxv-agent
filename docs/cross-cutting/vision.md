@@ -70,7 +70,7 @@ For a general or product-focused audience:
 For technical readers:
 
 1. [Architecture](./architecture.md)
-2. [GCS Server Overview](../technical/gcs/overview.md)
+2. [GCS Design](../components/gcs/design.md)
 3. [AI Agent Requirements](./ai-agent-requirements.md)
 4. [AI Agent Design](../components/ai-agent/design.md)
 5. [AI Agent Graph Spec](../components/ai-agent/internals/graph-spec.md)

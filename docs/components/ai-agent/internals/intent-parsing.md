@@ -318,7 +318,7 @@ Primary implementation files:
 - `gcs_server/static/ai.js`
 
 Related higher-level references:
-- [GCS Overview](../../../technical/gcs/overview.md)
-- [GCS API And Runtime](../../../technical/gcs/api-and-runtime.md)
+- [GCS Design](../../../components/gcs/design.md)
+- [GCS API And Runtime](../../../components/gcs/internals/api-and-runtime.md)
 - [Planning Shell](./workbench-mode.md)
 - [AI Agent Requirements](../requirements.md)

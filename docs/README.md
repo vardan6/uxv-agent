@@ -18,7 +18,7 @@ What the project is, what users see, what the system must do.
 | Doc | Purpose |
 |---|---|
 | [product/vision.md](./cross-cutting/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
-| [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
+| [components/gcs/requirements.md](./components/gcs/requirements.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
 | [components/ai-agent/requirements.md](./components/ai-agent/requirements.md) | Canonical AI agent requirements: behavior, safety, capability ladder, approval, mission execution, route planning, vehicle profiles |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
 | [product/rover-physics-tuning-prd.md](./product/rover-physics-tuning-prd.md) | PRD for realistic, operator-stable rover dynamics tuning in the simulator |
@@ -37,12 +37,14 @@ How the system is built.
 
 | Doc | Purpose |
 |---|---|
-| [technical/gcs/overview.md](./technical/gcs/overview.md) | What the GCS does today; main files |
-| [technical/gcs/api-and-runtime.md](./technical/gcs/api-and-runtime.md) | HTTP/WebSocket routes, runtime model |
+| [components/gcs/README.md](./components/gcs/README.md) | GCS component index |
+| [components/gcs/requirements.md](./components/gcs/requirements.md) | Operator workflow: pages, controls, safety invariants, acceptance criteria |
+| [components/gcs/design.md](./components/gcs/design.md) | Runtime model, browser workflow, MQTT, AI chat, settings, current limitations |
+| [components/gcs/internals/api-and-runtime.md](./components/gcs/internals/api-and-runtime.md) | HTTP/WebSocket routes, runtime model, intent parsing behavior |
 | [components/ai-agent/internals/intent-parsing.md](./components/ai-agent/internals/intent-parsing.md) | Rover intent fields and the `/intent` slash command |
 | [components/ai-agent/internals/workbench-mode.md](./components/ai-agent/internals/workbench-mode.md) | Planning shell stages, endpoints, interrupt types, troubleshooting (code namespace: `workbench_*`) |
-| [technical/gcs/llm-capability-matrix.md](./technical/gcs/llm-capability-matrix.md) | Configured providers and tool-calling fit |
-| [technical/gcs/regressions.md](./technical/gcs/regressions.md) | Behavioral regressions to avoid |
+| [components/gcs/internals/llm-capability-matrix.md](./components/gcs/internals/llm-capability-matrix.md) | Configured providers and tool-calling fit |
+| [components/gcs/internals/regressions.md](./components/gcs/internals/regressions.md) | Behavioral regressions to avoid |
 
 ### Simulator
 
@@ -111,14 +113,14 @@ For a general or product-focused audience:
 
 1. [product/vision.md](./cross-cutting/vision.md)
 2. [current-state.md](./current-state.md)
-3. [product/operator-experience.md](./product/operator-experience.md)
+3. [components/gcs/requirements.md](./components/gcs/requirements.md)
 4. [components/ai-agent/requirements.md](./components/ai-agent/requirements.md)
 5. [implementation-roadmap.md](./implementation-roadmap.md)
 
 For technical readers:
 
 1. [cross-cutting/architecture.md](./cross-cutting/architecture.md)
-2. [technical/gcs/overview.md](./technical/gcs/overview.md)
+2. [components/gcs/design.md](./components/gcs/design.md)
 3. [components/ai-agent/requirements.md](./components/ai-agent/requirements.md)
 4. [components/ai-agent/design.md](./components/ai-agent/design.md)
 5. [components/ai-agent/internals/graph-spec.md](./components/ai-agent/internals/graph-spec.md)

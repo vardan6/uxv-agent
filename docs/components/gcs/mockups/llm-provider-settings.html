@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en" data-color-mode="light" data-theme="vscode-light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Add LLM Provider Mockup | Remote Rover GCS</title>
+    <link rel="stylesheet" href="../../gcs_server/static/style.css">
+    <style>
+      .mockup-stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .management-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .llm-list {
+        display: grid;
+        gap: 8px;
+        max-height: 430px;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+
+      .llm-row {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.25fr) minmax(240px, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--text) 3%, transparent);
+        border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+      }
+
+      .llm-main {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .llm-title {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .llm-title strong {
+        line-height: 1.2;
+      }
+
+      .llm-meta {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .llm-meta code {
+        padding: 4px 7px;
+        border-radius: 999px;
+        color: var(--muted);
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+        border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+        font-size: 0.76rem;
+      }
+
+      .llm-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: end;
+      }
+
+      .llm-actions button {
+        min-height: 34px;
+        padding: 7px 9px;
+      }
+
+      .split-card {
+        display: grid;
+        gap: 18px;
+      }
+
+      .purpose-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      .routing-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.22fr) minmax(220px, 0.42fr) minmax(260px, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+      }
+
+      .routing-row.is-editing {
+        align-items: start;
+        margin: 4px 0;
+        padding: 12px 0;
+        background: transparent;
+        box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 42%, transparent);
+      }
+
+      .routing-row:last-child {
+        border-bottom: 0;
+      }
+
+      .routing-fallbacks {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .fallback-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        color: var(--muted);
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+        border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+        font-size: 0.86rem;
+      }
+
+      .fallback-edit {
+        padding: 8px 10px;
+        min-height: 0;
+        border-radius: 999px;
+        font-size: 0.84rem;
+      }
+
+      .fallback-editor {
+        grid-column: 2 / -1;
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--text) 3%, transparent);
+        border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+      }
+
+      .fallback-editor-title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .fallback-editor-row,
+      .fallback-add-row {
+        display: grid;
+        grid-template-columns: 32px minmax(200px, 1fr) auto auto auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .fallback-add-row {
+        grid-template-columns: 32px minmax(200px, 1fr) auto;
+      }
+
+      .fallback-rank {
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
+      .tiny-button {
+        padding: 7px 10px;
+        min-height: 0;
+        border-radius: 12px;
+        font-size: 0.82rem;
+      }
+
+      .danger-button {
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 8%, transparent);
+      }
+
+      .provider-preset-note {
+        margin: 16px 0 8px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .provider-template-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.26fr) minmax(260px, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        margin: 8px 0 18px;
+      }
+
+      .provider-form label,
+      .assignment-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.26fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .provider-form label span,
+      .assignment-row span {
+        margin: 0;
+      }
+
+      .provider-form .checkbox-row {
+        display: flex;
+        grid-template-columns: none;
+      }
+
+      .registry-note {
+        margin: -4px 0 12px;
+        color: var(--muted);
+        line-height: 1.42;
+      }
+
+      .json-scope-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .json-scope-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .json-scope-item {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+        background: color-mix(in srgb, var(--text) 2%, transparent);
+      }
+
+      .json-scope-item strong {
+        display: block;
+        margin-bottom: 2px;
+      }
+
+      .json-scope-item span {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .json-policy-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .json-policy-list code {
+        white-space: nowrap;
+      }
+
+      .list-header {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.25fr) minmax(240px, 1fr) auto auto;
+        gap: 10px;
+        padding: 0 12px 6px;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      @media (max-width: 1100px) {
+        .management-grid,
+        .json-scope-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .llm-row,
+        .list-header,
+        .provider-form label,
+        .assignment-row,
+        .routing-row,
+        .provider-template-row {
+          grid-template-columns: 1fr;
+        }
+
+        .fallback-editor {
+          grid-column: 1;
+        }
+
+        .fallback-editor-row,
+        .fallback-add-row {
+          grid-template-columns: 1fr;
+        }
+
+        .llm-actions {
+          justify-content: start;
+        }
+      }
+    </style>
+  </head>
+  <body data-page="settings">
+    <main class="app-shell has-page-intro">
+      <header class="app-header">
+        <div class="app-header-inner">
+          <a class="app-brand" href="#">
+            <span class="app-brand-kicker">Ground Control Station</span>
+            <strong>Remote Rover GCS</strong>
+          </a>
+          <nav class="app-nav" aria-label="Main">
+            <a class="app-nav-link" href="#">Dashboard</a>
+            <a class="app-nav-link" href="#">Replay</a>
+            <a class="app-nav-link active" href="#">Settings</a>
+          </nav>
+        </div>
+      </header>
+
+      <section class="page-intro">
+        <p class="page-kicker">Settings</p>
+        <h2>Settings</h2>
+        <p class="page-lede">Persistent GCS configuration lives here. Connectivity, video transport, appearance, AI provider configuration, and JSON config exchange are grouped into one stable settings area.</p>
+      </section>
+
+      <section class="settings-tabs" aria-label="Settings sections">
+        <a class="settings-tab" href="#">Connectivity</a>
+        <a class="settings-tab" href="#">Video</a>
+        <a class="settings-tab" href="#">Appearance</a>
+        <a class="settings-tab active" href="#">Add LLM Provider</a>
+        <a class="settings-tab" href="#">JSON</a>
+      </section>
+
+      <section class="settings-stack">
+        <div class="mockup-stack">
+          <article class="panel panel-secondary">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Add or edit</p>
+                <h2>Provider Settings</h2>
+              </div>
+              <span class="pill warn">Editing selected provider</span>
+            </div>
+            <p class="registry-note">Selecting Edit in the provider list loads that provider into this form. Save updates the existing provider. New Provider clears the form for a new record.</p>
+
+            <p class="provider-preset-note">Templates are optional shortcuts for common provider defaults. Choose one to pre-fill the form, or keep Custom / OpenAI-compatible for providers not listed here. Saving still happens only with Save Provider.</p>
+            <div class="provider-template-row">
+              <span>Provider template</span>
+              <select>
+                <option>OpenRouter</option>
+                <option>NVIDIA NIM / NVIDIA Build</option>
+                <option>OpenAI API</option>
+                <option>Anthropic Claude API</option>
+                <option>Google Gemini API</option>
+                <option>Ollama Local</option>
+                <option>LM Studio Local</option>
+                <option>Mistral API</option>
+                <option>Cohere API</option>
+                <option>Together AI</option>
+                <option>Groq</option>
+                <option>Hugging Face Inference</option>
+                <option>Custom / OpenAI-compatible</option>
+              </select>
+              <button type="button" class="ghost">Apply Template</button>
+            </div>
+
+            <form class="form-grid provider-form">
+              <label>
+                <span>Display Name</span>
+                <input value="OpenRouter Claude Sonnet">
+              </label>
+              <label>
+                <span>Provider Type</span>
+                <select>
+                  <option>OpenRouter</option>
+                  <option>NVIDIA NIM / NVIDIA Build</option>
+                  <option>OpenAI API</option>
+                  <option>Anthropic Claude API</option>
+                  <option>Ollama Local</option>
+                  <option>OpenAI-compatible</option>
+                </select>
+              </label>
+              <label>
+                <span>Auth Mode</span>
+                <select>
+                  <option>Environment variable</option>
+                  <option>API key</option>
+                  <option>No auth</option>
+                  <option>OAuth future</option>
+                </select>
+              </label>
+              <label>
+                <span>Secret / Env Var</span>
+                <input value="OPENROUTER_API_KEY">
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input value="https://openrouter.ai/api/v1">
+              </label>
+              <label>
+                <span>Model ID</span>
+                <input value="anthropic/claude-sonnet">
+              </label>
+              <label>
+                <span>Model Category</span>
+                <select>
+                  <option>Chat / Reasoning</option>
+                  <option>Embeddings</option>
+                  <option>Vision</option>
+                  <option>Audio Transcription</option>
+                  <option>Reranker</option>
+                </select>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" checked>
+                <span>Enabled</span>
+              </label>
+              <div class="form-actions">
+                <button type="button">Save Provider</button>
+                <button type="button" class="ghost">Check Draft</button>
+                <button type="button" class="ghost">New Provider</button>
+                <button type="button" class="ghost">Cancel Edit</button>
+              </div>
+            </form>
+          </article>
+
+          <div class="management-grid">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Registry</p>
+                  <h2>Configured LLMs</h2>
+                </div>
+                <span class="pill ok">5 enabled</span>
+              </div>
+              <p class="registry-note">The row check is a provider health check: it verifies auth, base URL, model ID, and the minimal request for that model category. It does not run chat prompts or rover intent parsing.</p>
+
+              <div class="list-header" aria-hidden="true">
+                <span>Provider</span>
+                <span>Endpoint / category</span>
+                <span>Status</span>
+                <span>Actions</span>
+              </div>
+              <div class="llm-list">
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>OpenRouter Claude Sonnet</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>OpenRouter</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>anthropic/claude-sonnet</code>
+                    <code>chat, reasoning</code>
+                  </div>
+                  <span class="pill ok">Available</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>NVIDIA Nemotron Planner</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>NVIDIA NIM</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>nvidia/llama-nemotron</code>
+                    <code>planner, tool calling</code>
+                  </div>
+                  <span class="pill ok">Available</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>Local Ollama Llama</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>Ollama</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>llama3.1:8b</code>
+                    <code>local chat</code>
+                  </div>
+                  <span class="pill warn">Not tested</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>OpenAI API Reporter</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>OpenAI API</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>gpt model</code>
+                    <code>reporting</code>
+                  </div>
+                  <span class="pill danger">Missing key</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>NVIDIA Embeddings</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>NVIDIA NIM</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>nvidia/embed-model</code>
+                    <code>embeddings</code>
+                  </div>
+                  <span class="pill ok">Available</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>Anthropic Direct</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>Anthropic API</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>claude model</code>
+                    <code>chat</code>
+                  </div>
+                  <span class="pill warn">Not tested</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+
+                <div class="llm-row">
+                  <div class="llm-main">
+                    <div class="llm-title">
+                      <strong>OpenRouter Vision</strong>
+                    </div>
+                    <div class="llm-meta">
+                      <code>OpenRouter</code>
+                    </div>
+                  </div>
+                  <div class="llm-meta">
+                    <code>vision model</code>
+                    <code>vision</code>
+                  </div>
+                  <span class="pill ok">Available</span>
+                  <div class="llm-actions">
+                    <button type="button">Check</button>
+                    <button type="button" class="ghost">Edit</button>
+                    <button type="button" class="ghost">Disable</button>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+              <div>
+                <p class="section-kicker">Routing</p>
+                <h2>Model Routing Rules</h2>
+              </div>
+              <span class="pill">Primary + fallback</span>
+            </div>
+            <p class="registry-note">Each task type gets a primary model plus ordered fallbacks. Runtime selection can still choose a different compatible model when the task needs vision, embeddings, cheaper local chat, or a provider is unavailable.</p>
+              <div class="purpose-grid">
+                <div class="routing-row">
+                  <span>General Chat</span>
+                  <select><option>OpenRouter Claude Sonnet</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. Local Ollama Llama</span>
+                    <span class="fallback-chip">2. Anthropic Direct</span>
+                    <button type="button" class="ghost fallback-edit">Edit fallbacks</button>
+                  </div>
+                </div>
+                <div class="routing-row is-editing">
+                  <span>Rover Intent Parser</span>
+                  <select><option>NVIDIA Nemotron Planner</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. OpenRouter Claude Sonnet</span>
+                    <span class="fallback-chip">2. OpenAI API Reporter</span>
+                    <button type="button" class="ghost fallback-edit">Close editor</button>
+                  </div>
+                  <div class="fallback-editor">
+                    <div class="fallback-editor-title">
+                      <span>Fallback priority for Rover Intent Parser. Runtime tries these after the primary model.</span>
+                      <span class="pill">Editing this route</span>
+                    </div>
+                    <div class="fallback-editor-row">
+                      <span class="fallback-rank">1</span>
+                      <select><option>OpenRouter Claude Sonnet</option></select>
+                      <button type="button" class="ghost tiny-button">Up</button>
+                      <button type="button" class="ghost tiny-button">Down</button>
+                      <button type="button" class="ghost tiny-button danger-button">Remove</button>
+                    </div>
+                    <div class="fallback-editor-row">
+                      <span class="fallback-rank">2</span>
+                      <select><option>OpenAI API Reporter</option></select>
+                      <button type="button" class="ghost tiny-button">Up</button>
+                      <button type="button" class="ghost tiny-button">Down</button>
+                      <button type="button" class="ghost tiny-button danger-button">Remove</button>
+                    </div>
+                    <div class="fallback-add-row">
+                      <span class="fallback-rank">+</span>
+                      <select>
+                        <option>Add compatible provider...</option>
+                        <option>Local Ollama Llama</option>
+                        <option>Anthropic Direct</option>
+                        <option>OpenRouter Claude Sonnet</option>
+                      </select>
+                      <button type="button" class="ghost tiny-button">Add fallback</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="routing-row">
+                  <span>Mission Planner</span>
+                  <select><option>NVIDIA Nemotron Planner</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. OpenRouter Claude Sonnet</span>
+                    <button type="button" class="ghost fallback-edit">Edit fallbacks</button>
+                  </div>
+                </div>
+                <div class="routing-row">
+                  <span>Reporter</span>
+                  <select><option>OpenAI API Reporter</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. OpenRouter Claude Sonnet</span>
+                    <span class="fallback-chip">2. Local Ollama Llama</span>
+                    <button type="button" class="ghost fallback-edit">Edit fallbacks</button>
+                  </div>
+                </div>
+                <div class="routing-row">
+                  <span>Embeddings</span>
+                  <select><option>NVIDIA embedding model</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. local embedding model</span>
+                    <button type="button" class="ghost fallback-edit">Edit fallbacks</button>
+                  </div>
+                </div>
+                <div class="routing-row">
+                  <span>Vision / Object Description</span>
+                  <select><option>OpenRouter vision model</option></select>
+                  <div class="routing-fallbacks">
+                    <span class="fallback-chip">1. NVIDIA vision model</span>
+                    <button type="button" class="ghost fallback-edit">Edit fallbacks</button>
+                  </div>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button type="button">Save Assignments</button>
+                <button type="button" class="ghost">Reset to Saved</button>
+              </div>
+            </article>
+
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">JSON Tab Integration</p>
+                  <h2>Scoped Import / Export</h2>
+                </div>
+                <span class="pill">Preview before apply</span>
+              </div>
+              <p class="registry-note">The JSON tab should export or import selected settings sections. Missing sections in a loaded file are ignored by default, so loading an older connectivity-only file does not erase LLM providers or routing rules.</p>
+              <div class="json-scope-grid">
+                <section>
+                  <p class="settings-note">Export sections</p>
+                  <div class="json-scope-list">
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Connectivity</strong><span>MQTT and simulator backend.</span></span>
+                      <span class="pill">on</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Video</strong><span>Ingest, delivery, and enable state.</span></span>
+                      <span class="pill">on</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Appearance</strong><span>Theme mode and selected themes.</span></span>
+                      <span class="pill">on</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>LLM Providers</strong><span>Provider records without raw secret values.</span></span>
+                      <span class="pill">on</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Model Routing Rules</strong><span>Primary and fallback model assignments.</span></span>
+                      <span class="pill">on</span>
+                    </label>
+                  </div>
+                  <div class="form-actions">
+                    <button type="button">Export Selected JSON</button>
+                    <button type="button" class="ghost">Select All</button>
+                  </div>
+                </section>
+                <section>
+                  <p class="settings-note">Import behavior</p>
+                  <div class="json-scope-list">
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Only apply checked sections</strong><span>Unchecked sections stay unchanged.</span></span>
+                      <span class="pill">safe</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Ignore sections missing from file</strong><span>Old JSON files do not clear newer settings.</span></span>
+                      <span class="pill">default</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox" checked>
+                      <span><strong>Preview diff before apply</strong><span>Show added, changed, skipped, and missing sections.</span></span>
+                      <span class="pill">required</span>
+                    </label>
+                    <label class="json-scope-item">
+                      <input type="checkbox">
+                      <span><strong>Replace full selected sections</strong><span>Advanced mode for intentional overwrite.</span></span>
+                      <span class="pill">off</span>
+                    </label>
+                  </div>
+                  <div class="json-policy-list">
+                    <p class="registry-note"><code>llm_providers</code> and <code>model_routing</code> are separate JSON sections, so provider setup can be restored without forcing routing changes.</p>
+                    <p class="registry-note">Secret handling should export environment variable names and masked secret references, not plaintext API keys.</p>
+                  </div>
+                  <div class="form-actions">
+                    <button type="button">Load JSON and Preview</button>
+                    <button type="button" class="ghost">Apply Checked Sections</button>
+                  </div>
+                </section>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
