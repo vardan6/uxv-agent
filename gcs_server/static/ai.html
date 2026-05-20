@@ -206,6 +206,9 @@
         const container = document.getElementById('ai-map-widget-container');
         if (!container) return;
         if (_widget) {
+          if (!_widget.isMounted) {
+            _widget.mount();
+          }
           _widget.setSessionId(sessionId);
           return;
         }

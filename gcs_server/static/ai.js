@@ -67,6 +67,22 @@ const AI_SOURCE_CONTROL_META = {
   },
 };
 
+const AI_CONTEXT_PROVIDER_META = {
+  get_current_rover_state: 'Current rover state snapshot',
+  get_runtime_context: 'Runtime status and environment context',
+  get_settings_context: 'Settings/config summary',
+  get_llm_context: 'LLM provider and routing context',
+  get_current_mission_state: 'Current mission state',
+  get_scene_summary: 'Scene/map summary',
+  query_objects_in_front: 'Objects in front of the rover',
+  query_objects_near: 'Objects near the rover',
+  query_objects_by_kind: 'Objects filtered by kind',
+  get_current_replay_summary: 'Current replay summary',
+  get_recent_telemetry: 'Recent telemetry window',
+  resolve_replay_sessions: 'Replay session lookup',
+  get_recent_ai_chat_history: 'Recent AI chat history',
+};
+
 const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'list_data_surfaces',
   'get_current_rover_state',
@@ -542,10 +558,9 @@ function fmtTokPerSec(n) {
   return `${n.toFixed(1)} tok/s`;
 }
 
-function messageStats(message) {
+function usageSnapshot(message) {
   const meta = message.meta || {};
   const rm = meta.response_metadata || {};
-  const latencyMs = message.latency_ms;
 
   // OpenAI-compatible (NIM, vLLM, OpenAI) + LangChain usage_metadata
   const usage = meta.usage_metadata || rm.usage_metadata || rm.token_usage || rm.usage || {};
@@ -558,6 +573,13 @@ function messageStats(message) {
   // Ollama shape
   if (inputTok === null && rm.prompt_eval_count != null) inputTok = rm.prompt_eval_count;
   if (outputTok === null && rm.eval_count != null) outputTok = rm.eval_count;
+
+  return { meta, rm, inputTok, outputTok, totalTok };
+}
+
+function messageStats(message) {
+  const { rm, inputTok, outputTok, totalTok } = usageSnapshot(message);
+  const latencyMs = message.latency_ms;
 
   // tok/s: prefer Ollama's precise eval_duration (nanoseconds), else wall-clock latency
   let tokPerSec = null;
@@ -572,22 +594,54 @@ function messageStats(message) {
   const finishReason = rm.finish_reason || rm.stop_reason || null;
   const showFinish = finishReason && finishReason !== 'stop' && finishReason !== 'end_turn';
 
-  // Context window fill — from provider config
-  const provider = providerById(message.provider_id || '');
-  const ctxMax = provider?.context_window || null;
-
   const parts = [];
-  if (inputTok != null && ctxMax) {
-    const pct = Math.round((Number(inputTok) / Number(ctxMax)) * 100);
-    parts.push(`ctx ${fmtTokens(inputTok)}/${fmtTokens(ctxMax)} (${pct}%)`);
-  } else if (inputTok != null) {
-    parts.push(`↑${fmtTokens(inputTok)}`);
-  }
+  if (inputTok != null) parts.push(`↑${fmtTokens(inputTok)}`);
   if (outputTok != null) parts.push(`↓${fmtTokens(outputTok)} tok`);
   else if (inputTok == null && totalTok != null) parts.push(`tok ${fmtTokens(totalTok)}`);
   if (tokPerSec != null) parts.push(fmtTokPerSec(tokPerSec));
   if (showFinish) parts.push(`[${finishReason}]`);
   return parts.join(' · ');
+}
+
+function renderContextStatus(message) {
+  const { meta, inputTok } = usageSnapshot(message);
+  const provider = providerById(message.provider_id || '');
+  const ctxMax = provider?.context_window || null;
+  const estimatedChars = Number(meta.estimated_chars);
+  const budgetChars = Number(meta.budget_chars);
+  const providers = Array.isArray(meta.context_providers) ? meta.context_providers.filter(Boolean) : [];
+  const droppedSections = Array.isArray(meta.dropped_sections) ? meta.dropped_sections.filter(Boolean) : [];
+
+  const hasPromptWindow = Number.isFinite(Number(inputTok)) && Number.isFinite(Number(ctxMax)) && Number(ctxMax) > 0;
+  const hasLiveBudget = Number.isFinite(estimatedChars) && Number.isFinite(budgetChars) && budgetChars > 0;
+  if (!hasPromptWindow && !hasLiveBudget && !providers.length && !droppedSections.length) return '';
+
+  const pctRaw = hasPromptWindow ? (Number(inputTok) / Number(ctxMax)) * 100 : null;
+  const pct = pctRaw == null ? null : Math.max(0, Math.min(100, Math.round(pctRaw)));
+  const meterWidth = pct == null ? 0 : Math.max(3, pct);
+  const detailParts = [];
+  if (hasPromptWindow) detailParts.push(`${fmtTokens(inputTok)} / ${fmtTokens(ctxMax)} tok`);
+  if (hasLiveBudget) detailParts.push(`live ${fmtTokens(estimatedChars)} / ${fmtTokens(budgetChars)} chars`);
+  if (providers.length) detailParts.push(`${providers.length} source${providers.length === 1 ? '' : 's'}`);
+  if (droppedSections.length) detailParts.push(`trimmed ${droppedSections.length}`);
+
+  const titleParts = [];
+  if (providers.length) titleParts.push(`sources: ${providers.join(', ')}`);
+  if (droppedSections.length) titleParts.push(`trimmed: ${droppedSections.join(', ')}`);
+  const titleAttr = titleParts.length ? ` title="${escapeHtml(titleParts.join(' | '))}"` : '';
+
+  return `
+    <div class="ai-context-status"${titleAttr}>
+      <div class="ai-context-status-row">
+        <span class="ai-context-status-label">Context</span>
+        <span class="ai-context-status-value">${pct == null ? 'available' : `${pct}%`}</span>
+      </div>
+      <div class="ai-context-status-meter" aria-hidden="true">
+        <span class="ai-context-status-meter-fill" style="width:${meterWidth}%"></span>
+      </div>
+      <div class="ai-context-status-meta">${escapeHtml(detailParts.join(' · '))}</div>
+    </div>
+  `;
 }
 
 function buildChatMarkdown(session, options = {}) {
@@ -1066,10 +1120,15 @@ async function sendSessionCommand(sessionId, command) {
   if (response.ok) {
     return response.json();
   }
-  if (response.status === 404) {
+  const data = await response.json().catch(() => ({}));
+  const detail = String(data.detail || '').trim();
+  const normalized = String(command || '').trim().toLowerCase();
+  if (
+    response.status === 404
+    || ((normalized === 'context' || normalized === '/context') && /unsupported command/i.test(detail))
+  ) {
     return runLocalSessionCommand(sessionId, command);
   }
-  const data = await response.json().catch(() => ({}));
   throw new Error(data.detail || `Command failed (${response.status})`);
 }
 
@@ -1108,6 +1167,120 @@ function formatRetrievalSurfacesMarkdown(session) {
       lines.push(`- \`${meta.label}\``);
     });
   }
+  return lines.join('\n').trim();
+}
+
+function latestAssistantMessageFromList(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const message = list[index];
+    if (String(message?.role || '') === 'assistant') return message;
+  }
+  return null;
+}
+
+function formatContextProviderLabel(name) {
+  const key = String(name || '').trim();
+  return AI_CONTEXT_PROVIDER_META[key] || key || 'unknown';
+}
+
+function formatContextMarkdown(sessionId) {
+  const live = liveStateFor(sessionId);
+  const session = aiState.activeSession?.id === sessionId
+    ? aiState.activeSession
+    : aiState.sessions.find((item) => item.id === sessionId);
+  const message = latestAssistantMessageFromList(live.messages || []);
+  if (!message) {
+    return '## Context\n\nNo assistant message is available for this session yet.';
+  }
+  const meta = message?.meta && typeof message.meta === 'object' ? message.meta : {};
+  const provider = providerById(message.provider_id || '');
+  const createdAt = message.created_at ? formatAiTime(message.created_at) : '';
+  const { inputTok } = usageSnapshot(message);
+  const ctxMax = Number(provider?.context_window || 0);
+  const estimatedChars = Number(meta.estimated_chars);
+  const budgetChars = Number(meta.budget_chars);
+  const providers = Array.isArray(meta.context_providers) ? meta.context_providers.filter(Boolean) : [];
+  const retrievedSources = Array.isArray(meta.retrieved_sources) ? meta.retrieved_sources : [];
+  const loadedRefs = Array.isArray(meta.loaded_data_refs) ? meta.loaded_data_refs : [];
+  const droppedSections = Array.isArray(meta.dropped_sections) ? meta.dropped_sections.filter(Boolean) : [];
+  const lines = ['## Context', ''];
+
+  if (createdAt) {
+    lines.push(`Latest assistant message: \`${createdAt}\``);
+    lines.push('');
+  }
+
+  lines.push('Summary:');
+  if (Number.isFinite(Number(inputTok)) && Number.isFinite(ctxMax) && ctxMax > 0) {
+    const pct = Math.max(0, Math.min(100, Math.round((Number(inputTok) / ctxMax) * 100)));
+    lines.push(`- Prompt window use: \`${fmtTokens(inputTok)} / ${fmtTokens(ctxMax)} tok (${pct}%)\``);
+  } else if (Number.isFinite(Number(inputTok))) {
+    lines.push(`- Prompt window use: \`${fmtTokens(inputTok)} tok\``);
+  }
+  if (Number.isFinite(estimatedChars) && Number.isFinite(budgetChars) && budgetChars > 0) {
+    lines.push(`- Compact-context size estimate: \`${fmtTokens(estimatedChars)} / ${fmtTokens(budgetChars)} chars\``);
+  }
+  lines.push(`- Session source controls enabled: \`${Object.values(normalizeSourceControls((session || {}).source_controls)).filter(Boolean).length}/${Object.keys(AI_SOURCE_CONTROL_META).length}\``);
+  if (providers.length) {
+    lines.push(`- Context providers used: \`${providers.length}\``);
+  }
+  if (retrievedSources.length) {
+    lines.push(`- Retrieval sources recorded: \`${retrievedSources.length}\``);
+  }
+  if (loadedRefs.length) {
+    lines.push(`- Loaded context blocks: \`${loadedRefs.length}\``);
+  }
+  if (droppedSections.length) {
+    lines.push(`- Trimmed sections: \`${droppedSections.length}\``);
+  }
+
+  if (providers.length) {
+    lines.push('', 'Context providers');
+    lines.push('This is what the old `6 sources` count was referring to.');
+    providers.forEach((name) => {
+      lines.push(`- \`${name}\`: ${formatContextProviderLabel(name)}`);
+    });
+  }
+
+  if (retrievedSources.length) {
+    lines.push('', 'Retrieval sources');
+    retrievedSources.forEach((source) => {
+      const key = String(source?.source || '');
+      const label = AI_SOURCE_CONTROL_META[key]?.label || key || 'source';
+      const status = String(source?.status || 'unknown');
+      const requested = source?.requested ? 'lazy-loaded in this turn' : 'not loaded in this turn';
+      const note = String(source?.note || '').trim();
+      let line = `- \`${label}\` (\`${key}\`): ${status}; ${requested}`;
+      if (note) line += `; ${note}`;
+      lines.push(line);
+    });
+  }
+
+  if (loadedRefs.length) {
+    lines.push('', 'Loaded context blocks');
+    loadedRefs.forEach((ref) => {
+      const sourceKey = String(ref?.source || '');
+      const sourceLabel = AI_SOURCE_CONTROL_META[sourceKey]?.label || sourceKey || 'source';
+      const block = String(ref?.ref || '');
+      const status = String(ref?.status || 'unknown');
+      const branch = String(ref?.branch || '');
+      const extras = [];
+      if (branch) extras.push(`branch: \`${branch}\``);
+      if (ref?.message_count != null) extras.push(`messages: \`${ref.message_count}\``);
+      let line = `- \`${sourceLabel}\`: \`${block || 'unknown'}\` (${status})`;
+      if (extras.length) line += `; ${extras.join(' · ')}`;
+      lines.push(line);
+    });
+  }
+
+  if (droppedSections.length) {
+    lines.push('', 'Trimmed sections');
+    droppedSections.forEach((section) => {
+      lines.push(`- \`${String(section)}\``);
+    });
+  }
+
   return lines.join('\n').trim();
 }
 
@@ -1190,6 +1363,9 @@ function buildLocalSessionCommandResponse(sessionId, command) {
   }
   if (normalized === 'tool-activity') {
     return { rawCommand: '/tool-activity', assistantContent: formatAgentToolActivityMarkdown(sessionId) };
+  }
+  if (normalized === 'context') {
+    return { rawCommand: '/context', assistantContent: formatContextMarkdown(sessionId) };
   }
   if (normalized === 'capabilities brief') {
     return {
@@ -2120,7 +2296,8 @@ function renderMessages(options = {}) {
       ${message.role === 'assistant'
         ? (() => {
             const stats = messageStats(message);
-            return `<div class="ai-message-foot">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}${stats ? ` · ${escapeHtml(stats)}` : ''}</div>`;
+            const contextStatus = messageRunMode(message) === 'agent' ? '' : renderContextStatus(message);
+            return `<div class="ai-message-foot">${contextStatus}<div class="ai-message-foot-meta">${escapeHtml(providerNameForMessage(message))}${message.model_id ? ` · ${escapeHtml(message.model_id)}` : ''}${message.latency_ms ? ` · ${message.latency_ms} ms` : ''}${stats ? ` · ${escapeHtml(stats)}` : ''}</div></div>`;
           })()
         : ''}
     </article>
@@ -2727,6 +2904,12 @@ const AI_SLASH_COMMANDS = [
     kind: 'session_command',
     serverCommand: 'tool-activity',
     description: 'Show the latest recorded agent tool activity for this session.',
+  },
+  {
+    command: '/context',
+    kind: 'session_command',
+    serverCommand: 'context',
+    description: 'Show the latest context snapshot, providers, retrieval sources, and loaded context blocks.',
   },
   {
     command: '/intent',

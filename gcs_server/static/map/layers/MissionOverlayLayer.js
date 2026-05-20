@@ -27,11 +27,15 @@ export class MissionOverlayLayer {
     this._group = L.layerGroup().addTo(map);
   }
 
-  render(payload, { color = DEFAULT_COLOR } = {}) {
+  render(payload, { color = DEFAULT_COLOR, opacity = null } = {}) {
     this._group.clearLayers();
     if (!payload?.available || !Array.isArray(payload.features)) return;
 
     const style = styleFor(payload.status);
+    const lineOpacity = opacity ?? style.opacity;
+    const fillOpacity = payload.status === 'proposed' || payload.status === 'awaiting_approval' || payload.status === 'planning'
+      ? 0
+      : (opacity ?? style.fillOpacity);
     const routeLines = payload.features.filter(f => f.type === 'route_line');
     const waypoints = payload.features.filter(f => f.type === 'waypoint');
 
@@ -40,8 +44,9 @@ export class MissionOverlayLayer {
       L.polyline(feature.points.map(p => [p.y, p.x]), {
         color,
         weight: 2.5,
-        opacity: style.opacity,
+        opacity: lineOpacity,
         dashArray: style.dashed ? '6,6' : undefined,
+        pane: 'missionPane',
       }).addTo(this._group);
     }
 
@@ -52,9 +57,10 @@ export class MissionOverlayLayer {
         radius: 7,
         color,
         weight: 2,
-        opacity: style.opacity,
+        opacity: lineOpacity,
         fillColor: color,
-        fillOpacity: style.dashed ? 0 : style.fillOpacity,
+        fillOpacity,
+        pane: 'missionPane',
       }).addTo(this._group);
 
       const icon = L.divIcon({
@@ -63,8 +69,24 @@ export class MissionOverlayLayer {
         iconSize: [18, 18],
         iconAnchor: [9, 9],
       });
-      L.marker([p.y, p.x], { icon, interactive: false }).addTo(this._group);
+      L.marker([p.y, p.x], { icon, interactive: false, pane: 'missionPane' }).addTo(this._group);
     }
+  }
+
+  renderMany(overlays = []) {
+    this._group.clearLayers();
+    for (const overlay of overlays) {
+      if (!overlay?.payload?.available) continue;
+      this._renderOverlay(overlay);
+    }
+  }
+
+  _renderOverlay(overlay) {
+    const nestedGroup = L.layerGroup().addTo(this._group);
+    const originalGroup = this._group;
+    this._group = nestedGroup;
+    this.render(overlay.payload, { color: overlay.color || DEFAULT_COLOR, opacity: overlay.opacity });
+    this._group = originalGroup;
   }
 
   clear() {

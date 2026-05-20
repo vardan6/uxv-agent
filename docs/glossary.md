@@ -97,7 +97,7 @@ focus releases the lock.
 The compact set of live structured facts (rover state, runtime, settings,
 scene summary, replay summary) injected into AI prompts before larger
 retrieval is used. See
-[technical/ai/context-layer.md](./technical/ai/context-layer.md).
+[components/ai-agent/internals/context-layer.md](./components/ai-agent/internals/context-layer.md).
 
 ## Draft Approval
 

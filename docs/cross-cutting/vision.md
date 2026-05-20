@@ -72,6 +72,6 @@ For technical readers:
 1. [Architecture](./architecture.md)
 2. [GCS Server Overview](../technical/gcs/overview.md)
 3. [AI Agent Requirements](./ai-agent-requirements.md)
-4. [AI Agent Technical Spec](../technical/ai/ai-agent-functional-spec.md)
-5. [AI Agent Graph Spec](../technical/ai/ai-agent-graph-spec.md)
+4. [AI Agent Design](../components/ai-agent/design.md)
+5. [AI Agent Graph Spec](../components/ai-agent/internals/graph-spec.md)
 6. [Run And Config Guide](./operations/run-and-config.md)

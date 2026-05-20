@@ -19,10 +19,8 @@ What the project is, what users see, what the system must do.
 |---|---|
 | [product/vision.md](./cross-cutting/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
 | [product/operator-experience.md](./product/operator-experience.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
-| [product/ai-experience.md](./product/ai-experience.md) | The `/ai` page: current Chat/Agent experience and the long-term single-Agent direction |
+| [components/ai-agent/requirements.md](./components/ai-agent/requirements.md) | Canonical AI agent requirements: behavior, safety, capability ladder, approval, mission execution, route planning, vehicle profiles |
 | [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
-| [product/ai-agent-requirements.md](./product/ai-agent-requirements.md) | Canonical AI agent product requirements, safety boundaries, capability ladder, fixed decisions |
-| [product/route-planning-and-mission-export-prd.md](./product/route-planning-and-mission-export-prd.md) | PRD for route planning, mission generation, and QGC `.plan` export |
 | [product/rover-physics-tuning-prd.md](./product/rover-physics-tuning-prd.md) | PRD for realistic, operator-stable rover dynamics tuning in the simulator |
 
 ## Technical (Implementation)
@@ -41,8 +39,8 @@ How the system is built.
 |---|---|
 | [technical/gcs/overview.md](./technical/gcs/overview.md) | What the GCS does today; main files |
 | [technical/gcs/api-and-runtime.md](./technical/gcs/api-and-runtime.md) | HTTP/WebSocket routes, runtime model |
-| [technical/gcs/intent-parsing.md](./technical/gcs/intent-parsing.md) | Rover intent fields and the `/intent` slash command |
-| [technical/gcs/workbench-mode.md](./technical/gcs/workbench-mode.md) | Planning shell stages, endpoints, interrupt types, troubleshooting (code namespace: `workbench_*`) |
+| [components/ai-agent/internals/intent-parsing.md](./components/ai-agent/internals/intent-parsing.md) | Rover intent fields and the `/intent` slash command |
+| [components/ai-agent/internals/workbench-mode.md](./components/ai-agent/internals/workbench-mode.md) | Planning shell stages, endpoints, interrupt types, troubleshooting (code namespace: `workbench_*`) |
 | [technical/gcs/llm-capability-matrix.md](./technical/gcs/llm-capability-matrix.md) | Configured providers and tool-calling fit |
 | [technical/gcs/regressions.md](./technical/gcs/regressions.md) | Behavioral regressions to avoid |
 
@@ -61,16 +59,17 @@ How the system is built.
 
 | Doc | Purpose |
 |---|---|
-| [technical/ai/README.md](./technical/ai/README.md) | Current AI documentation index and canonical reading order |
-| [technical/ai/ai-agent-functional-spec.md](./technical/ai/ai-agent-functional-spec.md) | Canonical AI agent technical spec: runtime, tools, policy, events, migration, rollback |
-| [technical/ai/ai-agent-graph-spec.md](./technical/ai/ai-agent-graph-spec.md) | Canonical AI agent diagrams and state machines |
-| [technical/ai/context-layer.md](./technical/ai/context-layer.md) | Compact live context layer, providers, integration |
-| [technical/ai/spatial-tools.md](./technical/ai/spatial-tools.md) | Spatial query service and tool registry design |
-| [technical/ai/replay-access.md](./technical/ai/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
-| [technical/ai/mission-execution-implementation.md](./technical/ai/mission-execution-implementation.md) | Current `mission_execution` implementation: data model, APIs, execution transition, and remaining gaps |
-| [technical/ai/tool-contract-standard.md](./technical/ai/tool-contract-standard.md) | Mandatory contract fields and rules for every tool in `tool_registry.py` |
-| [technical/ai/route-planning-mission-export-validation.md](./technical/ai/route-planning-mission-export-validation.md) | Manual validation checklist for route planning, approval, and QGC `.plan` export |
-| [other/rover-route-planning-and-mission-export.md](./other/rover-route-planning-and-mission-export.md) | Technical design: VehicleProfile, RoadGraphService, route planning tools, QGC exporter |
+| [components/ai-agent/README.md](./components/ai-agent/README.md) | AI agent component index |
+| [components/ai-agent/requirements.md](./components/ai-agent/requirements.md) | Requirements tier: product target |
+| [components/ai-agent/design.md](./components/ai-agent/design.md) | Design tier: runtime, mission execution, route planning + export, phase plan, rollback |
+| [components/ai-agent/internals/graph-spec.md](./components/ai-agent/internals/graph-spec.md) | LangGraph diagrams and state machines |
+| [components/ai-agent/internals/context-layer.md](./components/ai-agent/internals/context-layer.md) | Compact live context layer, providers, integration |
+| [components/ai-agent/internals/spatial-tools.md](./components/ai-agent/internals/spatial-tools.md) | Spatial query service and tool registry design |
+| [components/ai-agent/internals/replay-access.md](./components/ai-agent/internals/replay-access.md) | How replay sessions are exposed to AI Chat and Agent |
+| [components/ai-agent/internals/mission-execution.md](./components/ai-agent/internals/mission-execution.md) | Current `mission_execution` implementation: data model, APIs, execution transition, and remaining gaps |
+| [components/ai-agent/internals/route-planning.md](./components/ai-agent/internals/route-planning.md) | Road graph, planner tools, QGC `.plan` exporter, manual validation checklist |
+| [components/ai-agent/internals/tool-contract.md](./components/ai-agent/internals/tool-contract.md) | Mandatory contract fields and rules for every tool in `tool_registry.py` |
+| [components/ai-agent/internals/token-efficiency.md](./components/ai-agent/internals/token-efficiency.md) | Token-usage audit and phased optimization plan |
 
 ## Decisions (ADRs)
 
@@ -82,6 +81,12 @@ Non-obvious architectural choices and the reasoning behind them.
 | [0002](./cross-cutting/decisions/0002-two-approval-model.md) | Two-Approval Model: Draft Approval ≠ Execution Approval |
 | [0003](./cross-cutting/decisions/0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
 | [0004](./cross-cutting/decisions/0004-langgraph-checkpointer-choice.md) | LangGraph Planning Shell Checkpointer: MemorySaver For Now |
+| [0005](./cross-cutting/decisions/0005-keep-3d-env-as-current-simulator.md) | Keep `3d-env` As The Current Simulator Runtime |
+| [0006](./cross-cutting/decisions/0006-rover-sim-next-is-next-simulator.md) | `rover-sim-next` Is The Next Simulator Implementation |
+| [0007](./cross-cutting/decisions/0007-rag-later-not-now-for-live-state.md) | RAG Is Deferred; Live State Stays Structured Only |
+| [0008](./cross-cutting/decisions/0008-defer-replay-and-live-map-until-sim-next.md) | Defer Replay, Live-Map Sync, And Synchronized Video Until `rover-sim-next` |
+| [0009](./cross-cutting/decisions/0009-mission-execution-fold-under-ai-agent.md) | Mission Execution Lives Under `ai-agent`, Not As A Peer Component |
+| [0010](./cross-cutting/decisions/0010-internals-tier-naming.md) | "Internals" Is The Name Of The Third Documentation Tier |
 
 ## Operations
 
@@ -107,16 +112,16 @@ For a general or product-focused audience:
 1. [product/vision.md](./cross-cutting/vision.md)
 2. [current-state.md](./current-state.md)
 3. [product/operator-experience.md](./product/operator-experience.md)
-4. [product/ai-experience.md](./product/ai-experience.md)
+4. [components/ai-agent/requirements.md](./components/ai-agent/requirements.md)
 5. [implementation-roadmap.md](./implementation-roadmap.md)
 
 For technical readers:
 
-1. [technical/architecture.md](./cross-cutting/architecture.md)
+1. [cross-cutting/architecture.md](./cross-cutting/architecture.md)
 2. [technical/gcs/overview.md](./technical/gcs/overview.md)
-3. [product/ai-agent-requirements.md](./product/ai-agent-requirements.md)
-4. [technical/ai/ai-agent-functional-spec.md](./technical/ai/ai-agent-functional-spec.md)
-5. [technical/ai/ai-agent-graph-spec.md](./technical/ai/ai-agent-graph-spec.md)
-6. [technical/ai/context-layer.md](./technical/ai/context-layer.md)
-7. [decisions/](./cross-cutting/decisions/) — read all ADRs
-8. [operations/run-and-config.md](./cross-cutting/operations/run-and-config.md)
+3. [components/ai-agent/requirements.md](./components/ai-agent/requirements.md)
+4. [components/ai-agent/design.md](./components/ai-agent/design.md)
+5. [components/ai-agent/internals/graph-spec.md](./components/ai-agent/internals/graph-spec.md)
+6. [components/ai-agent/internals/context-layer.md](./components/ai-agent/internals/context-layer.md)
+7. [cross-cutting/decisions/](./cross-cutting/decisions/) — read all ADRs
+8. [cross-cutting/operations/run-and-config.md](./cross-cutting/operations/run-and-config.md)
