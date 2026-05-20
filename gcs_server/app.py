@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from datetime import datetime
 import json
 import os
@@ -50,6 +51,7 @@ try:
     from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
     from gcs_server.scene_map import get_scene_map_payload
@@ -72,6 +74,7 @@ except ModuleNotFoundError:
     from ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from ai.session_store import normalize_source_controls
     from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from config import load_config, save_config
     from runtime import AppRuntime, GCS_DIR, build_runtime
     from scene_map import get_scene_map_payload
@@ -113,6 +116,32 @@ ROUTING_PURPOSES = {
     "reporter": "Reporter",
     "embeddings": "Embeddings",
     "vision_object_description": "Vision / Object Description",
+}
+
+_AI_SOURCE_CONTROL_LABELS = {
+    "project_docs": "Project docs",
+    "mission_history": "Mission history",
+    "replay_reports": "Replay reports",
+    "ai_chat_history": "AI chat history",
+    "settings_config": "Settings/config",
+    "sensor_context": "Sensor context",
+    "web_research": "Web research",
+}
+
+_AI_CONTEXT_PROVIDER_LABELS = {
+    "get_current_rover_state": "Current rover state snapshot",
+    "get_runtime_context": "Runtime status and environment context",
+    "get_settings_context": "Settings/config summary",
+    "get_llm_context": "LLM provider and routing context",
+    "get_current_mission_state": "Current mission state",
+    "get_scene_summary": "Scene/map summary",
+    "query_objects_in_front": "Objects in front of the rover",
+    "query_objects_near": "Objects near the rover",
+    "query_objects_by_kind": "Objects filtered by kind",
+    "get_current_replay_summary": "Current replay summary",
+    "get_recent_telemetry": "Recent telemetry window",
+    "resolve_replay_sessions": "Replay session lookup",
+    "get_recent_ai_chat_history": "Recent AI chat history",
 }
 
 DEFAULT_ROVER_AVAILABILITY_POLICY = {
@@ -1119,6 +1148,30 @@ def _format_contract_mapping(values: dict[str, Any]) -> str:
     return ", ".join(f"`{key}`: `{value}`" for key, value in values.items())
 
 
+def _format_compact_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.1f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}K"
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.1f}"
+
+
+def _latest_assistant_message(session: dict[str, Any]) -> dict[str, Any] | None:
+    messages = session.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict) and str(message.get("role", "")) == "assistant":
+            return message
+    return None
+
+
 def _format_agent_tool_activity_markdown(session: dict[str, Any]) -> str:
     messages = session.get("messages")
     if not isinstance(messages, list):
@@ -1149,22 +1202,132 @@ def _format_agent_tool_activity_markdown(session: dict[str, Any]) -> str:
     return "## Agent Tool Activity\n\nNo agent tool activity has been recorded in this session yet."
 
 
+def _format_context_markdown(session: dict[str, Any]) -> str:
+    message = _latest_assistant_message(session)
+    if message is None:
+        return "## Context\n\nNo assistant message is available for this session yet."
+    meta = message.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    provider_name = str(message.get("provider_id") or "unknown")
+    model_id = str(message.get("model_id") or "").strip()
+    source_controls = normalize_source_controls(session.get("source_controls"))
+    providers = [item for item in meta.get("context_providers") or [] if item]
+    retrieved_sources = [item for item in meta.get("retrieved_sources") or [] if isinstance(item, dict)]
+    loaded_refs = [item for item in meta.get("loaded_data_refs") or [] if isinstance(item, dict)]
+    dropped_sections = [item for item in meta.get("dropped_sections") or [] if item]
+    input_tok = (meta.get("usage_metadata") or {}).get("input_tokens")
+    if input_tok is None:
+        rm = meta.get("response_metadata") or {}
+        usage = rm.get("usage_metadata") or rm.get("token_usage") or rm.get("usage") or {}
+        input_tok = usage.get("input_tokens") or usage.get("prompt_tokens") or usage.get("prompt_eval_count")
+    context_window = message.get("context_window") or session.get("context_window") or 0
+    estimated_chars = meta.get("estimated_chars")
+    budget_chars = meta.get("budget_chars")
+
+    lines = ["## Context", ""]
+    created_at = message.get("created_at")
+    if created_at is not None:
+        lines.append(f"Latest assistant message: `{created_at}`")
+        lines.append("")
+    lines.append("Summary:")
+    lines.append(f"- Provider: `{provider_name}`{f' · `{model_id}`' if model_id else ''}")
+    try:
+        input_tok_num = float(input_tok)
+    except (TypeError, ValueError):
+        input_tok_num = None
+    try:
+        ctx_max_num = float(context_window)
+    except (TypeError, ValueError):
+        ctx_max_num = 0.0
+    if input_tok_num is not None and ctx_max_num > 0:
+        pct = max(0, min(100, round((input_tok_num / ctx_max_num) * 100)))
+        lines.append(f"- Prompt window use: `{_format_compact_number(input_tok_num)} / {_format_compact_number(ctx_max_num)} tok ({pct}%)`")
+    elif input_tok_num is not None:
+        lines.append(f"- Prompt window use: `{_format_compact_number(input_tok_num)} tok`")
+    try:
+        estimated_chars_num = float(estimated_chars)
+        budget_chars_num = float(budget_chars)
+    except (TypeError, ValueError):
+        estimated_chars_num = None
+        budget_chars_num = None
+    if estimated_chars_num is not None and budget_chars_num is not None and budget_chars_num > 0:
+        lines.append(
+            f"- Compact-context size estimate: `{_format_compact_number(estimated_chars_num)} / {_format_compact_number(budget_chars_num)} chars`"
+        )
+    enabled_count = sum(1 for value in source_controls.values() if value)
+    lines.append(f"- Session source controls enabled: `{enabled_count}/{len(source_controls)}`")
+    if providers:
+        lines.append(f"- Context providers used: `{len(providers)}`")
+    if retrieved_sources:
+        lines.append(f"- Retrieval sources recorded: `{len(retrieved_sources)}`")
+    if loaded_refs:
+        lines.append(f"- Loaded context blocks: `{len(loaded_refs)}`")
+    if dropped_sections:
+        lines.append(f"- Trimmed sections: `{len(dropped_sections)}`")
+
+    if providers:
+        lines.extend(["", "Context providers", "This is what the old `6 sources` count was referring to."])
+        for name in providers:
+            label = _AI_CONTEXT_PROVIDER_LABELS.get(str(name), str(name))
+            lines.append(f"- `{name}`: {label}")
+
+    if retrieved_sources:
+        lines.extend(["", "Retrieval sources"])
+        for source in retrieved_sources:
+            key = str(source.get("source") or "")
+            label = _AI_SOURCE_CONTROL_LABELS.get(key, key or "source")
+            status = str(source.get("status") or "unknown")
+            requested = "lazy-loaded in this turn" if source.get("requested") else "not loaded in this turn"
+            note = str(source.get("note") or "").strip()
+            line = f"- `{label}` (`{key}`): {status}; {requested}"
+            if note:
+                line += f"; {note}"
+            lines.append(line)
+
+    if loaded_refs:
+        lines.extend(["", "Loaded context blocks"])
+        for ref in loaded_refs:
+            source_key = str(ref.get("source") or "")
+            source_label = _AI_SOURCE_CONTROL_LABELS.get(source_key, source_key or "source")
+            ref_name = str(ref.get("ref") or "unknown")
+            status = str(ref.get("status") or "unknown")
+            extras: list[str] = []
+            if ref.get("branch"):
+                extras.append(f"branch: `{ref['branch']}`")
+            if ref.get("message_count") is not None:
+                extras.append(f"messages: `{ref['message_count']}`")
+            line = f"- `{source_label}`: `{ref_name}` ({status})"
+            if extras:
+                line += f"; {' · '.join(extras)}"
+            lines.append(line)
+
+    if dropped_sections:
+        lines.extend(["", "Trimmed sections"])
+        for section in dropped_sections:
+            lines.append(f"- `{section}`")
+
+    return "\n".join(lines).strip()
+
+
 def _build_ai_session_command_response(
     runtime: AppRuntime,
     tool_registry: ToolRegistry,
     session_id: str,
     command: str,
 ) -> tuple[str, str]:
-    include_messages = str(command or "").strip().lower() == "tool-activity"
+    normalized = str(command or "").strip().lower()
+    include_messages = normalized in {"tool-activity", "context"}
     session = runtime.ai_store.get_session(session_id, include_messages=include_messages)
     if session is None:
         raise KeyError("AI session not found")
     source_controls = normalize_source_controls(session.get("source_controls"))
-    normalized = str(command or "").strip().lower()
     if normalized == "retrieval-surfaces":
         return "/retrieval-surfaces", _format_retrieval_surfaces_markdown(session_id, source_controls)
     if normalized == "tool-activity":
         return "/tool-activity", _format_agent_tool_activity_markdown(session)
+    if normalized == "context":
+        return "/context", _format_context_markdown(session)
     if normalized == "capabilities brief":
         retrieval = _format_retrieval_surfaces_markdown(session_id, source_controls)
         tools = _format_tool_catalog_markdown_brief(tool_registry, source_controls=source_controls)
@@ -1979,6 +2142,21 @@ async def get_current_mission_overlay(request: Request, session_id: str = "") ->
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
+
+
+@app.get("/api/vehicle-profile/active")
+async def get_active_vehicle_profile(request: Request) -> JSONResponse:
+    _runtime(request)
+    return JSONResponse({"ok": True, "profile": asdict(get_active_profile())})
+
+
+@app.get("/api/vehicle-profiles")
+async def list_vehicle_profiles(request: Request) -> JSONResponse:
+    _runtime(request)
+    return JSONResponse({
+        "ok": True,
+        "profiles": [asdict(profile) for profile in KNOWN_PROFILES.values()],
+    })
 
 
 @app.get("/api/ai/controller-mission")

@@ -7,6 +7,12 @@
     <title>AI Chat | Remote Rover GCS</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/static/style.css">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/atom-one-dark.min.css">
   </head>
   <body data-page="ai">
@@ -173,6 +179,11 @@
           title="Drag to resize chat panels height"
         ></button>
       </section>
+
+      <section id="ai-map-area" class="panel ai-map-area">
+        <div class="ai-map-area-list-placeholder" aria-hidden="true"></div>
+        <div id="ai-map-widget-container" class="ai-map-widget-container"></div>
+      </section>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/marked@14.1.1/lib/marked.umd.min.js" defer></script>
@@ -180,5 +191,48 @@
     <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js" defer></script>
     <script src="/static/common.js" defer></script>
     <script src="/static/ai.js" defer></script>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+      defer
+    ></script>
+    <script type="module">
+      import { MapWidget } from '/static/map/index.js';
+
+      let _widget = null;
+
+      function mountWidget(sessionId) {
+        const container = document.getElementById('ai-map-widget-container');
+        if (!container) return;
+        if (_widget) {
+          if (!_widget.isMounted) {
+            _widget.mount();
+          }
+          _widget.setSessionId(sessionId);
+          return;
+        }
+        _widget = new MapWidget(container, { sessionId });
+        _widget.mount();
+      }
+
+      document.addEventListener('ai:session-open', (e) => {
+        mountWidget(e.detail.sessionId);
+      });
+
+      document.addEventListener('ai:session-refreshed', (e) => {
+        const activeSessionId = window.__aiGetActiveSessionId?.() || '';
+        if (e.detail.sessionId === activeSessionId && _widget) {
+          _widget.refresh();
+        }
+      });
+
+      // Module scripts may execute after classic defer scripts in some browsers.
+      // Check if a session is already active (ai.js may have already called openSession).
+      window.addEventListener('load', () => {
+        const currentSessionId = window.__aiGetActiveSessionId?.() || '';
+        mountWidget(currentSessionId);
+      });
+    </script>
   </body>
 </html>

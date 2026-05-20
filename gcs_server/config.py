@@ -29,7 +29,7 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
-        "ai_use_planner_loop": False,
+        "ai_use_planner_loop": True,
     },
     "llm_providers": [
         {
