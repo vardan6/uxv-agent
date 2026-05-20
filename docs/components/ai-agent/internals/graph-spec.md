@@ -3,7 +3,7 @@
 Status date: 2026-05-18.
 Status: canonical. Synthesized on 2026-05-18 from three source drafts
 (prior canonical, codex regen, claude rewrite) which are preserved in
-[`docs/archive/ai/2026-05-18-graph-spec-merge/`](../../../archive/ai/2026-05-18-graph-spec-merge/)
+[`docs/archive/ai-agent/2026-05-18-graph-spec-merge/`](../../../archive/ai-agent/2026-05-18-graph-spec-merge/)
 for historical reference.
 
 This document is the visual companion to:
@@ -727,7 +727,7 @@ This document is a synthesis of three drafts produced on 2026-05-18:
   taxonomy, capability colouring, comparison cheat sheet)
 
 The three source drafts are archived in
-`docs/archive/ai/2026-05-18-graph-spec-merge/`. This file is the
+`docs/archive/ai-agent/2026-05-18-graph-spec-merge/`. This file is the
 canonical graph spec.
 
 Revision log:

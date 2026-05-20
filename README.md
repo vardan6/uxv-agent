@@ -23,21 +23,21 @@ Main documentation entry point:
 - [Documentation Portal](./docs/README.md)
 
 Recommended reading order:
-- [Vision](./docs/product/vision.md)
+- [Vision](./docs/cross-cutting/vision.md)
 - [Current State](./docs/current-state.md)
-- [Architecture](./docs/technical/architecture.md)
-- [AI Agent Requirements](./docs/product/ai-agent-requirements.md)
-- [AI Agent Technical Spec](./docs/technical/ai/ai-agent-functional-spec.md)
-- [AI Agent Graph Spec](./docs/technical/ai/ai-agent-graph-spec.md)
-- [AI Current Context Layer](./docs/technical/ai/context-layer.md)
-- [AI Spatial Tools And Agent Plan](./docs/technical/ai/spatial-tools.md)
-- [Implementation Roadmap](./docs/implementation-roadmap.md)
-- [Run And Config Guide](./docs/operations/run-and-config.md)
+- [Architecture](./docs/cross-cutting/architecture.md)
+- [AI Agent Requirements](./docs/components/ai-agent/requirements.md)
+- [AI Agent Design](./docs/components/ai-agent/design.md)
+- [AI Agent Graph Spec](./docs/components/ai-agent/internals/graph-spec.md)
+- [AI Current Context Layer](./docs/components/ai-agent/internals/context-layer.md)
+- [AI Spatial Tools](./docs/components/ai-agent/internals/spatial-tools.md)
+- [Roadmap](./docs/roadmap.md)
+- [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
 
 Subproject documentation:
-- [3D Simulator Docs](./docs/technical/simulator/overview.md)
-- [GCS Server Docs](./docs/technical/gcs/overview.md)
-- [Terrain Scene Manifest](./docs/technical/simulator/terrain-scene.md)
+- [Simulator Docs](./docs/components/simulator/README.md)
+- [GCS Docs](./docs/components/gcs/README.md)
+- [Terrain Scene Manifest](./docs/components/simulator/internals/terrain-scene.md)
 
 ## Repository Layout
 
@@ -151,8 +151,8 @@ python3 tools/validate_terrain_scene.py
 ```
 
 For cross-platform launcher details, shared config behavior, and telemetry policy notes, use:
-- [Run And Config Guide](./docs/operations/run-and-config.md)
+- [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, a first replay map, and an MQTT-to-WebSocket bootstrap video path. A major project target is AI-assisted remote robot operation: an operator prompts by text or voice, external AI agents generate a mission using map and robot context, the mission is passed to an autopilot/control layer, and AI agents monitor execution in parallel. If new obstacles, map mismatches, sensor findings, or other rule-triggering events make the mission unsafe or impossible, the agents either adjust within approved policy or report to a human for a revised prompt or decision. The GCS-side AI foundation now includes config-backed controls, LLM provider settings, provider checks, model routing, selected-section JSON settings import/export, provider-backed AI Chat with persistent sessions, compact exact rover/runtime/settings/LLM/map/replay context, a read-only Agent mode with rover/map/replay tools through the extracted AgentLoopRuntime, supervised intent parsing, and non-executing Workbench mission drafts with approval and clarification gates. The next AI implementation track is AgentLoopRuntime hardening, trace/stop reasons, policy seams, and Workbench planner-loop migration as documented in the AI agent requirements, technical spec, and graph spec. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.

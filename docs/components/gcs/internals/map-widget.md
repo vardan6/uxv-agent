@@ -10,7 +10,7 @@ Review history: `docs/archive/gcs/2026-05-20-map-widget-codex-review.md` (review
 
 ## Purpose
 
-Operators today approve agent-proposed missions on the AI chat page **without spatial review** — the only existing Leaflet map lives on the replay page as a 3500-line monolith that cannot be reused. Backend mission overlay APIs exist but no frontend renders them. This is a known safety gap (see `docs/product/mission-execution-and-flight-controller-handoff-prd.md`).
+Operators today approve agent-proposed missions on the AI chat page **without spatial review** — the only existing Leaflet map lives on the replay page as a 3500-line monolith that cannot be reused. Backend mission overlay APIs exist but no frontend renders them. This is a known safety gap; the mission approval and execution boundary now lives in [`../../ai-agent/requirements.md`](../../ai-agent/requirements.md) and [`../../ai-agent/design.md`](../../ai-agent/design.md).
 
 Goal: give the operator spatial review of agent proposals on `/ai` quickly via a small read-only render slice, then grow toward multi-mission management and (eventually) direct-manipulation editing — but only after the backend has the contracts to support those steps safely.
 

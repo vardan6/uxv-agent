@@ -29,4 +29,4 @@ Do not publish a retained MQTT current-state topic. Keep MQTT as the telemetry/c
 
 ## Follow-Ups
 
-- A shared state backend (e.g., Redis) becomes necessary if multiple GCS instances must coordinate live state. See [Implementation Roadmap](../../implementation-roadmap.md) Priority 5.
+- A shared state backend (e.g., Redis) becomes necessary if multiple GCS instances must coordinate live state. See [Roadmap](../../roadmap.md) Priority 5.

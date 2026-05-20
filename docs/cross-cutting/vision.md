@@ -63,15 +63,15 @@ The project is not yet in a final production architecture. It should be understo
 For a general or product-focused audience:
 
 1. [Current State](../current-state.md) — what works today
-2. [Operator Experience](./operator-experience.md) — what operators see and do
-3. [AI Agent Experience](./ai-experience.md) — the AI page UX
-4. [Implementation Roadmap](../implementation-roadmap.md) — what comes next
+2. [GCS Requirements](../components/gcs/requirements.md) — operator workflow and UI expectations
+3. [AI Agent Requirements](../components/ai-agent/requirements.md) — AI behavior, safety, and mission workflow
+4. [Roadmap](../roadmap.md) — what comes next
 
 For technical readers:
 
 1. [Architecture](./architecture.md)
 2. [GCS Design](../components/gcs/design.md)
-3. [AI Agent Requirements](./ai-agent-requirements.md)
-4. [AI Agent Design](../components/ai-agent/design.md)
-5. [AI Agent Graph Spec](../components/ai-agent/internals/graph-spec.md)
+3. [AI Agent Design](../components/ai-agent/design.md)
+4. [AI Agent Graph Spec](../components/ai-agent/internals/graph-spec.md)
+5. [Simulator Design](../components/simulator/design.md)
 6. [Run And Config Guide](./operations/run-and-config.md)
