@@ -51,7 +51,7 @@ python3 tools/validate_terrain_scene.py
 ```
 
 Detailed manifest notes:
-- [Terrain Scene Manifest](../../technical/simulator/terrain-scene.md)
+- [Terrain Scene Manifest](../../components/simulator/internals/terrain-scene.md)
 
 Important rule:
 - keep real environment-specific values only in `config/common.local.json`

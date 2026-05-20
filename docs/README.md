@@ -20,8 +20,7 @@ What the project is, what users see, what the system must do.
 | [product/vision.md](./cross-cutting/vision.md) | What Remote Rover is, current value, long-term AI-assisted target |
 | [components/gcs/requirements.md](./components/gcs/requirements.md) | Dashboard, replay, settings, MQTT setup — what operators see and do |
 | [components/ai-agent/requirements.md](./components/ai-agent/requirements.md) | Canonical AI agent requirements: behavior, safety, capability ladder, approval, mission execution, route planning, vehicle profiles |
-| [product/simulator-requirements.md](./product/simulator-requirements.md) | Stable requirements baseline for simulator and replay/map/logging work |
-| [product/rover-physics-tuning-prd.md](./product/rover-physics-tuning-prd.md) | PRD for realistic, operator-stable rover dynamics tuning in the simulator |
+| [components/simulator/requirements.md](./components/simulator/requirements.md) | Stable requirements baseline for simulator and replay/map/logging work, including rover physics tuning baseline |
 
 ## Technical (Implementation)
 
@@ -50,12 +49,14 @@ How the system is built.
 
 | Doc | Purpose |
 |---|---|
-| [technical/simulator/overview.md](./technical/simulator/overview.md) | 3D simulator purpose, features, controls |
-| [technical/simulator/technical-details.md](./technical/simulator/technical-details.md) | Simulator runtime structure |
-| [technical/simulator/terrain-scene.md](./technical/simulator/terrain-scene.md) | Source-of-truth terrain/object manifest |
-| [technical/simulator/platform-plan.md](./technical/simulator/platform-plan.md) | Simulator transition plan |
-| [technical/simulator/rover-sim-next-phase-1.md](./technical/simulator/rover-sim-next-phase-1.md) | Concrete first implementation checklist for the successor simulator |
-| [technical/simulator/rover-physics-tuning.md](./technical/simulator/rover-physics-tuning.md) | Manual route, acceptance behavior, and tuning order for rover dynamics work |
+| [components/simulator/README.md](./components/simulator/README.md) | Simulator component index |
+| [components/simulator/requirements.md](./components/simulator/requirements.md) | Requirements: simulation behavior, physics baseline, logging/replay, asset workflow |
+| [components/simulator/design.md](./components/simulator/design.md) | Design: architecture, MQTT contract, terrain, rover tuning decisions, transition plan |
+| [components/simulator/internals/terrain-scene.md](./components/simulator/internals/terrain-scene.md) | Source-of-truth terrain/object manifest |
+| [components/simulator/internals/technical-details.md](./components/simulator/internals/technical-details.md) | Simulator runtime structure and publish gating |
+| [components/simulator/internals/rover-physics-tuning.md](./components/simulator/internals/rover-physics-tuning.md) | Manual route, acceptance behavior, and tuning order for rover dynamics work |
+| [components/simulator/internals/rover-sim-next-phase-1.md](./components/simulator/internals/rover-sim-next-phase-1.md) | Concrete first implementation checklist for the successor simulator |
+| [components/simulator/internals/shadow-enhancement.md](./components/simulator/internals/shadow-enhancement.md) | Shadow quality implementation tiers and fixes |
 
 ### AI
 
