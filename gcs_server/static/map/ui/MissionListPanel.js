@@ -1,5 +1,8 @@
 import { vehicleIcon } from '../vehicleProfiles.js';
 
+const APPROVABLE = new Set(['proposed', 'awaiting_approval', 'planning']);
+const EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
+
 const STATUS_CLASS = {
   proposed: 'is-proposed',
   awaiting_approval: 'is-proposed',
@@ -25,6 +28,36 @@ function missionTitle(revision) {
 
 function originBadge() {
   return '🤖';
+}
+
+function renderActionButtons(revision, status) {
+  const revisionId = String(revision.id || '');
+  const draftId = String(revision.draft_id || '');
+
+  if (status === 'executing') {
+    return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
+  }
+  if (APPROVABLE.has(status) && draftId) {
+    return `
+      <button class="mission-row-action-btn is-approve" type="button"
+        data-approve-draft-id="${draftId}"
+        title="Approve draft (does not execute)"
+        aria-label="Approve draft (does not execute)">✓</button>
+      <button class="mission-row-action-btn is-reject" type="button"
+        data-reject-draft-id="${draftId}"
+        title="Reject draft"
+        aria-label="Reject draft">✕</button>
+    `;
+  }
+  if (EXECUTABLE.has(status)) {
+    return `
+      <button class="mission-row-action-btn is-execute" type="button"
+        data-execute-revision-id="${revisionId}"
+        title="Execute on rover (uploads and starts mission)"
+        aria-label="Execute on rover">▶</button>
+    `;
+  }
+  return '';
 }
 
 function renderRow(revision, ctx) {
@@ -62,13 +95,15 @@ function renderRow(revision, ctx) {
         <span class="mission-row-origin" title="Agent-created mission">${originBadge()}</span>
       </button>
       <span class="mission-row-actions">
+        ${renderActionButtons(revision, status)}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
-          class="mission-row-eye"
+          class="mission-row-eye${status === 'executing' ? ' is-locked' : ''}"
           type="button"
           data-toggle-revision-id="${revisionId}"
           aria-label="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
           title="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
+          ${status === 'executing' ? 'disabled aria-disabled="true"' : ''}
         >${isVisible ? '👁' : '🚫'}</button>
       </span>
     </div>
@@ -81,6 +116,9 @@ export class MissionListPanel {
     this._onFocusRequested = opts.onFocusRequested || (() => {});
     this._onVisibilityToggled = opts.onVisibilityToggled || (() => {});
     this._onExpandToggled = opts.onExpandToggled || (() => {});
+    this._onApproveRequested = opts.onApproveRequested || (() => {});
+    this._onRejectRequested = opts.onRejectRequested || (() => {});
+    this._onExecuteRequested = opts.onExecuteRequested || (() => {});
   }
 
   render({
@@ -155,6 +193,24 @@ export class MissionListPanel {
     this._container.querySelectorAll('[data-toggle-operation-id]').forEach((button) => {
       button.addEventListener('click', () => {
         this._onExpandToggled(button.dataset.toggleOperationId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-approve-draft-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onApproveRequested(button.dataset.approveDraftId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-reject-draft-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onRejectRequested(button.dataset.rejectDraftId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-execute-revision-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onExecuteRequested(button.dataset.executeRevisionId || '');
       });
     });
   }

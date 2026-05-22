@@ -24,7 +24,7 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
 ```
 
 Default URL:
-- `http://localhost:8080`
+- `http://127.0.0.1:8080` from `config/common.example.json` by default
 
 Notes:
 - shared runtime config lives in `../config/common.local.json`

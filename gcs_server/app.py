@@ -686,6 +686,38 @@ def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _sanitize_routing(payload: dict[str, Any] | None, providers: list[dict[str, Any]]) -> dict[str, Any]:
+    normalized = _normalize_routing(payload if isinstance(payload, dict) else {}, providers)
+    enabled_ids = [
+        str(provider.get("id"))
+        for provider in providers
+        if isinstance(provider, dict) and provider.get("enabled", True)
+    ]
+    enabled_id_set = set(enabled_ids)
+    first_enabled = enabled_ids[0] if enabled_ids else ""
+    out: dict[str, Any] = {}
+    for purpose in ROUTING_PURPOSES:
+        rule = normalized.get(purpose, {})
+        candidate_ids = []
+        if isinstance(rule, dict):
+            candidate_ids = [
+                str(rule.get("primary_provider_id", "")).strip(),
+                *[str(item).strip() for item in rule.get("fallback_provider_ids", []) if str(item).strip()],
+            ]
+        ordered_enabled_ids: list[str] = []
+        for candidate_id in candidate_ids:
+            if candidate_id and candidate_id in enabled_id_set and candidate_id not in ordered_enabled_ids:
+                ordered_enabled_ids.append(candidate_id)
+        primary_id = ordered_enabled_ids[0] if ordered_enabled_ids else first_enabled
+        fallback_ids = [candidate_id for candidate_id in ordered_enabled_ids[1:] if candidate_id != primary_id]
+        out[purpose] = {
+            "primary_provider_id": primary_id,
+            "fallback_provider_ids": fallback_ids,
+            "allow_runtime_override": bool(rule.get("allow_runtime_override", True)) if isinstance(rule, dict) else True,
+        }
+    return out
+
+
 def _selected_sections(payload: dict[str, Any]) -> list[str]:
     raw_sections = payload.get("sections", [])
     if not isinstance(raw_sections, list):
@@ -844,9 +876,14 @@ async def create_llm_provider(request: Request) -> JSONResponse:
         runtime.config.raw["llm_providers"] = []
         providers = runtime.config.raw["llm_providers"]
     providers.append(provider)
+    runtime.config.raw["model_routing"] = _sanitize_routing(runtime.config.raw.get("model_routing"), providers)
     save_config(runtime.config)
     evict_model_cache()
-    return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
+    return JSONResponse({
+        "ok": True,
+        "provider": _provider_public(provider, runtime),
+        "routing": runtime.config.raw["model_routing"],
+    })
 
 
 @app.put("/api/llm-providers/{provider_id}")
@@ -869,9 +906,17 @@ async def update_llm_provider(provider_id: str, request: Request) -> JSONRespons
     if previous_auth_mode == "stored_secret" and provider.get("auth_mode") != "stored_secret" and previous_secret_ref:
         runtime.secret_store.delete_secret(previous_secret_ref)
     runtime.config.raw["llm_providers"][index] = provider
+    runtime.config.raw["model_routing"] = _sanitize_routing(
+        runtime.config.raw.get("model_routing"),
+        [item for item in runtime.config.raw["llm_providers"] if isinstance(item, dict)],
+    )
     save_config(runtime.config)
     evict_model_cache()
-    return JSONResponse({"ok": True, "provider": _provider_public(provider, runtime)})
+    return JSONResponse({
+        "ok": True,
+        "provider": _provider_public(provider, runtime),
+        "routing": runtime.config.raw["model_routing"],
+    })
 
 
 @app.delete("/api/llm-providers/{provider_id}")
@@ -879,23 +924,24 @@ async def delete_llm_provider(provider_id: str, request: Request) -> JSONRespons
     runtime = _runtime(request)
     index, provider = _find_provider(runtime, provider_id)
     del runtime.config.raw["llm_providers"][index]
+    preserved = runtime.ai_store.preserve_deleted_provider_history(provider)
+    runtime.ai_store.clear_provider_selection(provider_id)
     if str(provider.get("auth_mode", "")).strip() == "stored_secret":
         runtime.secret_store.delete_secret(str(provider.get("secret_ref", "")).strip())
-
-    routing = runtime.config.raw.get("model_routing")
-    if isinstance(routing, dict):
-        for rule in routing.values():
-            if not isinstance(rule, dict):
-                continue
-            if rule.get("primary_provider_id") == provider_id:
-                rule["primary_provider_id"] = ""
-            fallback_ids = rule.get("fallback_provider_ids")
-            if isinstance(fallback_ids, list):
-                rule["fallback_provider_ids"] = [item for item in fallback_ids if item != provider_id]
+    runtime.config.raw["model_routing"] = _sanitize_routing(
+        runtime.config.raw.get("model_routing"),
+        [item for item in runtime.config.raw["llm_providers"] if isinstance(item, dict)],
+    )
 
     save_config(runtime.config)
     evict_model_cache()
-    return JSONResponse({"ok": True, "deleted_provider_id": provider_id, "provider": _provider_public(provider, runtime)})
+    return JSONResponse({
+        "ok": True,
+        "deleted_provider_id": provider_id,
+        "provider": _provider_public(provider, runtime),
+        "preserved_history": preserved,
+        "routing": runtime.config.raw["model_routing"],
+    })
 
 
 @app.post("/api/llm-providers/{provider_id}/check")
@@ -940,10 +986,11 @@ async def get_model_routing(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
     current = runtime.config.raw.setdefault("model_routing", {})
-    if not isinstance(current, dict) or not current:
-        current = _default_routing(providers)
-        runtime.config.raw["model_routing"] = current
-    return {"purposes": ROUTING_PURPOSES, "routing": current}
+    routing = _sanitize_routing(current, providers) if current else _default_routing(providers)
+    if routing != current:
+        runtime.config.raw["model_routing"] = routing
+        save_config(runtime.config)
+    return {"purposes": ROUTING_PURPOSES, "routing": routing}
 
 
 @app.put("/api/model-routing")
@@ -954,7 +1001,7 @@ async def set_model_routing(request: Request) -> JSONResponse:
     if not isinstance(routing_payload, dict):
         raise HTTPException(status_code=400, detail="routing object is required")
     providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
-    routing = _normalize_routing(routing_payload, providers)
+    routing = _sanitize_routing(routing_payload, providers)
     runtime.config.raw["model_routing"] = routing
     save_config(runtime.config)
     return JSONResponse({"ok": True, "purposes": ROUTING_PURPOSES, "routing": routing})
@@ -965,9 +1012,10 @@ async def get_llm_settings(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     providers = [provider for provider in runtime.config.raw.setdefault("llm_providers", []) if isinstance(provider, dict)]
     routing = runtime.config.raw.setdefault("model_routing", {})
-    if not isinstance(routing, dict) or not routing:
-        routing = _default_routing(providers)
+    routing = _sanitize_routing(routing, providers) if routing else _default_routing(providers)
+    if routing != runtime.config.raw.get("model_routing"):
         runtime.config.raw["model_routing"] = routing
+        save_config(runtime.config)
     return {
         "providers": [_provider_public(provider, runtime) for provider in providers],
         "purposes": ROUTING_PURPOSES,
@@ -989,7 +1037,7 @@ async def set_llm_settings(request: Request) -> JSONResponse:
     if not isinstance(routing_payload, dict):
         raise HTTPException(status_code=400, detail="model_routing must be an object")
     runtime.config.raw["llm_providers"] = providers
-    runtime.config.raw["model_routing"] = _normalize_routing(routing_payload, providers) if routing_payload else _default_routing(providers)
+    runtime.config.raw["model_routing"] = _sanitize_routing(routing_payload, providers) if routing_payload else _default_routing(providers)
     save_config(runtime.config)
     return JSONResponse({
         "ok": True,
@@ -1441,6 +1489,12 @@ def _latest_user_run_mode(messages: list[dict[str, Any]]) -> str:
     return "chat"
 
 
+def _payload_or_latest_user_run_mode(payload: dict[str, Any], messages: list[dict[str, Any]]) -> str:
+    if "run_mode" in payload:
+        return _ai_run_mode(payload)
+    return _latest_user_run_mode(messages)
+
+
 def _ai_run_mode(payload: dict[str, Any]) -> str:
     clean = str(payload.get("run_mode", "chat")).strip().lower()
     if clean in {"", "chat", "general_chat", "workbench", "intent", "rover_intent_test"}:
@@ -1785,16 +1839,19 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
         payload = await request.json()
     except json.JSONDecodeError:
         payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="message payload must be an object")
     timezone_name = _request_timezone_name(request, payload)
     try:
         messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
+        run_mode = _payload_or_latest_user_run_mode(payload, messages)
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _tool_registry(request),
             _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
-            run_mode=_latest_user_run_mode(messages),
+            run_mode=run_mode,
         )
         result = await _run_ai_call(
             runtime,
@@ -1802,6 +1859,7 @@ async def retry_ai_message(session_id: str, request: Request) -> JSONResponse:
             runtime.config,
             session_id,
             context_snapshot,
+            run_mode,
             {"timezone_name": timezone_name, "runtime": runtime},
         )
     except KeyError as exc:
@@ -1831,22 +1889,26 @@ async def retry_ai_message_stream(session_id: str, request: Request) -> Streamin
         payload = await request.json()
     except json.JSONDecodeError:
         payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="message payload must be an object")
     timezone_name = _request_timezone_name(request, payload)
     try:
         messages = runtime.ai_store.latest_messages(session_id, limit=AI_CONTEXT_MESSAGE_LIMIT)
+        run_mode = _payload_or_latest_user_run_mode(payload, messages)
         context_snapshot = await _ai_context_snapshot(
             runtime,
             _tool_registry(request),
             _latest_user_content(messages),
             session_id=session_id,
             timezone_name=timezone_name,
-            run_mode=_latest_user_run_mode(messages),
+            run_mode=run_mode,
         )
         def _stream_factory() -> Any:
             return _ai_chat_service(request).stream_retry_events(
                 runtime.config,
                 session_id,
                 context_snapshot,
+                run_mode,
                 {"timezone_name": timezone_name, "runtime": runtime},
             )
         run = inflight.start(runtime, session_id, _stream_factory)

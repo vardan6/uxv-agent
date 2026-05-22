@@ -1825,6 +1825,13 @@ body[data-page="settings"] .page-lede {
   align-items: center;
 }
 
+.llm-cell-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .llm-chip {
   padding: 5px 8px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -1854,12 +1861,70 @@ body[data-page="settings"] .page-lede {
   font-size: 1rem;
 }
 
-.llm-action-icon span {
+.llm-action-icon.is-active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--text);
+}
+
+.llm-action-icon > span {
   line-height: 1;
 }
 
 .llm-action-icon.llm-action-danger {
   color: color-mix(in srgb, var(--danger) 72%, var(--text));
+}
+
+.llm-icon-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, currentColor 22%, var(--line));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-strong) 55%, transparent);
+}
+
+.llm-icon-badge svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.llm-icon-default-active {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, #fff3b0 68%, var(--warn-bg)), color-mix(in srgb, var(--warn-bg) 92%, transparent));
+}
+
+.llm-icon-default-idle {
+  color: color-mix(in srgb, var(--warn) 40%, var(--muted));
+  background: color-mix(in srgb, var(--warn-bg) 45%, var(--panel));
+}
+
+.llm-icon-enabled-on {
+  color: color-mix(in srgb, var(--accent-strong) 72%, #198754);
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--ok-bg) 55%, #f5fff6), color-mix(in srgb, var(--ok-bg) 95%, transparent));
+}
+
+.llm-icon-enabled-off {
+  color: color-mix(in srgb, var(--muted) 74%, var(--warn));
+  background: color-mix(in srgb, var(--button-secondary-bg) 80%, var(--panel));
+}
+
+.llm-icon-status-ok {
+  color: color-mix(in srgb, var(--accent-strong) 72%, #198754);
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--ok-bg) 55%, #f5fff6), color-mix(in srgb, var(--ok-bg) 95%, transparent));
+}
+
+.llm-icon-status-pending {
+  color: var(--warn);
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--warn-bg) 45%, #fff5dc), color-mix(in srgb, var(--warn-bg) 92%, transparent));
+}
+
+.llm-icon-status-danger {
+  color: var(--danger);
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--danger-bg) 44%, #ffe7e2), color-mix(in srgb, var(--danger-bg) 92%, transparent));
 }
 
 .llm-routing-row {
@@ -1902,6 +1967,12 @@ body[data-page="settings"] .page-lede {
   margin: 14px 0 16px;
 }
 
+.json-scope-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .json-scope-list {
   display: grid;
   gap: 8px;
@@ -1914,6 +1985,7 @@ body[data-page="settings"] .page-lede {
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
+  min-height: 60px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 14px;
   background: color-mix(in srgb, var(--text) 2%, transparent);
@@ -1932,6 +2004,10 @@ body[data-page="settings"] .page-lede {
 .json-policy-list {
   display: grid;
   gap: 8px;
+  margin-top: 12px;
+}
+
+.json-scope-actions {
   margin-top: 12px;
 }
 
@@ -3527,6 +3603,168 @@ code {
 
 .map-widget-empty p {
   margin: 0;
+}
+
+/* Mission row action buttons */
+.mission-row-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.mission-row-action-btn.is-approve {
+  color: #2ea043;
+  border-color: color-mix(in srgb, #2ea043 40%, transparent);
+}
+
+.mission-row-action-btn.is-approve:hover {
+  background: color-mix(in srgb, #2ea043 14%, transparent);
+}
+
+.mission-row-action-btn.is-reject {
+  color: #c72e0f;
+  border-color: color-mix(in srgb, #c72e0f 40%, transparent);
+}
+
+.mission-row-action-btn.is-reject:hover {
+  background: color-mix(in srgb, #c72e0f 14%, transparent);
+}
+
+.mission-row-action-btn.is-execute {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.mission-row-action-btn.is-execute:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.mission-row-lock {
+  font-size: 0.9rem;
+  opacity: 0.7;
+  cursor: default;
+}
+
+.mission-row-eye.is-locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Confirmation modal for execute */
+.map-confirm-modal {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.map-confirm-modal[hidden] {
+  display: none;
+}
+
+.map-confirm-dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px 28px;
+  max-width: 380px;
+  width: calc(100% - 32px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.map-confirm-title {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.map-confirm-body {
+  margin: 0 0 20px;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.map-confirm-body code {
+  font-family: monospace;
+  font-size: 0.85em;
+  background: var(--bg-accent-b, rgba(255,255,255,0.06));
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.map-confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.map-confirm-cancel {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.map-confirm-cancel:hover {
+  background: color-mix(in srgb, var(--line) 30%, transparent);
+}
+
+.map-confirm-ok {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #c72e0f 50%, transparent);
+  background: color-mix(in srgb, #c72e0f 18%, transparent);
+  color: #e05c3a;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.map-confirm-ok:hover {
+  background: color-mix(in srgb, #c72e0f 28%, transparent);
+}
+
+/* Live vehicle marker */
+.map-vehicle-marker {
+  width: 24px;
+  height: 24px;
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+}
+
+.map-vehicle-marker::before {
+  content: '';
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-bottom: 20px solid var(--accent, #4a90d9);
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));
 }
 
 /* Numbered waypoint badge rendered via L.divIcon */

@@ -5,7 +5,7 @@ const aiState = {
   activeSession: null,
   editingSessionId: '',
   showArchived: false,
-  runMode: 'chat',
+  runMode: 'agent',
   messageListPinnedToBottom: true,
   slashMenuItems: [],
   slashMenuIndex: 0,
@@ -606,7 +606,8 @@ function messageStats(message) {
 function renderContextStatus(message) {
   const { meta, inputTok } = usageSnapshot(message);
   const provider = providerById(message.provider_id || '');
-  const ctxMax = provider?.context_window || null;
+  const snapshot = providerSnapshotForMessage(message);
+  const ctxMax = provider?.context_window || snapshot?.context_window || null;
   const estimatedChars = Number(meta.estimated_chars);
   const budgetChars = Number(meta.budget_chars);
   const providers = Array.isArray(meta.context_providers) ? meta.context_providers.filter(Boolean) : [];
@@ -1195,9 +1196,10 @@ function formatContextMarkdown(sessionId) {
   }
   const meta = message?.meta && typeof message.meta === 'object' ? message.meta : {};
   const provider = providerById(message.provider_id || '');
+  const providerSnapshot = providerSnapshotForMessage(message);
   const createdAt = message.created_at ? formatAiTime(message.created_at) : '';
   const { inputTok } = usageSnapshot(message);
-  const ctxMax = Number(provider?.context_window || 0);
+  const ctxMax = Number(provider?.context_window || providerSnapshot?.context_window || 0);
   const estimatedChars = Number(meta.estimated_chars);
   const budgetChars = Number(meta.budget_chars);
   const providers = Array.isArray(meta.context_providers) ? meta.context_providers.filter(Boolean) : [];
@@ -1654,9 +1656,27 @@ function activeProviderId() {
   return aiState.activeSession?.provider_id || aiEls.providerSelect.value || '';
 }
 
+function effectiveRoutingProviderId(purpose = 'general_chat') {
+  const rule = aiState.routing?.[purpose];
+  const candidateIds = [];
+  if (rule && typeof rule === 'object') {
+    candidateIds.push(String(rule.primary_provider_id || '').trim());
+    if (Array.isArray(rule.fallback_provider_ids)) {
+      rule.fallback_provider_ids.forEach((providerId) => candidateIds.push(String(providerId || '').trim()));
+    }
+  }
+  for (const providerId of candidateIds) {
+    const provider = providerById(providerId);
+    if (provider && provider.enabled !== false) {
+      return provider.id;
+    }
+  }
+  const firstEnabled = aiState.providers.find((provider) => provider && provider.enabled !== false) || null;
+  return firstEnabled?.id || '';
+}
+
 function generalChatProviderId() {
-  const rule = aiState.routing?.general_chat || {};
-  return rule.primary_provider_id || '';
+  return effectiveRoutingProviderId('general_chat');
 }
 
 function currentProvider() {
@@ -1676,9 +1696,16 @@ function providerById(providerId) {
   return aiState.providers.find((provider) => provider.id === providerId);
 }
 
+function providerSnapshotForMessage(message) {
+  const meta = message?.meta;
+  const snapshot = meta && typeof meta === 'object' ? meta.provider_snapshot : null;
+  return snapshot && typeof snapshot === 'object' ? snapshot : null;
+}
+
 function providerNameForMessage(message) {
   const provider = providerById(message.provider_id || '');
-  return provider?.display_name || message.provider_id || 'Unknown provider';
+  const snapshot = providerSnapshotForMessage(message);
+  return provider?.display_name || snapshot?.display_name || message.provider_id || 'Unknown provider';
 }
 
 function normalizeRunMode(value) {
@@ -2283,7 +2310,9 @@ function renderMessages(options = {}) {
                 aria-label="Copy markdown"
               >${aiCopyIcon()}</button>`
             : ''}
-          <button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>
+          ${message.role === 'user' && !viewingArchived && String(message.content || '').trim()
+            ? `<button class="ghost ai-message-resend" type="button" data-message-action="resend" data-message-id="${escapeHtml(message.id)}" title="Resend this message">Resend</button>`
+            : ''}
           <span>${escapeHtml(formatAiTime(message.created_at))}</span>
         </span>
       </div>
@@ -2350,7 +2379,7 @@ function pushLocalPendingMessages(sessionId, content, runMode = 'chat') {
   ];
 }
 
-function pushLocalRetryPendingAssistant(sessionId) {
+function pushLocalRetryPendingAssistant(sessionId, runMode = currentRunMode()) {
   const live = liveStateFor(sessionId);
   const now = Date.now() / 1000;
   const pendingAssistantId = `pending-assistant-${crypto.randomUUID()}`;
@@ -2358,9 +2387,9 @@ function pushLocalRetryPendingAssistant(sessionId) {
   if (messages[messages.length - 1]?.role === 'assistant') {
     messages.pop();
   }
-  const runMode = messageRunMode(messages[messages.length - 1]);
+  const normalizedRunMode = normalizeRunMode(runMode);
   live.pendingAssistantMessageId = pendingAssistantId;
-  setMessageActivityOpen(pendingAssistantId, runMode === 'agent');
+  setMessageActivityOpen(pendingAssistantId, normalizedRunMode === 'agent');
   live.messages = [
     ...messages,
     {
@@ -2371,7 +2400,7 @@ function pushLocalRetryPendingAssistant(sessionId) {
       provider_id: activeProviderId() || generalChatProviderId(),
       model_id: '',
       latency_ms: null,
-      meta: { interrupted: false, run_mode: runMode, agent_trace: [], agent_tool_progress: [] },
+      meta: { interrupted: false, run_mode: normalizedRunMode, agent_trace: [], agent_tool_progress: [] },
     },
   ];
 }
@@ -3209,17 +3238,18 @@ async function retryResponse() {
   const sessionId = aiState.activeSession?.id;
   if (!sessionId || liveStateFor(sessionId).sending) return;
   const live = liveStateFor(sessionId);
+  const runMode = currentRunMode();
   live.sending = true;
   const abortController = new AbortController();
   live.abortController = abortController;
-  pushLocalRetryPendingAssistant(sessionId);
+  pushLocalRetryPendingAssistant(sessionId, runMode);
   renderMessages();
   setAiStatus('Retrying last model response.');
   try {
     saveInflightMarker(sessionId, 'retry');
     await streamAiRequest(
       `/api/ai/sessions/${encodeURIComponent(sessionId)}/retry/stream`,
-      {},
+      { run_mode: runMode },
       abortController,
       sessionId,
     );

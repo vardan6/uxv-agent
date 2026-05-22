@@ -5,8 +5,8 @@
 This document captures the requirements for the simulation-platform work across both the current `3d-env` simulator and the planned `rover-sim-next` successor.
 
 Sources consolidated here:
-- `docs/archive/simulator/2026-05-simulator-requirements.md` (primary)
-- `docs/archive/simulator/2026-05-rover-physics-tuning-prd.md` (physics tuning baseline)
+- `docs/archive/simulator/2026-05-16-simulator-requirements.md` (primary)
+- `docs/archive/simulator/2026-05-16-rover-physics-tuning-prd.md` (physics tuning baseline)
 
 For implementation design, see [design.md](./design.md).
 For vocabulary, see [docs/glossary.md](../../glossary.md).

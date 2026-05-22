@@ -17,12 +17,25 @@ Goal: give the operator spatial review of agent proposals on `/ai` quickly via a
 
 ## Current Implementation Reality
 
-Before describing the target widget, here is what exists in the codebase today (May 2026):
+Updated 2026-05-21 to reflect Phases 1A–1C shipping.
 
-**Frontend:**
-- No `gcs_server/static/map/` module exists yet.
-- Leaflet usage lives only in `gcs_server/static/replay.html` and `replay.js`. Replay uses `L.CRS.Simple` (scene metres, not WGS84). Leaflet 1.9.4 from CDN.
-- `gcs_server/static/ai.html` / `ai.js` has no map.
+**Frontend (`gcs_server/static/map/`):**
+- `MapWidget.js` — orchestrator; mounts Leaflet map, manages polling, action callbacks, confirm modal, vehicle layer
+- `layers/MissionOverlayLayer.js` — renders route polylines and numbered waypoint badges in scene coordinates
+- `layers/LiveVehicleLayer.js` — subscribes to `/ws`, draws heading-rotated vehicle arrow marker
+- `ui/MissionListPanel.js` — grouped revision list; visibility/focus toggles; approve/reject/execute action buttons; 🔒 badge for executing state
+- `data/missionApi.js` — wrappers for all mission overlay, list, approve, reject, execute, and controller-state endpoints
+- `data/vehicleProfileApi.js` — vehicle profile wrappers
+- `missionListLogic.js` — pure grouping, visibility cap, palette assignment
+- `vehicleProfiles.js` — client mirror of the seven-field `VehicleProfile`
+- `ai.html` — mounts `MapWidget` on `ai:session-open` and `ai:session-refreshed` events; reads session id via `window.__aiGetActiveSessionId`
+
+**Not yet implemented (Phase 1D/1E):**
+- `layers/GeofenceLayer.js`, `layers/TerrainCanvasLayer.js` — Phase 2
+- `ui/SelectionPanel.js` — read-only waypoint inspector on marker click
+- `ui/KeyboardHelpOverlay.js` — `?` key help
+- `state/editState.js` — selection set, dirty waypoints, provenance map
+- Backend mutation endpoints for creating/editing/deleting waypoints
 
 **Backend routes that exist (verified):**
 - `GET /api/ai/mission-revisions?session_id=...` — list revisions
@@ -75,6 +88,8 @@ Before describing the target widget, here is what exists in the codebase today (
 ## Phase Plan
 
 Phase 1 is split into four shippable slices. Each slice has acceptance criteria and ships independently. Phase 2 is everything that needs new backend contracts.
+
+**Shipped:** Phases 1A, 1B, and 1C are complete as of 2026-05-21. Phase 1D (backend mutation API design) is next.
 
 ### Phase 1A — Read-only current mission overlay on `/ai`
 

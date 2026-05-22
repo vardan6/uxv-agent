@@ -780,9 +780,98 @@ function statusTone(status) {
   return 'danger';
 }
 
+function formatProviderStatus(status) {
+  return String(status || 'not_tested').replaceAll('_', ' ');
+}
+
+function renderProviderIcon(kind, state = '') {
+  if (kind === 'default') {
+    if (state === 'active') {
+      return `
+        <span class="llm-icon-badge llm-icon-default llm-icon-default-active" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M8 1.6l1.9 3.86 4.26.62-3.08 3 0.73 4.24L8 11.29l-3.81 2.03 0.73-4.24-3.08-3 4.26-.62L8 1.6z" fill="currentColor"></path>
+          </svg>
+        </span>
+      `;
+    }
+    return `
+      <span class="llm-icon-badge llm-icon-default llm-icon-default-idle" aria-hidden="true">
+        <svg viewBox="0 0 16 16" focusable="false">
+          <path d="M8 1.6l1.9 3.86 4.26.62-3.08 3 0.73 4.24L8 11.29l-3.81 2.03 0.73-4.24-3.08-3 4.26-.62L8 1.6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path>
+        </svg>
+      </span>
+    `;
+  }
+  if (kind === 'enabled') {
+    return `
+      <span class="llm-icon-badge llm-icon-enabled llm-icon-enabled-${state === 'active' ? 'on' : 'off'}" aria-hidden="true">
+        <svg viewBox="0 0 16 16" focusable="false">
+          <path d="M8 1.6v5.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+          <path d="M4.38 3.48a5.5 5.5 0 107.24 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+        </svg>
+      </span>
+    `;
+  }
+  if (kind === 'status') {
+    if (state === 'available') {
+      return `
+        <span class="llm-icon-badge llm-icon-status llm-icon-status-ok" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <circle cx="8" cy="8" r="5.7" fill="none" stroke="currentColor" stroke-width="1.4"></circle>
+            <path d="M5.1 8.1l1.9 1.9 3.8-4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+      `;
+    }
+    if (state === 'not_tested') {
+      return `
+        <span class="llm-icon-badge llm-icon-status llm-icon-status-pending" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <circle cx="8" cy="8" r="5.7" fill="none" stroke="currentColor" stroke-width="1.4"></circle>
+            <path d="M8 4.9v3.3l2 1.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+      `;
+    }
+    return `
+      <span class="llm-icon-badge llm-icon-status llm-icon-status-danger" aria-hidden="true">
+        <svg viewBox="0 0 16 16" focusable="false">
+          <path d="M8 2.2l5.55 9.6a.7.7 0 01-.6 1.05H3.05a.7.7 0 01-.6-1.05L8 2.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path>
+          <path d="M8 5.4v3.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
+          <circle cx="8" cy="11.1" r="0.8" fill="currentColor"></circle>
+        </svg>
+      </span>
+    `;
+  }
+  return '';
+}
+
+function renderProviderActionButton({
+  action,
+  title,
+  label,
+  iconMarkup,
+  disabled = false,
+  active = false,
+  extraClass = '',
+}) {
+  return `<button type="button" class="ghost llm-action-icon${active ? ' is-active' : ''}${extraClass ? ` ${extraClass}` : ''}" data-llm-action="${escapeHtml(action)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(label || title)}"${disabled ? ' disabled' : ''}>${iconMarkup}</button>`;
+}
+
 function providerLabel(providerId) {
   const provider = llmProviders.find((item) => item.id === providerId);
   return provider ? provider.display_name : 'No provider';
+}
+
+function generalChatRule() {
+  const current = modelRouting && typeof modelRouting === 'object' ? modelRouting.general_chat : null;
+  if (current && typeof current === 'object') return current;
+  return { primary_provider_id: '', fallback_provider_ids: [], allow_runtime_override: true };
+}
+
+function getDefaultProviderId() {
+  return String(generalChatRule().primary_provider_id || '').trim();
 }
 
 function normalizeSecretRef(value) {
@@ -897,6 +986,7 @@ function updateProviderAuthFields() {
 function renderProviderList() {
   if (!settingsEls.llmProviderList) return;
   const enabledCount = llmProviders.filter((provider) => provider.enabled !== false).length;
+  const defaultProviderId = getDefaultProviderId();
   if (settingsEls.llmRegistryPill) settingsEls.llmRegistryPill.textContent = `${enabledCount} enabled`;
   if (!llmProviders.length) {
     settingsEls.llmProviderList.innerHTML = '<p class="settings-note">No LLM providers configured yet.</p>';
@@ -930,8 +1020,43 @@ function renderProviderList() {
       </thead>
       <tbody>
         ${rows.map(({ provider, check, capabilities, authSummary }) => {
-    const tone = statusTone(check.status);
     const capabilitiesMarkup = capabilities.map((capability) => `<span class="llm-chip">${escapeHtml(capability)}</span>`).join('');
+    const isDefault = provider.id === defaultProviderId;
+    const enabled = provider.enabled !== false;
+    const statusText = formatProviderStatus(check.status);
+    const statusMessage = String(check.message || '').trim();
+    const statusTitle = statusMessage ? `${statusText}: ${statusMessage}` : statusText;
+    const defaultMarkup = renderProviderActionButton({
+      action: 'set-default',
+      title: isDefault
+        ? `Current default for General Chat: ${provider.display_name}${enabled ? '' : ' (disabled)'}`
+        : `Set ${provider.display_name} as the default provider for General Chat`,
+      label: isDefault
+        ? `Current default provider for General Chat: ${provider.display_name}`
+        : `Set ${provider.display_name} as default provider for General Chat`,
+      iconMarkup: renderProviderIcon('default', isDefault ? 'active' : 'idle'),
+      disabled: !isDefault && !enabled,
+      active: isDefault,
+    });
+    const enabledMarkup = renderProviderActionButton({
+      action: 'toggle',
+      title: enabled
+        ? `Disable ${provider.display_name} for routing and selection`
+        : `Enable ${provider.display_name} for routing and selection`,
+      label: enabled
+        ? `Disable provider ${provider.display_name}`
+        : `Enable provider ${provider.display_name}`,
+      iconMarkup: renderProviderIcon('enabled', enabled ? 'active' : 'inactive'),
+      active: enabled,
+    });
+    const statusCheckMarkup = renderProviderActionButton({
+      action: 'check',
+      title: statusMessage
+        ? `Check ${provider.display_name} again. Last result: ${statusTitle}`
+        : `Check ${provider.display_name} auth, base URL, and model endpoint`,
+      label: `Check provider ${provider.display_name}`,
+      iconMarkup: renderProviderIcon('status', check.status),
+    });
     return `
       <tr class="llm-provider-row" data-provider-id="${escapeHtml(provider.id)}">
         <td><strong>${escapeHtml(provider.display_name)}</strong></td>
@@ -939,14 +1064,32 @@ function renderProviderList() {
         <td><span class="llm-chip">${escapeHtml(provider.model_id || 'no model id')}</span></td>
         <td><span class="llm-chip">${escapeHtml(authSummary)}</span></td>
         <td><div class="llm-provider-meta">${capabilitiesMarkup || '<span class="llm-chip">none</span>'}</div></td>
-        <td><span class="pill ${provider.enabled === false ? 'warn' : 'ok'}">${provider.enabled === false ? 'disabled' : 'enabled'}</span></td>
-        <td><span class="pill ${tone}">${escapeHtml(check.status || 'not_tested')}</span></td>
+        <td>
+          <div class="llm-cell-control">
+            ${enabledMarkup}
+          </div>
+        </td>
+        <td>
+          <div class="llm-cell-control">
+            ${statusCheckMarkup}
+          </div>
+        </td>
         <td>
           <div class="llm-actions">
-            <button type="button" class="ghost llm-action-icon" data-llm-action="check" title="Check provider" aria-label="Check provider"><span aria-hidden="true">✓</span></button>
-            <button type="button" class="ghost llm-action-icon" data-llm-action="edit" title="Edit provider" aria-label="Edit provider"><span aria-hidden="true">✎</span></button>
-            <button type="button" class="ghost llm-action-icon" data-llm-action="toggle" title="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}" aria-label="${provider.enabled === false ? 'Enable provider' : 'Disable provider'}"><span aria-hidden="true">${provider.enabled === false ? '⏻' : '⏼'}</span></button>
-            <button type="button" class="ghost llm-action-icon llm-action-danger" data-llm-action="delete" title="Delete provider" aria-label="Delete provider"><span aria-hidden="true">🗑</span></button>
+            ${defaultMarkup}
+            ${renderProviderActionButton({
+      action: 'edit',
+      title: `Edit ${provider.display_name}`,
+      label: `Edit provider ${provider.display_name}`,
+      iconMarkup: '<span aria-hidden="true">✎</span>',
+    })}
+            ${renderProviderActionButton({
+      action: 'delete',
+      title: `Delete ${provider.display_name}`,
+      label: `Delete provider ${provider.display_name}`,
+      iconMarkup: '<span aria-hidden="true">🗑</span>',
+      extraClass: 'llm-action-danger',
+    })}
           </div>
         </td>
       </tr>
@@ -1063,6 +1206,9 @@ async function saveProvider(event) {
   const index = llmProviders.findIndex((item) => item.id === result.provider.id);
   if (index >= 0) llmProviders[index] = result.provider;
   else llmProviders.push(result.provider);
+  if (result.routing && typeof result.routing === 'object') {
+    modelRouting = result.routing;
+  }
   fillProviderForm(result.provider);
   settingsEls.llmSecretValue.value = '';
   renderProviderList();
@@ -1099,6 +1245,9 @@ async function addMissingExampleProviders() {
         }),
       });
       llmProviders.push(result.provider);
+      if (result.routing && typeof result.routing === 'object') {
+        modelRouting = result.routing;
+      }
     }
     renderProviderList();
     renderRoutingList();
@@ -1117,6 +1266,28 @@ async function checkDraftProvider() {
   });
   settingsEls.llmSecretValue.value = '';
   setLlmStatus(`Draft check: ${result.check.status}. ${result.check.message || ''}`);
+}
+
+async function setDefaultProvider(provider) {
+  ensureRoutingDefaults();
+  const nextRouting = JSON.parse(JSON.stringify(modelRouting || {}));
+  nextRouting.general_chat = {
+    ...generalChatRule(),
+    primary_provider_id: provider.id,
+    fallback_provider_ids: Array.isArray(generalChatRule().fallback_provider_ids)
+      ? generalChatRule().fallback_provider_ids.filter((id) => id !== provider.id)
+      : [],
+  };
+  const result = await readJson('/api/model-routing', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ routing: nextRouting }),
+  });
+  modelRouting = result.routing || {};
+  renderProviderList();
+  renderRoutingList();
+  setLlmStatus(`Default LLM set to ${provider.display_name} for General Chat.`);
+  setRoutingStatus('Model routing rules saved.');
 }
 
 async function handleProviderListClick(event) {
@@ -1143,6 +1314,9 @@ async function handleProviderListClick(event) {
     settingsEls.llmDisplayName?.focus();
     settingsEls.llmDisplayName?.select();
     setLlmStatus(`Editing provider: ${provider.display_name}.`);
+  } else if (action === 'set-default') {
+    setLlmStatus(`Setting default LLM to ${provider.display_name}.`);
+    await setDefaultProvider(provider);
   } else if (action === 'toggle') {
     const updated = { ...provider, enabled: provider.enabled === false };
     const result = await readJson(`/api/llm-providers/${encodeURIComponent(provider.id)}`, {
@@ -1151,6 +1325,9 @@ async function handleProviderListClick(event) {
       body: JSON.stringify(updated),
     });
     llmProviders = llmProviders.map((item) => item.id === provider.id ? result.provider : item);
+    if (result.routing && typeof result.routing === 'object') {
+      modelRouting = result.routing;
+    }
     renderProviderList();
     renderRoutingList();
     setLlmStatus(`${result.provider.enabled === false ? 'Disabled' : 'Enabled'} provider: ${result.provider.display_name}.`);
@@ -1162,8 +1339,11 @@ async function handleProviderListClick(event) {
     setLlmStatus(`Provider check: ${result.check.status}. ${result.check.message || ''}`);
   } else if (action === 'delete') {
     if (!window.confirm(`Delete provider "${provider.display_name}"?`)) return;
-    await readJson(`/api/llm-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' });
+    const result = await readJson(`/api/llm-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' });
     llmProviders = llmProviders.filter((item) => item.id !== provider.id);
+    if (result.routing && typeof result.routing === 'object') {
+      modelRouting = result.routing;
+    }
     if (settingsEls.llmProviderId.value === provider.id) clearProviderForm();
     renderProviderList();
     renderRoutingList();

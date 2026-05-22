@@ -147,7 +147,7 @@ python -m gcs_server
 ```
 
 Open:
-- `http://localhost:8080` by default
+- `http://127.0.0.1:8080` from `config/common.example.json` by default
 
 Alternative helper:
 

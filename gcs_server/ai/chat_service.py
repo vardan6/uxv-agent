@@ -108,6 +108,7 @@ class AIChatService:
         config: Any,
         session_id: str,
         context_snapshot: dict[str, Any] | None = None,
+        run_mode: str | None = None,
         tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session = self._store.get_session(session_id, include_messages=False)
@@ -120,9 +121,7 @@ class AIChatService:
         if messages[-1]["role"] == "assistant":
             self._store.delete_message(messages[-1]["id"])
             messages = messages[:-1]
-        if not messages or messages[-1]["role"] != "user":
-            raise ValueError("Retry requires the latest remaining message to be from the user.")
-        clean_run_mode = _message_run_mode(messages[-1])
+        clean_run_mode = _retry_run_mode(messages, run_mode)
 
         resolved = _resolve_provider_for_session(config, session, self._secret_resolver)
         provider = resolved.provider
@@ -146,6 +145,7 @@ class AIChatService:
         config: Any,
         session_id: str,
         context_snapshot: dict[str, Any] | None = None,
+        run_mode: str | None = None,
         tool_context: dict[str, Any] | None = None,
     ) -> Iterator[str]:
         session = self._store.get_session(session_id, include_messages=False)
@@ -158,9 +158,7 @@ class AIChatService:
         if messages[-1]["role"] == "assistant":
             self._store.delete_message(messages[-1]["id"])
             messages = messages[:-1]
-        if not messages or messages[-1]["role"] != "user":
-            raise ValueError("Retry requires the latest remaining message to be from the user.")
-        clean_run_mode = _message_run_mode(messages[-1])
+        clean_run_mode = _retry_run_mode(messages, run_mode)
 
         resolved = _resolve_provider_for_session(config, session, self._secret_resolver)
         provider = resolved.provider
@@ -559,6 +557,14 @@ def _normalize_run_mode(run_mode: str) -> str:
     if clean == "agent":
         return "agent"
     raise ValueError("run_mode must be chat or agent")
+
+
+def _retry_run_mode(messages: list[dict[str, Any]], requested_run_mode: str | None = None) -> str:
+    if requested_run_mode is not None:
+        return _normalize_run_mode(requested_run_mode)
+    if not messages or messages[-1]["role"] != "user":
+        raise ValueError("Retry requires the latest remaining message to be from the user.")
+    return _message_run_mode(messages[-1])
 
 
 def _fit_messages_to_budget(

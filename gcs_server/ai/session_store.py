@@ -69,6 +69,17 @@ def _session_meta(meta: dict[str, Any] | None = None, source_controls: Any = Non
     return out
 
 
+def _provider_snapshot(provider: dict[str, Any] | None) -> dict[str, Any]:
+    source = provider if isinstance(provider, dict) else {}
+    return {
+        "id": str(source.get("id") or "").strip(),
+        "display_name": str(source.get("display_name") or "").strip(),
+        "provider_type": str(source.get("provider_type") or "").strip(),
+        "model_id": str(source.get("model_id") or "").strip(),
+        "context_window": source.get("context_window"),
+    }
+
+
 class AISessionStore:
     def __init__(self, db_path: str | Path):
         self._db_path = Path(db_path)
@@ -200,6 +211,56 @@ class AISessionStore:
             )
             conn.commit()
         return self.get_session(session_id, include_messages=False)
+
+    def clear_provider_selection(self, provider_id: str) -> int:
+        clean_provider_id = provider_id.strip()
+        if not clean_provider_id:
+            return 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE ai_sessions SET provider_id = '', updated_at = ? WHERE provider_id = ?",
+                (time.time(), clean_provider_id),
+            )
+            conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def preserve_deleted_provider_history(self, provider: dict[str, Any]) -> dict[str, int]:
+        snapshot = _provider_snapshot(provider)
+        clean_provider_id = snapshot["id"]
+        if not clean_provider_id:
+            return {"sessions": 0, "messages": 0}
+
+        updated_sessions = 0
+        updated_messages = 0
+        with self._connect() as conn:
+            session_rows = conn.execute(
+                "SELECT id, meta_json FROM ai_sessions WHERE provider_id = ?",
+                (clean_provider_id,),
+            ).fetchall()
+            for row in session_rows:
+                meta = _load_json(row["meta_json"])
+                meta["deleted_provider_snapshot"] = snapshot
+                conn.execute(
+                    "UPDATE ai_sessions SET meta_json = ?, updated_at = ? WHERE id = ?",
+                    (_json(_session_meta(meta)), time.time(), row["id"]),
+                )
+                updated_sessions += 1
+
+            message_rows = conn.execute(
+                "SELECT id, meta_json FROM ai_messages WHERE provider_id = ?",
+                (clean_provider_id,),
+            ).fetchall()
+            for row in message_rows:
+                meta = _load_json(row["meta_json"])
+                meta["provider_snapshot"] = snapshot
+                conn.execute(
+                    "UPDATE ai_messages SET meta_json = ? WHERE id = ?",
+                    (_json(meta), row["id"]),
+                )
+                updated_messages += 1
+            conn.commit()
+
+        return {"sessions": updated_sessions, "messages": updated_messages}
 
     def archive_session(self, session_id: str) -> bool:
         with self._connect() as conn:

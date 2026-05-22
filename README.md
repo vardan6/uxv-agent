@@ -75,14 +75,11 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
 python -m venv gcs_server/.venv
 source gcs_server/.venv/bin/activate
 pip install -r gcs_server/requirements-gcs.txt
-python -m uvicorn gcs_server.app:app --host 127.0.0.1 --port 9002
+python -m gcs_server
 ```
 
-Open the GCS:
-
-```text
-http://127.0.0.1:9002
-```
+Open the GCS at the host and port configured under `gcs.host` and `gcs.port` in `config/common.local.json`.
+The tracked template defaults to `http://127.0.0.1:8080`; this repo's local override may differ.
 
 Alternative helper from inside `gcs_server/`:
 

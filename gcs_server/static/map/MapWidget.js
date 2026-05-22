@@ -1,6 +1,7 @@
-import { getCurrentOverlay, getRevisionOverlay, listRevisions } from './data/missionApi.js';
+import { getCurrentOverlay, getRevisionOverlay, listRevisions, approveDraft, rejectDraft, executeMission, getControllerState } from './data/missionApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
+import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { groupRevisionsByOperation, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
 
@@ -40,6 +41,12 @@ export class MapWidget {
     this._focusedRevisionId = '';
     this._activeProfileId = 'rover_default';
     this._profilesById = {};
+    this._controllerVersion = null;
+    this._vehicleLayer = null;
+    this._pollTimer = null;
+    this._confirmModal = null;
+    this._confirmResolve = null;
+    this._actionBusy = false;
   }
 
   mount() {
@@ -66,14 +73,23 @@ export class MapWidget {
       onFocusRequested: (revisionId) => this.setFocus(revisionId),
       onVisibilityToggled: (revisionId) => this._toggleVisibility(revisionId),
       onExpandToggled: (operationId) => this._toggleExpand(operationId),
+      onApproveRequested: (draftId) => this._handleApprove(draftId),
+      onRejectRequested: (draftId) => this._handleReject(draftId),
+      onExecuteRequested: (revisionId) => this._handleExecuteRequest(revisionId),
     });
+    this._vehicleLayer = new LiveVehicleLayer(this._map);
+    this._vehicleLayer.connect();
     this._mounted = true;
     window.requestAnimationFrame(() => this.invalidateSize());
+    this._startPolling();
     this.refresh().catch((error) => this._showError(error?.message || 'Map refresh failed'));
   }
 
   destroy() {
     this._mounted = false;
+    this._stopPolling();
+    this._vehicleLayer?.disconnect();
+    this._vehicleLayer = null;
     this._revisionCache.clear();
     if (this._map) {
       this._map.remove();
@@ -102,7 +118,7 @@ export class MapWidget {
   async refresh() {
     if (!this._map) return;
     this._hideError();
-    await this._loadVehicleProfiles();
+    await Promise.all([this._loadVehicleProfiles(), this._loadControllerState()]);
     const revisionsPayload = await listRevisions({ sessionId: this._sessionId, limit: 100 });
     if (!revisionsPayload.ok) {
       this._showError(revisionsPayload.error || 'fetch failed');
@@ -132,6 +148,95 @@ export class MapWidget {
       );
     } else if (!listResult.ok) {
       console.warn('MapWidget: vehicle profiles unavailable, defaulting to rover_default');
+    }
+  }
+
+  async _loadControllerState() {
+    const result = await getControllerState();
+    if (result.ok && result.controller_state) {
+      this._controllerVersion = result.controller_state.current_version ?? null;
+    }
+  }
+
+  _startPolling() {
+    this._stopPolling();
+    const tick = () => {
+      if (!this._mounted) return;
+      if (document.visibilityState !== 'hidden') {
+        this.refresh().catch(() => {});
+      }
+      this._pollTimer = setTimeout(tick, 5000);
+    };
+    this._pollTimer = setTimeout(tick, 5000);
+  }
+
+  _stopPolling() {
+    if (this._pollTimer !== null) {
+      clearTimeout(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
+
+  async _handleApprove(draftId) {
+    if (this._actionBusy || !draftId) return;
+    this._actionBusy = true;
+    const result = await approveDraft(draftId);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Approve failed');
+      return;
+    }
+    this._revisionCache.clear();
+    await this.refresh();
+  }
+
+  async _handleReject(draftId) {
+    if (this._actionBusy || !draftId) return;
+    this._actionBusy = true;
+    const result = await rejectDraft(draftId);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Reject failed');
+      return;
+    }
+    this._revisionCache.clear();
+    await this.refresh();
+  }
+
+  async _handleExecuteRequest(revisionId) {
+    if (this._actionBusy || !revisionId) return;
+    const confirmed = await this._showConfirmModal(revisionId);
+    if (!confirmed) return;
+    this._actionBusy = true;
+    const result = await executeMission(revisionId, { expectedControllerVersion: this._controllerVersion });
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Execute failed');
+      return;
+    }
+    this._revisionCache.clear();
+    await this.refresh();
+  }
+
+  _showConfirmModal(revisionId) {
+    return new Promise((resolve) => {
+      this._confirmResolve = resolve;
+      const modal = this._confirmModal;
+      if (!modal) { resolve(false); return; }
+      modal.querySelector('.map-confirm-revision-id').textContent = String(revisionId).slice(-8);
+      modal.querySelector('.map-confirm-controller-version').textContent =
+        this._controllerVersion !== null ? String(this._controllerVersion) : 'unknown';
+      modal.hidden = false;
+      modal.querySelector('.map-confirm-ok').focus();
+    });
+  }
+
+  _closeConfirmModal(confirmed) {
+    if (this._confirmModal) this._confirmModal.hidden = true;
+    if (this._confirmResolve) {
+      const resolve = this._confirmResolve;
+      this._confirmResolve = null;
+      resolve(confirmed);
     }
   }
 
@@ -305,7 +410,35 @@ export class MapWidget {
 
     mapWrap.append(mapEl, emptyState);
     shell.append(listEl, mapWrap);
-    this._container.append(errorBanner, shell);
+
+    const confirmModal = document.createElement('div');
+    confirmModal.className = 'map-confirm-modal';
+    confirmModal.setAttribute('role', 'dialog');
+    confirmModal.setAttribute('aria-modal', 'true');
+    confirmModal.setAttribute('aria-labelledby', 'map-confirm-title');
+    confirmModal.hidden = true;
+    confirmModal.innerHTML = `
+      <div class="map-confirm-dialog">
+        <h3 id="map-confirm-title" class="map-confirm-title">Execute mission on rover?</h3>
+        <p class="map-confirm-body">
+          This will upload the mission to the rover and start execution.<br>
+          Revision: <code class="map-confirm-revision-id"></code> &nbsp;
+          Controller version: <code class="map-confirm-controller-version"></code>
+        </p>
+        <div class="map-confirm-actions">
+          <button class="map-confirm-cancel" type="button">Cancel</button>
+          <button class="map-confirm-ok" type="button">Execute on rover</button>
+        </div>
+      </div>
+    `;
+    confirmModal.querySelector('.map-confirm-cancel').addEventListener('click', () => this._closeConfirmModal(false));
+    confirmModal.querySelector('.map-confirm-ok').addEventListener('click', () => this._closeConfirmModal(true));
+    confirmModal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._closeConfirmModal(false);
+    });
+    this._confirmModal = confirmModal;
+
+    this._container.append(errorBanner, shell, confirmModal);
   }
 
   _showError(msg) {

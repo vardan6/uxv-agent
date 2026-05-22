@@ -8,10 +8,10 @@ For requirements, see [requirements.md](./requirements.md).
 For implementation internals, see [internals/](./internals/).
 
 Sources consolidated here:
-- `docs/archive/simulator/2026-05-simulator-overview.md` (primary)
+- `docs/archive/simulator/2026-05-16-simulator-overview.md` (primary)
 - `docs/archive/simulator/2026-05-08-platform-plan.md` (transition and rover-sim-next plan)
-- `docs/archive/simulator/2026-04-initial-hl-design.md` (historical context and first architectural decisions)
-- `docs/archive/simulator/2026-04-phase1-3D-Simulator.md` (Phase 1 scope and world redesign history)
+- `docs/archive/simulator/2026-04-05-initial-hl-design.md` (historical context and first architectural decisions)
+- `docs/archive/simulator/2026-04-05-phase1-3D-Simulator.md` (Phase 1 scope and world redesign history)
 - `docs/archive/simulator/2026-04-05-mqtt-plan-canonical.md` (canonical Phase 2 MQTT control/telemetry contract)
 - `docs/archive/simulator/2026-05-15-center-station-physics-grill.md` (center-station redesign decisions)
 

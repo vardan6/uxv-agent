@@ -36,3 +36,67 @@ export async function getRevisionOverlay(revisionId) {
     return { ok: false, error: err.message || 'Network error' };
   }
 }
+
+export async function approveDraft(draftId, { note = '' } = {}) {
+  try {
+    const res = await fetch(`/api/ai/mission-drafts/${encodeURIComponent(draftId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note, execute_after_approval: false }),
+    });
+    let errDetail = `HTTP ${res.status}`;
+    if (!res.ok) {
+      try { errDetail = (await res.json()).detail || errDetail; } catch {}
+      return { ok: false, status: res.status, error: errDetail };
+    }
+    return { ok: true, ...(await res.json()) };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+export async function rejectDraft(draftId, { note = '' } = {}) {
+  try {
+    const res = await fetch(`/api/ai/mission-drafts/${encodeURIComponent(draftId)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    });
+    let errDetail = `HTTP ${res.status}`;
+    if (!res.ok) {
+      try { errDetail = (await res.json()).detail || errDetail; } catch {}
+      return { ok: false, status: res.status, error: errDetail };
+    }
+    return { ok: true, ...(await res.json()) };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+export async function executeMission(revisionId, { expectedControllerVersion = null } = {}) {
+  try {
+    const res = await fetch(`/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_controller_version: expectedControllerVersion }),
+    });
+    let errDetail = `HTTP ${res.status}`;
+    if (!res.ok) {
+      try { errDetail = (await res.json()).detail || errDetail; } catch {}
+      return { ok: false, status: res.status, error: errDetail };
+    }
+    return { ok: true, ...(await res.json()) };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+export async function getControllerState() {
+  try {
+    const res = await fetch('/api/ai/controller-mission');
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    return { ok: true, ...(await res.json()) };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}

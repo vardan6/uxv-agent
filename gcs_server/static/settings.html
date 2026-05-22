@@ -377,7 +377,7 @@
                 </div>
                 <span id="llm-registry-pill" class="pill">Loading</span>
               </div>
-              <p class="settings-note">Check verifies auth, base URL, and the provider model endpoint. It does not run chat prompts or rover intent parsing.</p>
+              <p class="settings-note">Check verifies auth, base URL, and the provider model endpoint. It does not run chat prompts or rover intent parsing. The default marker here controls the General Chat route.</p>
               <div class="form-actions form-actions-inline">
                 <button id="llm-add-example-providers" type="button" class="ghost">Add Missing Example Providers</button>
               </div>
@@ -419,52 +419,56 @@
                   <p class="settings-source-copy">Load or export selected settings sections. Missing sections in an imported JSON file are ignored, so older files do not clear newer settings.</p>
                 </div>
                 <div class="json-scope-grid">
-                  <section>
+                  <section class="json-scope-column">
                     <p class="settings-note">Export sections</p>
                     <div class="json-scope-list" aria-label="Export JSON sections">
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="mqtt" checked>
-                        <span><strong>MQTT</strong><span>Broker, topic, and control-loop settings.</span></span>
+                        <span><strong>MQTT</strong><span>Export broker, topic, and control-loop settings.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="simulation" checked>
-                        <span><strong>Simulation</strong><span>Backend identity and backend metadata.</span></span>
+                        <span><strong>Simulation</strong><span>Export backend identity and backend metadata.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="video" checked>
-                        <span><strong>Video</strong><span>Ingest, delivery, and enable state.</span></span>
+                        <span><strong>Video</strong><span>Export ingest, delivery, and enable state.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="appearance" checked>
-                        <span><strong>Appearance</strong><span>Theme mode and selected themes.</span></span>
+                        <span><strong>Appearance</strong><span>Export theme mode and selected themes.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="ai_settings" checked>
-                        <span><strong>AI Settings</strong><span>Response voice playback preferences.</span></span>
+                        <span><strong>AI Settings</strong><span>Export response voice playback preferences.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="llm_providers" checked>
-                        <span><strong>LLM Providers</strong><span>Provider records without raw secret values.</span></span>
+                        <span><strong>LLM Providers</strong><span>Export provider records without raw secret values.</span></span>
                         <span class="pill">on</span>
                       </label>
                       <label class="json-scope-item">
                         <input class="json-export-toggle" type="checkbox" value="model_routing" checked>
-                        <span><strong>Model Routing Rules</strong><span>Primary and fallback model assignments.</span></span>
+                        <span><strong>Model Routing Rules</strong><span>Export primary and fallback model assignments.</span></span>
                         <span class="pill">on</span>
                       </label>
                     </div>
-                    <div class="form-actions">
+                    <div class="json-policy-list">
+                      <p class="settings-note">Preview exports the checked sections only and shows the exact selected JSON payload before you save it.</p>
+                      <p class="settings-note"><code>llm_providers</code> exports <code>secret_ref</code> names only, never raw API key values.</p>
+                    </div>
+                    <div class="form-actions json-scope-actions">
                       <button id="save-local-file" type="button">Export Selected JSON</button>
                       <button id="save-backend-path" type="button" class="ghost">Save to Backend Path</button>
                       <button id="select-all-export-sections" type="button" class="ghost">Select All</button>
                     </div>
                   </section>
-                  <section>
+                  <section class="json-scope-column">
                     <p class="settings-note">Import and apply sections</p>
                     <div class="json-scope-list" aria-label="Import JSON sections">
                       <label class="json-scope-item">
@@ -507,7 +511,7 @@
                       <p class="settings-note">Preview shows checked sections that will apply, checked sections missing from the file, and the exact selected JSON payload.</p>
                       <p class="settings-note"><code>llm_providers</code> exports <code>secret_ref</code> names only, never raw API key values.</p>
                     </div>
-                    <div class="form-actions">
+                    <div class="form-actions json-scope-actions">
                       <button id="load-backend-path" type="button">Load JSON and Preview</button>
                       <button id="apply-json-settings" type="button" class="ghost">Apply Checked Sections</button>
                       <button id="select-all-import-sections" type="button" class="ghost">Select All</button>
