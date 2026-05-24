@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 
 
 @dataclass(frozen=True)
-class WorkbenchGraphRuntime:
+class PlanningShellGraphRuntime:
     """Immutable service container passed via LangGraph config['configurable'].
 
     Service handles and database connections are kept outside graph state so

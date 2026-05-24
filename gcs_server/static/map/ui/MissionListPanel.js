@@ -2,6 +2,7 @@ import { vehicleIcon } from '../vehicleProfiles.js';
 
 const APPROVABLE = new Set(['proposed', 'awaiting_approval', 'planning']);
 const EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
+const EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
 
 const STATUS_CLASS = {
   proposed: 'is-proposed',
@@ -26,38 +27,49 @@ function missionTitle(revision) {
   return goal || 'Mission revision';
 }
 
-function originBadge() {
+function computeOriginBadge(revision) {
+  const prov = revision.provenance;
+  if (!prov || typeof prov !== 'object') return '🤖';
+  const values = Object.values(prov);
+  if (!values.length) return '🤖';
+  if (values.every(v => v === 'user')) return '👤';
+  if (values.some(v => v === 'ai+edited')) return '✏️';
   return '🤖';
 }
 
-function renderActionButtons(revision, status) {
+function renderActionButtons(revision, status, { isActiveRevision = false } = {}) {
   const revisionId = String(revision.id || '');
   const draftId = String(revision.draft_id || '');
+  const parts = [];
 
   if (status === 'executing') {
     return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
   }
+  if (EDITABLE.has(status)) {
+    parts.push(`<button class="mission-row-action-btn is-edit" type="button"
+      data-edit-revision-id="${revisionId}"
+      title="Edit waypoints"
+      aria-label="Edit waypoints">✏</button>`);
+  }
   if (APPROVABLE.has(status) && draftId) {
-    return `
-      <button class="mission-row-action-btn is-approve" type="button"
-        data-approve-draft-id="${draftId}"
-        title="Approve draft (does not execute)"
-        aria-label="Approve draft (does not execute)">✓</button>
-      <button class="mission-row-action-btn is-reject" type="button"
-        data-reject-draft-id="${draftId}"
-        title="Reject draft"
-        aria-label="Reject draft">✕</button>
-    `;
+    parts.push(`<button class="mission-row-action-btn is-approve" type="button"
+      data-approve-draft-id="${draftId}"
+      title="Approve draft (does not execute)"
+      aria-label="Approve draft (does not execute)">✓</button>`);
+    parts.push(`<button class="mission-row-action-btn is-reject" type="button"
+      data-reject-draft-id="${draftId}"
+      title="Reject draft"
+      aria-label="Reject draft">✕</button>`);
   }
-  if (EXECUTABLE.has(status)) {
-    return `
-      <button class="mission-row-action-btn is-execute" type="button"
-        data-execute-revision-id="${revisionId}"
-        title="Execute on rover (uploads and starts mission)"
-        aria-label="Execute on rover">▶</button>
-    `;
+  if (EXECUTABLE.has(status) && isActiveRevision) {
+    parts.push(`<button class="mission-row-action-btn is-execute" type="button"
+      data-execute-revision-id="${revisionId}"
+      title="Execute on rover (uploads and starts mission)"
+      aria-label="Execute on rover">▶</button>`);
+  } else if (EXECUTABLE.has(status)) {
+    parts.push(`<span class="mission-row-stale" title="A newer active revision exists for this mission. Execute that revision instead.">stale</span>`);
   }
-  return '';
+  return parts.join('');
 }
 
 function renderRow(revision, ctx) {
@@ -67,11 +79,13 @@ function renderRow(revision, ctx) {
     paletteByRevisionId,
     profilesById,
     activeProfileId,
+    activeRevisionId,
     isEarlier,
   } = ctx;
   const revisionId = String(revision.id || '');
   const isVisible = visibleRevisionIds.has(revisionId);
   const isFocused = focusedRevisionId === revisionId;
+  const isActiveRevision = revisionId === String(activeRevisionId || '');
   const status = String(revision.status || '');
   const color = paletteByRevisionId.get(revisionId) || 'transparent';
   const profileId = String(revision?.mission?.vehicle_profile_id || activeProfileId || 'rover_default');
@@ -92,10 +106,10 @@ function renderRow(revision, ctx) {
           <span class="mission-row-title">${missionTitle(revision)}</span>
           <span class="mission-row-meta">${statusLabel(status)} · rev ${String(revisionId).slice(-6)}</span>
         </span>
-        <span class="mission-row-origin" title="Agent-created mission">${originBadge()}</span>
+        <span class="mission-row-origin" title="Mission origin">${computeOriginBadge(revision)}</span>
       </button>
       <span class="mission-row-actions">
-        ${renderActionButtons(revision, status)}
+        ${renderActionButtons(revision, status, { isActiveRevision })}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
           class="mission-row-eye${status === 'executing' ? ' is-locked' : ''}"
@@ -119,6 +133,7 @@ export class MissionListPanel {
     this._onApproveRequested = opts.onApproveRequested || (() => {});
     this._onRejectRequested = opts.onRejectRequested || (() => {});
     this._onExecuteRequested = opts.onExecuteRequested || (() => {});
+    this._onEditRequested = opts.onEditRequested || (() => {});
   }
 
   render({
@@ -133,6 +148,7 @@ export class MissionListPanel {
     const body = groups.length
       ? groups.map((group) => {
         const defaultRevisionId = String(group.defaultRevisionId || '');
+        const activeRevisionId = String(group.activeRevisionId || defaultRevisionId);
         const defaultRevision = group.revisions.find((revision) => String(revision.id || '') === defaultRevisionId)
           || group.revisions[0];
         const earlierRevisions = group.revisions.filter((revision) => revision !== defaultRevision);
@@ -144,6 +160,7 @@ export class MissionListPanel {
             paletteByRevisionId,
             profilesById,
             activeProfileId,
+            activeRevisionId,
             isEarlier: true,
           })).join('')
           : '';
@@ -166,6 +183,7 @@ export class MissionListPanel {
               paletteByRevisionId,
               profilesById,
               activeProfileId,
+              activeRevisionId,
               isEarlier: false,
             })}
             ${expander}
@@ -173,7 +191,14 @@ export class MissionListPanel {
           </section>
         `;
       }).join('')
-      : '<div class="mission-list-empty">No missions yet. Ask the agent.</div>';
+      : `<div class="mission-list-empty">
+            <p class="mission-list-empty-title">No missions yet</p>
+            <p class="mission-list-empty-hint">Ask the agent in the chat above to plan a mission.</p>
+            <button class="mission-list-empty-cta" type="button"
+              onclick="document.querySelector('.ai-chat-panel')?.scrollIntoView({behavior:'smooth',block:'nearest'}); setTimeout(()=>document.getElementById('ai-message-input')?.focus(),300)">
+              ↑ Go to chat
+            </button>
+          </div>`;
 
     this._container.innerHTML = `<div class="mission-list-panel">${body}</div>`;
     this._bind();
@@ -211,6 +236,12 @@ export class MissionListPanel {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         this._onExecuteRequested(button.dataset.executeRevisionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-edit-revision-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onEditRequested(button.dataset.editRevisionId || '');
       });
     });
   }

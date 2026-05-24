@@ -90,7 +90,7 @@ def _migration_003_create_ai_mission_execution_tables(conn: sqlite3.Connection) 
 
 
 def _migration_002_add_ai_session_meta_json(conn: sqlite3.Connection) -> None:
-    if not _column_exists(conn, "ai_sessions", "meta_json"):
+    if _table_exists(conn, "ai_sessions") and not _column_exists(conn, "ai_sessions", "meta_json"):
         conn.execute("ALTER TABLE ai_sessions ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
 
 
@@ -141,11 +141,23 @@ def _migration_004_create_ai_mission_controller_tables(conn: sqlite3.Connection)
     )
 
 
+def _migration_005_add_revision_mutation_fields(conn: sqlite3.Connection) -> None:
+    if not _column_exists(conn, "ai_mission_revisions", "client_version"):
+        conn.execute(
+            "ALTER TABLE ai_mission_revisions ADD COLUMN client_version INTEGER NOT NULL DEFAULT 0"
+        )
+    if not _column_exists(conn, "ai_mission_revisions", "provenance_json"):
+        conn.execute(
+            "ALTER TABLE ai_mission_revisions ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'"
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
     (3, "create_ai_mission_execution_tables", _migration_003_create_ai_mission_execution_tables),
     (4, "create_ai_mission_controller_tables", _migration_004_create_ai_mission_controller_tables),
+    (5, "add_revision_mutation_fields", _migration_005_add_revision_mutation_fields),
 )
 
 

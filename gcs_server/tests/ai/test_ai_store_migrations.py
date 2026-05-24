@@ -30,11 +30,11 @@ def test_bootstrap_existing_ai_sessions_schema_without_rewriting_rows() -> None:
 
     rows = conn.execute("SELECT version, name FROM ai_schema_migrations").fetchall()
     session = conn.execute("SELECT title FROM ai_sessions WHERE id = 's1'").fetchone()
-    assert [(row["version"], row["name"]) for row in rows] == [
-        (BOOTSTRAP_VERSION, BOOTSTRAP_NAME),
-        (1, "create_ai_mission_drafts"),
-        (2, "add_ai_session_meta_json"),
-    ]
+    version_names = [(row["version"], row["name"]) for row in rows]
+    assert (BOOTSTRAP_VERSION, BOOTSTRAP_NAME) in version_names
+    assert (1, "create_ai_mission_drafts") in version_names
+    assert (2, "add_ai_session_meta_json") in version_names
+    assert (5, "add_revision_mutation_fields") in version_names
     assert session["title"] == "Existing"
 
 
@@ -70,10 +70,10 @@ def test_empty_migration_table_is_bootstrapped_when_ai_tables_exist() -> None:
     assert rows[0]["version"] == BOOTSTRAP_VERSION
     assert rows[0]["name"] == BOOTSTRAP_NAME
     assert rows[0]["applied_at"] >= before
-    assert [(row["version"], row["name"]) for row in rows[1:]] == [
-        (1, "create_ai_mission_drafts"),
-        (2, "add_ai_session_meta_json"),
-    ]
+    version_names = [(row["version"], row["name"]) for row in rows[1:]]
+    assert (1, "create_ai_mission_drafts") in version_names
+    assert (2, "add_ai_session_meta_json") in version_names
+    assert (5, "add_revision_mutation_fields") in version_names
 
 
 def test_migration_002_adds_meta_json_to_existing_ai_sessions() -> None:

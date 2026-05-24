@@ -80,12 +80,16 @@ export async function executeMission(revisionId, { expectedControllerVersion = n
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expected_controller_version: expectedControllerVersion }),
     });
-    let errDetail = `HTTP ${res.status}`;
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      try { errDetail = (await res.json()).detail || errDetail; } catch {}
-      return { ok: false, status: res.status, error: errDetail };
+      return {
+        ok: false,
+        status: data.status || res.status,
+        error: data.error || data.detail || `HTTP ${res.status}`,
+        ...data,
+      };
     }
-    return { ok: true, ...(await res.json()) };
+    return { ok: true, ...data };
   } catch (err) {
     return { ok: false, error: err.message || 'Network error' };
   }

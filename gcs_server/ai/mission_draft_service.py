@@ -41,7 +41,7 @@ def validate_draft_payload(
 
     # execution_allowed must be false — hard blocker if someone snuck it in
     if draft_payload.get("execution_allowed") is True:
-        blockers.append("execution_allowed must be false in the workbench phase")
+        blockers.append("execution_allowed must be false in the planning-shell phase")
 
     # check for execution-like top-level fields in draft
     for field in _EXECUTION_LIKE_FIELDS:

@@ -175,10 +175,9 @@ represents: `read_only`, `analysis`, `planning`. The classes
 
 The durable wrapper around the shared agent runtime that handles
 clarification pauses, draft approval, and other human-in-the-loop workflow
-steps. Implemented in code under the `workbench_*` namespace
-(`workbench_graph.py`, `WorkbenchGraphState`, `WorkbenchGraphRuntime`,
-`/workbench/stream`) — the code identifiers are historical and not
-exposed in product surfaces.
+steps. Implemented in code under the `planning_shell` namespace
+(`planning_shell_graph.py`, `PlanningShellGraphState`,
+`PlanningShellGraphRuntime`, `/planning-shell/stream`).
 
 ## Presence Topic
 
@@ -259,10 +258,52 @@ acceptable") from execution approval ("publish these commands to the
 rover"). Currently only the first exists. See
 [decisions/0002-two-approval-model.md](./cross-cutting/decisions/0002-two-approval-model.md).
 
+The three canonical operator verbs are:
+- **Approve draft** — locks the revision; does not execute.
+- **Execute mission** — the second, explicit gate that hands the approved revision to the flight controller.
+- **Export plan** — exports an approved revision as a `.plan` file without executing.
+
+The word "Accept" is not used in UI copy or documentation.
+
+## MapWidget
+
+The reusable Leaflet-based map component (`static/map/MapWidget.js`) used
+on the `/ai` page and the Approval Card. Uses `L.CRS.Simple` with local
+scene metres for all overlay coordinates — not lat/lon. Vehicle-aware: reads
+the active `VehicleProfile` to drive property panels and dispatch validation.
+See [internals/map-widget.md](./components/gcs/internals/map-widget.md).
+
+## Mission Revision
+
+A versioned snapshot of a mission's waypoint list and metadata, stored in
+`mission_revisions`. Revisions are append-only and lineage-aware. Every
+revision carries a `client_version` for optimistic concurrency and a
+`vehicle_profile_id` binding. Provenance at the waypoint level is one of
+`ai`, `user`, or `ai+edited`. See also **Waypoint Provenance**.
+
+## `client_version` (Optimistic Concurrency)
+
+An integer version counter on mission revisions used for optimistic CAS.
+Every mutation request carries `expected_version`; the backend rejects stale
+writes with `409 Conflict`. Editing a locked revision (`approved`,
+`executing`, `completed`) forks a new client-authored revision rather than
+mutating in place. There is no last-write-wins fallback.
+
+## Waypoint Provenance
+
+A per-waypoint field tracking the origin of each waypoint in a mission
+revision. Values:
+- `ai` — waypoint was emitted by the agent and has not been edited by the operator.
+- `user` — waypoint was created by the operator from scratch.
+- `ai+edited` — waypoint was originally AI-proposed and has since been edited by the operator.
+
+The agent must diff and ask before overwriting `ai+edited` waypoints during
+regeneration; this is enforced server-side. See
+[internals/mission-execution.md](./components/ai-agent/internals/mission-execution.md).
+
 ## Universal Agent Runtime
 
 The shared bounded reasoning loop that should power chat, grounded
 investigation, planning, and future specialist behaviors. Project-specific
 capabilities are added through tools, policy, memory, and workflow shells
 around this core.
-

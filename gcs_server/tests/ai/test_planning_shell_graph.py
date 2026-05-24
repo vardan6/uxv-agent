@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai.workbench_graph import _build_retrieved_sources, _normalize_retrieval_request, finalize_response
+from ai.planning_shell_graph import _build_retrieved_sources, _normalize_retrieval_request, finalize_response
 
 
 class _FakeStore:

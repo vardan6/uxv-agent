@@ -17,11 +17,11 @@ Implemented and ready for manual validation:
 
 Committed follow-up work (not optional, separated only to keep this slice shippable):
 
-- Mission template library and manual waypoint editing
-- shared `MissionMapView`
-- corridor/blockage creation, viewing, editing, enabling/disabling, and deletion UI
+- corridor/blockage creation, viewing, editing, enabling/disabling, and deletion UI on the `/ai` map
 - planned-vs-actual replay overlay
 - MAVLink upload, execution, stop/abort, and mission monitoring
+
+Note: manual waypoint editing and the shared map component shipped as the `MapWidget` on `/ai` (Phase 1D). The separate "Mission template library" and `MissionMapView` concepts were superseded by client-authored revisions on the `/ai` map widget.
 
 ## Algorithm reference
 
@@ -83,6 +83,8 @@ Output format: QGC `.plan` JSON. Reference: [../../../cross-cutting/research/fli
 - Local→geo projection: flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent
 
 Output path: `data/missions/<draft_id>.plan`. Recorded on the draft. The `.plan` file is the current hand-off boundary to the flight controller; MAVSDK `import_qgroundcontrol_mission` → `upload_mission` over UDP 14550 is the documented next slice and lives outside this PR.
+
+**Coordinate frame split.** All mission overlay coordinates inside the system (planner output, revision storage, map widget rendering) use **local scene metres** with `L.CRS.Simple` as the coordinate reference system. Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportService` via a flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent. Nothing upstream of the exporter deals in lat/lon.
 
 **Coordinate caveat.** The current scene and its `coordinate_system.georeference` are development placeholders. When real rover hardware and real-world scene data arrive, both the map and its georeference are expected to be regenerated together. The projection code consumes the new origin without changes.
 

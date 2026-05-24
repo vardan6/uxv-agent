@@ -193,7 +193,7 @@ Completed sequence (Milestones A–F + LangGraph Phases 1–3):
 6. ✅ Session mode → provider-routing purpose mapping.
 7. ✅ Target resolution using spatial tools.
 8. ✅ Mission draft storage, approval, and reject status.
-9. ✅ LangGraph planning shell (Phases 1–3): intent → retrieve → resolve target → draft → validate → approval interrupt → clarification loop.
+9. ✅ LangGraph planning shell: planner-loop tool selection → deterministic validation → approval or clarification interrupt.
 10. Bounded non-RAG source controls are implemented; later milestone is true RAG/document/web retrieval.
 
 ### Async/Sync Boundary For Spatial Tools

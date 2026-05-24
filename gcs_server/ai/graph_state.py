@@ -4,8 +4,8 @@ from operator import add
 from typing import Annotated, TypedDict
 
 
-class WorkbenchGraphState(TypedDict, total=False):
-    """State for the workbench planning graph.
+class PlanningShellGraphState(TypedDict, total=False):
+    """State for the durable planning-shell graph.
 
     ``total=False`` makes all keys optional — each node returns only the keys
     it produces. The three trace lists are annotated with the ``add`` reducer
@@ -32,6 +32,7 @@ class WorkbenchGraphState(TypedDict, total=False):
     chat_history_summary: dict
     settings_summary: dict
     llm_summary: dict
+    active_mission_context: dict   # active revision provenance summary for conflict detection
 
     # ── Intent layer ──────────────────────────────────────────────────────────
     intent: dict
@@ -57,6 +58,7 @@ class WorkbenchGraphState(TypedDict, total=False):
     # ── Draft layer ───────────────────────────────────────────────────────────
     draft: dict
     draft_id: str
+    parent_operation_id: str     # non-empty when planner links proposal to an existing operation
     mission_operation_id: str
     mission_revision_id: str
     validation: dict
@@ -64,14 +66,13 @@ class WorkbenchGraphState(TypedDict, total=False):
     draft_response_metadata: dict
     approval_status: str           # awaiting_approval | approved | rejected | validation_failed | needs_clarification
     approval_note: str
-    operator_decision: str         # Phase 2: approve | reject | pending_rest (set by request_workbench_approval)
+    operator_decision: str         # Phase 2: approve | reject | pending_rest
 
     # ── Planner loop — Phase 5 ────────────────────────────────────────────────
-    use_planner_loop: bool          # True when ai_use_planner_loop flag is set
     planner_agent_stop_reason: str  # stop reason from AgentLoopRuntime run
     planner_agent_iterations: int   # iteration count from AgentLoopRuntime run
     planner_agent_trace_id: str     # durable AgentLoopRuntime JSONL trace ID
-    planner_loop_fallback: bool     # True when planner loop failed and fell back to legacy path
+    planner_loop_fallback: bool     # True when planner loop could not produce a draft
 
     # ── Append-only traces — LangGraph concatenates via add reducer ───────────
     tool_trace: Annotated[list, add]

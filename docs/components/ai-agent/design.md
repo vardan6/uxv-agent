@@ -7,7 +7,7 @@ Status date: 2026-05-20.
 Status note (implementation reality, kept in sync with [`../../current-state.md`](../../current-state.md)):
 
 - `AgentLoopRuntime` is implemented and powers Agent chat.
-- The planning shell wraps the planning flow (code namespace: `workbench_*`).
+- The planning shell wraps the planning flow.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
 - `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, and a local execution-transition adapter. Real external controller transport remains the next slice.
 
@@ -499,7 +499,7 @@ START
               └─► critic_loop_node?       optional (Phase 7); role=critic
                   └─► validate_draft      deterministic, unchanged; backstop for empty waypoints
                       └─► hand off to mission_execution (proposal package)
-                          └─► request_workbench_approval   interrupt()
+                          └─► request_planning_shell_approval   interrupt()
                               └─► record_approval | record_rejection
                                   └─► finalize_response
 ```
@@ -531,18 +531,17 @@ AgentLoopConfig(
 )
 ```
 
-State additions to `WorkbenchGraphState` (identifier retained for code-namespace compatibility):
+State additions to `PlanningShellGraphState`:
 
 ```python
-class WorkbenchGraphState(TypedDict, total=False):
+class PlanningShellGraphState(TypedDict, total=False):
     # ... existing fields unchanged ...
-    use_planner_loop: bool
     planner_agent_iterations: int
     planner_agent_stop_reason: str
     thought_trace: Annotated[list, add]    # planned: user-safe summaries only
 ```
 
-Detail: [internals/workbench-mode.md](./internals/workbench-mode.md), [internals/graph-spec.md](./internals/graph-spec.md), [internals/intent-parsing.md](./internals/intent-parsing.md).
+Detail: [internals/planning-shell.md](./internals/planning-shell.md), [internals/graph-spec.md](./internals/graph-spec.md), [internals/intent-parsing.md](./internals/intent-parsing.md).
 
 ## Route Planning, Vehicle Profiles, and Mission Export
 
@@ -556,7 +555,7 @@ Keep the graph topology vehicle- and task-agnostic. Every new capability ships a
 
 ### `VehicleProfile` (`gcs_server/ai/vehicle_profile.py`)
 
-First-class profile concept. Populated for all currently-anticipated kinds (`ground_vehicle`, `multirotor`, `fixed_wing`) even though only `ground_vehicle` is exercised end-to-end. Goal: when multirotor or fixed-wing is wired up later, no refactor of the planner / exporter / tool-registry / workbench graph is required — only new planner-tool files and a scene swap.
+First-class profile concept. Populated for all currently-anticipated kinds (`ground_vehicle`, `multirotor`, `fixed_wing`) even though only `ground_vehicle` is exercised end-to-end. Goal: when multirotor or fixed-wing is wired up later, no refactor of the planner / exporter / tool-registry / planning-shell graph is required — only new planner-tool files and a scene swap.
 
 ```python
 @dataclass
@@ -696,16 +695,16 @@ Two independent channels. Safety requires stopping the rover never depends on th
 
 Both channels write a `cancelled` (operator stop) or `failed` (FC error during stop) entry to the active draft's `lifecycle_history`. Stop is not gated by approval — that is the whole point.
 
-### Mission templates (committed follow-up)
+### Mission authoring and start target (committed follow-up)
 
-The `start_target` is not always "current rover pose." Two distinct usage modes:
+The `start_target` is not always "current rover pose." Two distinct dispatch modes:
 
-- **Mode A — Live dispatch.** `start_target = None` ⇒ tool reads current pose. Pose must be fresh. Normal draft → approve → export.
-- **Mode B — Pre-authored templates.** `start_target` is explicit at authoring time (coordinate, named scene object, or sentinel `"rover_pose_at_execution"` for deferred resolution). Output is a reusable `MissionTemplate` stored under `data/mission_templates/<id>.json` via a new `MissionTemplateService` parallel to `MissionDraftService`. AI loop on templates: agent creates draft template from prompt, operator reviews, asks for adjustments, agent edits and re-emits. Manual edits are interchangeable views on the same data.
+- **Mode A — Live dispatch.** `start_target = None` ⇒ tool reads current pose at dispatch time. Pose must be fresh. Normal draft → approve → execute.
+- **Mode B — Pre-authored revisions.** `start_target` is explicit at authoring time (coordinate, named scene object, or sentinel `"rover_pose_at_execution"` for deferred resolution). The operator authors the route directly on the `/ai` map — either by creating a new mission from scratch (`➕ New mission`) or by editing an AI-proposed revision. Manual edits and AI proposals are different provenance sources on the same revision data model.
 
-Templates are vehicle-bound. Every `MissionTemplate` stores a required `vehicle_profile_id`. Dispatch refuses if the active vehicle profile doesn't match. Rationale: the `.plan` format itself is vehicle-bound, `NAV_WAYPOINT` param interpretation differs by stack, fixed-wing/PX4-multirotor require explicit `NAV_TAKEOFF` while rovers don't, and some commands exist only on specific firmwares. A vehicle-abstract intent grammar would re-materialise through divergent rules at dispatch time — exactly where a bug becomes "wrong mission uploaded."
+Revisions are vehicle-bound. Every revision stores a required `vehicle_profile_id`. Dispatch refuses if the active vehicle profile does not match. Rationale: the `.plan` format is vehicle-bound; `NAV_WAYPOINT` parameter interpretation differs by stack, fixed-wing/PX4-multirotor require explicit `NAV_TAKEOFF` while rovers do not, and some commands exist only on specific firmware variants. A vehicle-abstract intent grammar would re-materialise through divergent rules at dispatch time — exactly where a bug becomes "wrong mission uploaded."
 
-Concurrent template edits are last-write-wins with `updated_at` and `updated_by` audit. No optimistic-locking machinery — conflicts between operators are expected to be rare, and a fast manual override is sometimes the operationally-correct outcome.
+Concurrent edits use **optimistic concurrency** via `client_version`. Each mutation request carries `expected_version`; the backend rejects stale writes with `409 Conflict`. Editing a locked revision (status `approved`, `executing`, or `completed`) forks a new client-authored revision with provenance inheritance rather than mutating in place. There is no last-write-wins fallback — conflicts are surfaced to the operator.
 
 ### Operational constraints (committed follow-up)
 
@@ -733,19 +732,19 @@ The same interrupt mechanism used for approval — generalised into a runtime ex
 
 ### UI split (committed follow-up)
 
-Two pages, one shared map component:
+Two pages, one shared `MapWidget` component:
 
-- **Missions** (new — authoring + library): browse / create / rename / delete `MissionTemplate`s; embeds the chat agent for prompt-driven authoring; hosts manual editing tools (drag handles, add-point, delete-point, undo/redo); "Dispatch" materialises template into a draft.
-- **Replay** (existing) — gains a planned-vs-actual overlay: when replaying a session whose mission came from a known template/draft, fetch that route and render it as a second layer alongside the actual telemetry path. Read-only; diff metrics (`max_cross_track_error`, `missed_waypoints`) in a side panel.
-- **Shared `MissionMapView` component** — takes N route layers + 1 optional telemetry layer + optional edit handles. Same component used by the Approval Card. Approval-gate UX renders both the structured draft and the map preview with route + active corridors/blockages overlaid; an "Approve / Reject / Request changes" footer.
+- **AI Agent (`/ai`) — authoring + review.** The map widget on this page is the primary mission authoring surface: operators create missions from scratch (`➕ New mission`), review and edit AI-proposed revisions, and manage the mission list. Chat panel and map panel are co-present — the agent proposes, the operator refines on the same screen.
+- **Replay (`/replay`)** — gains a planned-vs-actual overlay: when replaying a session whose mission came from a known revision, fetch that route and render it as a second layer alongside the actual telemetry path. Read-only; diff metrics (`max_cross_track_error`, `missed_waypoints`) in a side panel.
+- **Shared `MapWidget` component** — takes N route layers + 1 optional telemetry layer + optional edit handles. Used by the Approval Card and the `/ai` mission editor. The Approval Card renders the structured draft and map preview with route + active corridors/blockages overlaid; footer verbs are **Approve draft (does not execute) / Reject / Execute mission**.
 
-Why not one page: authoring and replay have incompatible interaction models. Folding them creates affordance ambiguity (is dragging this point editing a template or rewriting history?) and complicates state management.
+The `/ai` map is the authoring surface — there is no separate Missions page. Co-locating authoring with the agent removes a context switch: the operator reviews the AI's explanation and the spatial route in the same view, and edits are immediately visible to both the agent and the operator. Replay and `/ai` have incompatible interaction models (read-only history vs. live edit), so they remain separate pages sharing the map component.
 
 ### Critical files (route planning slice)
 
 - **New**: `gcs_server/ai/road_graph_service.py`, `gcs_server/ai/mission_export_service.py`, `gcs_server/ai/vehicle_profile.py`.
 - **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `export_mission`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/policy_engine.py` (gate `export_mission` on `draft.lifecycle == approved`); `gcs_server/ai/mission_draft_service.py` (extend step schema with `waypoints` + `route_summary`; add lifecycle fields); `gcs_server/scene_map.py` (expose centerlines).
-- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionDraftService` for storage + approval flow, existing `PolicyEngine` for tier gating, existing `validate` step in the workbench graph.
+- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionDraftService` for storage + approval flow, existing `PolicyEngine` for tier gating, existing `validate` step in the planning-shell graph.
 - **Possibly bump**: `config/terrain_scene.v1.json` + `terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
 
 ## Memory Subsystem
@@ -1074,7 +1073,7 @@ Phases are sequenced by what they unlock. Any phase can move based on product pr
 | **2** | Structured trace + stop reasons; loop start / end / iteration events; repeated-tool-failure detection; provider-tool-calling fallback. **Done.** | Platform |
 | **3** | `PolicyEngine` seam; data-access manifest in loop input; extend `ToolDefinition` with `tier` / `required_scopes` / `side_effects`. **Done.** | Platform |
 | **4** | Bounded lazy tools: settings, AI session listing / search / message, available-data-surface discovery, sensor / perception metadata stubs. | Platform |
-| **5** | Planning-shell planner-loop node behind `ai_use_planner_loop = false`. **Done.** | Platform |
+| **5** | Introduce the planning-shell planner-loop node with an initial migration flag. **Done.** | Platform |
 | **6** | Default-on planner loop; remove the superseded deterministic-DAG nodes. **Done.** | Platform |
 | **7** | Critic (7a) + Reporter (7b) + memory foundations (session summaries, mission / report memory, operator preference memory). | Platform |
 | **8** | Voice terminal: STT / TTS adapters, voice transcript metadata, barge-in, fixed-grammar approvals + e-stop. | Platform |
@@ -1105,7 +1104,7 @@ Phases are sequenced by what they unlock. Any phase can move based on product pr
 | 2 | Disable new loop events; keep tool events | seconds |
 | 3 | Fall back to existing `ToolRegistry` permission filter | minutes |
 | 4 | Disable new tools from registry | seconds |
-| 5 | `ai_use_planner_loop = false` setting flip | seconds (config) |
+| 5 | Git revert of the historical planner-loop introduction | one deploy cycle |
 | 6 | Git revert + redeploy; superseded code preserved on a tag | one deploy cycle |
 | 7 | Disable specialist; read-through-only memory flags | per layer |
 | 8 | Disable voice transport; text unchanged | seconds |
@@ -1150,7 +1149,7 @@ Before any tier-3+ work starts, **all** must hold:
 | `ToolRegistry` | Tool registration and permission filtering | implemented; extended with tier / scopes / side_effects |
 | `PolicyEngine` | Permission / grant / policy decision before tool execution | thin wrapper, implemented |
 | `AIContextService` | Compact current context and manifest | implemented |
-| `WorkbenchGraph` | Durable HITL shell for planning approval (`workbench_*` code namespace) | implemented; simplified |
+| `PlanningShellGraph` | Durable HITL shell for planning approval | implemented; simplified |
 | `MissionDraftService` | Store and validate draft lifecycle | implemented |
 | `MissionExecutionService` | Authoritative mission revision / operation / controller-handoff state | implemented; real-controller adapter slice next |
 | `ProviderRegistry` | Role / purpose model routing | implemented; evolves to roles |
@@ -1176,8 +1175,8 @@ gcs_server/ai/policy_engine.py           policy / guardrail seam
 gcs_server/ai/agent_traces.py            JSONL trace writer
 gcs_server/ai/chat_service.py            calls runtime
 gcs_server/ai/tool_registry.py           extended definitions; bounded tools
-gcs_server/ai/workbench_graph.py         planner-loop node; deterministic-DAG middle removed
-gcs_server/ai/graph_state.py             use_planner_loop / planner_agent_iterations / planner_agent_stop_reason
+gcs_server/ai/planning_shell_graph.py    planner-loop node; deterministic-DAG middle removed
+gcs_server/ai/graph_state.py             planner_agent_iterations / planner_agent_stop_reason
 gcs_server/ai/provider_registry.py       purpose routing evolving toward roles
 gcs_server/ai/context_service.py         compact context and manifest
 gcs_server/ai/mission_execution_service.py   mission_execution subsystem

@@ -44,28 +44,23 @@ This is the correct source of truth for AI access.
 
 ### Current AI Agent Behavior
 
-The current "agent" is not a real iterative tool-calling agent yet.
+> **Historical note.** The description below was accurate at the bootstrap stage (pre-Phase 5). The agent is now a real iterative tool-calling loop with LangGraph orchestration — see [`graph-spec.md`](./graph-spec.md) §1 and §3 and [`context-layer.md`](./context-layer.md) for current architecture. The sections below are retained for historical context and to describe the design goals that drove the move to a real tool-calling loop.
 
-What it does today:
+What the bootstrap stage did:
 1. Build one compact context snapshot before the LLM call.
 2. Optionally include a few precomputed read-only facts based on the user message.
 3. Serialize those facts into the prompt as `tool_calls`.
 4. Send a single LLM request.
 5. Store the response.
 
-What it does not do today:
+What the bootstrap stage did not do:
 - no tool selection after the first model response
 - no second LLM call after retrieving data
-- no autonomous loop of think -> call tool -> think again
+- no autonomous loop of think → call tool → think again
 - no LangGraph orchestration
 - no real structured tool invocation contract with the provider
 
-So the current implementation is best described as:
-- single-request prompt assembly
-- with pre-LLM context injection
-- and prompt-level pseudo-tools
-
-That is useful as a bootstrap layer but it is not sufficient for scalable replay-session analytics.
+That was useful as a bootstrap layer but not sufficient for scalable replay-session analytics. The real tool-calling loop is the current implementation.
 
 ## Design Goals
 

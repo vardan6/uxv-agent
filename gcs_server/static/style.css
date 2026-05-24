@@ -3218,7 +3218,7 @@ code {
   color: var(--text);
 }
 
-/* Workbench approval card */
+/* Planning-shell approval card */
 .ai-approval-card {
   margin: 12px 0 4px;
   padding: 12px 14px;
@@ -3394,15 +3394,45 @@ code {
 
 .mission-list-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 120px;
-  padding: 16px;
+  gap: 6px;
+  min-height: 140px;
+  padding: 20px 16px;
   border: 1px dashed var(--line);
   border-radius: 12px;
   color: var(--muted);
   text-align: center;
-  font-size: 0.92rem;
+  font-size: 0.85rem;
+}
+
+.mission-list-empty p { margin: 0; }
+
+.mission-list-empty-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.mission-list-empty-hint {
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
+.mission-list-empty-cta {
+  margin-top: 6px;
+  padding: 5px 14px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.mission-list-empty-cta:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .mission-group {
@@ -3590,6 +3620,7 @@ code {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--panel) 80%, transparent);
@@ -3599,10 +3630,36 @@ code {
   line-height: 1.5;
   pointer-events: none;
   z-index: 500;
+  gap: 6px;
 }
 
-.map-widget-empty p {
-  margin: 0;
+.map-widget-empty p { margin: 0; }
+
+.map-empty-title {
+  font-weight: 700;
+  color: inherit;
+}
+
+.map-empty-hint {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.map-empty-cta {
+  pointer-events: auto; /* re-enable within the no-events overlay */
+  margin-top: 6px;
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.map-empty-cta:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* Mission row action buttons */
@@ -3653,6 +3710,21 @@ code {
 .mission-row-lock {
   font-size: 0.9rem;
   opacity: 0.7;
+  cursor: default;
+}
+
+.mission-row-stale {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   cursor: default;
 }
 
@@ -4563,3 +4635,485 @@ code {
     padding-right: 16px;
   }
 }
+
+/* ============================================================
+   Phase 1E — direct-manipulation editor
+   ============================================================ */
+
+/* Edit-mode banner */
+.map-edit-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 0.8rem;
+  z-index: 510;
+  pointer-events: auto;
+}
+
+.map-edit-banner[hidden] { display: none; }
+
+.map-edit-banner-text {
+  flex: 1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-edit-exit-btn {
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.map-edit-exit-btn:hover {
+  background: color-mix(in srgb, var(--line) 30%, transparent);
+}
+
+/* Cursor overrides for edit mode */
+.map-widget-map.is-edit-mode { cursor: crosshair !important; }
+.map-widget-map.is-locked { cursor: not-allowed !important; }
+
+/* Ghost midpoint marker — CSS class applied via circleMarker className */
+.leaflet-interactive.map-wp-ghost { cursor: cell; }
+
+/* Edit button in action strip */
+.mission-row-action-btn.is-edit {
+  color: var(--muted);
+  border-color: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.mission-row-action-btn.is-edit:hover {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+/* Selection panel (floating waypoint inspector) */
+.map-selection-panel-wrap {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 520;
+  pointer-events: auto;
+}
+
+.map-selection-panel-wrap[hidden] { display: none; }
+
+.map-selection-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 170px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-size: 0.82rem;
+}
+
+.map-selection-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.map-selection-title {
+  font-weight: 700;
+  flex: 1;
+}
+
+.map-selection-close {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.map-selection-details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+
+.map-selection-details dt {
+  color: var(--muted);
+}
+
+.map-selection-details dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Provenance colour hints */
+.map-prov-ai         { color: var(--muted); }
+.map-prov-user       { color: #2ea043; }
+.map-prov-ai-edited  { color: var(--accent); }
+
+/* Context menu */
+.map-context-menu {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  min-width: 140px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 600;
+}
+
+.map-context-menu[hidden] { display: none; }
+
+.map-context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.map-context-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Keyboard help dialog */
+.map-keyboard-help-dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px 28px;
+  max-width: 420px;
+  width: calc(100vw - 32px);
+  color: inherit;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.map-keyboard-help-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.map-kbhelp-title {
+  margin: 0 0 14px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.map-kbhelp-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.map-kbhelp-table td {
+  padding: 4px 8px 4px 0;
+  vertical-align: top;
+}
+
+.map-kbhelp-table td:last-child {
+  color: var(--muted);
+}
+
+.map-kbhelp-key {
+  display: inline-block;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.82em;
+  white-space: nowrap;
+}
+
+.map-kbhelp-footer {
+  margin-top: 18px;
+  text-align: right;
+}
+
+.map-kbhelp-close {
+  padding: 6px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.map-kbhelp-close:hover {
+  background: color-mix(in srgb, var(--line) 30%, transparent);
+}
+
+/* Waypoint badge variants for the editable layer */
+.map-wp-badge.map-wp-selected span {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+.map-wp-badge.map-wp-user span {
+  background: #2ea043 !important;
+}
+
+.map-wp-badge.map-wp-ai-edited span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Inline provenance glyphs inside waypoint badge */
+.map-wp-prov-user,
+.map-wp-prov-edited {
+  font-size: 0.6em;
+  vertical-align: middle;
+  margin-left: 1px;
+}
+
+/* ============================================================
+   Phase 2 — marquee multi-select + hint toasts
+   ============================================================ */
+
+/* Rubber-band selection rectangle */
+.map-marquee {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  z-index: 600;
+  box-sizing: border-box;
+}
+
+.map-marquee[hidden] { display: none; }
+
+/* Transient hint toast (e.g., "Hold Alt to snap") */
+.map-hint-toast {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  z-index: 600;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.map-hint-toast[hidden] { display: none; }
+
+/* ── Elevation Profile Panel ─────────────────────────────────────── */
+.map-elevation-panel {
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.map-elev-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 3px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.map-elev-title {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: 0.8rem;
+}
+
+.map-elev-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.map-elev-chip {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+}
+
+.map-elev-chip[hidden] { display: none; }
+
+.map-elev-chip-ok      { background: color-mix(in srgb, #2ea043 18%, transparent); color: #2ea043; border: 1px solid color-mix(in srgb, #2ea043 35%, transparent); }
+.map-elev-chip-warn    { background: color-mix(in srgb, #f0a030 18%, transparent); color: #f0a030; border: 1px solid color-mix(in srgb, #f0a030 35%, transparent); }
+.map-elev-chip-danger  { background: color-mix(in srgb, #e05050 20%, transparent); color: #e05050; border: 1px solid color-mix(in srgb, #e05050 35%, transparent); }
+
+.map-elev-chart-wrap {
+  padding: 0 0 2px;
+  overflow: hidden;
+}
+
+.map-elev-chart-wrap[hidden] { display: none; }
+
+.map-elev-empty {
+  padding: 10px 14px;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.map-elev-svg { display: block; }
+
+.map-elev-grid {
+  stroke: var(--line);
+  stroke-width: 0.5;
+  opacity: 0.6;
+}
+
+.map-elev-axis {
+  stroke: color-mix(in srgb, var(--muted) 50%, transparent);
+  stroke-width: 1;
+}
+
+.map-elev-terrain-fill {
+  fill: color-mix(in srgb, var(--muted) 28%, transparent);
+}
+
+.map-elev-clearance-fill {
+  fill: color-mix(in srgb, #2ea043 20%, transparent);
+}
+
+.map-elev-terrain-line {
+  stroke: color-mix(in srgb, var(--muted) 60%, transparent);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+.map-elev-label {
+  font-size: 8px;
+  fill: var(--muted);
+  opacity: 0.85;
+}
+
+.map-elev-wp-num {
+  font-size: 7px;
+  fill: var(--muted);
+  pointer-events: none;
+}
+
+.map-elev-dot:hover { opacity: 0.85; }
+
+/* ── Bulk-edit action bar (Phase 2) ─────────────────────────────────────── */
+.map-bulk-bar {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 520;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+}
+
+.map-bulk-bar[hidden] { display: none; }
+
+.map-bulk-count {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.map-bulk-sep {
+  color: var(--line);
+  user-select: none;
+}
+
+.map-bulk-alt-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: default;
+}
+
+.map-bulk-alt-input {
+  width: 58px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+.map-bulk-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.map-bulk-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.map-bulk-btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.map-bulk-btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.map-bulk-clear {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.map-bulk-clear:hover { color: var(--text); }

@@ -17,25 +17,44 @@ Goal: give the operator spatial review of agent proposals on `/ai` quickly via a
 
 ## Current Implementation Reality
 
-Updated 2026-05-21 to reflect Phases 1A–1C shipping.
+Updated 2026-05-22 to reflect Phases 1A–1E complete.
 
 **Frontend (`gcs_server/static/map/`):**
-- `MapWidget.js` — orchestrator; mounts Leaflet map, manages polling, action callbacks, confirm modal, vehicle layer
-- `layers/MissionOverlayLayer.js` — renders route polylines and numbered waypoint badges in scene coordinates
+- `MapWidget.js` — orchestrator; mounts Leaflet map, manages polling, action callbacks, confirm modal, vehicle layer, edit session, keyboard shortcuts
+- `layers/MissionOverlayLayer.js` — renders route polylines and numbered waypoint badges; `renderEditable()` draws draggable markers, ghost midpoint inserts, and provenance badges (`👤` / `✏`) for the active edit session
 - `layers/LiveVehicleLayer.js` — subscribes to `/ws`, draws heading-rotated vehicle arrow marker
 - `ui/MissionListPanel.js` — grouped revision list; visibility/focus toggles; approve/reject/execute action buttons; 🔒 badge for executing state
+- `ui/SelectionPanel.js` — read-only waypoint inspector shown on marker click; displays index, x/y/z coords, and provenance label
+- `ui/ContextMenu.js` — right-click context menu on waypoint markers: Insert before, Insert after, Delete, Move to vehicle position (shown only when vehicle telemetry is available)
+- `ui/KeyboardHelpOverlay.js` — `?` key keyboard shortcuts dialog
+- `state/editState.js` — pure in-memory store (no DOM/Leaflet): selection set, editMode (`null | 'vertex' | 'add'`), waypoints with provenance, `clientVersion`, `busy`; `isEditable()` blocks when status is `executing`
 - `data/missionApi.js` — wrappers for all mission overlay, list, approve, reject, execute, and controller-state endpoints
+- `data/missionMutationApi.js` — wrappers for the four Phase 1D mutation endpoints plus `getRevision`
 - `data/vehicleProfileApi.js` — vehicle profile wrappers
 - `missionListLogic.js` — pure grouping, visibility cap, palette assignment
 - `vehicleProfiles.js` — client mirror of the seven-field `VehicleProfile`
 - `ai.html` — mounts `MapWidget` on `ai:session-open` and `ai:session-refreshed` events; reads session id via `window.__aiGetActiveSessionId`
 
-**Not yet implemented (Phase 1D/1E):**
-- `layers/GeofenceLayer.js`, `layers/TerrainCanvasLayer.js` — Phase 2
-- `ui/SelectionPanel.js` — read-only waypoint inspector on marker click
-- `ui/KeyboardHelpOverlay.js` — `?` key help
-- `state/editState.js` — selection set, dirty waypoints, provenance map
-- Backend mutation endpoints for creating/editing/deleting waypoints
+**Phase 2 items now implemented:**
+- `ui/HintToasts.js` — transient hint toasts (auto-dismiss); shown on drag-start to hint "Hold Alt to snap"
+- Marquee multi-select — drag on empty map (while a revision is loaded, non-add mode) rubber-band selects waypoints via capture-phase mousedown intercept
+- Alt-snap — hold Alt during waypoint drag to snap to the nearest other waypoint within 12 px screen distance
+- Execute recovery hardening — `MapWidget` now handles backend `stale_revision` and `stale_controller_version` responses by refreshing state, refocusing the active revision, and updating cached controller version from the backend response
+
+**Phase 2 elevation profile implemented (2026-05-23):**
+- `data/terrainApi.js` — `fetchSceneMap()` hits `GET /api/replay/scene-map`; `makeSampler(sceneMap)` returns bilinear interpolation over the 128×128 normalized heightmap
+- `ui/ElevationProfilePanel.js` — SVG chart: terrain fill, route altitude polyline, clearance fill, numbered waypoint dots; status chip: ✓ CLEAR / ⚠ LOW CLEARANCE / ⚠ BELOW TERRAIN; minimum clearance dashed line for aerial vehicles (multirotor 3 m, fixed_wing 5 m); collapsible; dot click selects waypoint in edit state
+- `MapWidget.js` — elevation panel mounted below the shell; updates on `_render()`, on edit-state change (live drag feedback), and on edit-session end; terrain sampler loaded once via `fetchSceneMap()` at mount time
+
+**Phase 2 bulk-edit action bar implemented (2026-05-23):**
+- `ui/BulkEditActionBar.js` — floating bar shown when ≥2 waypoints are selected (editable revision only); shows selection count, altitude bulk-set (sequential `PATCH` per waypoint, median z pre-fill, Enter submits), delete-all-selected button, and clear-selection button; auto-hides on single-select (defers to SelectionPanel) and when edit is not active
+
+**Phase 2 terrain canvas layer implemented (2026-05-24):**
+- `layers/TerrainCanvasLayer.js` — Leaflet `imageOverlay`-backed terrain layer; bilinear colour palette (4-band green→tan→grey); creates a `terrainPane` at z-index 180 (below mission overlays at 470); `addTo(map)` / `remove()` / `setOpacity()` interface; mounted in `MapWidget.mount()` immediately after `fetchSceneMap()` resolves
+
+**Not yet implemented (Phase 2):**
+- `layers/GeofenceLayer.js` — blocked on backend geofence API (no source exists)
+- "Set as home" context menu item (no backend contract yet)
 
 **Backend routes that exist (verified):**
 - `GET /api/ai/mission-revisions?session_id=...` — list revisions
@@ -46,12 +65,15 @@ Updated 2026-05-21 to reflect Phases 1A–1C shipping.
 - `POST /api/ai/mission-drafts/{draft_id}/approve` — **draft approval; also triggers `.plan` export and revision-side sync**. Supports `execute_after_approval=true` body flag.
 - `POST /api/ai/mission-drafts/{draft_id}/reject`
 - `POST /api/ai/mission-revisions/{revision_id}/execute` — **execution gate**; takes `expected_controller_version` for staleness checks.
+- `POST /api/ai/mission-revisions` — create a new client-authored revision (operation-scoped, inherits provenance from parent)
+- `PATCH /api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}` — update waypoint geometry; promotes provenance to `ai+edited`; takes `expected_version` for staleness check
+- `POST /api/ai/mission-revisions/{revision_id}/waypoints` — insert waypoint at `after_index`; provenance = `user`; takes `expected_version`
+- `DELETE /api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}` — delete waypoint; takes `expected_version`
+- `GET /api/vehicle-profile/active` — returns the active `VehicleProfile` as JSON
+- `GET /api/vehicle-profiles` — returns `KNOWN_PROFILES` list
 - `GET /api/snapshot` and `WS /ws` — telemetry / snapshot / controller events.
 
 **Backend routes that do not exist (verified):**
-- `GET /api/vehicle-profile/active`
-- `GET /api/vehicle-profiles`
-- Any `POST .../mission-revisions` for client-driven revision creation/mutation.
 - Any standalone `.plan` export route (export currently happens inside draft approval).
 - Any geofence API.
 
@@ -60,7 +82,8 @@ Updated 2026-05-21 to reflect Phases 1A–1C shipping.
 - `ai_mission_revisions` rows carry `operation_id`, `draft_id`, `status`, and the full `mission` JSON.
 - The draft system (`MissionDraftService`) and the revision system (`MissionExecutionService`) coexist; approval drives both in sync.
 - Overlay coordinates are **local scene metres** `{x, y, z}` from the mission payload — **not lat/lon**. Mission export projects to WGS84 separately for `.plan` files.
-- Per-waypoint provenance is **not in the current payload** — adding it is a backend prerequisite for the editor phase.
+- Per-waypoint provenance is now included in overlay waypoint features and persisted in `provenance_json` as `ai` / `user` / `ai+edited`.
+- Client-side edit forking must support all current mission waypoint shapes: direct `mission.waypoints`, `route_artifacts[*].waypoints`, and `steps[*].waypoints`. This is now implemented in `MapWidget.collectEditableWaypoints()`.
 
 **Vehicle profile facts:**
 - `gcs_server/ai/vehicle_profile.py` defines three profiles: `rover_default` (ground), `quad_x500` (multirotor), `fixed_wing_default` (fixed-wing).
@@ -87,9 +110,9 @@ Updated 2026-05-21 to reflect Phases 1A–1C shipping.
 
 ## Phase Plan
 
-Phase 1 is split into four shippable slices. Each slice has acceptance criteria and ships independently. Phase 2 is everything that needs new backend contracts.
+Phase 1 shipped in five slices (1A–1E). Phase 2 covers everything requiring new backend sources or new platform contracts.
 
-**Shipped:** Phases 1A, 1B, and 1C are complete as of 2026-05-21. Phase 1D (backend mutation API design) is next.
+**Shipped:** Phases 1A–1E are complete as of 2026-05-22. Phase 2 (elevation profile, replay page migration, geofence, bulk-edit) is next.
 
 ### Phase 1A — Read-only current mission overlay on `/ai`
 
@@ -152,35 +175,58 @@ Out of scope for 1C:
 - Standalone export route or button (export piggybacks on draft approval today; a dedicated re-export is Phase 2).
 - Any geometry mutation, new-mission creation, duplicate, import.
 
-### Phase 1D — Backend mutation API design (no UI yet)
+### Phase 1D — Backend mutation API ✓ complete
 
-**Goal:** design and add the minimum backend surface that the editor needs. Treated as separate backend work; the widget does not ship editing until this lands.
+**Goal:** design and add the minimum backend surface that the editor needs.
 
-Required contracts (to be designed, not specified in this doc):
-- Create new client-authored revision (operation-scoped or fresh).
-- Update waypoint geometry on a revision.
-- Insert / delete waypoint on a revision.
-- Per-waypoint provenance field added to revision schema and overlay payload (`ai`, `user`, `ai+edited`).
-- Stale-edit detection via revision id + version (optimistic concurrency).
-- Conflict resolution rules when the agent regenerates over user-edited waypoints (must diff, must not silently overwrite).
-- Decision: does "edit an approved revision" create a new `proposed` successor under the same operation, or supersede in place? Default recommendation: new successor; preserves history and the two-approval model.
+Implemented (migration 005 + `MissionExecutionService` methods + routes in `app.py`):
+- `POST /api/ai/mission-revisions` — create client-authored revision; inherits provenance from parent.
+- `PATCH .../waypoints/{index}` — update waypoint geometry; promotes provenance to `ai+edited`.
+- `POST .../waypoints` — insert waypoint; provenance = `user`.
+- `DELETE .../waypoints/{index}` — delete waypoint.
+- `client_version` column on `ai_mission_revisions` for optimistic concurrency; all mutation routes reject on version mismatch.
+- `provenance_json` column carries per-waypoint `ai` / `user` / `ai+edited` state; `_build_mission_overlay_payload` now includes provenance per waypoint feature.
 
-Out of scope for 1D itself:
-- The UI consuming these contracts (that's Phase 1E).
-- Settings UI; geofence.
+### Phase 1E — Direct manipulation editor ✓ complete
 
-### Phase 1E — Direct manipulation editor
+Implemented:
+- `state/editState.js` — pure store; selection set, editMode (`null | 'vertex' | 'add'`), waypoints with provenance, `clientVersion`, `busy`, `isEditable()`.
+- `ui/SelectionPanel.js` — read-only waypoint inspector: index, x/y/z in metres, provenance label.
+- `ui/ContextMenu.js` — right-click context menu on markers: Insert before, Insert after, Delete.
+- `ui/KeyboardHelpOverlay.js` — `?` key modal listing all map keyboard shortcuts.
+- `data/missionMutationApi.js` — client wrappers for all four mutation endpoints plus `getRevision`.
+- `MissionOverlayLayer.renderEditable()` — draggable markers, ghost midpoints for segment insertion (including end-cap ghosts before the first and after the last waypoint for prepend/append), provenance badges.
+- `MapWidget` keyboard handler: `V` toggle vertex-edit, `A` toggle add-waypoint (map click appends waypoint in add mode), `F` focus, `Delete`/`Backspace` delete selected, `Esc` close menu → clear selection → exit edit, `?` help.
+- Edit banner shows active mode label (`· vertex edit` / `· add mode`) alongside status and revision ID.
+- `LiveVehicleLayer.getPosition()` exposes last known vehicle position; used by "Move to vehicle position" context menu item.
+- Hard-lock: `LOCKED_STATUSES` set (`executing`, `approved`, `completed`, etc.) disables all edit affordances and shows `not-allowed` cursor.
+- Editing a locked but non-executing revision now forks a new client revision from the full canonical waypoint set, not only `mission.waypoints`.
+- When edit starts, the target revision is pinned into the visible set, focused, and its operation group is expanded so the operator does not keep looking at an older approved sibling.
 
-Built only after 1D lands. UX target — already designed at length in v1 of this doc — preserved verbatim below in **Editing Model (Deferred)** so the spec does not lose information. Acceptance criteria for 1E will be drafted when 1D contracts are concrete.
+Not yet implemented:
+- "Set as home" context menu item (no backend contract yet).
+
+Execution hardening added after Phase 1E:
+- `MissionListPanel` only shows `Execute` on the operation's active revision. Older executable siblings show a `stale` badge instead.
+- Backend `execute_revision()` rejects non-active sibling revisions with `status = stale_revision`.
+- `missionApi.executeMission()` preserves structured error payloads on non-200 responses.
+- `MapWidget` recovery paths:
+  - `stale_revision` → clear overlay cache, refresh, pin/focus returned active revision, show targeted message
+  - `stale_controller_version` → update cached `controller_version`, refresh, pin/focus controller active revision when present, show targeted retry message
+- `MapWidget._loadControllerState()` now reads `controller_state.controller_version` from the backend payload; the previous `current_version` name was wrong for this API surface
+
+Recommended next continuation from the current codebase:
+- planning-shell / mission-execution integration around edited revisions, not more standalone map affordances
+- specifically: teach the planning shell to detect and resolve conflicts against operator-edited (`ai+edited`) waypoint provenance and active-revision lineage
 
 ### Phase 2 — Out of scope here
 
-- Replay page migration (extract `TerrainCanvasLayer` and historical-track layer from `replay.js`; rebuild replay on `MapWidget`).
+- Replay page migration (extract historical-track layer from `replay.js`; rebuild replay on `MapWidget` — `TerrainCanvasLayer` is now extracted).
 - Elevation profile panel — **required before the first multirotor mission ships**.
 - Floating / pop-out / second-monitor window modes (design hook only — `MapWidget` must support re-parenting via `invalidateSize()`).
 - 3D map view.
 - Snap-to-road, edit-during-execution.
-- Bulk-edit action bar for multi-selected waypoints.
+- Bulk-edit action bar for multi-selected waypoints — **implemented 2026-05-23**.
 - Geofence display + waypoint-vs-geofence validation (only after a real geofence backend source exists).
 - Settings UI for vehicle profile selection.
 - Vehicle property schema layer (per-waypoint speed / hold / action / altitude / yaw / gimbal forms).
@@ -372,18 +418,18 @@ The map shares a page with a keyboard-heavy chat composer. The widget MUST follo
 - `/`, `Delete`, `Backspace`, `Esc`, `Enter`, `N`, `A`, `V`, `F` MUST NOT fire while the chat composer, the mission-list search input, or any property-field input is focused.
 - `Esc` behavior is ordered: close any open menu/modal, then clear map selection, then exit edit mode.
 - Tooltip hover delay: 400 ms. Tooltip format: `"<Action> (<Hotkey>)"`.
-- Touch / mobile: list panel + read-only map + buttons MUST be usable. Drag editing (Phase 1E) MAY degrade to read-only on touch.
+- Touch / mobile: list panel + read-only map + buttons MUST be usable. Drag editing MAY degrade to read-only on touch.
 
 ## Empty / Error / Offline States
 
-- **No mission overlay available:** center on `(0, 0)` in scene mode, list shows a single CTA card *"No missions yet. Ask the agent."* (`➕ New mission` appears only when Phase 1E ships.)
+- **No mission overlay available:** center on `(0, 0)` in scene mode, list shows a single CTA card *"No missions yet. Ask the agent."* (`➕ New mission` affordance available via the editor.)
 - **Overlay API failure:** non-blocking banner at top of map area: *"Mission overlay unavailable — retrying in 5 s."* Manual refresh button. Map still pans/zooms.
 - **Vehicle telemetry failure / no `/ws`:** live vehicle marker hides. Mission overlay rendering is unaffected.
 - **Active-profile API missing:** widget uses `rover_default` and logs a console warning. No blocking dialog.
 
-## Editing Model (Deferred — Phase 1E target)
+## Editing Model (Phase 1E — Implemented)
 
-Recorded here so the design intent is not lost. Implemented only after Phase 1D contracts land.
+Core editing is live. Items still pending are noted inline.
 
 ### Gestures
 
@@ -464,7 +510,7 @@ Manual QA, per repository convention (no JS tests added by this work).
 - "Reject" calls the reject endpoint and removes the row from the list (or marks superseded if backend behavior dictates).
 - Live vehicle marker is on by default, updates from `/ws`, and missing telemetry does not block mission overlay rendering.
 
-Phase 1D and 1E acceptance criteria are deferred and will be added when 1D contracts are concrete.
+Phase 1D and 1E shipped without a formal acceptance-criteria section in this doc; the implementation is the record. Phase 2 acceptance criteria will be authored here when the Phase 2 design is concrete.
 
 ## Open Questions
 

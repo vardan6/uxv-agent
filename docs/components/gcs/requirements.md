@@ -163,7 +163,49 @@ A standalone first-run page for editing MQTT settings. Equivalent to the Connect
 
 ## AI Agent (`/ai`)
 
-The AI page is documented in the [AI Agent component](../ai-agent/requirements.md).
+For the full AI agent product requirements — intent parsing, planning shell, mission execution, memory, and operator interaction model — see [AI Agent requirements](../ai-agent/requirements.md). This section covers the GCS-owned surfaces on the `/ai` page: the map widget, mission list, and edit UI.
+
+### Map widget
+
+The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and all mission overlays. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.
+
+The map widget must:
+
+- render the terrain scene (scene objects, road graph, blockages, corridors) at all times
+- display a `MissionListPanel` showing revisions grouped by operation, with status badges
+- render mission overlays (AI-proposed and operator-authored) as distinct visual layers with provenance-aware per-waypoint styling (`ai` / `user` / `ai+edited`)
+- track and display the live vehicle position via the `/ws` telemetry stream (polling fallback at 2 s)
+- support a `SelectionPanel` that shows waypoint-level details and provenance for any selected waypoint
+- support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home, detach from AI proposal)
+- display hint toasts for gestures and a keyboard help overlay
+
+### Mission CRUD
+
+The map widget is the primary mission authoring surface on `/ai`. No separate Missions page exists.
+
+Operators must be able to:
+
+- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually on the map
+- **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
+- **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
+- **Approve a draft** (does not execute) using the "Approve draft" button; semantics: approval locks the revision for the `Execute mission` gate
+- **Execute mission** — a separate, explicit second action that hands the approved revision to the flight controller
+- **Export plan** — export the approved revision as a `.plan` file without executing
+
+The three verbs are **Approve draft**, **Execute mission**, and **Export plan**. The word "Accept" is not used.
+
+### Concurrency and edit-lock invariants
+
+- All edits carry `client_version` for optimistic CAS. The backend rejects stale writes with `409 Conflict`.
+- Editing a locked revision (`approved`, `executing`, `completed`) forks a new client-authored revision with provenance inheritance rather than mutating in place.
+- No mutation of an executing revision is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
+- The `Execute mission` button is shown only for the operation's **active** revision. Attempting to execute a sibling revision is rejected with `stale_revision`.
+
+### Safety invariants
+
+- Approval does not execute. Execution requires a second explicit operator action.
+- The edit lock during execution is not bypassable from the frontend.
+- The map widget never issues low-level MQTT commands directly.
 
 ## Cross-Cutting Behavior
 

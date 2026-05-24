@@ -149,9 +149,10 @@ Did the system understand the requested rover task correctly?
 
 ### Planning Shell
 
-The planning shell sits after intent parsing in the intended workflow.
-It uses parsed intent plus target/context resolution to produce a mission
-draft that requires draft approval. Reached via `/plan <prompt>`.
+The planning shell reaches intent parsing through planner tools inside the
+shared agent runtime. The planner combines parsed intent with only the
+target/context resolution it needs to propose a mission draft that requires
+draft approval. Reached via `/plan <prompt>`.
 
 Use it when you want a supervised mission-planning flow.
 
@@ -320,5 +321,5 @@ Primary implementation files:
 Related higher-level references:
 - [GCS Design](../../../components/gcs/design.md)
 - [GCS API And Runtime](../../../components/gcs/internals/api-and-runtime.md)
-- [Planning Shell](./workbench-mode.md)
+- [Planning Shell](./planning-shell.md)
 - [AI Agent Requirements](../requirements.md)

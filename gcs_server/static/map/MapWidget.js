@@ -1,9 +1,70 @@
 import { getCurrentOverlay, getRevisionOverlay, listRevisions, approveDraft, rejectDraft, executeMission, getControllerState } from './data/missionApi.js';
+import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
+import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
 import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
+import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
 import { groupRevisionsByOperation, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
+import { SelectionPanel } from './ui/SelectionPanel.js';
+import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
+import { ContextMenu } from './ui/ContextMenu.js';
+import { HintToasts } from './ui/HintToasts.js';
+import { ElevationProfilePanel } from './ui/ElevationProfilePanel.js';
+import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
+import { editState } from './state/editState.js';
+
+const LOCKED_STATUSES = new Set(['approved', 'exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
+
+function collectEditableWaypoints(mission = {}) {
+  if (Array.isArray(mission.waypoints) && mission.waypoints.length) {
+    return mission.waypoints
+      .filter((wp) => wp && typeof wp === 'object')
+      .map((wp, index) => ({
+        id: wp.id || `mission-wp-${index + 1}`,
+        x: Number(wp.x) || 0,
+        y: Number(wp.y) || 0,
+        z: Number(wp.z) || 0,
+        label: wp.label || '',
+        kind: wp.kind || 'waypoint',
+      }));
+  }
+
+  const routeWaypoints = [];
+  for (const [artifactIndex, artifact] of (mission.route_artifacts || []).entries()) {
+    const points = Array.isArray(artifact?.waypoints) ? artifact.waypoints : [];
+    for (const [waypointIndex, wp] of points.entries()) {
+      if (!wp || typeof wp !== 'object') continue;
+      routeWaypoints.push({
+        id: wp.id || `route-${artifactIndex + 1}-wp-${waypointIndex + 1}`,
+        x: Number(wp.x) || 0,
+        y: Number(wp.y) || 0,
+        z: Number(wp.z) || 0,
+        label: wp.label || '',
+        kind: wp.kind || 'waypoint',
+      });
+    }
+  }
+  if (routeWaypoints.length) return routeWaypoints;
+
+  const stepWaypoints = [];
+  for (const [stepIndex, step] of (mission.steps || []).entries()) {
+    const points = Array.isArray(step?.waypoints) ? step.waypoints : [];
+    for (const [waypointIndex, wp] of points.entries()) {
+      if (!wp || typeof wp !== 'object') continue;
+      stepWaypoints.push({
+        id: wp.id || `step-${stepIndex + 1}-wp-${waypointIndex + 1}`,
+        x: Number(wp.x) || 0,
+        y: Number(wp.y) || 0,
+        z: Number(wp.z) || 0,
+        label: wp.label || '',
+        kind: wp.kind || 'waypoint',
+      });
+    }
+  }
+  return stepWaypoints;
+}
 
 function boundsUnion(boundsList = []) {
   const valid = boundsList.filter(Boolean);
@@ -32,7 +93,15 @@ export class MapWidget {
     this._emptyState = null;
     this._mapEl = null;
     this._listEl = null;
+    this._shellEl = null;
+    this._mapWrapEl = null;
     this._listPanel = null;
+    this._selectionPanel = null;
+    this._keyboardHelp = null;
+    this._contextMenu = null;
+    this._editBanner = null;
+    this._editBannerText = null;
+    this._selectionPanelWrap = null;
     this._mounted = false;
     this._revisionGroups = [];
     this._revisionCache = new Map();
@@ -47,6 +116,17 @@ export class MapWidget {
     this._confirmModal = null;
     this._confirmResolve = null;
     this._actionBusy = false;
+    this._paletteByRevisionId = new Map();
+    this._editStateSubscriber = null;
+    this._keydownHandler = null;
+    this._marqueeEl = null;
+    this._marqueeHandler = null;
+    this._hintToasts = null;
+    this._elevationEl = null;
+    this._elevationPanel = null;
+    this._sampleHeight = () => 0;
+    this._terrainLayer = null;
+    this._bulkActionBar = null;
   }
 
   mount() {
@@ -69,6 +149,18 @@ export class MapWidget {
     this._map.getPane('missionPane').style.zIndex = 470;
     this._map.setView([0, 0], 1);
     this._overlayLayer = new MissionOverlayLayer(this._map);
+
+    // Dismiss context menu on map click; in add mode, append a waypoint at the clicked position
+    this._map.on('click', (e) => {
+      this._contextMenu.close();
+      if (editState.editMode === 'add' && editState.isEditable()) {
+        const ll = e.latlng;
+        this._handleGhostClick(editState.waypoints.length, { x: ll.lng, y: ll.lat, z: 0 });
+      } else if (editState.revisionId) {
+        editState.clearSelection();
+      }
+    });
+
     this._listPanel = new MissionListPanel(this._listEl, {
       onFocusRequested: (revisionId) => this.setFocus(revisionId),
       onVisibilityToggled: (revisionId) => this._toggleVisibility(revisionId),
@@ -76,9 +168,49 @@ export class MapWidget {
       onApproveRequested: (draftId) => this._handleApprove(draftId),
       onRejectRequested: (draftId) => this._handleReject(draftId),
       onExecuteRequested: (revisionId) => this._handleExecuteRequest(revisionId),
+      onEditRequested: (revisionId) => this._onEditRequested(revisionId),
     });
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
+
+    this._elevationPanel = new ElevationProfilePanel(this._elevationEl, {
+      onWaypointClick: (idx) => editState.setSelection(new Set([idx])),
+    });
+
+    this._bulkActionBar = new BulkEditActionBar(this._mapWrapEl, {
+      onDelete: () => this._handleDeleteSelected(),
+      onSetAltitude: (z) => this._handleBulkSetAltitude(z),
+      onClearSelection: () => editState.clearSelection(),
+    });
+
+    fetchSceneMap().then((sceneMap) => {
+      if (sceneMap) {
+        this._terrainLayer = new TerrainCanvasLayer(sceneMap);
+        this._terrainLayer.addTo(this._map);
+      }
+      this._sampleHeight = makeSampler(sceneMap);
+      this._updateElevationProfile();
+    });
+
+    this._editStateSubscriber = (snapshot) => this._onEditStateChange(snapshot);
+    editState.subscribe(this._editStateSubscriber);
+
+    this._keydownHandler = (e) => this._handleMapKeydown(e);
+    this._shellEl.addEventListener('keydown', this._keydownHandler);
+    this._shellEl.tabIndex = -1; // allow programmatic focus for keyboard routing
+
+    // Marquee multi-select: capture-phase mousedown on empty map starts a rubber-band selector.
+    // stopImmediatePropagation prevents Leaflet's drag handler from panning during the gesture.
+    // Only active when a revision is loaded and not in add mode (add mode uses click-to-append).
+    this._marqueeHandler = (e) => {
+      if (e.button !== 0) return;
+      if (!editState.revisionId || editState.editMode === 'add') return;
+      if (e.target.closest('.leaflet-interactive')) return;
+      e.stopImmediatePropagation();
+      this._startMarquee(e);
+    };
+    this._mapEl.addEventListener('mousedown', this._marqueeHandler, true);
+
     this._mounted = true;
     window.requestAnimationFrame(() => this.invalidateSize());
     this._startPolling();
@@ -90,7 +222,20 @@ export class MapWidget {
     this._stopPolling();
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
+    this._terrainLayer?.remove();
+    this._terrainLayer = null;
     this._revisionCache.clear();
+    if (this._editStateSubscriber) {
+      editState.unsubscribe(this._editStateSubscriber);
+      this._editStateSubscriber = null;
+    }
+    if (this._mapEl && this._marqueeHandler) {
+      this._mapEl.removeEventListener('mousedown', this._marqueeHandler, true);
+    }
+    if (this._shellEl && this._keydownHandler) {
+      this._shellEl.removeEventListener('keydown', this._keydownHandler);
+    }
+    editState.clearEdit();
     if (this._map) {
       this._map.remove();
       this._map = null;
@@ -154,7 +299,7 @@ export class MapWidget {
   async _loadControllerState() {
     const result = await getControllerState();
     if (result.ok && result.controller_state) {
-      this._controllerVersion = result.controller_state.current_version ?? null;
+      this._controllerVersion = result.controller_state.controller_version ?? null;
     }
   }
 
@@ -162,7 +307,8 @@ export class MapWidget {
     this._stopPolling();
     const tick = () => {
       if (!this._mounted) return;
-      if (document.visibilityState !== 'hidden') {
+      // Skip automatic refresh while user has an active edit session.
+      if (document.visibilityState !== 'hidden' && !editState.revisionId) {
         this.refresh().catch(() => {});
       }
       this._pollTimer = setTimeout(tick, 5000);
@@ -211,12 +357,349 @@ export class MapWidget {
     const result = await executeMission(revisionId, { expectedControllerVersion: this._controllerVersion });
     this._actionBusy = false;
     if (!result.ok) {
+      if (result.status === 'stale_revision') {
+        await this._recoverFromStaleExecution(result, revisionId);
+        return;
+      }
+      if (result.status === 'stale_controller_version') {
+        await this._recoverFromStaleControllerVersion(result, revisionId);
+        return;
+      }
       this._showError(result.error || 'Execute failed');
       return;
     }
     this._revisionCache.clear();
     await this.refresh();
   }
+
+  // --- Edit flow ---
+
+  async _onEditRequested(revisionId) {
+    const rawResult = await getRevision(revisionId);
+    if (!rawResult.ok) {
+      this._showError(rawResult.error || 'Could not load revision for editing');
+      return;
+    }
+    // rawResult has revision fields spread at the top level (normalized in missionMutationApi).
+    let revisionToEdit = rawResult;
+
+    if (LOCKED_STATUSES.has(String(rawResult.status || ''))) {
+      // Fork: create a new proposed successor so the original stays intact.
+      const waypoints = collectEditableWaypoints(rawResult.mission || {});
+      const forkResult = await createClientRevision({
+        operation_id: rawResult.operation_id,
+        waypoints,
+        label: `Edit of …${String(revisionId).slice(-6)}`,
+        from_revision_id: revisionId,
+      });
+      if (!forkResult.ok) {
+        this._showError(forkResult.error || 'Could not fork revision for editing');
+        return;
+      }
+      revisionToEdit = forkResult.revision;
+      this._prepareRevisionForEditing(revisionToEdit.id || revisionId, revisionToEdit.operation_id || rawResult.operation_id || '');
+      this._revisionCache.clear();
+      await this.refresh();
+    }
+
+    this._prepareRevisionForEditing(revisionToEdit.id || revisionId, revisionToEdit.operation_id || rawResult.operation_id || '');
+    editState.beginEdit(revisionToEdit);
+    this.setFocus(revisionToEdit.id || revisionId);
+    this._render(); // drop edited revision from renderMany
+  }
+
+  async _handleDragEnd(idx, newPoint, preDragLatLng, marker) {
+    if (!editState.isEditable()) return;
+    editState.setBusy(true);
+    const result = await updateWaypoint(editState.revisionId, idx + 1, {
+      point: newPoint,
+      expected_version: editState.clientVersion,
+    });
+    if (result.ok) {
+      editState.beginEdit(result.revision);
+    } else {
+      // Snap the marker back to its pre-drag position.
+      if (preDragLatLng && marker) marker.setLatLng(preDragLatLng);
+      editState.setBusy(false);
+      if (result.status === 'version_conflict') {
+        this._showError('Edit conflict — refreshing.');
+        const fresh = await getRevision(editState.revisionId);
+        if (fresh.ok) editState.beginEdit(fresh);
+      } else if (result.status === 'revision_locked') {
+        this._showError('This revision is locked. Use the Edit button to create an editable copy.');
+      } else {
+        this._showError(result.error || 'Waypoint update failed');
+      }
+    }
+  }
+
+  // afterIndex is the 1-based API after_index value (0 = prepend, N = insert after N-th waypoint).
+  async _handleGhostClick(afterIndex, point) {
+    if (!editState.isEditable()) return;
+    editState.setBusy(true);
+    const result = await insertWaypoint(editState.revisionId, {
+      point,
+      expected_version: editState.clientVersion,
+      after_index: afterIndex,
+    });
+    if (result.ok) {
+      editState.beginEdit(result.revision);
+    } else {
+      editState.setBusy(false);
+      this._showError(result.error || 'Insert failed');
+    }
+  }
+
+  async _handleDeleteSelected() {
+    if (!editState.isEditable()) return;
+    const sortedIndices = [...editState.selectedIndices].sort((a, b) => b - a); // descending
+    if (!sortedIndices.length) return;
+    editState.setBusy(true);
+    let prevRevision = null;
+    for (const idx of sortedIndices) {
+      const revId = prevRevision ? prevRevision.id : editState.revisionId;
+      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
+      const result = await deleteWaypoint(revId, idx + 1, version);
+      if (!result.ok) {
+        editState.setBusy(false);
+        this._showError(result.error || 'Delete failed');
+        if (prevRevision) editState.beginEdit(prevRevision);
+        return;
+      }
+      prevRevision = result.revision;
+    }
+    if (prevRevision) editState.beginEdit(prevRevision);
+  }
+
+  async _handleBulkSetAltitude(z) {
+    if (!editState.isEditable()) return;
+    const sortedIndices = [...editState.selectedIndices].sort((a, b) => a - b);
+    if (!sortedIndices.length) return;
+    editState.setBusy(true);
+    let prevRevision = null;
+    for (const idx of sortedIndices) {
+      const revId = prevRevision ? prevRevision.id : editState.revisionId;
+      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
+      const wp = editState.waypoints[idx];
+      if (!wp) continue;
+      const result = await updateWaypoint(revId, idx + 1, {
+        point: { x: wp.x, y: wp.y, z },
+        expected_version: version,
+      });
+      if (!result.ok) {
+        editState.setBusy(false);
+        this._showError(result.error || 'Altitude update failed');
+        if (prevRevision) editState.beginEdit(prevRevision);
+        return;
+      }
+      prevRevision = result.revision;
+    }
+    if (prevRevision) editState.beginEdit(prevRevision);
+  }
+
+  _handleMarkerClick(idx, event) {
+    editState.setSelection([idx], {
+      shift: event?.shiftKey,
+      toggle: event?.metaKey || event?.ctrlKey,
+    });
+  }
+
+  _handleMarkerRightClick(idx, event) {
+    if (!editState.isEditable() || !event) return;
+    const rect = this._container.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const items = [
+      { label: 'Insert before', action: () => this._insertAdjacentTo(idx, 'before') },
+      { label: 'Insert after',  action: () => this._insertAdjacentTo(idx, 'after') },
+      { label: 'Delete',        action: () => {
+        editState.setSelection([idx]);
+        this._handleDeleteSelected();
+      }},
+    ];
+    const vehiclePos = this._vehicleLayer?.getPosition();
+    if (vehiclePos) {
+      items.push({ label: 'Move to vehicle position', action: () => this._moveWaypointToVehicle(idx, vehiclePos) });
+    }
+    this._contextMenu.open(x, y, items);
+  }
+
+  async _insertAdjacentTo(idx, side) {
+    const wp = editState.waypoints[idx];
+    if (!wp) return;
+    if (side === 'before') {
+      const prev = idx > 0 ? editState.waypoints[idx - 1] : null;
+      const point = prev
+        ? { x: (wp.x + prev.x) / 2, y: (wp.y + prev.y) / 2, z: wp.z }
+        : { x: wp.x, y: wp.y - 1, z: wp.z };
+      await this._handleGhostClick(idx, point); // after_index=idx means insert before waypoint idx+1 (1-based)
+    } else {
+      const next = idx + 1 < editState.waypoints.length ? editState.waypoints[idx + 1] : null;
+      const point = next
+        ? { x: (wp.x + next.x) / 2, y: (wp.y + next.y) / 2, z: wp.z }
+        : { x: wp.x, y: wp.y + 1, z: wp.z };
+      await this._handleGhostClick(idx + 1, point); // after_index=idx+1 means after current waypoint
+    }
+  }
+
+  async _moveWaypointToVehicle(idx, vehiclePos) {
+    await this._handleDragEnd(idx, { x: vehiclePos.x, y: vehiclePos.y, z: vehiclePos.z }, null, null);
+  }
+
+  // --- Marquee multi-select ---
+
+  _startMarquee(e) {
+    const rect = this._mapWrapEl.getBoundingClientRect();
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+
+    this._marqueeEl.style.left = `${startX}px`;
+    this._marqueeEl.style.top = `${startY}px`;
+    this._marqueeEl.style.width = '0px';
+    this._marqueeEl.style.height = '0px';
+
+    const onMouseMove = (mv) => {
+      const x = mv.clientX - rect.left;
+      const y = mv.clientY - rect.top;
+      this._marqueeEl.style.left = `${Math.min(startX, x)}px`;
+      this._marqueeEl.style.top = `${Math.min(startY, y)}px`;
+      this._marqueeEl.style.width = `${Math.abs(x - startX)}px`;
+      this._marqueeEl.style.height = `${Math.abs(y - startY)}px`;
+      this._marqueeEl.hidden = false;
+    };
+
+    const onMouseUp = (mu) => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      this._marqueeEl.hidden = true;
+
+      const endX = mu.clientX - rect.left;
+      const endY = mu.clientY - rect.top;
+      const dx = endX - startX;
+      const dy = endY - startY;
+      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return; // treat as click — let the click event clear selection
+
+      // Convert screen corners to scene coords via Leaflet
+      const tl = this._map.containerPointToLatLng([Math.min(startX, endX), Math.min(startY, endY)]);
+      const br = this._map.containerPointToLatLng([Math.max(startX, endX), Math.max(startY, endY)]);
+      const minX = Math.min(tl.lng, br.lng);
+      const maxX = Math.max(tl.lng, br.lng);
+      const minY = Math.min(tl.lat, br.lat);
+      const maxY = Math.max(tl.lat, br.lat);
+
+      const selected = editState.waypoints
+        .map((wp, i) => (wp.x >= minX && wp.x <= maxX && wp.y >= minY && wp.y <= maxY ? i : -1))
+        .filter((i) => i >= 0);
+
+      if (selected.length) editState.setSelection(selected);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }
+
+  // --- editState subscriber ---
+
+  _onEditStateChange(snapshot) {
+    if (!snapshot.revisionId) {
+      this._overlayLayer.clearEditable();
+      this._selectionPanel.hide();
+      this._bulkActionBar?.hide();
+      this._editBanner.hidden = true;
+      this._mapEl.classList.remove('is-edit-mode', 'is-locked');
+      this._updateElevationProfile();
+      return;
+    }
+
+    const isLocked = snapshot.status === 'executing';
+    this._mapEl.classList.toggle('is-locked', isLocked);
+    this._mapEl.classList.toggle('is-edit-mode', snapshot.editMode === 'add');
+
+    this._editBanner.hidden = false;
+    const modeLabel = snapshot.editMode === 'vertex' ? ' · vertex edit' : snapshot.editMode === 'add' ? ' · add mode' : '';
+    this._editBannerText.textContent =
+      `Editing — ${snapshot.status} · rev …${snapshot.revisionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
+
+    if (snapshot.selectedIndices.size === 1) {
+      const idx = [...snapshot.selectedIndices][0];
+      const wp = snapshot.waypoints[idx];
+      if (wp) this._selectionPanel.show(wp, idx);
+      else this._selectionPanel.hide();
+    } else {
+      this._selectionPanel.hide();
+    }
+
+    this._bulkActionBar?.update(snapshot.selectedIndices, snapshot.waypoints, editState.isEditable());
+
+    const color = this._paletteByRevisionId.get(snapshot.revisionId) || '#4a90d9';
+    this._overlayLayer.renderEditable(snapshot.waypoints, {
+      color,
+      selectedIndices: snapshot.selectedIndices,
+      isLocked,
+      callbacks: {
+        onDragEnd:         (idx, pt, preDragLL, marker) => this._handleDragEnd(idx, pt, preDragLL, marker),
+        onGhostClick:      (afterIndex, pt) => this._handleGhostClick(afterIndex, pt),
+        onMarkerClick:     (idx, ev) => this._handleMarkerClick(idx, ev),
+        onMarkerRightClick:(idx, ev) => this._handleMarkerRightClick(idx, ev),
+        onDragStart:       () => this._hintToasts?.show('Hold Alt to snap to a waypoint'),
+      },
+    });
+
+    const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
+    this._elevationPanel?.update(snapshot.waypoints, this._sampleHeight, { color, vehicleKind });
+
+    if (snapshot.selectedIndices.size === 1) {
+      const idx = [...snapshot.selectedIndices][0];
+      this._elevationPanel?.highlight(idx);
+    }
+  }
+
+  // --- Keyboard ---
+
+  _handleMapKeydown(e) {
+    if (this._isInputFocused(e.target)) return;
+    const key = e.key;
+
+    // Always available
+    if (key === '?') { e.preventDefault(); this._keyboardHelp.show(); return; }
+    if (key === '/') {
+      e.preventDefault();
+      document.querySelector('#ai-session-search')?.focus();
+      return;
+    }
+    if (key === 'Escape') {
+      e.preventDefault();
+      if (this._contextMenu.isOpen) { this._contextMenu.close(); return; }
+      if (editState.selectedIndices.size) { editState.clearSelection(); return; }
+      if (editState.editMode) { editState.setEditMode(null); return; }
+      if (editState.revisionId) {
+        editState.clearEdit();
+        this._revisionCache.clear();
+        this.refresh();
+      }
+      return;
+    }
+
+    if (!editState.revisionId) return;
+
+    if (key === 'f' || key === 'F') { e.preventDefault(); this.setFocus(editState.revisionId); return; }
+    if (key === '[') { e.preventDefault(); editState.stepSelection(-1); return; }
+    if (key === ']') { e.preventDefault(); editState.stepSelection(1); return; }
+
+    if (!editState.isEditable()) return;
+
+    if (key === 'v' || key === 'V') { e.preventDefault(); editState.setEditMode('vertex'); return; }
+    if (key === 'a' || key === 'A') { e.preventDefault(); editState.setEditMode('add'); return; }
+    if (key === 'Delete' || key === 'Backspace') { e.preventDefault(); this._handleDeleteSelected(); return; }
+  }
+
+  _isInputFocused(target) {
+    if (!target) return false;
+    const tag = (target.tagName || '').toLowerCase();
+    return ['textarea', 'input', 'select'].includes(tag);
+  }
+
+  // --- Confirm modal ---
 
   _showConfirmModal(revisionId) {
     return new Promise((resolve) => {
@@ -239,6 +722,8 @@ export class MapWidget {
       resolve(confirmed);
     }
   }
+
+  // --- Visibility / focus / expand ---
 
   _syncVisibilityState(groups) {
     for (const group of groups) {
@@ -284,8 +769,11 @@ export class MapWidget {
   }
 
   _render() {
+    const editedRevisionId = editState.revisionId;
     const visibleRevisionIds = new Set(this._visibleRevisionOrder);
     const paletteByRevisionId = assignPaletteColor(this._visibleRevisionOrder);
+    this._paletteByRevisionId = paletteByRevisionId;
+
     this._listPanel.render({
       groups: this._revisionGroups,
       expandedOperationIds: this._expandedOperationIds,
@@ -296,7 +784,10 @@ export class MapWidget {
       activeProfileId: this._activeProfileId,
     });
 
+    // Exclude the actively-edited revision from the read-only overlay so only
+    // the editable layer shows it.
     const overlays = this._visibleRevisionOrder
+      .filter((revisionId) => revisionId !== editedRevisionId)
       .map((revisionId) => {
         const payload = this._revisionCache.get(revisionId);
         if (!payload?.available) return null;
@@ -313,7 +804,30 @@ export class MapWidget {
     const focusedPayload = this._focusedRevisionId ? this._revisionCache.get(this._focusedRevisionId) : null;
     const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
     this._fitBounds(focusedPayload?.bounds || unionBounds);
-    this._showEmpty(!overlays.length);
+    this._showEmpty(!overlays.length && !editedRevisionId);
+    this._updateElevationProfile();
+  }
+
+  _updateElevationProfile() {
+    if (!this._elevationPanel) return;
+    // During active edit: show live edit waypoints
+    if (editState.revisionId && editState.waypoints.length) {
+      const color = this._paletteByRevisionId.get(editState.revisionId) || '#4a90d9';
+      const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
+      this._elevationPanel.update(editState.waypoints, this._sampleHeight, { color, vehicleKind });
+      return;
+    }
+    // Otherwise: show focused revision
+    const payload = this._focusedRevisionId ? this._revisionCache.get(this._focusedRevisionId) : null;
+    if (!payload?.available) { this._elevationPanel.clear(); return; }
+    const wps = (payload.features || [])
+      .filter((f) => f.type === 'waypoint')
+      .sort((a, b) => a.index - b.index)
+      .map((f) => ({ ...f.point, index: f.index }));
+    if (!wps.length) { this._elevationPanel.clear(); return; }
+    const color = this._paletteByRevisionId.get(this._focusedRevisionId) || '#4a90d9';
+    const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
+    this._elevationPanel.update(wps, this._sampleHeight, { color, vehicleKind });
   }
 
   _fitBounds(bounds) {
@@ -369,6 +883,87 @@ export class MapWidget {
     this._render();
   }
 
+  _pinRevisionInView(revisionId, operationId = '') {
+    const nextRevisionId = String(revisionId || '').trim();
+    if (!nextRevisionId) return;
+
+    const nextOperationId = String(operationId || '').trim();
+    if (nextOperationId) {
+      this._expandedOperationIds.add(nextOperationId);
+      localStorage.setItem(`mapWidget.expand.${nextOperationId}`, '1');
+    }
+
+    this._visibleRevisionOrder = this._visibleRevisionOrder.filter((id) => id !== nextRevisionId);
+    this._visibleRevisionOrder.push(nextRevisionId);
+
+    const executingIds = this._revisionGroups
+      .flatMap((group) => group.revisions)
+      .filter((revision) => String(revision.status || '') === 'executing')
+      .map((revision) => String(revision.id || ''));
+    this._visibleRevisionOrder = enforceVisibilityCap(this._visibleRevisionOrder, 3, executingIds);
+    this._focusedRevisionId = nextRevisionId;
+  }
+
+  _prepareRevisionForEditing(revisionId, operationId = '') {
+    this._pinRevisionInView(revisionId, operationId);
+  }
+
+  async _recoverFromStaleExecution(result, requestedRevisionId) {
+    const activeRevision = result.active_revision || null;
+    const activeRevisionId = String(result.active_revision_id || activeRevision?.id || '').trim();
+    const operationId = String(activeRevision?.operation_id || result.revision?.operation_id || '').trim();
+
+    if (activeRevisionId) {
+      this._pinRevisionInView(activeRevisionId, operationId);
+    }
+
+    this._revisionCache.clear();
+    await this.refresh();
+
+    if (activeRevisionId) {
+      this.setFocus(activeRevisionId);
+      this._showError(
+        `Revision …${String(requestedRevisionId).slice(-6)} is stale. Focused active revision …${activeRevisionId.slice(-6)} instead.`,
+      );
+      return;
+    }
+
+    this._showError(result.error || 'Execute failed');
+  }
+
+  async _recoverFromStaleControllerVersion(result, requestedRevisionId) {
+    const controllerState = result.controller_state || {};
+    const latestVersion = controllerState.controller_version ?? null;
+    if (latestVersion !== null && latestVersion !== undefined) {
+      this._controllerVersion = latestVersion;
+    }
+
+    const activeRevisionId = String(controllerState.active_revision_id || '').trim();
+    const activeOperationId = String(controllerState.active_operation_id || '').trim();
+    if (activeRevisionId) {
+      this._pinRevisionInView(activeRevisionId, activeOperationId);
+    }
+
+    this._revisionCache.clear();
+    await this.refresh();
+
+    const requestedSuffix = String(requestedRevisionId).slice(-6);
+    const versionText = latestVersion !== null && latestVersion !== undefined ? String(latestVersion) : 'unknown';
+    if (activeRevisionId) {
+      this.setFocus(activeRevisionId);
+      this._showError(
+        `Controller mission version changed to ${versionText}. Refreshed from stale execute on …${requestedSuffix}; review active revision …${activeRevisionId.slice(-6)} and retry.`,
+      );
+      return;
+    }
+
+    this._showError(
+      `Controller mission version changed to ${versionText}. Refreshed after stale execute on …${requestedSuffix}; retry when ready.`,
+    );
+  }
+
+  // --- DOM ---
+
   _buildDOM() {
     this._container.innerHTML = '';
 
@@ -390,6 +985,7 @@ export class MapWidget {
 
     const shell = document.createElement('div');
     shell.className = 'map-widget-shell';
+    this._shellEl = shell;
 
     const listEl = document.createElement('div');
     listEl.className = 'map-widget-list';
@@ -397,6 +993,8 @@ export class MapWidget {
 
     const mapWrap = document.createElement('div');
     mapWrap.className = 'map-widget-wrap';
+    this._mapWrapEl = mapWrap;
+
     const mapEl = document.createElement('div');
     mapEl.className = 'map-widget-map';
     this._mapEl = mapEl;
@@ -405,12 +1003,63 @@ export class MapWidget {
     emptyState.className = 'map-widget-empty';
     emptyState.setAttribute('aria-live', 'polite');
     emptyState.hidden = true;
-    emptyState.innerHTML = '<p>No mission overlay yet.<br>Ask the agent to plan a mission.</p>';
+    emptyState.innerHTML = `
+      <p class="map-empty-title">No missions yet</p>
+      <p class="map-empty-hint">Ask the agent in the chat above to plan a mission.</p>
+      <button class="map-empty-cta" type="button">↑ Go to chat</button>
+    `;
+    emptyState.querySelector('.map-empty-cta').addEventListener('click', () => {
+      document.querySelector('.ai-chat-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setTimeout(() => document.getElementById('ai-message-input')?.focus(), 300);
+    });
     this._emptyState = emptyState;
 
-    mapWrap.append(mapEl, emptyState);
+    // Edit-mode banner (hidden by default)
+    const editBanner = document.createElement('div');
+    editBanner.className = 'map-edit-banner';
+    editBanner.hidden = true;
+    const editBannerText = document.createElement('span');
+    editBannerText.className = 'map-edit-banner-text';
+    const exitEditBtn = document.createElement('button');
+    exitEditBtn.type = 'button';
+    exitEditBtn.className = 'map-edit-exit-btn';
+    exitEditBtn.textContent = '✕ Exit edit';
+    exitEditBtn.setAttribute('aria-label', 'Exit edit mode');
+    exitEditBtn.addEventListener('click', () => {
+      editState.clearEdit();
+      this._revisionCache.clear();
+      this.refresh();
+    });
+    editBanner.append(editBannerText, exitEditBtn);
+    this._editBanner = editBanner;
+    this._editBannerText = editBannerText;
+
+    // Selection panel (floating waypoint inspector)
+    const selectionPanelWrap = document.createElement('div');
+    selectionPanelWrap.className = 'map-selection-panel-wrap';
+    selectionPanelWrap.hidden = true;
+    this._selectionPanelWrap = selectionPanelWrap;
+    this._selectionPanel = new SelectionPanel(selectionPanelWrap, {
+      onClose: () => editState.clearSelection(),
+    });
+
+    // Marquee selection rectangle (hidden by default)
+    const marqueeEl = document.createElement('div');
+    marqueeEl.className = 'map-marquee';
+    marqueeEl.hidden = true;
+    marqueeEl.setAttribute('aria-hidden', 'true');
+    this._marqueeEl = marqueeEl;
+
+    // Hint toasts (floating transient hints, e.g., "Hold Alt to snap")
+    this._hintToasts = new HintToasts(mapWrap);
+
+    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl);
     shell.append(listEl, mapWrap);
 
+    // Context menu (absolute-positioned inside container)
+    this._contextMenu = new ContextMenu(this._container);
+
+    // Confirm modal
     const confirmModal = document.createElement('div');
     confirmModal.className = 'map-confirm-modal';
     confirmModal.setAttribute('role', 'dialog');
@@ -438,7 +1087,14 @@ export class MapWidget {
     });
     this._confirmModal = confirmModal;
 
-    this._container.append(errorBanner, shell, confirmModal);
+    const elevationEl = document.createElement('div');
+    elevationEl.className = 'map-elevation-panel';
+    this._elevationEl = elevationEl;
+
+    this._container.append(errorBanner, shell, elevationEl, confirmModal);
+
+    // Keyboard help overlay (<dialog> appended to container by constructor)
+    this._keyboardHelp = new KeyboardHelpOverlay(this._container);
   }
 
   _showError(msg) {

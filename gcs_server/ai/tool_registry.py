@@ -1039,21 +1039,21 @@ class ToolRegistry:
     def _lazy_load_replay(self, context: ToolInvocationContext) -> dict[str, Any]:
         if not context.source_controls.get("replay_reports", True):
             return {"ok": False, "error": "source_disabled", "source": "replay_reports"}
-        details = context.context_snapshot.get("details") or {}
-        replay = details.get("current_replay") or {}
-        return {"ok": True, "replay_summary": replay, "available": bool(replay)}
+        replay = AIContextService(context.runtime).get_current_replay_summary()
+        return {"ok": True, "replay_summary": replay, "available": bool(replay.get("active"))}
 
     def _lazy_load_ai_memory(self, context: ToolInvocationContext) -> dict[str, Any]:
         if not context.source_controls.get("ai_chat_history", False):
             return {"ok": False, "error": "source_disabled", "source": "ai_chat_history"}
-        details = context.context_snapshot.get("details") or {}
-        history = details.get("ai_chat_history") or {}
-        return {"ok": True, "chat_history_summary": history, "available": bool(history)}
+        history = AIContextService(context.runtime).get_recent_ai_chat_history(
+            session_id=context.session_id,
+        )
+        return {"ok": True, "chat_history_summary": history, "available": bool(history.get("available"))}
 
     def _lazy_load_settings(self, context: ToolInvocationContext) -> dict[str, Any]:
         if not context.source_controls.get("settings_config", False):
             return {"ok": False, "error": "source_disabled", "source": "settings_config"}
-        settings = context.context_snapshot.get("settings") or {}
+        settings = AIContextService(context.runtime).get_settings_context()
         return {"ok": True, "settings_summary": settings, "available": bool(settings)}
 
     def _lazy_load_sensor(self, context: ToolInvocationContext) -> dict[str, Any]:
@@ -1094,9 +1094,11 @@ class ToolRegistry:
         rover_position: dict | None = None,
         draft: dict | None = None,
         route_artifacts: list | None = None,
+        parent_operation_id: str = "",
     ) -> dict[str, Any]:
         # Pure artifact submitter mode: planner provides the draft directly.
         # Preferred when route-planning tools were called so waypoints are preserved.
+        parent_op = str(parent_operation_id or "").strip()
         if draft and isinstance(draft, dict):
             normalized, repairs = normalize_mission_draft_payload(draft)
             if route_artifacts and isinstance(route_artifacts, list):
@@ -1106,6 +1108,7 @@ class ToolRegistry:
                 "draft": normalized,
                 "repairs": repairs,
                 "source": "planner_submitted",
+                "parent_operation_id": parent_op,
             }
 
         # LLM generation mode: second model generates draft from intent summary.
@@ -1141,7 +1144,7 @@ class ToolRegistry:
         normalized, repairs = normalize_mission_draft_payload(raw_draft)
         if route_artifacts and isinstance(route_artifacts, list):
             normalized["route_artifacts"] = list(route_artifacts)
-        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated"}
+        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated", "parent_operation_id": parent_op}
 
 
 def _route_hash(waypoints: list[dict[str, Any]]) -> str:

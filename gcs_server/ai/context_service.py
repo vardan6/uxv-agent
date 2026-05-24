@@ -41,8 +41,6 @@ class AIContextService:
         providers = [
             "get_current_rover_state",
             "get_runtime_context",
-            "get_settings_context",
-            "get_llm_context",
             "get_current_mission_state",
             "get_scene_summary",
         ]
@@ -51,8 +49,12 @@ class AIContextService:
             self.get_current_rover_state(),
             self.get_runtime_context(),
         )
-        settings = self.get_settings_context()
-        llm = self.get_llm_context(session_id=session_id)
+        settings: dict[str, Any] = {}
+        llm: dict[str, Any] = {"session": {"id": session_id}}
+        if str(run_mode or "").strip().lower() != "agent":
+            settings = self.get_settings_context()
+            llm = self.get_llm_context(session_id=session_id)
+            providers.extend(["get_settings_context", "get_llm_context"])
         mission = self.get_current_mission_state(session_id=session_id)
         # B3: load scene payload once and reuse for all spatial queries
         scene_payload = self.load_scene_payload()
@@ -92,7 +94,7 @@ class AIContextService:
         if replay_context.get("available"):
             details["replay_sessions"] = replay_context
             providers.append("resolve_replay_sessions")
-        if clean_source_controls.get("ai_chat_history") and _message_references(lower, _MEMORY_KEYWORDS):
+        if eager_detail_mode and clean_source_controls.get("ai_chat_history") and _message_references(lower, _MEMORY_KEYWORDS):
             history = self.get_recent_ai_chat_history(session_id=session_id)
             if history.get("available"):
                 details["ai_chat_history"] = history

@@ -8,7 +8,11 @@ export class LiveVehicleLayer {
     this._marker = null;
     this._ws = null;
     this._active = false;
+    this._lastPosition = null; // {x, y, z} scene metres, or null if unknown
   }
+
+  /** Returns the last known vehicle position in scene metres, or null. */
+  getPosition() { return this._lastPosition; }
 
   connect() {
     this._active = true;
@@ -48,6 +52,7 @@ export class LiveVehicleLayer {
       this._hideMarker();
       return;
     }
+    this._lastPosition = { x: pos.x, y: pos.y, z: pos.z ?? 0 };
     const heading = telemetry?.orientation?.heading_deg ?? 0;
     const ll = [pos.y, pos.x];
     if (!this._marker) {

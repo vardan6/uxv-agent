@@ -283,9 +283,9 @@ function liveStateFor(sessionId) {
       pendingUserMessageId: '',
       pendingAssistantMessageId: '',
       abortController: null,
-      // Phase 2: workbench interrupt/resume state
+      // Phase 2: planning-shell interrupt/resume state
       pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
-      workbenchThreadId: '',
+      planningShellThreadId: '',
       scrollTop: 0,
       pinnedToBottom: true,
     });
@@ -1461,18 +1461,18 @@ function mergeServerAndLocalMessages(serverMessages, existingMessages) {
   return merged;
 }
 
-// ── Workbench streaming and approval ──────────────────────────────────────────
+// ── Planning-shell streaming and approval ─────────────────────────────────────
 
-function handleWorkbenchStreamEvent(sessionId, eventData) {
+function handlePlanningShellStreamEvent(sessionId, eventData) {
   const live = liveStateFor(sessionId);
   if (eventData.type === 'graph_run_start') {
-    live.workbenchThreadId = eventData.thread_id || '';
-    setAiStatus('Workbench planning graph started.');
+    live.planningShellThreadId = eventData.thread_id || '';
+    setAiStatus('Planning shell started.');
   } else if (eventData.type === 'graph_resume_start') {
     setAiStatus(`Submitting ${eventData.decision || 'decision'}...`);
   } else if (eventData.type === 'graph_node_result') {
     const node = String(eventData.node || '').replace(/_/g, ' ');
-    setAiStatus(`Workbench: ${node}...`);
+    setAiStatus(`Planning shell: ${node}...`);
   } else if (eventData.type === 'graph_retrieval_result') {
     updatePendingRetrievalState(
       sessionId,
@@ -1487,7 +1487,7 @@ function handleWorkbenchStreamEvent(sessionId, eventData) {
     setAiStatus(`Draft ${status}.`, status === 'approved' ? 'ok' : 'warn');
   } else if (eventData.type === 'graph_interrupt') {
     live.pendingInterrupt = {
-      threadId: eventData.thread_id || live.workbenchThreadId || '',
+      threadId: eventData.thread_id || live.planningShellThreadId || '',
       approvalPayload: eventData.interrupt_value || {},
     };
     // Remove the spinner pending message — graph is paused, not running
@@ -1502,16 +1502,16 @@ function handleWorkbenchStreamEvent(sessionId, eventData) {
     );
     if (aiState.activeSession?.id === sessionId) renderMessages();
   } else if (eventData.type === 'graph_run_error') {
-    throw new Error(String(eventData.error || 'Workbench graph error'));
+    throw new Error(String(eventData.error || 'Planning shell error'));
   } else if (eventData.type === 'graph_run_end') {
     live.pendingInterrupt = null;
-    setAiStatus('Workbench graph complete.', 'ok');
+    setAiStatus('Planning shell complete.', 'ok');
   }
   if (aiState.activeSession?.id === sessionId) renderMessages();
 }
 
-async function sendWorkbenchRequest(sessionId, content, abortController) {
-  const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/stream`;
+async function sendPlanningShellRequest(sessionId, content, abortController) {
+  const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/planning-shell/stream`;
   const response = await fetch(url, withAiTimezone({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1523,10 +1523,10 @@ async function sendWorkbenchRequest(sessionId, content, abortController) {
     try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
     throw new Error(detail || `${response.status}`);
   }
-  await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+  await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
 }
 
-async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
+async function resumePlanningShellApproval(sessionId, threadId, decision, note) {
   const live = liveStateFor(sessionId);
   live.pendingInterrupt = null;
   live.sending = true;
@@ -1535,7 +1535,7 @@ async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
   renderMessages();
   setAiStatus(`Submitting ${decision}...`);
   try {
-    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/workbench/thread/${encodeURIComponent(threadId)}/resume`;
+    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/planning-shell/thread/${encodeURIComponent(threadId)}/resume`;
     const response = await fetch(url, withAiTimezone({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1547,7 +1547,7 @@ async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
       try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
       throw new Error(detail || `${response.status}`);
     }
-    await readJsonLinesStream(response, (event) => handleWorkbenchStreamEvent(sessionId, event));
+    await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
     await refreshSessionLive(sessionId);
     await loadSessions();
     setAiStatus('Ready.', 'ok');
@@ -1560,7 +1560,7 @@ async function resumeWorkbenchApproval(sessionId, threadId, decision, note) {
   }
 }
 
-function renderWorkbenchApprovalCard(sessionId, interrupt) {
+function renderPlanningShellApprovalCard(sessionId, interrupt) {
   const payload = interrupt.approvalPayload || {};
   if (payload.type === 'clarification_request') {
     return renderClarificationCard(sessionId, interrupt);
@@ -1705,27 +1705,31 @@ function providerSnapshotForMessage(message) {
 function providerNameForMessage(message) {
   const provider = providerById(message.provider_id || '');
   const snapshot = providerSnapshotForMessage(message);
-  return provider?.display_name || snapshot?.display_name || message.provider_id || 'Unknown provider';
+  if (provider?.display_name) return provider.display_name;
+  if (snapshot?.display_name) return snapshot.display_name;
+  if (message?.provider_id) return message.provider_id;
+  const fallbackProvider = currentProvider();
+  return fallbackProvider?.display_name || 'Routing default';
 }
 
 function normalizeRunMode(value) {
   const clean = String(value || '').trim().toLowerCase();
   if (clean === 'agent') return 'agent';
   if (clean === 'intent' || clean === 'rover_intent_test') return 'intent';
-  if (clean === 'workbench') return 'workbench';
+  if (clean === 'planning_shell') return 'planning_shell';
   return 'chat';
 }
 
 function sessionModeToRunMode(session) {
   const mode = normalizeRunMode(session?.mode);
-  return mode === 'intent' || mode === 'workbench' ? 'agent' : mode;
+  return mode === 'intent' || mode === 'planning_shell' ? 'agent' : mode;
 }
 
 function runModeToSessionMode(runMode) {
   const mode = normalizeRunMode(runMode);
   if (mode === 'agent') return 'agent';
   if (mode === 'intent') return 'rover_intent_test';
-  if (mode === 'workbench') return 'workbench';
+  if (mode === 'planning_shell') return 'planning_shell';
   return 'general_chat';
 }
 
@@ -1741,7 +1745,7 @@ function runModeLabel(runMode) {
   const mode = normalizeRunMode(runMode);
   if (mode === 'agent') return 'Agent';
   if (mode === 'intent') return 'Intent Test';
-  if (mode === 'workbench') return 'Workbench';
+  if (mode === 'planning_shell') return 'Planning Shell';
   return 'Chat';
 }
 
@@ -2331,7 +2335,7 @@ function renderMessages(options = {}) {
         : ''}
     </article>
   `;
-  }).join('') + (pendingInterrupt ? renderWorkbenchApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
+  }).join('') + (pendingInterrupt ? renderPlanningShellApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
   postRenderMessages();
   if (shouldStickToBottom) {
     aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
@@ -2949,8 +2953,8 @@ const AI_SLASH_COMMANDS = [
   {
     command: '/plan',
     kind: 'run_mode',
-    runMode: 'workbench',
-    description: 'Run the workbench planner for the current prompt.',
+    runMode: 'planning_shell',
+    description: 'Run the planning shell for the current prompt.',
   },
 ];
 
@@ -3102,7 +3106,7 @@ async function sendMessage(event) {
     isSessionCommand ? `Running ${slash.command}...`
     : runMode === 'agent' ? 'Agent is checking rover context.'
     : runMode === 'intent' ? 'Parsing rover intent...'
-    : runMode === 'workbench' ? 'Workbench graph starting...'
+    : runMode === 'planning_shell' ? 'Planning shell starting...'
     : 'Waiting for model response.'
   );
 
@@ -3136,8 +3140,8 @@ async function sendMessage(event) {
     }
     if (runMode === 'intent') {
       await sendIntentTestRequest(sessionId, content, abortController);
-    } else if (runMode === 'workbench') {
-      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else if (runMode === 'planning_shell') {
+      await sendPlanningShellRequest(sessionId, content, abortController);
     } else {
       saveInflightMarker(sessionId, 'messages');
       await streamAiRequest(
@@ -3148,7 +3152,7 @@ async function sendMessage(event) {
       );
     }
     // Refresh from server and update live state (works even if user switched away).
-    // Skip refresh if workbench is suspended at interrupt (pendingInterrupt is set).
+    // Skip refresh if the planning shell is suspended at interrupt.
     if (!liveStateFor(sessionId).pendingInterrupt) {
       await refreshSessionLive(sessionId);
       await loadSessions();
@@ -3202,8 +3206,8 @@ async function resendMessage(messageId) {
   try {
     if (runMode === 'intent') {
       await sendIntentTestRequest(sessionId, content, abortController);
-    } else if (runMode === 'workbench') {
-      await sendWorkbenchRequest(sessionId, content, abortController);
+    } else if (runMode === 'planning_shell') {
+      await sendPlanningShellRequest(sessionId, content, abortController);
     } else {
       saveInflightMarker(sessionId, 'messages');
       await streamAiRequest(
@@ -3213,7 +3217,7 @@ async function resendMessage(messageId) {
         sessionId,
       );
     }
-    // Workbench sessions can pause at interrupt() waiting for operator input.
+    // Planning-shell sessions can pause at interrupt() waiting for operator input.
     if (!liveStateFor(sessionId).pendingInterrupt) {
       await refreshSessionLive(sessionId);
       await loadSessions();
@@ -3623,7 +3627,7 @@ function bindAi() {
   }, true);
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
-    // Workbench clarification card buttons
+    // Planning-shell clarification card buttons
     const clarificationBtn = event.target.closest('[data-clarification-action]');
     if (clarificationBtn) {
       const action = clarificationBtn.dataset.clarificationAction;
@@ -3632,13 +3636,13 @@ function bindAi() {
       const answerInput = document.getElementById('ai-clarification-input');
       const answer = answerInput ? answerInput.value.trim() : '';
       if (sid && threadId) {
-        resumeWorkbenchApproval(sid, threadId, action, answer)
+        resumePlanningShellApproval(sid, threadId, action, answer)
           .catch((err) => setAiStatus(err.message || 'Clarification failed.', 'danger'));
       }
       return;
     }
 
-    // Workbench approval card buttons
+    // Planning-shell approval card buttons
     const approvalBtn = event.target.closest('[data-approval-action]');
     if (approvalBtn) {
       const decision = approvalBtn.dataset.approvalAction;
@@ -3647,7 +3651,7 @@ function bindAi() {
       const noteInput = document.getElementById('ai-approval-note-input');
       const note = noteInput ? noteInput.value.trim() : '';
       if (sid && threadId && (decision === 'approve' || decision === 'reject')) {
-        resumeWorkbenchApproval(sid, threadId, decision, note)
+        resumePlanningShellApproval(sid, threadId, decision, note)
           .catch((err) => setAiStatus(err.message || 'Approval failed.', 'danger'));
       }
       return;

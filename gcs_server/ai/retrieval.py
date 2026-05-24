@@ -8,91 +8,6 @@ except ModuleNotFoundError:
     from ai.session_store import normalize_source_controls
 
 
-_REPLAY_KEYWORDS = (
-    "replay",
-    "session",
-    "timeline",
-    "recent",
-    "telemetry",
-    "event",
-    "events",
-    "path",
-    "metric",
-    "metrics",
-    "anomaly",
-    "anomalies",
-    "happened",
-)
-_MEMORY_KEYWORDS = (
-    "remember",
-    "earlier",
-    "before",
-    "previous chat",
-    "previous session",
-    "last time",
-    "chat history",
-    "history",
-    "we discussed",
-)
-_SETTINGS_KEYWORDS = (
-    "setting",
-    "settings",
-    "config",
-    "configuration",
-    "mqtt",
-    "topic",
-    "port",
-    "host",
-    "binding",
-    "provider",
-    "routing",
-    "tts",
-)
-_SENSOR_KEYWORDS = (
-    "sensor",
-    "sensors",
-    "camera",
-    "video",
-    "frame",
-    "image",
-    "perception",
-    "detection",
-    "detect",
-    "lidar",
-    "imu",
-    "ultrasonic",
-)
-
-
-def infer_lazy_branches(user_prompt: str, source_controls: dict[str, bool]) -> list[str]:
-    lower = str(user_prompt or "").strip().lower()
-    branches: list[str] = []
-    if source_controls.get("replay_reports") and any(token in lower for token in _REPLAY_KEYWORDS):
-        branches.append("retrieve_replay_context")
-    if source_controls.get("ai_chat_history") and any(token in lower for token in _MEMORY_KEYWORDS):
-        branches.append("retrieve_application_memory")
-    if source_controls.get("settings_config") and any(token in lower for token in _SETTINGS_KEYWORDS):
-        branches.append("retrieve_settings_context")
-    if source_controls.get("sensor_context") and any(token in lower for token in _SENSOR_KEYWORDS):
-        branches.append("retrieve_sensor_context")
-    return branches
-
-
-def classify_request_scope(user_prompt: str, source_controls: dict[str, bool]) -> str:
-    branches = infer_lazy_branches(user_prompt, source_controls)
-    if len(branches) == 1:
-        branch = branches[0]
-        if branch == "retrieve_replay_context":
-            return "replay_analysis"
-        if branch == "retrieve_application_memory":
-            return "memory_lookup"
-        if branch == "retrieve_settings_context":
-            return "settings_lookup"
-        if branch == "retrieve_sensor_context":
-            return "sensor_review"
-    return "rover_task"
-
-
 def normalize_retrieval_request(
     value: Any,
     *,
@@ -103,14 +18,18 @@ def normalize_retrieval_request(
     source_controls = normalize_source_controls(source.get("source_controls"))
     enabled = [key for key, is_enabled in source_controls.items() if is_enabled]
     disabled = [key for key, is_enabled in source_controls.items() if not is_enabled]
-    lazy_branches = infer_lazy_branches(user_prompt, source_controls)
+    lazy_branches = [
+        str(branch)
+        for branch in source.get("lazy_branches") or []
+        if str(branch).strip()
+    ]
     return {
         "session_id": str(session_id or source.get("session_id") or ""),
         "source_controls": source_controls,
         "enabled_sources": enabled,
         "disabled_sources": disabled,
         "lazy_branches": lazy_branches,
-        "request_scope": classify_request_scope(user_prompt, source_controls),
+        "request_scope": str(source.get("request_scope") or "rover_task"),
     }
 
 

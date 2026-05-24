@@ -37,7 +37,7 @@ try:
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.agent_traces import AgentTraceStore
-    from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
+    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.intent_service import IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from gcs_server.ai.mission_export_service import MissionExportService
@@ -50,7 +50,7 @@ try:
     )
     from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from gcs_server.ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
     from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
@@ -60,7 +60,7 @@ except ModuleNotFoundError:
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from ai.data_access import build_data_access_manifest
     from ai.agent_traces import AgentTraceStore
-    from ai.graph_runtime import WorkbenchGraphRuntime
+    from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.intent_service import IntentService
     from ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from ai.mission_export_service import MissionExportService
@@ -73,7 +73,7 @@ except ModuleNotFoundError:
     )
     from ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from ai.session_store import normalize_source_controls
-    from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
     from ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from config import load_config, save_config
     from runtime import AppRuntime, GCS_DIR, build_runtime
@@ -204,7 +204,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.ai_inflight_streams = AIInflightStreamManager()
     _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
-    app.state.workbench_runtime = WorkbenchGraphRuntime(
+    app.state.planning_shell_runtime = PlanningShellGraphRuntime(
         app_runtime=runtime,
         tool_registry=_tool_registry,
         context_service=AIContextService(runtime),
@@ -632,7 +632,6 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
             minimum=4000,
             maximum=200000,
         ),
-        "ai_use_planner_loop": _bool_setting(source.get("ai_use_planner_loop", False), default=False),
     }
 
 
@@ -687,7 +686,21 @@ def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _sanitize_routing(payload: dict[str, Any] | None, providers: list[dict[str, Any]]) -> dict[str, Any]:
-    normalized = _normalize_routing(payload if isinstance(payload, dict) else {}, providers)
+    raw_payload = payload if isinstance(payload, dict) else {}
+    provider_ids = {str(provider.get("id")) for provider in providers if isinstance(provider, dict)}
+    normalized_payload: dict[str, Any] = {}
+    for purpose in ROUTING_PURPOSES:
+        raw_rule = raw_payload.get(purpose, {})
+        if not isinstance(raw_rule, dict):
+            raw_rule = {}
+        primary_id = str(raw_rule.get("primary_provider_id", "")).strip()
+        fallback_ids = [str(item).strip() for item in raw_rule.get("fallback_provider_ids", []) if str(item).strip()]
+        normalized_payload[purpose] = {
+            "primary_provider_id": primary_id if primary_id in provider_ids else "",
+            "fallback_provider_ids": [item for item in fallback_ids if item in provider_ids],
+            "allow_runtime_override": bool(raw_rule.get("allow_runtime_override", True)),
+        }
+    normalized = _normalize_routing(normalized_payload, providers)
     enabled_ids = [
         str(provider.get("id"))
         for provider in providers
@@ -1392,8 +1405,8 @@ def _ai_chat_service(request: Request) -> AIChatService:
 
 
 def _tool_registry(request: Request) -> ToolRegistry:
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
-    return wb_runtime.tool_registry
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
+    return shell_runtime.tool_registry
 
 
 def _agent_trace_store(request: Request) -> AgentTraceStore:
@@ -1497,7 +1510,7 @@ def _payload_or_latest_user_run_mode(payload: dict[str, Any], messages: list[dic
 
 def _ai_run_mode(payload: dict[str, Any]) -> str:
     clean = str(payload.get("run_mode", "chat")).strip().lower()
-    if clean in {"", "chat", "general_chat", "workbench", "intent", "rover_intent_test"}:
+    if clean in {"", "chat", "general_chat", "planning_shell", "intent", "rover_intent_test"}:
         return "chat"
     if clean == "agent":
         return "agent"
@@ -2206,6 +2219,130 @@ async def get_current_mission_overlay(request: Request, session_id: str = "") ->
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
 
 
+@app.post("/api/ai/mission-revisions")
+async def create_client_mission_revision(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    operation_id = str(payload.get("operation_id") or "").strip()
+    if not operation_id:
+        raise HTTPException(status_code=400, detail="operation_id is required")
+    waypoints = payload.get("waypoints")
+    if not isinstance(waypoints, list):
+        raise HTTPException(status_code=400, detail="waypoints must be a list")
+    label = str(payload.get("label") or "")
+    from_revision_id = str(payload.get("from_revision_id") or "")
+    result = mission_execution.create_client_revision(
+        operation_id=operation_id,
+        waypoints=waypoints,
+        label=label,
+        from_revision_id=from_revision_id,
+    )
+    return JSONResponse(result, status_code=201 if result.get("ok") else 409)
+
+
+@app.patch("/api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}")
+async def update_mission_waypoint(revision_id: str, waypoint_index: int, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    point = payload.get("point")
+    if not isinstance(point, dict):
+        raise HTTPException(status_code=400, detail="point is required and must be an object")
+    expected_version_raw = payload.get("expected_version")
+    if expected_version_raw is None:
+        raise HTTPException(status_code=400, detail="expected_version is required")
+    try:
+        expected_version = int(expected_version_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    result = mission_execution.update_waypoint(
+        revision_id,
+        waypoint_index,
+        point=point,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/mission-revisions/{revision_id}/waypoints")
+async def insert_mission_waypoint(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    point = payload.get("point")
+    if not isinstance(point, dict):
+        raise HTTPException(status_code=400, detail="point is required and must be an object")
+    expected_version_raw = payload.get("expected_version")
+    if expected_version_raw is None:
+        raise HTTPException(status_code=400, detail="expected_version is required")
+    try:
+        expected_version = int(expected_version_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    after_index_raw = payload.get("after_index", -1)
+    try:
+        after_index = int(after_index_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="after_index must be an integer") from None
+    result = mission_execution.insert_waypoint(
+        revision_id,
+        after_index=after_index,
+        point=point,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.delete("/api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}")
+async def delete_mission_waypoint(
+    revision_id: str,
+    waypoint_index: int,
+    request: Request,
+) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    expected_version = 0
+    if isinstance(payload, dict) and payload.get("expected_version") is not None:
+        try:
+            expected_version = int(payload["expected_version"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    result = mission_execution.delete_waypoint(
+        revision_id,
+        waypoint_index,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
 @app.get("/api/vehicle-profile/active")
 async def get_active_vehicle_profile(request: Request) -> JSONResponse:
     _runtime(request)
@@ -2359,9 +2496,9 @@ async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "draft": draft})
 
 
-@app.post("/api/ai/sessions/{session_id}/workbench/stream")
-async def run_workbench_session_stream(session_id: str, request: Request) -> StreamingResponse:
-    """Stream a workbench planning graph run for the given session.
+@app.post("/api/ai/sessions/{session_id}/planning-shell/stream")
+async def run_planning_shell_session_stream(session_id: str, request: Request) -> StreamingResponse:
+    """Stream a planning-shell graph run for the given session.
 
     Request body:
         content        (str, required)  — the operator's planning prompt
@@ -2385,7 +2522,7 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
         raise HTTPException(status_code=400, detail="content is required")
 
     timezone_name = _request_timezone_name(request, payload)
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
 
     session = runtime.ai_store.get_session(session_id, include_messages=False)
     if session is None or session.get("archived_at") is not None:
@@ -2393,12 +2530,12 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
 
     async def _generate():
         try:
-            async for line in stream_workbench_graph(
-                wb_runtime,
+            async for line in stream_planning_shell_graph(
+                shell_runtime,
                 session_id=session_id,
                 user_prompt=content,
                 operator_timezone=timezone_name,
-                session_mode=str(session.get("mode", "workbench")),
+                session_mode=str(session.get("mode", "planning_shell")),
                 source_controls=session.get("source_controls"),
             ):
                 yield line
@@ -2408,11 +2545,11 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@app.post("/api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume")
-async def resume_workbench_session(
+@app.post("/api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume")
+async def resume_planning_shell_session(
     session_id: str, thread_id: str, request: Request
 ) -> StreamingResponse:
-    """Resume a workbench graph suspended at an interrupt() approval gate.
+    """Resume a planning-shell graph suspended at an interrupt() approval gate.
 
     Request body:
         decision  (str, required)   — "approve", "reject", "continue", or "cancel"
@@ -2437,12 +2574,12 @@ async def resume_workbench_session(
     if session is None or session.get("archived_at") is not None:
         raise HTTPException(status_code=404, detail="AI session not found")
 
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
 
     async def _generate():
         try:
-            async for line in resume_workbench_graph(
-                wb_runtime,
+            async for line in resume_planning_shell_graph(
+                shell_runtime,
                 thread_id=thread_id,
                 decision=decision,
                 note=note,

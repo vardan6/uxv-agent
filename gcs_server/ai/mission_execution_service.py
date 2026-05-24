@@ -187,6 +187,7 @@ def _route_overlay_features(mission: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _build_mission_overlay_payload(revision: dict[str, Any]) -> dict[str, Any]:
     mission = revision.get("mission") if isinstance(revision.get("mission"), dict) else {}
+    provenance_map = revision.get("provenance") if isinstance(revision.get("provenance"), dict) else {}
     waypoints = _collect_waypoints(mission)
     route_features = _route_overlay_features(mission)
     marker_features = [
@@ -197,6 +198,7 @@ def _build_mission_overlay_payload(revision: dict[str, Any]) -> dict[str, Any]:
             "kind": str(point.get("kind") or "waypoint"),
             "index": index,
             "point": {"x": point["x"], "y": point["y"], "z": point["z"]},
+            "provenance": provenance_map.get(str(point.get("id") or f"mission-wp-{index}"), "ai"),
         }
         for index, point in enumerate(waypoints, start=1)
     ]
@@ -291,9 +293,9 @@ class MissionExecutionService:
         validation: dict[str, Any],
         draft_status: str,
         review_context: dict[str, Any] | None = None,
+        parent_operation_id: str = "",
     ) -> dict[str, Any]:
         now = time.time()
-        operation_id = f"mission-op-{uuid.uuid4().hex[:12]}"
         revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
         mission = _canonicalize_mission_payload(draft_payload)
         operation_status = _operation_status_from_revision(draft_status)
@@ -303,47 +305,97 @@ class MissionExecutionService:
             "approval_scope": "planning_artifact_only",
         }
 
+        parent_op = str(parent_operation_id or "").strip()
+
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO ai_mission_operations (
-                  id, session_id, source_message_id, status, active_revision_id,
-                  policy_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    operation_id,
-                    session_id,
-                    source_message_id or "",
-                    operation_status,
-                    revision_id,
-                    _json(policy),
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO ai_mission_revisions (
-                  id, operation_id, draft_id, parent_revision_id, status,
-                  mission_json, intent_json, target_resolution_json, validation_json,
-                  review_context_json, created_at, updated_at, approved_at, rejected_at
-                ) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """,
-                (
-                    revision_id,
-                    operation_id,
-                    draft_id,
-                    operation_status,
-                    _json(mission),
-                    _json(intent),
-                    _json(target_resolution),
-                    _json(validation),
-                    _json(review_context or {}),
-                    now,
-                    now,
-                ),
-            )
+            if parent_op:
+                op_row = conn.execute(
+                    "SELECT id, status FROM ai_mission_operations WHERE id = ?",
+                    (parent_op,),
+                ).fetchone()
+                if op_row is None or str(op_row["status"] or "") == "executing":
+                    # Fall through to creating a new operation when the parent is
+                    # missing or currently executing (safety invariant: no mutation
+                    # while execution is in flight).
+                    parent_op = ""
+
+            if parent_op:
+                operation_id = parent_op
+                parent_revision_id = str(
+                    (conn.execute(
+                        "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
+                        (parent_op,),
+                    ).fetchone() or {}).get("active_revision_id") or ""
+                )
+                conn.execute(
+                    """
+                    INSERT INTO ai_mission_revisions (
+                      id, operation_id, draft_id, parent_revision_id, status,
+                      mission_json, intent_json, target_resolution_json, validation_json,
+                      review_context_json, created_at, updated_at, approved_at, rejected_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                    """,
+                    (
+                        revision_id,
+                        operation_id,
+                        draft_id,
+                        parent_revision_id,
+                        operation_status,
+                        _json(mission),
+                        _json(intent),
+                        _json(target_resolution),
+                        _json(validation),
+                        _json(review_context or {}),
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    "UPDATE ai_mission_operations SET active_revision_id = ?, status = ?, updated_at = ? WHERE id = ?",
+                    (revision_id, operation_status, now, operation_id),
+                )
+            else:
+                operation_id = f"mission-op-{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO ai_mission_operations (
+                      id, session_id, source_message_id, status, active_revision_id,
+                      policy_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        operation_id,
+                        session_id,
+                        source_message_id or "",
+                        operation_status,
+                        revision_id,
+                        _json(policy),
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO ai_mission_revisions (
+                      id, operation_id, draft_id, parent_revision_id, status,
+                      mission_json, intent_json, target_resolution_json, validation_json,
+                      review_context_json, created_at, updated_at, approved_at, rejected_at
+                    ) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                    """,
+                    (
+                        revision_id,
+                        operation_id,
+                        draft_id,
+                        operation_status,
+                        _json(mission),
+                        _json(intent),
+                        _json(target_resolution),
+                        _json(validation),
+                        _json(review_context or {}),
+                        now,
+                        now,
+                    ),
+                )
             conn.commit()
         return self.get_revision(revision_id) or {}
 
@@ -482,6 +534,21 @@ class MissionExecutionService:
         revision = self.get_revision(str(revision_id or "").strip())
         if revision is None:
             return {"ok": False, "status": "revision_not_found", "error": "mission revision not found"}
+
+        active_revision_id = str(revision.get("active_revision_id") or "").strip()
+        if active_revision_id and active_revision_id != str(revision.get("id") or "").strip():
+            active_revision = self.get_revision(active_revision_id)
+            return {
+                "ok": False,
+                "status": "stale_revision",
+                "error": (
+                    f"mission revision '{revision['id']}' is no longer the active revision for "
+                    f"operation '{revision['operation_id']}'; execute the active revision instead"
+                ),
+                "revision": revision,
+                "active_revision_id": active_revision_id,
+                "active_revision": active_revision,
+            }
 
         status = str(revision.get("status") or "")
         if status not in MISSION_EXECUTION_READY_STATUSES:
@@ -992,6 +1059,249 @@ class MissionExecutionService:
         )
         return overlay
 
+    def create_client_revision(
+        self,
+        *,
+        operation_id: str,
+        waypoints: list[dict[str, Any]],
+        label: str = "",
+        from_revision_id: str = "",
+    ) -> dict[str, Any]:
+        operation_id = str(operation_id or "").strip()
+        if not operation_id:
+            return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
+
+        with self._connect() as conn:
+            op_row = conn.execute(
+                "SELECT * FROM ai_mission_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+        if op_row is None:
+            return {"ok": False, "status": "operation_not_found", "error": "operation not found"}
+
+        op_status = str(op_row["status"] or "")
+        if op_status == "executing":
+            return {
+                "ok": False,
+                "status": "operation_locked",
+                "error": "cannot create a revision while the operation is executing",
+            }
+
+        parent_provenance: dict[str, Any] = {}
+        if from_revision_id:
+            parent = self.get_revision(str(from_revision_id).strip())
+            if parent is not None:
+                parent_provenance = dict(parent.get("provenance") or {})
+
+        now = time.time()
+        revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
+        parent_revision_id = str(op_row["active_revision_id"] or "")
+
+        coerced: list[dict[str, Any]] = []
+        for i, wp in enumerate(waypoints or [], start=1):
+            point = _coerce_scene_point(wp, fallback_id=f"client-wp-{i}")
+            if point is None:
+                return {
+                    "ok": False,
+                    "status": "invalid_waypoint",
+                    "error": f"waypoint {i} is not a valid scene point (requires x, y, z as numbers)",
+                }
+            if not point.get("id"):
+                point["id"] = f"client-wp-{uuid.uuid4().hex[:8]}"
+            coerced.append(point)
+
+        provenance: dict[str, str] = {}
+        for wp in coerced:
+            wid = wp["id"]
+            provenance[wid] = parent_provenance.get(wid, "user")
+
+        mission: dict[str, Any] = {
+            "goal": str(label or "Client-authored revision"),
+            "waypoints": [{"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
+                           "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"}
+                          for wp in coerced],
+            "execution_allowed": False,
+            "required_operator_approval": True,
+        }
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_mission_revisions (
+                  id, operation_id, draft_id, parent_revision_id, status,
+                  mission_json, intent_json, target_resolution_json, validation_json,
+                  review_context_json, provenance_json, client_version,
+                  created_at, updated_at, approved_at, rejected_at
+                ) VALUES (?, ?, '', ?, 'awaiting_approval', ?, '{}', '{}', '{}', '{}', ?, 0, ?, ?, NULL, NULL)
+                """,
+                (revision_id, operation_id, parent_revision_id, _json(mission), _json(provenance), now, now),
+            )
+            conn.execute(
+                """
+                UPDATE ai_mission_operations
+                SET active_revision_id = ?, status = 'awaiting_approval', updated_at = ?
+                WHERE id = ?
+                """,
+                (revision_id, now, operation_id),
+            )
+            conn.commit()
+
+        revision = self.get_revision(revision_id)
+        return {"ok": True, "revision": revision}
+
+    def update_waypoint(
+        self,
+        revision_id: str,
+        waypoint_index: int,
+        *,
+        point: dict[str, Any],
+        expected_version: int,
+    ) -> dict[str, Any]:
+        result = self._load_mutable_revision(revision_id, expected_version)
+        if not result.get("ok"):
+            return result
+        revision = result["revision"]
+
+        waypoints = _collect_waypoints(revision.get("mission") or {})
+        idx = int(waypoint_index) - 1
+        if idx < 0 or idx >= len(waypoints):
+            return {
+                "ok": False,
+                "status": "invalid_index",
+                "error": f"waypoint_index {waypoint_index} is out of range (revision has {len(waypoints)} waypoints)",
+            }
+
+        new_point = _coerce_scene_point(point, fallback_id=waypoints[idx].get("id") or f"wp-{waypoint_index}")
+        if new_point is None:
+            return {"ok": False, "status": "invalid_waypoint", "error": "point must have numeric x, y, z fields"}
+
+        existing_id = waypoints[idx].get("id") or f"mission-wp-{waypoint_index}"
+        new_point["id"] = existing_id
+        new_point["label"] = point.get("label") or waypoints[idx].get("label") or ""
+        new_point["kind"] = point.get("kind") or waypoints[idx].get("kind") or "waypoint"
+        waypoints[idx] = new_point
+
+        provenance = dict(revision.get("provenance") or {})
+        old_prov = provenance.get(existing_id, "ai")
+        provenance[existing_id] = "user" if old_prov == "user" else "ai+edited"
+
+        return self._save_waypoint_mutation(revision, waypoints, provenance)
+
+    def insert_waypoint(
+        self,
+        revision_id: str,
+        *,
+        after_index: int,
+        point: dict[str, Any],
+        expected_version: int,
+    ) -> dict[str, Any]:
+        result = self._load_mutable_revision(revision_id, expected_version)
+        if not result.get("ok"):
+            return result
+        revision = result["revision"]
+
+        waypoints = _collect_waypoints(revision.get("mission") or {})
+        new_point = _coerce_scene_point(point, fallback_id=f"client-wp-{uuid.uuid4().hex[:8]}")
+        if new_point is None:
+            return {"ok": False, "status": "invalid_waypoint", "error": "point must have numeric x, y, z fields"}
+
+        new_id = f"client-wp-{uuid.uuid4().hex[:8]}"
+        new_point["id"] = new_id
+        new_point["label"] = point.get("label") or ""
+        new_point["kind"] = point.get("kind") or "waypoint"
+
+        insert_pos = len(waypoints) if after_index < 0 else min(after_index, len(waypoints))
+        waypoints.insert(insert_pos, new_point)
+
+        provenance = dict(revision.get("provenance") or {})
+        provenance[new_id] = "user"
+
+        return self._save_waypoint_mutation(revision, waypoints, provenance)
+
+    def delete_waypoint(
+        self,
+        revision_id: str,
+        waypoint_index: int,
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        result = self._load_mutable_revision(revision_id, expected_version)
+        if not result.get("ok"):
+            return result
+        revision = result["revision"]
+
+        waypoints = _collect_waypoints(revision.get("mission") or {})
+        idx = int(waypoint_index) - 1
+        if idx < 0 or idx >= len(waypoints):
+            return {
+                "ok": False,
+                "status": "invalid_index",
+                "error": f"waypoint_index {waypoint_index} is out of range (revision has {len(waypoints)} waypoints)",
+            }
+
+        removed_id = waypoints[idx].get("id") or f"mission-wp-{waypoint_index}"
+        waypoints.pop(idx)
+
+        provenance = dict(revision.get("provenance") or {})
+        provenance.pop(removed_id, None)
+
+        return self._save_waypoint_mutation(revision, waypoints, provenance)
+
+    def _load_mutable_revision(self, revision_id: str, expected_version: int) -> dict[str, Any]:
+        revision = self.get_revision(str(revision_id or "").strip())
+        if revision is None:
+            return {"ok": False, "status": "revision_not_found", "error": "mission revision not found"}
+
+        status = str(revision.get("status") or "")
+        LOCKED = frozenset({"approved", "exported", "cutover_pending", "executing"})
+        if status in LOCKED:
+            return {
+                "ok": False,
+                "status": "revision_locked",
+                "error": f"revision status '{status}' does not allow waypoint mutations; "
+                         "create a new client revision via POST /api/ai/mission-revisions",
+            }
+
+        current_version = int(revision.get("client_version") or 0)
+        if int(expected_version) != current_version:
+            return {
+                "ok": False,
+                "status": "version_conflict",
+                "error": f"expected client_version {expected_version} but revision is at {current_version}",
+                "current_version": current_version,
+            }
+
+        return {"ok": True, "revision": revision}
+
+    def _save_waypoint_mutation(
+        self,
+        revision: dict[str, Any],
+        waypoints: list[dict[str, Any]],
+        provenance: dict[str, str],
+    ) -> dict[str, Any]:
+        mission = dict(revision.get("mission") or {})
+        mission["waypoints"] = [
+            {"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
+             "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"}
+            for wp in waypoints
+        ]
+        mission.pop("route_artifacts", None)
+        mission.pop("steps", None)
+
+        new_version = int(revision.get("client_version") or 0) + 1
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE ai_mission_revisions
+                SET mission_json = ?, provenance_json = ?, client_version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_json(mission), _json(provenance), new_version, now, revision["id"]),
+            )
+            conn.commit()
+        updated = self.get_revision(revision["id"])
+        return {"ok": True, "revision": updated, "client_version": new_version}
+
     def _set_revision_status(self, draft_id: str, *, status: str, note: str, timestamp_field: str) -> dict[str, Any] | None:
         revision = self.get_revision_by_draft_id(draft_id)
         if revision is None:
@@ -1199,6 +1509,7 @@ def _revision_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "validation_json",
         "review_context_json",
         "operation_policy_json",
+        "provenance_json",
     ):
         key = field.removesuffix("_json")
         out[key] = _load_json(out.pop(field, "{}"))
@@ -1206,4 +1517,5 @@ def _revision_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     out["source_message_id"] = out.pop("operation_source_message_id", "")
     out["operation_status"] = out.get("operation_status", "")
     out["active_revision_id"] = out.pop("operation_active_revision_id", "")
+    out.setdefault("client_version", 0)
     return out
