@@ -4,8 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
-
 from ai.migrations import apply_ai_store_migrations
 from ai.mission_draft_service import (
     MissionDraftService,
@@ -189,6 +187,10 @@ class TestMissionDraftService:
         draft = self._make_draft()
         assert draft["id"].startswith("ai-draft-")
         assert draft["session_id"] == self.session_id
+
+    def test_create_accepts_explicit_draft_id(self):
+        draft = self._make_draft(draft_id="ai-draft-shared123")
+        assert draft["id"] == "ai-draft-shared123"
 
     def test_execution_allowed_always_false(self):
         draft = self._make_draft()

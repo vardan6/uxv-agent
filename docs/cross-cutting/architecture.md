@@ -350,9 +350,9 @@ Current important modules:
 - `gcs_server/ai/tool_registry.py`: permissioned per-request tool registry for Agent and planning-shell flows
 - `gcs_server/ai/intent_service.py`: structured rover intent parsing with repair
 - `gcs_server/ai/mission_draft_service.py`: mission-draft CRUD, validate, approve/reject
-- `gcs_server/ai/workbench_graph.py`: LangGraph planning graph (Phases 1–3)
-- `gcs_server/ai/graph_state.py`: `WorkbenchGraphState` TypedDict
-- `gcs_server/ai/graph_runtime.py`: `WorkbenchGraphRuntime` service container
+- `gcs_server/ai/planning_shell_graph.py`: LangGraph planning graph
+- `gcs_server/ai/graph_state.py`: `PlanningShellGraphState` TypedDict
+- `gcs_server/ai/graph_runtime.py`: `PlanningShellGraphRuntime` service container
 - `gcs_server/ai/provider_registry.py`: configured provider to LangChain model adapter
 - `gcs_server/ai/chat_service.py`: read-only Chat/Agent orchestration
 - `gcs_server/ai/session_store.py`: SQLite AI session/message storage

@@ -28,11 +28,11 @@ core; the deterministic-DAG middle has been removed.
 - `PolicyEngine` seam + extended `ToolDefinition` (tier · scopes ·
   side_effects) is in (Phase 3 done).
 - Bounded lazy tools shipped (Phase 4 done).
-- Planner-loop node ships behind `ai_use_planner_loop` (Phase 5 done).
-- Deterministic-DAG middle removed; `ai_use_planner_loop` defaults to
-  `True`; `prepare_clarification` routes back to `planner_loop_node`
-  on resume with the operator's answer injected into the planner
-  context (Phase 6 done).
+- Planner-loop node shipped behind `ai_use_planner_loop` in Phase 5.
+- Deterministic-DAG middle removed and the historical toggle retired;
+  `prepare_clarification` routes back to `planner_loop_node` on resume
+  with the operator's answer injected into the planner context
+  (Phase 6 done).
 - `mission_execution` revisioning is invoked from inside `store_draft`
   (proposal create, approval, rejection, export). A separate
   `handoff_to_mission_execution` graph node is **not** present; the
@@ -80,7 +80,7 @@ flowchart TB
 
     subgraph Surfaces["Session Surfaces"]
         CHAT[AIChatService<br/>session + persistence]
-        SHELL[WorkbenchGraph<br/>planning-shell durable HITL wrapper]
+        SHELL[PlanningShellGraph<br/>planning-shell durable HITL wrapper]
         SCHED[Task Scheduler<br/>future]
     end
 
@@ -162,7 +162,7 @@ condition.
 
 ### 2.1 Planning Shell — Hand-Wired DAG (removed in Phase 6)
 
-Before Phase 6, `gcs_server/ai/workbench_graph.py` was a deterministic
+Before Phase 6, `gcs_server/ai/planning_shell_graph.py` was a deterministic
 graph where each node ran at most once per request. It is preserved
 here to explain the motivation for the planner-loop migration; the
 current shape is in §3.
@@ -185,7 +185,7 @@ flowchart TB
     CL -- no --> GD[generate_mission_draft]
     GD --> VD[validate_draft 🔒]
     VD --> ST[store_draft]
-    ST --> AP[request_workbench_approval ⏸]
+    ST --> AP[request_planning_shell_approval ⏸]
     AP --> D{approved?}
     D -- yes --> RA[record_approval] --> FN[finalize_response]
     D -- no --> RJ[record_rejection] --> FN
@@ -245,7 +245,7 @@ flowchart TB
     LP --> VD[validate_draft 🔒]
     CR --> VD
     VD --> ST["store_draft<br/>(invokes mission_execution.create_proposal)"]
-    ST --> AP[request_workbench_approval ⏸]
+    ST --> AP[request_planning_shell_approval ⏸]
     AP --> D{approved?}
     D -- yes --> RA["record_approval<br/>(mission_execution.approve + export)"] --> FN[finalize_response]
     D -- no --> RJ["record_rejection<br/>(mission_execution.reject)"] --> FN
@@ -254,7 +254,7 @@ flowchart TB
 
 Implementation note: `mission_execution` is invoked as a service call
 *inside* `store_draft`, `record_approval`, and `record_rejection`
-(`workbench_graph.py:554-593, 973-1003, 1055-1063`), not as a separate
+(`planning_shell_graph.py:554-593, 973-1003, 1055-1063`), not as a separate
 graph node. The diagram above is faithful to the runtime flow but
 collapses the handoff into the storage / approval / rejection nodes
 where the call sites live.
@@ -273,7 +273,7 @@ What collapsed into tools (Phase 6 removals):
 | `generate_mission_draft` | `propose_mission_draft` terminal tool |
 | `prepare_clarification` | `request_clarification` tool wrapping `interrupt()` |
 
-Net change in `workbench_graph.py`: ~530 lines removed.
+Net change in `planning_shell_graph.py`: ~530 lines removed.
 
 Properties preserved through the migration:
 
@@ -475,7 +475,7 @@ flowchart TB
     I3 --> I4[iter 4<br/>propose_mission_draft<br/>execution_allowed=false<br/>risks: trash classifier unavailable]
     I4 --> VD[validate_draft 🔒]
     VD --> HX[mission_execution.handoff]
-    HX --> AP[request_workbench_approval ⏸]
+    HX --> AP[request_planning_shell_approval ⏸]
     AP --> OK[operator approves]
     OK --> FN[finalize_response]
     FN --> D([assistant message with risks + assumptions])
@@ -550,7 +550,7 @@ Hard invariants visible in this diagram:
 flowchart LR
     L0[L0 Chat<br/>compact context only<br/>no tool authority]
     L1[L1 Read-only Agent<br/>tier 0–1 tools<br/>no approval]
-    L2[L2 Planner Agent<br/>tier 2 tools<br/>WORKBENCH APPROVAL]
+    L2[L2 Planner Agent<br/>tier 2 tools<br/>DRAFT APPROVAL]
     L3[L3 Staging Agent<br/>tier 3<br/>STAGING APPROVAL]
     L4[L4 Sim Execution<br/>tier 4<br/>SIM CONFIRMATION]
     L5[L5 Live Execution<br/>tier 5<br/>PER-MISSION LIVE GRANT]
@@ -656,12 +656,12 @@ Properties this confirms:
 
 | Phase | Runtime / Shell delta | New nodes / surfaces | Safety added |
 |---|---|---|---|
-| 0 (today) | DAG planning shell + extracted chat loop | — | tool tier filter |
+| 0 (historical baseline) | DAG planning shell + extracted chat loop | — | tool tier filter |
 | **1** ✓ | `AgentLoopRuntime` powers Agent chat | — | parity |
 | **2** ✓ | `AgentTraceStore` (JSONL); stop reasons; repeated-tool-failure | trace inspection endpoints | trace IDs persisted per run |
 | **3** ✓ | `PolicyEngine` seam; extended `ToolDefinition` (tier · scopes · side_effects); data manifest | — | tier ladder declared; manifest in context |
 | **4** ✓ | bounded lazy tools (settings · sessions · sensor stubs) | — | tools read-only & redacted |
-| **5** ✓ | planner-loop node behind `ai_use_planner_loop` flag | `planner_loop_node` | unchanged surface |
+| **5** ✓ | planner-loop node introduced behind `ai_use_planner_loop` flag | `planner_loop_node` | unchanged surface |
 | **6** ✓ | deterministic-DAG middle removed; planner-loop default-on; `mission_execution` invoked from `store_draft` / approval / rejection | 8 nodes deleted; clarification routes back into planner loop | `propose_mission_draft` schema forces `execution_allowed=false` |
 | 7 | critic + reporter specialists; memory layers populated | optional `critic_loop_node` | memory writes redacted & retention enforced |
 | 8 | voice adapter | — (loop unchanged) | fixed-grammar approvals; voice e-stop bypass |

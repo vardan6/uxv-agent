@@ -2,10 +2,8 @@
 
 ## Purpose
 
-This document describes the current planning shell. Its code lives under
-the `workbench_*` namespace (graph file, state TypedDict, runtime, REST
-routes) — those identifiers are historical and do not appear in any
-product surface.
+This document describes the current planning shell. Its graph, state,
+runtime, and REST routes use the `planning_shell` namespace.
 
 Framing:
 
@@ -46,6 +44,8 @@ Long-term direction:
 
 - more planning behavior should become reachable from the primary Agent
   experience without requiring a separate top-level product mode
+- until that path is designed, `/plan` remains the explicit product entry
+  point for this shell; do not expose a separate planning product mode
 - this shell should remain a durable orchestration layer, not a separate
   reasoning system
 
@@ -60,7 +60,7 @@ deterministic-DAG middle and made the planner loop the sole default path):
 - durable `MemorySaver` checkpointer with stable
   `ai-session:{session_id}:run:{run_id}` thread IDs (see
   [ADR 0004](../../cross-cutting/decisions/0004-langgraph-checkpointer-choice.md))
-- interrupt-driven approval gate (`request_workbench_approval`) —
+- interrupt-driven approval gate (`request_planning_shell_approval`) —
   approve/reject buttons
 - clarification loop (`prepare_clarification`) — when intent has missing
   information, graph pauses before drafting, operator answers questions,
@@ -69,16 +69,12 @@ deterministic-DAG middle and made the planner loop the sole default path):
   `gcs_server/ai/data_access.py`
 - shared tool-policy seam (`gcs_server/ai/policy_engine.py`) now matches
   Agent runtime metadata, though this path remains non-executing
-- bounded retrieval/source metadata: source controls, request-scope
-  classification, and recorded `retrieved_sources` / `loaded_data_refs` /
-  `retrieval_citations`
-- bounded planner-loop node (`planner_loop_node`) behind
-  `ai_use_planner_loop = false`; planner tools include route planning,
-  clarification handoff, and draft submission; planner-loop JSONL traces
-  are persisted through the shared trace store. The deterministic-DAG path
-  remains the default until validation completes; "Phase 5 complete"
-  means the planner-loop code is in place, not that it is the default
-  product path
+- bounded retrieval/source metadata: source controls and recorded
+  `retrieved_sources` / `loaded_data_refs` / `retrieval_citations`
+- bounded planner-loop node (`planner_loop_node`) as the sole planning core;
+  planner tools include route planning, clarification handoff, and draft
+  submission; planner-loop JSONL traces are persisted through the shared
+  trace store
 - route planning and mission export: route-bearing drafts preserve route
   artifacts/waypoints, approval cards show a compact route summary, and
   approved route drafts are exported to QGC `.plan` files under
@@ -89,8 +85,6 @@ deterministic-DAG middle and made the planner loop the sole default path):
 
 Current next direction:
 
-- the deterministic-DAG fallback should be removed once the planner-loop
-  path is validated as default
 - mission planning stays universal-agent-driven
 - authoritative mission revision state should move out of the graph and
   into a backend-owned `mission_execution` layer; that layer now exists,
@@ -100,36 +94,35 @@ Current next direction:
   the final owner of mission approval effects or controller behavior
 - execution cutover is available through mission-execution APIs, but the
   current planning-shell approval flow does not yet automatically invoke it
+- **provenance-aware regeneration:** when the agent regenerates or refines
+  waypoints, it must diff against per-waypoint provenance before
+  overwriting. Waypoints with provenance `ai+edited` (operator-modified
+  after AI proposal) are now blocked by server-side planning-shell
+  validation until the operator explicitly confirms replacement through the
+  clarification path. See [`mission-execution.md`](./mission-execution.md)
+  for the provenance state machine and
+  [`map-widget.md`](../../gcs/internals/map-widget.md) for the contract.
 
-Code identifiers (historical, kept stable to avoid churn):
+Code identifiers:
 
-- `workbench_graph.py`
-- `WorkbenchGraphState`
-- `WorkbenchGraphRuntime`
-- `/workbench/stream`
-- `/workbench/thread/{thread_id}/resume`
+- `planning_shell_graph.py`
+- `PlanningShellGraphState`
+- `PlanningShellGraphRuntime`
+- `/planning-shell/stream`
+- `/planning-shell/thread/{thread_id}/resume`
 
-## Flow Shapes
-
-Deterministic-DAG path (`ai_use_planner_loop = false`, current default):
-
-`capture_request` → `retrieve_current_context` → `classify_request_scope`
-→ [lazy branches] → `parse_intent` → [`prepare_clarification`]
-→ [`resolve_target`] → `generate_mission_draft` → `validate_draft`
-→ `store_draft` → `request_workbench_approval`
-→ `record_approval` | `record_rejection` → `finalize_response`
-
-Planner-loop path (`ai_use_planner_loop = true`, intended direction):
+## Current Flow Shape
 
 `capture_request` → `retrieve_current_context` → `planner_loop_node`
-→ [`prepare_clarification`] → [`resolve_target`]
-→ [`generate_mission_draft`] → `validate_draft` → `store_draft`
-→ `request_workbench_approval`
+→ [`prepare_clarification`] → `validate_draft` → `store_draft`
+→ `request_planning_shell_approval`
 → `record_approval` | `record_rejection` → `finalize_response`
 
-The architectural point is that the middle should collapse into the shared
-agent loop, while deterministic validation/storage/approval/cutover move
-under backend-owned mission execution rather than staying inside the graph.
+The deterministic DAG middle was removed in Phase 6. Intent parsing, target
+resolution, lazy retrieval, route planning, clarification requests, and draft
+submission now happen through tools selected by the shared agent runtime.
+Deterministic validation/storage/approval/cutover remain outside free-form
+model reasoning and continue moving under backend-owned mission execution.
 
 ## High-Level Flow
 
@@ -138,9 +131,10 @@ Happy path:
 1. Operator types `/plan <planning prompt>` in the `/ai` composer.
 2. Frontend calls the planning-shell stream endpoint.
 3. Backend runs the planning graph and streams NDJSON events.
-4. Graph parses intent, optionally resolves a spatial target, generates and
-   validates a mission draft.
-5. Graph reaches `request_workbench_approval` and interrupts.
+4. The planner loop uses bounded tools to parse intent, retrieve or resolve
+   needed context, propose a mission draft, and pass it to deterministic
+   validation.
+5. Graph reaches `request_planning_shell_approval` and interrupts.
 6. UI shows an approval card.
 7. Frontend calls the resume endpoint with operator decision.
 8. Graph records the decision and emits final assistant response.
@@ -148,7 +142,7 @@ Happy path:
 Clarification path:
 
 1. Same initial flow.
-2. After intent parsing, missing information is detected.
+2. The planner requests missing information through the clarification tool.
 3. Graph reaches `prepare_clarification` and interrupts before drafting.
 4. UI shows a clarification card.
 5. Operator supplies answers and resumes.
@@ -159,8 +153,8 @@ Clarification path:
 
 Planning-shell endpoints:
 
-- `POST /api/ai/sessions/{session_id}/workbench/stream`
-- `POST /api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume`
+- `POST /api/ai/sessions/{session_id}/planning-shell/stream`
+- `POST /api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume`
 
 General chat/agent endpoint:
 
@@ -180,12 +174,12 @@ Two interrupt types can appear in the stream. The UI distinguishes them by
 
 | `interrupt_value.type` | UI card shown | Resume decisions | Where in graph |
 |---|---|---|---|
-| `workbench_draft_approval` | Approval card | `approve` / `reject` | `request_workbench_approval` |
+| `planning_shell_draft_approval` | Approval card | `approve` / `reject` | `request_planning_shell_approval` |
 | `clarification_request` | Clarification card | `continue` / `cancel` | `prepare_clarification` |
 
 Both use the same resume endpoint:
 
-- `POST /api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume`
+- `POST /api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume`
 
 ## Why This Path Can Look Like It Hangs
 
@@ -234,9 +228,9 @@ Primary files:
 | `static/ai.js` | slash-command routing, planning-shell send/resume handlers, approval/clarification rendering |
 | `static/style.css` | approval/clarification card styles |
 | `app.py` | planning-shell stream/resume routes |
-| `ai/workbench_graph.py` | planning graph, routers, `stream_workbench_graph()`, `resume_workbench_graph()`, planner-loop integration |
-| `ai/graph_state.py` | `WorkbenchGraphState` TypedDict |
-| `ai/graph_runtime.py` | `WorkbenchGraphRuntime` immutable service container |
+| `ai/planning_shell_graph.py` | planning graph, routers, `stream_planning_shell_graph()`, `resume_planning_shell_graph()`, planner-loop integration |
+| `ai/graph_state.py` | `PlanningShellGraphState` TypedDict |
+| `ai/graph_runtime.py` | `PlanningShellGraphRuntime` immutable service container |
 
 ## Safety Model
 

@@ -29,7 +29,6 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
-        "ai_use_planner_loop": True,
     },
     "llm_providers": [
         {
@@ -60,6 +59,12 @@ DEFAULT_GCS_SETTINGS["logging"] = {
     "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
     "agent_trace_dir": "data/agent_traces",
     "controller_mission_state_path": "data/controller_mission_adapter.json",
+    "controller_mission_adapter": "json_file",
+    "controller_mission_mavlink_url": "",
+    "controller_mission_heartbeat_timeout_s": 5.0,
+    "controller_mission_request_timeout_s": 5.0,
+    "controller_mission_source_system": 245,
+    "controller_mission_source_component": 190,
     "auto_start_session": True,
 }
 
@@ -121,10 +126,6 @@ class AppConfig:
     def model_routing(self) -> dict[str, Any]:
         routing = self.raw.get("model_routing", {})
         return routing if isinstance(routing, dict) else {}
-
-    @property
-    def ai_use_planner_loop(self) -> bool:
-        return bool(self.ai_settings.get("ai_use_planner_loop", False))
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

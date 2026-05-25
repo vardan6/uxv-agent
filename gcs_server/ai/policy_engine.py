@@ -11,7 +11,7 @@ POLICY_DENIED_STOP_REASON = "policy_denied"
 _RUN_MODE_MAX_TIER = {
     "chat": 2,
     "agent": 2,
-    "workbench": 2,
+    "planning_shell": 2,
 }
 
 

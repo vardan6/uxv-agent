@@ -37,7 +37,7 @@ try:
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.agent_traces import AgentTraceStore
-    from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
+    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.intent_service import IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from gcs_server.ai.mission_export_service import MissionExportService
@@ -50,7 +50,7 @@ try:
     )
     from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from gcs_server.ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
     from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from gcs_server.config import load_config, save_config
     from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
@@ -60,7 +60,7 @@ except ModuleNotFoundError:
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from ai.data_access import build_data_access_manifest
     from ai.agent_traces import AgentTraceStore
-    from ai.graph_runtime import WorkbenchGraphRuntime
+    from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.intent_service import IntentService
     from ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from ai.mission_export_service import MissionExportService
@@ -73,7 +73,7 @@ except ModuleNotFoundError:
     )
     from ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
     from ai.session_store import normalize_source_controls
-    from ai.workbench_graph import resume_workbench_graph, stream_workbench_graph
+    from ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
     from ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
     from config import load_config, save_config
     from runtime import AppRuntime, GCS_DIR, build_runtime
@@ -204,7 +204,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.ai_inflight_streams = AIInflightStreamManager()
     _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
-    app.state.workbench_runtime = WorkbenchGraphRuntime(
+    app.state.planning_shell_runtime = PlanningShellGraphRuntime(
         app_runtime=runtime,
         tool_registry=_tool_registry,
         context_service=AIContextService(runtime),
@@ -632,7 +632,6 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
             minimum=4000,
             maximum=200000,
         ),
-        "ai_use_planner_loop": _bool_setting(source.get("ai_use_planner_loop", False), default=False),
     }
 
 
@@ -687,7 +686,21 @@ def _default_routing(providers: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _sanitize_routing(payload: dict[str, Any] | None, providers: list[dict[str, Any]]) -> dict[str, Any]:
-    normalized = _normalize_routing(payload if isinstance(payload, dict) else {}, providers)
+    raw_payload = payload if isinstance(payload, dict) else {}
+    provider_ids = {str(provider.get("id")) for provider in providers if isinstance(provider, dict)}
+    normalized_payload: dict[str, Any] = {}
+    for purpose in ROUTING_PURPOSES:
+        raw_rule = raw_payload.get(purpose, {})
+        if not isinstance(raw_rule, dict):
+            raw_rule = {}
+        primary_id = str(raw_rule.get("primary_provider_id", "")).strip()
+        fallback_ids = [str(item).strip() for item in raw_rule.get("fallback_provider_ids", []) if str(item).strip()]
+        normalized_payload[purpose] = {
+            "primary_provider_id": primary_id if primary_id in provider_ids else "",
+            "fallback_provider_ids": [item for item in fallback_ids if item in provider_ids],
+            "allow_runtime_override": bool(raw_rule.get("allow_runtime_override", True)),
+        }
+    normalized = _normalize_routing(normalized_payload, providers)
     enabled_ids = [
         str(provider.get("id"))
         for provider in providers
@@ -1392,8 +1405,8 @@ def _ai_chat_service(request: Request) -> AIChatService:
 
 
 def _tool_registry(request: Request) -> ToolRegistry:
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
-    return wb_runtime.tool_registry
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
+    return shell_runtime.tool_registry
 
 
 def _agent_trace_store(request: Request) -> AgentTraceStore:
@@ -1497,7 +1510,7 @@ def _payload_or_latest_user_run_mode(payload: dict[str, Any], messages: list[dic
 
 def _ai_run_mode(payload: dict[str, Any]) -> str:
     clean = str(payload.get("run_mode", "chat")).strip().lower()
-    if clean in {"", "chat", "general_chat", "workbench", "intent", "rover_intent_test"}:
+    if clean in {"", "chat", "general_chat", "planning_shell", "intent", "rover_intent_test"}:
         return "chat"
     if clean == "agent":
         return "agent"
@@ -2076,42 +2089,11 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ai/sessions/{session_id}/mission-draft")
 async def create_mission_draft(session_id: str, request: Request) -> JSONResponse:
-    runtime = _runtime(request)
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="payload must be an object")
-
-    session = runtime.ai_store.get_session(session_id, include_messages=False)
-    if session is None or session.get("archived_at") is not None:
-        raise HTTPException(status_code=404, detail="AI session not found")
-
-    intent = payload.get("intent")
-    if not isinstance(intent, dict):
-        raise HTTPException(status_code=400, detail="intent is required and must be an object")
-    target_resolution = payload.get("target_resolution") or {}
-    if not isinstance(target_resolution, dict):
-        raise HTTPException(status_code=400, detail="target_resolution must be an object")
-    draft_payload = payload.get("draft")
-    if not isinstance(draft_payload, dict):
-        raise HTTPException(status_code=400, detail="draft is required and must be an object")
-    source_message_id = str(payload.get("source_message_id") or "")
-
-    context_snapshot = payload.get("context_snapshot") or {}
-    rover_state: dict[str, Any] | None = None
-    if isinstance(context_snapshot, dict):
-        meta = context_snapshot.get("meta") or {}
-        snap = meta.get("context_snapshot") if isinstance(meta, dict) else None
-        rover_state = snap.get("rover") if isinstance(snap, dict) else None
-
-    draft = runtime.mission_draft_service.create_draft(
-        session_id=session_id,
-        source_message_id=source_message_id,
-        intent=intent,
-        target_resolution=target_resolution,
-        draft_payload=draft_payload,
-        rover_state=rover_state if isinstance(rover_state, dict) else None,
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail="legacy mission draft writes are disabled; use /api/ai/mission-revisions and planning-shell endpoints",
     )
-    return JSONResponse({"ok": True, "draft": draft})
 
 
 @app.get("/api/ai/mission-drafts")
@@ -2206,6 +2188,130 @@ async def get_current_mission_overlay(request: Request, session_id: str = "") ->
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
 
 
+@app.post("/api/ai/mission-revisions")
+async def create_client_mission_revision(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    operation_id = str(payload.get("operation_id") or "").strip()
+    if not operation_id:
+        raise HTTPException(status_code=400, detail="operation_id is required")
+    waypoints = payload.get("waypoints")
+    if not isinstance(waypoints, list):
+        raise HTTPException(status_code=400, detail="waypoints must be a list")
+    label = str(payload.get("label") or "")
+    from_revision_id = str(payload.get("from_revision_id") or "")
+    result = mission_execution.create_client_revision(
+        operation_id=operation_id,
+        waypoints=waypoints,
+        label=label,
+        from_revision_id=from_revision_id,
+    )
+    return JSONResponse(result, status_code=201 if result.get("ok") else 409)
+
+
+@app.patch("/api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}")
+async def update_mission_waypoint(revision_id: str, waypoint_index: int, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    point = payload.get("point")
+    if not isinstance(point, dict):
+        raise HTTPException(status_code=400, detail="point is required and must be an object")
+    expected_version_raw = payload.get("expected_version")
+    if expected_version_raw is None:
+        raise HTTPException(status_code=400, detail="expected_version is required")
+    try:
+        expected_version = int(expected_version_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    result = mission_execution.update_waypoint(
+        revision_id,
+        waypoint_index,
+        point=point,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/mission-revisions/{revision_id}/waypoints")
+async def insert_mission_waypoint(revision_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="request body must be JSON")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    point = payload.get("point")
+    if not isinstance(point, dict):
+        raise HTTPException(status_code=400, detail="point is required and must be an object")
+    expected_version_raw = payload.get("expected_version")
+    if expected_version_raw is None:
+        raise HTTPException(status_code=400, detail="expected_version is required")
+    try:
+        expected_version = int(expected_version_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    after_index_raw = payload.get("after_index", -1)
+    try:
+        after_index = int(after_index_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="after_index must be an integer") from None
+    result = mission_execution.insert_waypoint(
+        revision_id,
+        after_index=after_index,
+        point=point,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.delete("/api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}")
+async def delete_mission_waypoint(
+    revision_id: str,
+    waypoint_index: int,
+    request: Request,
+) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    expected_version = 0
+    if isinstance(payload, dict) and payload.get("expected_version") is not None:
+        try:
+            expected_version = int(payload["expected_version"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_version must be an integer") from None
+    result = mission_execution.delete_waypoint(
+        revision_id,
+        waypoint_index,
+        expected_version=expected_version,
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
 @app.get("/api/vehicle-profile/active")
 async def get_active_vehicle_profile(request: Request) -> JSONResponse:
     _runtime(request)
@@ -2264,9 +2370,21 @@ async def execute_mission_revision(revision_id: str, request: Request) -> JSONRe
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
-@app.post("/api/ai/mission-drafts/{draft_id}/approve")
-async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+def _mission_export_payload(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "file_path": result.get("file_path", ""),
+        "waypoint_count": result.get("waypoint_count", 0),
+        "vehicle_type": result.get("vehicle_type", 0),
+    }
+
+
+@app.post("/api/ai/mission-revisions/{revision_id}/approve")
+async def approve_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
         payload = await request.json()
     except Exception:
@@ -2280,88 +2398,98 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             expected_controller_version = int(expected_controller_version_raw)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="expected_controller_version must be an integer") from None
-    draft = runtime.mission_draft_service.approve_draft(draft_id, note=note)
-    if draft is None:
+
+    revision = mission_execution.approve_revision(revision_id, note=note)
+    if revision is None:
         raise HTTPException(
             status_code=409,
-            detail="draft not found or not in awaiting_approval status",
+            detail="revision not found or not in awaiting_approval status",
         )
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is not None:
-        mission_execution.approve_revision_for_draft(draft_id, note=note)
+
+    draft_id = str(revision.get("draft_id") or "")
     export_result: dict[str, Any] | None = None
     try:
-        result = MissionExportService().export(draft)
+        result = MissionExportService().export(revision)
         if result.get("ok"):
-            updated = runtime.mission_draft_service.mark_exported(draft_id, export_result=result)
+            updated = mission_execution.mark_revision_exported_by_revision_id(revision_id, export_result=result)
             if updated is not None:
-                draft = updated
-            if mission_execution is not None:
-                mission_execution.mark_revision_exported(draft_id, export_result=result)
-            export_result = {
-                "ok": True,
-                "file_path": result.get("file_path", ""),
-                "waypoint_count": result.get("waypoint_count", 0),
-                "vehicle_type": result.get("vehicle_type", 0),
-            }
+                revision = updated
+            export_result = _mission_export_payload(result)
         elif "no waypoints" not in str(result.get("error") or ""):
             export_result = {"ok": False, "error": result.get("error", "mission export failed")}
     except Exception as exc:
         export_result = {"ok": False, "error": str(exc)}
-    response = {"ok": True, "draft": draft}
+
+    response = {"ok": True, "revision": revision}
     if export_result is not None:
         response["mission_export"] = export_result
     if execute_after_approval:
-        revision = mission_execution.get_revision_by_draft_id(draft_id) if mission_execution is not None else None
-        if revision is None:
-            response["mission_execution"] = {
-                "ok": False,
-                "status": "revision_not_found",
-                "error": "approved draft does not have a mission revision to execute",
-            }
-        else:
-            execution_result = mission_execution.execute_revision(
-                str(revision.get("id") or ""),
-                expected_controller_version=expected_controller_version,
-            )
-            runtime.replay_store.log_runtime_event(
-                "mission_execution_cutover",
-                {
-                    "revision_id": revision.get("id", ""),
-                    "draft_id": draft_id,
-                    "status": execution_result.get("status", ""),
-                    "ok": bool(execution_result.get("ok")),
-                    "attempt_id": execution_result.get("attempt_id", ""),
-                    "expected_controller_version": expected_controller_version,
-                },
-            )
-            response["mission_execution"] = execution_result
+        execution_result = mission_execution.execute_revision(
+            revision_id,
+            expected_controller_version=expected_controller_version,
+        )
+        runtime.replay_store.log_runtime_event(
+            "mission_execution_cutover",
+            {
+                "revision_id": revision_id,
+                "draft_id": draft_id,
+                "status": execution_result.get("status", ""),
+                "ok": bool(execution_result.get("ok")),
+                "attempt_id": execution_result.get("attempt_id", ""),
+                "expected_controller_version": expected_controller_version,
+            },
+        )
+        response["mission_execution"] = execution_result
     return JSONResponse(response)
 
 
-@app.post("/api/ai/mission-drafts/{draft_id}/reject")
-async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+@app.post("/api/ai/mission-revisions/{revision_id}/reject")
+async def reject_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     note = str(payload.get("note", "") if isinstance(payload, dict) else "")
-    draft = runtime.mission_draft_service.reject_draft(draft_id, note=note)
-    if draft is None:
+    revision = mission_execution.reject_revision(revision_id, note=note)
+    if revision is None:
         raise HTTPException(
             status_code=409,
-            detail="draft not found or not in a rejectable status",
+            detail="revision not found or not in a rejectable status",
         )
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is not None:
-        mission_execution.reject_revision_for_draft(draft_id, note=note)
-    return JSONResponse({"ok": True, "draft": draft})
+    return JSONResponse({"ok": True, "revision": revision})
 
 
-@app.post("/api/ai/sessions/{session_id}/workbench/stream")
-async def run_workbench_session_stream(session_id: str, request: Request) -> StreamingResponse:
-    """Stream a workbench planning graph run for the given session.
+@app.post("/api/ai/mission-drafts/{draft_id}/approve")
+async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "legacy mission draft approve is disabled; use "
+            "/api/ai/mission-revisions/{revision_id}/approve"
+        ),
+    )
+
+
+@app.post("/api/ai/mission-drafts/{draft_id}/reject")
+async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "legacy mission draft reject is disabled; use "
+            "/api/ai/mission-revisions/{revision_id}/reject"
+        ),
+    )
+
+
+@app.post("/api/ai/sessions/{session_id}/planning-shell/stream")
+async def run_planning_shell_session_stream(session_id: str, request: Request) -> StreamingResponse:
+    """Stream a planning-shell graph run for the given session.
 
     Request body:
         content        (str, required)  — the operator's planning prompt
@@ -2385,7 +2513,7 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
         raise HTTPException(status_code=400, detail="content is required")
 
     timezone_name = _request_timezone_name(request, payload)
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
 
     session = runtime.ai_store.get_session(session_id, include_messages=False)
     if session is None or session.get("archived_at") is not None:
@@ -2393,12 +2521,12 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
 
     async def _generate():
         try:
-            async for line in stream_workbench_graph(
-                wb_runtime,
+            async for line in stream_planning_shell_graph(
+                shell_runtime,
                 session_id=session_id,
                 user_prompt=content,
                 operator_timezone=timezone_name,
-                session_mode=str(session.get("mode", "workbench")),
+                session_mode=str(session.get("mode", "planning_shell")),
                 source_controls=session.get("source_controls"),
             ):
                 yield line
@@ -2408,11 +2536,11 @@ async def run_workbench_session_stream(session_id: str, request: Request) -> Str
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@app.post("/api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume")
-async def resume_workbench_session(
+@app.post("/api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume")
+async def resume_planning_shell_session(
     session_id: str, thread_id: str, request: Request
 ) -> StreamingResponse:
-    """Resume a workbench graph suspended at an interrupt() approval gate.
+    """Resume a planning-shell graph suspended at an interrupt() approval gate.
 
     Request body:
         decision  (str, required)   — "approve", "reject", "continue", or "cancel"
@@ -2437,12 +2565,12 @@ async def resume_workbench_session(
     if session is None or session.get("archived_at") is not None:
         raise HTTPException(status_code=404, detail="AI session not found")
 
-    wb_runtime: WorkbenchGraphRuntime = request.app.state.workbench_runtime
+    shell_runtime: PlanningShellGraphRuntime = request.app.state.planning_shell_runtime
 
     async def _generate():
         try:
-            async for line in resume_workbench_graph(
-                wb_runtime,
+            async for line in resume_planning_shell_graph(
+                shell_runtime,
                 thread_id=thread_id,
                 decision=decision,
                 note=note,

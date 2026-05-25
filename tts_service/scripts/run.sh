@@ -3,14 +3,12 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
-PYTHON_BIN="$DIR/.venv/bin/python"
+PYTHON_BIN="$ROOT/.venv/bin/python"
 
 if [ ! -x "$PYTHON_BIN" ]; then
-  echo "TTS venv not found at $DIR/.venv"
+  echo "Shared venv not found at $ROOT/.venv"
   echo "Create it from the repository root:"
-  echo "  python -m venv tts_service/.venv"
-  echo "  source tts_service/.venv/bin/activate"
-  echo "  pip install -r tts_service/requirements.txt"
+  echo "  ./merge_root_venvs.sh"
   exit 1
 fi
 

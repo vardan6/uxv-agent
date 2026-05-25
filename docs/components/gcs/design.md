@@ -62,7 +62,7 @@ It is responsible for:
 - read-only agent tools for rover state, scene summary, object queries, mission state, and replay analytics
 - structured rover intent parsing with optional deterministic target-resolution hints
 - mission-draft storage and approval/reject flow with two-approval model
-- planning shell (deterministic-DAG path is default; planner-loop path is code-complete behind `ai_use_planner_loop = false`): durable checkpointer, interrupt-driven approval and clarification gates, streaming NDJSON events, approval and clarification cards in UI
+- planning shell reached through `/plan`: planner-loop planning core, durable checkpointer, interrupt-driven approval and clarification gates, streaming NDJSON events, approval and clarification cards in UI
 
 Current execution-boundary status:
 
@@ -120,13 +120,37 @@ Current AI Chat behavior:
 - `/ai` is a provider-backed Chat/Agent workspace
 - the live composer exposes Chat and Agent as the visible modes
 - `/intent <prompt>` and the planning shell (via `/plan <prompt>`) remain available as supervised non-executing side paths
+- `/plan` is the current explicit planning-shell entry point; there is no separate visible planning product mode
 - LLM provider configuration comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - Agent mode is wired through `ToolRegistry`; tools cover rover state, scene summary, object queries, mission state, and replay analytics
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 
-For AI context, intent parsing, and workbench (planning shell) wiring, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
+## Map Widget
+
+The `/ai` page hosts a `MapWidget` (`static/map/MapWidget.js`) below the chat panel. It is the primary mission authoring surface and the live vehicle view during mission execution.
+
+Key frontend modules under `static/map/`:
+
+| Module | Role |
+|---|---|
+| `MapWidget.js` | Root widget; Leaflet init, layer orchestration, keyboard shortcuts |
+| `layers/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
+| `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
+| `ui/MissionListPanel.js` | Mission list grouped by operation; status badges; Approve draft / Execute mission buttons |
+| `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
+| `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
+| `ui/HintToasts.js` | Gesture hint toasts |
+| `ui/KeyboardHelpOverlay.js` | Keyboard shortcut reference overlay |
+| `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
+| `state/` | Frontend mission state management |
+
+The widget uses `L.CRS.Simple` with local scene metres for all overlay coordinates. Export-side projection (local → WGS84) is handled by `MissionExportService` on the backend. Lat/lon is never used inside the widget itself.
+
+For the map widget design spec and phase 1A–1E delivery plan, see [internals/map-widget.md](./internals/map-widget.md).
+
+For AI context, intent parsing, and planning-shell wiring, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
 
 ## Settings Model
 

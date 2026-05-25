@@ -294,10 +294,12 @@ A mission draft is incomplete unless it carries a drivable route and a serialisa
 
 The following are committed product work, not optional scope; they are separated from the route-planning/export slice only to keep that slice shippable:
 
-- Named **Mission Templates** for recurring patrols, vehicle-bound (a rover template cannot be dispatched to a quadcopter).
-- A **Missions page** to author, browse, and dispatch templates.
-- **AI-assisted edits** and **manual waypoint editing** on the same template (drag / add / delete), with last-write-wins audit (`updated_at` / `updated_by`).
-- **Replay planned-vs-actual overlay** and a shared `MissionMapView` component used by Approval Card, Missions page, and Replay overlay.
+- **Mission authoring on the `/ai` map**: operators create missions from scratch (`➕ New mission`) and edit AI-proposed revisions in the same view. No separate Missions page — authoring is co-located with the agent chat.
+- **AI-assisted edits and manual waypoint editing** on revisions (drag / add / delete). Edits create client-authored revisions with **optimistic `client_version` concurrency** — not last-write-wins. Editing a locked revision (status `approved`, `executing`, or `completed`) forks a new client-authored revision with provenance inheritance.
+- **Per-waypoint provenance** (`ai` / `user` / `ai+edited`). When an operator edits an AI-proposed waypoint, provenance promotes to `ai+edited`. The agent must diff and ask before overwriting `ai+edited` waypoints during regeneration; this is enforced server-side.
+- **Edit-during-execution hard lock.** No client-side mutation of an executing revision is permitted. Gesture handlers short-circuit on the frontend; the backend rejects mutation requests against executing revisions.
+- **Vehicle-bound revisions.** Every revision stores a `vehicle_profile_id`; dispatch refuses if the active vehicle profile does not match.
+- **Replay planned-vs-actual overlay** and a shared `MapWidget` component used by the Approval Card, the `/ai` mission editor, and the Replay overlay.
 - **Corridors** (must-stay-inside regions, soft/hard) and **blockages** (must-stay-outside regions, soft/hard) supported by the planner and the map UI. A map authoring UI must let operators create, view, edit, enable/disable, and delete these objects as first-class mission planning data.
 - **Off-route tolerance and interrupt-and-ask channel** during execution.
 - **Mission upload + execute + abort** flows (this slice's `.plan` file is the current hand-off boundary).
@@ -434,6 +436,7 @@ The product direction is correct when all of these are true:
 
 - The target architecture is a universal bounded agent loop, not a growing library of hardcoded node DAGs.
 - The long-term primary `/ai` experience is one Agent mode. Chat may exist temporarily as a simpler fallback/testing path during migration.
+- During the current migration, `/plan` remains the explicit planning-shell entry point. Do not expose a separate planning product mode or imply Agent auto-routing into planning before that path has its own product/runtime design.
 - Project-specific capabilities belong in tools, deterministic services, policy, memory, and approval layers around the core loop.
 - Retrieval and discovery must be lazy by default.
 - Compact always-on context is required; large front-loaded prompts are not the target design.
@@ -447,7 +450,7 @@ The product direction is correct when all of these are true:
 
 ## Open Product Questions
 
-- Should general operator messaging auto-route into planning behavior when the agent infers a planning request, or should planning stay an explicit mode/command at the product layer?
+- When should the temporary `/plan` entry point collapse into the primary Agent experience, and what operator signal should replace it if any?
 - How much of the agent's short plan summary should be surfaced without encouraging chain-of-thought leakage?
 - Which future memory writes require lightweight confirmation versus full approval artifacts?
 - When future execution levels arrive, which grants are per-run versus long-lived scoped grants?
@@ -464,7 +467,7 @@ The product direction is correct when all of these are true:
 | Compact context | The small always-on live context sent at run start |
 | Lazy retrieval | On-demand loading of larger information only when needed |
 | Durable shell | A graph or workflow wrapper used for interrupt/resume and long-running orchestration around the core loop |
-| Planning shell | The durable shell that today wraps mission planning; implemented in the `workbench_*` code namespace |
+| Planning shell | The durable shell that today wraps mission planning |
 | Vehicle profile | A first-class profile binding planner kind, MAVLink vehicle type, altitude semantics, yaw policy, and physical parameters; the active profile is a Settings selection |
 | Mission revision | An append-only, lineage-aware snapshot of a mission proposal; backend-owned, canonical ID assigned by the execution layer |
 | Mission operation | The top-level lifecycle of a mission-affecting request, correlating graph progress, mission revisions, approvals, cutover, verification, rollback, and rebasing under one `operation_id` |

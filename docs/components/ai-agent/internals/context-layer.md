@@ -435,7 +435,7 @@ It may:
 
 Completed:
 - `SpatialQueryService` and `ToolRegistry` implemented; Agent mode rewired through registry
-- LangGraph planning shell (Phases 1–3) with approval and clarification interrupts
+- LangGraph planning shell with planner-loop tool selection plus approval and clarification interrupts
 - Phase 4 bounded lazy retrieval/source controls implemented for replay, AI memory, settings, and sensor metadata
 
 Near-term improvements:

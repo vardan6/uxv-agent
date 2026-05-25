@@ -37,8 +37,8 @@ Current important routes:
 - `/api/ai/sessions/{session_id}/retry`: retry the last assistant response
 - `/api/ai/sessions/{session_id}/retry/stream`: retry the last assistant response with streaming
 - `/api/ai/sessions/{session_id}/intent-test`: parse a rover task into structured intent without executing anything
-- `/api/ai/sessions/{session_id}/workbench/stream`: stream the planning shell (`workbench_*` is the historical code namespace)
-- `/api/ai/sessions/{session_id}/workbench/thread/{thread_id}/resume`: resume approval/clarification interrupts for the planning shell
+- `/api/ai/sessions/{session_id}/planning-shell/stream`: stream the planning shell
+- `/api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume`: resume approval/clarification interrupts for the planning shell
 - `/api/ai/mission-revisions`: list mission revisions
 - `/api/ai/mission-revisions/current`: fetch current mission state, active revision, and overlay
 - `/api/ai/mission-revisions/{revision_id}`: fetch one mission revision
@@ -46,6 +46,12 @@ Current important routes:
 - `/api/ai/mission-revisions/{revision_id}/execute`: trigger mission execution cutover for a stored revision
 - `/api/ai/mission-overlays/current`: fetch the current mission overlay by session
 - `/api/ai/controller-mission`: fetch durable controller mission state
+- `POST /api/ai/mission-revisions`: create a new client-authored revision (body includes `operation_id`, `waypoints`, `client_version` for CAS, and optional `vehicle_profile_id`)
+- `PATCH /api/ai/mission-revisions/{revision_id}/waypoints/{index}`: update a single waypoint (body includes `expected_version`, waypoint fields, provenance)
+- `POST /api/ai/mission-revisions/{revision_id}/waypoints`: append a new waypoint (body includes `expected_version`, waypoint fields)
+- `DELETE /api/ai/mission-revisions/{revision_id}/waypoints/{index}`: remove a waypoint (body includes `expected_version`)
+- `/api/vehicle-profile/active`: fetch the currently active `VehicleProfile`
+- `/api/vehicle-profiles`: list all available vehicle profiles
 - `/api/settings/export`: export selected settings sections
 - `/api/settings/load-from-path`: load and preview selected settings sections from a config file
 - `/api/settings/save-to-path`: save selected settings sections to a config file
@@ -175,6 +181,7 @@ Current AI Chat behavior:
 - `/ai` is a provider-backed Chat/Agent workspace
 - the live composer exposes Chat and Agent as the visible modes
 - `/intent <prompt>` and the planning shell (via `/plan <prompt>`) remain available as supervised non-executing side paths
+- `/plan` is the current explicit planning-shell entry point; there is no separate visible planning product mode
 - LLM provider configuration still comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - OpenAI-compatible providers and Ollama are supported by the current adapter layer

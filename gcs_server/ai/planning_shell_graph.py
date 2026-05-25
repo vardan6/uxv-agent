@@ -1,4 +1,4 @@
-"""Workbench planning graph (Phases 1–6).
+"""Planning-shell graph for durable mission-planning approval (Phases 1-6).
 
 Phase 6: legacy deterministic-DAG middle removed. Planner loop
 (Phase 5 / planner_loop_node) is now the sole default path.
@@ -12,7 +12,7 @@ Node order:
     [prepare_clarification]     only when planner requests clarification
     validate_draft
     store_draft
-    request_workbench_approval  interrupt() durable HITL
+    request_planning_shell_approval  interrupt() durable HITL
     record_approval | record_rejection
     finalize_response
 
@@ -48,8 +48,8 @@ except ImportError:
 try:
     from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
     from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.graph_runtime import WorkbenchGraphRuntime
-    from gcs_server.ai.graph_state import WorkbenchGraphState
+    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
+    from gcs_server.ai.graph_state import PlanningShellGraphState
     from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai.mission_draft_service import validate_draft_payload
     from gcs_server.ai.provider_registry import resolve_provider
@@ -64,8 +64,8 @@ try:
 except ModuleNotFoundError:
     from ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
     from ai.data_access import build_data_access_manifest
-    from ai.graph_runtime import WorkbenchGraphRuntime
-    from ai.graph_state import WorkbenchGraphState
+    from ai.graph_runtime import PlanningShellGraphRuntime
+    from ai.graph_state import PlanningShellGraphState
     from ai.mission_export_service import MissionExportService
     from ai.mission_draft_service import validate_draft_payload
     from ai.provider_registry import resolve_provider
@@ -111,12 +111,19 @@ _PLANNER_SYSTEM_PROMPT = (
     "- required_operator_approval must always be true.\n"
     "- If the intent is not a rover planning task (navigate, inspect, search), "
     "call propose_mission_draft with a minimal draft explaining why the request is out of scope.\n"
+    "- If the context reports an active revision with 'ai+edited' waypoints and the operator's request "
+    "is ambiguous about whether to replace or extend the mission, call request_clarification before "
+    "calling propose_mission_draft. Never silently discard operator-edited waypoints.\n"
+    "- When your proposal refines or extends the current mission (operator confirmed, or intent is "
+    "clearly a refinement), pass the active mission's operation_id as parent_operation_id to "
+    "propose_mission_draft so the new revision appears under the same operation group. "
+    "When the operator asks for a wholly new mission unrelated to the current one, omit parent_operation_id.\n"
 )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _runtime(config: RunnableConfig) -> WorkbenchGraphRuntime:
+def _runtime(config: RunnableConfig) -> PlanningShellGraphRuntime:
     return (config.get("configurable") or {})["runtime"]
 
 
@@ -126,6 +133,17 @@ def _node_entry(name: str, **extra: Any) -> dict:
 
 def _tool_entry(name: str, args: dict, result: Any) -> dict:
     return {"tool": name, "args": args, "result": result, "ts": time.time()}
+
+
+def _provider_snapshot(provider: dict[str, Any] | None) -> dict[str, Any]:
+    source = provider if isinstance(provider, dict) else {}
+    return {
+        "id": str(source.get("id") or "").strip(),
+        "display_name": str(source.get("display_name") or "").strip(),
+        "provider_type": str(source.get("provider_type") or "").strip(),
+        "model_id": str(source.get("model_id") or "").strip(),
+        "context_window": source.get("context_window"),
+    }
 
 
 def _route_summary_for_approval(draft: dict[str, Any]) -> dict[str, Any]:
@@ -232,7 +250,52 @@ def _merge_response_metadata(*items: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _build_data_access_manifest(runtime: WorkbenchGraphRuntime, source_controls: dict[str, Any] | None = None) -> dict:
+def _build_active_mission_context(mission_execution: Any, session_id: str) -> dict[str, Any]:
+    """Return a compact provenance summary for the active revision of the current session.
+
+    Used by the planner to detect operator-edited waypoints before proposing a new mission.
+    Returns an empty dict when no active revision exists or the service is unavailable.
+    """
+    if mission_execution is None or not session_id:
+        return {}
+    try:
+        revision = mission_execution.get_current_revision(session_id=session_id)
+    except Exception:
+        return {}
+    if not revision:
+        return {}
+
+    provenance: dict[str, str] = revision.get("provenance") or {}
+    mission = revision.get("mission") or {}
+
+    ai_count = sum(1 for v in provenance.values() if v == "ai")
+    edited_count = sum(1 for v in provenance.values() if v == "ai+edited")
+    user_count = sum(1 for v in provenance.values() if v == "user")
+    total_tracked = ai_count + edited_count + user_count
+
+    waypoint_count = 0
+    for artifact in (mission.get("route_artifacts") or []):
+        if isinstance(artifact, dict):
+            waypoint_count += int(artifact.get("waypoint_count") or len(artifact.get("waypoints") or []))
+    if not waypoint_count and isinstance(mission.get("waypoints"), list):
+        waypoint_count = len(mission["waypoints"])
+
+    return {
+        "has_active_revision": True,
+        "revision_id": str(revision.get("id") or ""),
+        "revision_status": str(revision.get("status") or revision.get("operation_status") or ""),
+        "operation_id": str(revision.get("operation_id") or ""),
+        "goal": str(mission.get("goal") or ""),
+        "waypoint_count": waypoint_count,
+        "provenance_ai": ai_count,
+        "provenance_ai_edited": edited_count,
+        "provenance_user": user_count,
+        "has_operator_edits": edited_count > 0,
+        "is_operator_authored": total_tracked > 0 and edited_count == 0 and ai_count == 0,
+    }
+
+
+def _build_data_access_manifest(runtime: PlanningShellGraphRuntime, source_controls: dict[str, Any] | None = None) -> dict:
     return build_data_access_manifest(
         runtime.tool_registry.definitions(),
         allowed_tool_names=allowed_tool_names_for_source_controls(source_controls),
@@ -241,6 +304,143 @@ def _build_data_access_manifest(runtime: WorkbenchGraphRuntime, source_controls:
 
 def _normalize_retrieval_request(value: Any, *, user_prompt: str = "", session_id: str = "") -> dict[str, Any]:
     return normalize_retrieval_request(value, user_prompt=user_prompt, session_id=session_id)
+
+
+def _coerce_scene_point(value: Any, *, fallback_id: str = "") -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        point = {
+            "x": float(value.get("x")),
+            "y": float(value.get("y")),
+            "z": float(value.get("z", 0.0) or 0.0),
+        }
+    except (TypeError, ValueError):
+        return None
+    point["id"] = str(value.get("id") or fallback_id or "")
+    point["label"] = str(value.get("label") or "")
+    point["kind"] = str(value.get("kind") or "")
+    return point
+
+
+def _collect_waypoints(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    if isinstance(payload.get("waypoints"), list):
+        direct = [
+            _coerce_scene_point(wp, fallback_id=f"wp-{index}")
+            for index, wp in enumerate(payload["waypoints"], start=1)
+        ]
+        direct_points = [wp for wp in direct if wp is not None]
+        if direct_points:
+            return direct_points
+
+    route_waypoints: list[dict[str, Any]] = []
+    for artifact_index, artifact in enumerate(payload.get("route_artifacts") or [], start=1):
+        if not isinstance(artifact, dict):
+            continue
+        for waypoint_index, waypoint in enumerate(artifact.get("waypoints") or [], start=1):
+            point = _coerce_scene_point(
+                waypoint,
+                fallback_id=f"route-{artifact_index}-wp-{waypoint_index}",
+            )
+            if point is not None:
+                route_waypoints.append(point)
+    if route_waypoints:
+        return route_waypoints
+
+    step_waypoints: list[dict[str, Any]] = []
+    for step_index, step in enumerate(payload.get("steps") or [], start=1):
+        if not isinstance(step, dict):
+            continue
+        for waypoint_index, waypoint in enumerate(step.get("waypoints") or [], start=1):
+            point = _coerce_scene_point(
+                waypoint,
+                fallback_id=f"step-{step_index}-wp-{waypoint_index}",
+            )
+            if point is not None:
+                step_waypoints.append(point)
+    return step_waypoints
+
+
+def _is_explicit_replace_confirmation(answer: str) -> bool:
+    text = str(answer or "").strip().lower()
+    if not text:
+        return False
+    phrases = (
+        "replace",
+        "overwrite",
+        "supersede",
+        "regenerate",
+        "start over",
+        "discard the edits",
+        "discard edits",
+        "ignore the edits",
+        "ignore edits",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShellGraphRuntime) -> dict[str, Any]:
+    draft = state.get("draft") or {}
+    mission = state.get("active_mission_context") or {}
+    parent_operation_id = str(state.get("parent_operation_id") or "").strip()
+    current_operation_id = str(mission.get("operation_id") or "").strip()
+    if not draft or not parent_operation_id or parent_operation_id != current_operation_id:
+        return {}
+    if not mission.get("has_operator_edits"):
+        return {}
+    answer = str((state.get("clarification_response") or {}).get("answer") or "")
+    if _is_explicit_replace_confirmation(answer):
+        return {}
+
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        return {}
+    current_revision = mission_execution.get_current_revision(session_id=str(state.get("session_id") or ""))
+    if not current_revision:
+        return {}
+
+    provenance = current_revision.get("provenance") if isinstance(current_revision.get("provenance"), dict) else {}
+    current_waypoints = _collect_waypoints(current_revision.get("mission") or {})
+    edited_waypoints = [
+        {
+            "id": str(point.get("id") or f"mission-wp-{index}"),
+            "label": str(point.get("label") or f"Waypoint {index}"),
+            "index": index,
+        }
+        for index, point in enumerate(current_waypoints, start=1)
+        if provenance.get(str(point.get("id") or f"mission-wp-{index}")) == "ai+edited"
+    ]
+    if not edited_waypoints:
+        return {}
+
+    proposed_waypoints = _collect_waypoints(draft)
+    if not proposed_waypoints:
+        return {}
+
+    summary = (
+        f"The active mission revision has {len(edited_waypoints)} operator-edited waypoint(s). "
+        "Creating a new AI proposal linked to this mission would supersede those edits."
+    )
+    edited_labels = ", ".join(item["label"] for item in edited_waypoints[:3])
+    if len(edited_waypoints) > 3:
+        edited_labels = f"{edited_labels}, and {len(edited_waypoints) - 3} more"
+    question = (
+        "Reply with 'replace' if you want the AI to supersede those edited waypoints, "
+        "or describe how the mission should preserve or extend them instead."
+    )
+    return {
+        "type": "provenance_conflict",
+        "intent_summary": summary,
+        "questions": [question],
+        "summary": summary,
+        "edited_waypoints": edited_waypoints,
+        "edited_waypoint_labels": edited_labels,
+        "current_revision_id": str(current_revision.get("id") or ""),
+        "current_waypoint_count": len(current_waypoints),
+        "proposed_waypoint_count": len(proposed_waypoints),
+    }
 
 
 # ── Planner loop helpers (Phase 5) ────────────────────────────────────────────
@@ -271,6 +471,37 @@ def _planner_prompt_builder(
     rover = ctx.get("rover") or {}
     if rover.get("position"):
         lines.append(f"Rover position: {json.dumps(rover['position'])}")
+    mission = ctx.get("mission") or {}
+    if mission.get("has_active_revision"):
+        edited = int(mission.get("provenance_ai_edited") or 0)
+        user = int(mission.get("provenance_user") or 0)
+        total = int(mission.get("waypoint_count") or 0)
+        goal = str(mission.get("goal") or "")
+        status = str(mission.get("revision_status") or "")
+        parts = [f"There is an active mission revision (status: {status}"]
+        if goal:
+            parts.append(f', goal: "{goal}"')
+        parts.append(f", {total} waypoint(s)).")
+        if edited > 0:
+            parts.append(
+                f" {edited} waypoint(s) carry 'ai+edited' provenance — the operator manually "
+                "repositioned them after the AI proposed the route. "
+                "Your new proposal will supersede those edits. "
+                "If the operator's request is to refine or extend the existing mission rather than replace it, "
+                "ask a clarification question before proposing."
+            )
+        elif user > 0:
+            parts.append(
+                f" {user} waypoint(s) are fully operator-authored (provenance: user). "
+                "Your proposal will create a new revision; the operator's waypoints will not be carried forward automatically."
+            )
+        op_id = str(mission.get("operation_id") or "")
+        if op_id:
+            parts.append(
+                f" Use parent_operation_id=\"{op_id}\" in propose_mission_draft if your proposal "
+                "refines or extends this mission."
+            )
+        lines.append("".join(parts))
     return "\n".join(lines)
 
 
@@ -294,12 +525,11 @@ def _is_tool_calling_unsupported_error(exc: Exception) -> bool:
     return "tool" in msg and ("unsupported" in msg or "not support" in msg or "bind_tools" in msg)
 
 
-def _build_planner_context_snapshot(state: WorkbenchGraphState) -> dict:
+def _build_planner_context_snapshot(state: PlanningShellGraphState) -> dict:
     """Build a context_snapshot suitable for the planner AgentLoopRuntime.
 
-    Includes all retrieved data (replay, memory, settings) so lazy-load tools
-    can return it without needing extra service calls. Source controls are carried
-    into meta so _snapshot_source_controls and lazy tool handlers enforce them.
+    Source controls are carried into meta so lazy tool handlers can enforce them.
+    Larger retrieval surfaces stay out of the planner context until tools load them.
     """
     source_controls = normalize_source_controls(
         (state.get("retrieval_request") or {}).get("source_controls")
@@ -309,13 +539,10 @@ def _build_planner_context_snapshot(state: WorkbenchGraphState) -> dict:
             "context_snapshot": {
                 "rover": state.get("rover_state") or {},
                 "scene": state.get("scene_summary") or {},
-                "mission": {},
+                "mission": state.get("active_mission_context") or {},
                 "runtime": state.get("runtime_summary") or {},
-                "details": {
-                    "current_replay": state.get("replay_summary") or {},
-                    "ai_chat_history": state.get("chat_history_summary") or {},
-                },
-                "settings": state.get("settings_summary") or {},
+                "details": {},
+                "settings": {},
                 "llm": state.get("llm_summary") or {},
             },
             "context_text": (state.get("context_metadata") or {}).get("context_text", ""),
@@ -345,7 +572,7 @@ def _extract_planner_tool_result(
     return None
 
 
-def _build_retrieved_sources(state: WorkbenchGraphState) -> list[dict[str, Any]]:
+def _build_retrieved_sources(state: PlanningShellGraphState) -> list[dict[str, Any]]:
     return build_retrieved_sources(
         retrieval_request=_normalize_retrieval_request(
             state.get("retrieval_request") or {},
@@ -364,9 +591,83 @@ def _build_retrieved_sources(state: WorkbenchGraphState) -> list[dict[str, Any]]
     )
 
 
+def _retrieval_update_from_tool_calls(
+    state: PlanningShellGraphState,
+    tool_calls: list[dict],
+) -> dict[str, Any]:
+    branch_by_tool = {
+        "lazy_load_replay": "retrieve_replay_context",
+        "lazy_load_ai_memory": "retrieve_application_memory",
+        "lazy_load_settings": "retrieve_settings_context",
+        "lazy_load_sensor": "retrieve_sensor_context",
+    }
+    lazy_branches: list[str] = []
+    replay_summary: dict[str, Any] = {}
+    chat_history_summary: dict[str, Any] = {}
+    settings_summary: dict[str, Any] = {}
+    sensor_summary: dict[str, Any] = {}
+
+    for call in tool_calls:
+        name = str(call.get("name") or "")
+        branch = branch_by_tool.get(name)
+        if branch and branch not in lazy_branches:
+            lazy_branches.append(branch)
+        result = call.get("result") or {}
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        if name == "lazy_load_replay":
+            replay_summary = result.get("replay_summary") or {}
+        elif name == "lazy_load_ai_memory":
+            chat_history_summary = result.get("chat_history_summary") or {}
+        elif name == "lazy_load_settings":
+            settings_summary = result.get("settings_summary") or {}
+        elif name == "lazy_load_sensor":
+            sensor_summary = {
+                "telemetry_fresh": result.get("telemetry_fresh"),
+                "camera_fresh": result.get("camera_fresh"),
+            }
+
+    if not lazy_branches:
+        return {}
+
+    retrieval_request = _normalize_retrieval_request(
+        {
+            **(state.get("retrieval_request") or {}),
+            "lazy_branches": lazy_branches,
+        },
+        user_prompt=str(state.get("user_prompt") or ""),
+        session_id=str(state.get("session_id") or ""),
+    )
+    retrieved_sources = build_retrieved_sources(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=replay_summary,
+        chat_history_summary=chat_history_summary,
+        settings_summary=settings_summary,
+        sensor_summary=sensor_summary,
+    )
+    loaded_data_refs = build_loaded_data_refs(
+        retrieval_request=retrieval_request,
+        session_id=str(state.get("session_id") or ""),
+        replay_summary=replay_summary,
+        chat_history_summary=chat_history_summary,
+        settings_summary=settings_summary,
+        sensor_summary=sensor_summary,
+    )
+    return {
+        "retrieval_request": retrieval_request,
+        "retrieved_sources": retrieved_sources,
+        "retrieval_citations": build_retrieval_citations(retrieved_sources, loaded_data_refs),
+        "loaded_data_refs": loaded_data_refs,
+        "replay_summary": replay_summary,
+        "chat_history_summary": chat_history_summary,
+        "settings_summary": settings_summary,
+    }
+
+
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
-def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def capture_request(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Validate inputs, ensure a user message exists, initialize trace."""
     rt = _runtime(config)
     session_id = state.get("session_id", "")
@@ -391,7 +692,7 @@ def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                 session_id,
                 role="user",
                 content=user_prompt,
-                meta={"run_mode": "workbench"},
+                meta={"run_mode": "planning_shell"},
             )
             source_message_id = msg.get("id", "")
         except Exception as exc:
@@ -400,10 +701,8 @@ def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                 "severity": "warning", "message": str(exc), "recoverable": True,
             })
 
-    use_planner_loop = bool(getattr(rt.app_runtime.config, "ai_use_planner_loop", False))
     return {
         "source_message_id": source_message_id,
-        "use_planner_loop": use_planner_loop,
         "retrieval_request": _normalize_retrieval_request(
             state.get("retrieval_request") or {},
             user_prompt=user_prompt,
@@ -414,7 +713,7 @@ def capture_request(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
     }
 
 
-async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+async def retrieve_current_context(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Build one compact context snapshot for the entire graph run."""
     rt = _runtime(config)
     try:
@@ -472,6 +771,9 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
     )
     retrieval_citations = build_retrieval_citations(retrieved_sources, loaded_data_refs)
 
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    active_mission_context = _build_active_mission_context(mission_execution, str(state.get("session_id") or ""))
+
     return {
         "context_metadata": compact_meta,
         "data_access_manifest": _build_data_access_manifest(rt, retrieval_request.get("source_controls")),
@@ -482,6 +784,7 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
         "chat_history_summary": chat_history_summary,
         "settings_summary": full_ctx.get("settings") or {},
         "llm_summary": full_ctx.get("llm") or {},
+        "active_mission_context": active_mission_context,
         "retrieval_request": retrieval_request,
         "retrieved_sources": retrieved_sources,
         "retrieval_citations": retrieval_citations,
@@ -490,8 +793,9 @@ async def retrieve_current_context(state: WorkbenchGraphState, config: RunnableC
     }
 
 
-def validate_draft(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def validate_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Run deterministic validation rules on the draft payload."""
+    rt = _runtime(config)
     intent = state.get("intent") or {}
     target_resolution = state.get("target_resolution") or {}
     draft = state.get("draft") or {}
@@ -511,15 +815,36 @@ def validate_draft(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             "severity": "warning", "message": warning, "recoverable": True,
         })
 
+    provenance_conflict = _build_provenance_conflict(state, rt)
+    if provenance_conflict:
+        new_errors.append({
+            "node": "validate_draft",
+            "code": "provenance_conflict",
+            "severity": "warning",
+            "message": provenance_conflict.get("summary") or "operator-edited waypoints need confirmation before replacement",
+            "recoverable": True,
+        })
+
     return {
         "validation": validation,
+        "clarification_request": provenance_conflict,
+        "clarification_response": {} if provenance_conflict else (state.get("clarification_response") or {}),
+        "provenance_conflict": provenance_conflict,
         "errors": new_errors,
-        "node_trace": [_node_entry("validate_draft", status=validation.get("status", "unknown"))],
+        "node_trace": [_node_entry(
+            "validate_draft",
+            status=validation.get("status", "unknown"),
+            provenance_conflict=bool(provenance_conflict),
+        )],
     }
 
 
-def store_draft(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
-    """Persist the draft and validation to the mission draft store."""
+def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
+    """Persist the draft with mission_execution as canonical storage.
+
+    Planning-shell writes are mission-revision-first: this node allocates a
+    stable draft_id and persists only through mission_execution.
+    """
     rt = _runtime(config)
     draft = state.get("draft") or {}
     intent = state.get("intent") or {}
@@ -531,80 +856,83 @@ def store_draft(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="empty_draft_or_intent")],
         }
 
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    draft_id = str(state.get("draft_id") or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
+    draft_status = str(state.get("approval_status") or "awaiting_approval")
+    validation = state.get("validation") or {}
+    mission_operation_id = ""
+    mission_revision_id = ""
+    mission_errors: list[dict[str, Any]] = []
+    if mission_execution is None:
+        return {
+            "draft_id": "",
+            "approval_status": "validation_failed",
+            "errors": [{
+                "node": "store_draft",
+                "code": "mission_execution_unavailable",
+                "severity": "error",
+                "message": "mission execution service unavailable",
+                "recoverable": False,
+            }],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_unavailable")],
+        }
+
     try:
-        stored = rt.draft_service.create_draft(
+        revision = mission_execution.create_proposal(
             session_id=state.get("session_id", ""),
             source_message_id=state.get("source_message_id", ""),
+            draft_id=draft_id,
             intent=intent,
             target_resolution=state.get("target_resolution") or {},
             draft_payload=draft,
-            rover_state=state.get("rover_state") or None,
+            validation=validation,
+            draft_status=draft_status,
+            review_context={
+                "goal": draft.get("goal", ""),
+                "risks": draft.get("risks") or [],
+                "approval_scope": "planning_artifact_only",
+            },
+            parent_operation_id=state.get("parent_operation_id", ""),
         )
+        mission_operation_id = str(revision.get("operation_id") or "")
+        mission_revision_id = str(revision.get("id") or "")
     except Exception as exc:
         return {
             "draft_id": "",
             "approval_status": "validation_failed",
             "errors": [{
-                "node": "store_draft", "code": "store_error",
-                "severity": "error", "message": str(exc), "recoverable": False,
-            }],
-            "node_trace": [_node_entry("store_draft", ok=False, reason="store_exception")],
-        }
-
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    mission_operation_id = ""
-    mission_revision_id = ""
-    mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
-        try:
-            revision = mission_execution.create_proposal(
-                session_id=state.get("session_id", ""),
-                source_message_id=state.get("source_message_id", ""),
-                draft_id=stored.get("id", ""),
-                intent=intent,
-                target_resolution=state.get("target_resolution") or {},
-                draft_payload=stored.get("draft") or draft,
-                validation=stored.get("validation") or state.get("validation") or {},
-                draft_status=stored.get("status", ""),
-                review_context={
-                    "goal": (stored.get("draft") or draft).get("goal", ""),
-                    "risks": (stored.get("draft") or draft).get("risks") or [],
-                    "approval_scope": "planning_artifact_only",
-                },
-            )
-            mission_operation_id = str(revision.get("operation_id") or "")
-            mission_revision_id = str(revision.get("id") or "")
-        except Exception as exc:
-            mission_errors.append({
                 "node": "store_draft",
                 "code": "mission_execution_store_error",
-                "severity": "warning",
+                "severity": "error",
                 "message": str(exc),
-                "recoverable": True,
-            })
+                "recoverable": False,
+            }],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_store_exception")],
+        }
 
     return {
-        "draft_id": stored.get("id", ""),
+        "draft_id": draft_id,
         "mission_operation_id": mission_operation_id,
         "mission_revision_id": mission_revision_id,
-        "approval_status": stored.get("status", ""),
+        "approval_status": draft_status,
         "errors": mission_errors,
         "node_trace": [_node_entry(
             "store_draft", ok=True,
-            draft_id=stored.get("id", ""),
-            status=stored.get("status", ""),
+            draft_id=draft_id,
+            status=draft_status,
             mission_operation_id=mission_operation_id or None,
             mission_revision_id=mission_revision_id or None,
         )],
     }
 
 
-def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Compose and store the final assistant message, then end the graph."""
     rt = _runtime(config)
     session_id = state.get("session_id", "")
     intent = state.get("intent") or {}
     draft_id = state.get("draft_id", "")
+    mission_revision_id = str(state.get("mission_revision_id") or "")
     approval_status = state.get("approval_status", "")
     validation = state.get("validation") or {}
     errors = state.get("errors") or []
@@ -624,18 +952,25 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         if summary:
             parts.append(f"Request understood: {summary}.")
         parts.append(
-            "The workbench graph handles rover planning tasks (navigate, inspect, search). "
+            "The planning shell handles rover planning tasks (navigate, inspect, search). "
             "Use the General Chat session for status questions, replay analysis, or other queries."
         )
     elif draft_id:
         parts.append(f"Mission draft created (ID: {draft_id}).")
+        if mission_revision_id:
+            parts.append(f"Mission revision ID: {mission_revision_id}.")
         parts.append(f"Status: {approval_status}.")
         for blocker in validation.get("blockers") or []:
             parts.append(f"Blocker: {blocker}")
         for warning in validation.get("warnings") or []:
             parts.append(f"Warning: {warning}")
         if approval_status == "awaiting_approval":
-            parts.append("Use POST /api/ai/mission-drafts/{draft_id}/approve to approve this draft.")
+            if mission_revision_id:
+                parts.append(
+                    "Use POST /api/ai/mission-revisions/{revision_id}/approve to approve this mission revision."
+                )
+            else:
+                parts.append("Mission revision link missing; retry planning to create a revision-backed draft.")
         elif approval_status == "approved":
             note = state.get("approval_note", "")
             parts.append("Mission draft approved as a planning artifact.")
@@ -658,18 +993,19 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         parts.append("Mission planning cancelled during clarification.")
     elif not draft_id:
         parts.append("Could not generate a mission draft for this request.")
-        fatal = [e for e in errors if e.get("severity") in ("error", "fatal")]
-        if fatal:
-            parts.append(f"Reason: {fatal[-1].get('message', 'unknown error')}.")
+        relevant_errors = [e for e in errors if e.get("severity") in ("warning", "error", "fatal")]
+        if relevant_errors:
+            parts.append(f"Reason: {relevant_errors[-1].get('message', 'unknown error')}.")
     if retrieved_sources:
         enabled = retrieval_request.get("enabled_sources") or []
         parts.append(f"Enabled source controls: {', '.join(str(item) for item in enabled)}.")
 
     content = " ".join(parts)
     meta = {
-        "run_mode": "workbench",
+        "run_mode": "planning_shell",
         "intent": intent,
         "draft_id": draft_id,
+        "mission_revision_id": mission_revision_id,
         "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
         "mission_export": state.get("mission_export") or {},
@@ -679,14 +1015,13 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         "retrieval_citations": state.get("retrieval_citations") or [],
         "loaded_data_refs": state.get("loaded_data_refs") or [],
         "node_count": len(state.get("node_trace") or []),
-        "planner_loop_enabled": bool(state.get("use_planner_loop")),
+        "planner_loop_enabled": True,
     }
-    if state.get("use_planner_loop"):
-        meta["planner_agent_stop_reason"] = str(state.get("planner_agent_stop_reason") or "")
-        meta["planner_agent_iterations"] = int(state.get("planner_agent_iterations") or 0)
-        meta["planner_agent_trace_id"] = str(state.get("planner_agent_trace_id") or "")
-        if state.get("planner_loop_fallback"):
-            meta["planner_loop_fallback"] = True
+    meta["planner_agent_stop_reason"] = str(state.get("planner_agent_stop_reason") or "")
+    meta["planner_agent_iterations"] = int(state.get("planner_agent_iterations") or 0)
+    meta["planner_agent_trace_id"] = str(state.get("planner_agent_trace_id") or "")
+    if state.get("planner_loop_fallback"):
+        meta["planner_loop_fallback"] = True
     usage_metadata = _merge_usage_metadata(
         state.get("intent_usage_metadata") or {},
         state.get("draft_usage_metadata") or {},
@@ -699,12 +1034,17 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     )
     if response_metadata:
         meta["response_metadata"] = response_metadata
+    provider_snapshot = _provider_snapshot(state.get("intent_provider") or {})
+    if provider_snapshot.get("id"):
+        meta["provider_snapshot"] = provider_snapshot
     if session_id and content:
         try:
             rt.ai_session_store.add_message(
                 session_id,
                 role="assistant",
                 content=content,
+                provider_id=str(provider_snapshot.get("id") or ""),
+                model_id=str(provider_snapshot.get("model_id") or ""),
                 meta=meta,
             )
         except Exception:
@@ -719,21 +1059,28 @@ def finalize_response(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     }
 
 
-def finalize_error(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def finalize_error(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Store a controlled error response and end the graph."""
     rt = _runtime(config)
     session_id = state.get("session_id", "")
     errors = state.get("errors") or []
     fatal = [e for e in errors if e.get("severity") == "fatal"]
-    message = fatal[0]["message"] if fatal else "An unexpected error occurred in the workbench graph."
+    message = fatal[0]["message"] if fatal else "An unexpected error occurred in the planning shell."
+    provider_snapshot = _provider_snapshot(state.get("intent_provider") or {})
 
     if session_id:
         try:
             rt.ai_session_store.add_message(
                 session_id,
                 role="assistant",
-                content=f"Workbench error: {message}",
-                meta={"run_mode": "workbench", "errors": errors},
+                content=f"Planning shell error: {message}",
+                provider_id=str(provider_snapshot.get("id") or ""),
+                model_id=str(provider_snapshot.get("model_id") or ""),
+                meta={
+                    "run_mode": "planning_shell",
+                    "errors": errors,
+                    "provider_snapshot": provider_snapshot if provider_snapshot.get("id") else {},
+                },
             )
         except Exception:
             pass
@@ -743,7 +1090,7 @@ def finalize_error(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
     }
 
 
-def _route_after_capture(state: WorkbenchGraphState) -> str:
+def _route_after_capture(state: PlanningShellGraphState) -> str:
     errors = state.get("errors") or []
     if any(e.get("severity") == "fatal" for e in errors):
         return "finalize_error"
@@ -752,7 +1099,7 @@ def _route_after_capture(state: WorkbenchGraphState) -> str:
 
 # ── Phase 5 nodes ─────────────────────────────────────────────────────────────
 
-def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def planner_loop_node(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Run AgentLoopRuntime as the sole planner node (Phase 6).
 
     Calls parse_rover_intent, resolve_spatial_target, lazy-load tools,
@@ -812,6 +1159,7 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
 
     if result is None:
         return {
+            "intent_provider": _provider_snapshot(resolved.provider),
             "planner_loop_fallback": True,
             "errors": [{
                 "node": "planner_loop_node", "code": "tool_calling_unsupported",
@@ -825,6 +1173,9 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     intent = _extract_planner_tool_result(result.tool_calls, "parse_rover_intent", "intent") or {}
     target_result = _extract_planner_tool_result(result.tool_calls, "resolve_spatial_target") or {}
     draft_raw = _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "draft") or {}
+    parent_operation_id = str(
+        _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "parent_operation_id") or ""
+    ).strip()
 
     # Collect route artifacts from any route-planning tool calls so they survive draft storage.
     route_artifacts: list[dict[str, Any]] = []
@@ -855,6 +1206,7 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     ]
 
     node_update: dict = {
+        "intent_provider": _provider_snapshot(resolved.provider),
         "planner_agent_stop_reason": result.stop_reason,
         "planner_agent_iterations": result.iterations,
         "planner_agent_trace_id": result.trace_id,
@@ -871,6 +1223,7 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
             draft_repairs=draft_repairs if draft_repairs else None,
         )],
     }
+    node_update.update(_retrieval_update_from_tool_calls(state, result.tool_calls))
     if intent:
         node_update["intent"] = intent
         node_update["intent_usage_metadata"] = result.usage_metadata
@@ -882,6 +1235,8 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
         node_update["draft"] = draft_raw
         node_update["draft_usage_metadata"] = result.usage_metadata
         node_update["draft_response_metadata"] = result.response_metadata
+    if parent_operation_id:
+        node_update["parent_operation_id"] = parent_operation_id
 
     # Clarification handoff: extract questions from the request_clarification tool result
     # and set clarification_request in state so _route_after_planner_loop routes to
@@ -898,11 +1253,11 @@ def planner_loop_node(state: WorkbenchGraphState, config: RunnableConfig) -> dic
     return node_update
 
 
-def _route_after_context(state: WorkbenchGraphState) -> str:
+def _route_after_context(state: PlanningShellGraphState) -> str:
     return "planner_loop_node"
 
 
-def _route_after_planner_loop(state: WorkbenchGraphState) -> str:
+def _route_after_planner_loop(state: PlanningShellGraphState) -> str:
     if state.get("planner_loop_fallback"):
         return "finalize_response"
     if state.get("clarification_request") and not state.get("clarification_response"):
@@ -914,7 +1269,7 @@ def _route_after_planner_loop(state: WorkbenchGraphState) -> str:
 
 # ── Phase 2 nodes ─────────────────────────────────────────────────────────────
 
-def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def request_planning_shell_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Pause for operator approval of the planning draft.
 
     Phase 2: calls interrupt() when a checkpointer is available.
@@ -926,7 +1281,7 @@ def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfi
     draft_id = state.get("draft_id", "")
 
     approval_payload = {
-        "type": "workbench_draft_approval",
+        "type": "planning_shell_draft_approval",
         "draft_id": draft_id,
         "mission_operation_id": state.get("mission_operation_id", ""),
         "mission_revision_id": state.get("mission_revision_id", ""),
@@ -944,37 +1299,28 @@ def request_workbench_approval(state: WorkbenchGraphState, config: RunnableConfi
         return {
             "operator_decision": decision_str,
             "approval_note": note,
-            "node_trace": [_node_entry("request_workbench_approval", mode="interrupt", decision=decision_str)],
+            "node_trace": [_node_entry("request_planning_shell_approval", mode="interrupt", decision=decision_str)],
         }
 
     # REST fallback — graph finishes normally; approval via separate API calls
     return {
         "operator_decision": "pending_rest",
-        "node_trace": [_node_entry("request_workbench_approval", mode="rest_fallback")],
+        "node_trace": [_node_entry("request_planning_shell_approval", mode="rest_fallback")],
     }
 
 
-def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Record operator approval on the stored draft."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
+    revision_id = str(state.get("mission_revision_id") or "").strip()
     note = state.get("approval_note", "")
-    try:
-        approved = rt.draft_service.approve_draft(draft_id, note=note)
-    except Exception as exc:
-        return {
-            "approval_status": "approved",
-            "errors": [{
-                "node": "record_approval", "code": "service_error",
-                "severity": "warning", "message": str(exc), "recoverable": True,
-            }],
-            "node_trace": [_node_entry("record_approval", ok=False, reason=str(exc))],
-        }
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
     mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
+    approved: dict[str, Any] | None = None
+    if mission_execution is not None and revision_id:
         try:
-            mission_execution.approve_revision_for_draft(draft_id, note=note)
+            approved = mission_execution.approve_revision(revision_id, note=note)
         except Exception as exc:
             mission_errors.append({
                 "node": "record_approval",
@@ -983,24 +1329,30 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                 "message": str(exc),
                 "recoverable": True,
             })
+    if approved is None:
+        mission_errors.append({
+            "node": "record_approval",
+            "code": "revision_approval_missing",
+            "severity": "warning",
+            "message": "linked mission revision could not be approved",
+            "recoverable": True,
+        })
     mission_export: dict[str, Any] = {}
     export_error = ""
-    if approved and _route_summary_for_approval(approved.get("draft") or {}).get("waypoint_count"):
+    if approved and _route_summary_for_approval(approved.get("mission") or approved.get("draft") or {}).get("waypoint_count"):
         try:
             result = MissionExportService().export(
                 approved,
                 home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
             )
             if result.get("ok"):
-                updated = rt.draft_service.mark_exported(draft_id, export_result=result)
-                mission_export = (updated or {}).get("draft", {}).get("mission_export") or {
-                    "file_path": result.get("file_path", ""),
-                    "waypoint_count": result.get("waypoint_count", 0),
-                    "vehicle_type": result.get("vehicle_type", 0),
-                }
-                if mission_execution is not None:
+                export_synced = None
+                if mission_execution is not None and revision_id:
                     try:
-                        mission_execution.mark_revision_exported(draft_id, export_result=result)
+                        export_synced = mission_execution.mark_revision_exported_by_revision_id(
+                            revision_id,
+                            export_result=result,
+                        )
                     except Exception as exc:
                         mission_errors.append({
                             "node": "record_approval",
@@ -1009,6 +1361,11 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
                             "message": str(exc),
                             "recoverable": True,
                         })
+                mission_export = (export_synced or {}).get("mission", {}).get("mission_export") or {
+                    "file_path": result.get("file_path", ""),
+                    "waypoint_count": result.get("waypoint_count", 0),
+                    "vehicle_type": result.get("vehicle_type", 0),
+                }
             else:
                 export_error = str(result.get("error") or "mission export failed")
         except Exception as exc:
@@ -1036,27 +1393,18 @@ def record_approval(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
     }
 
 
-def record_rejection(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Record operator rejection on the stored draft."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
+    revision_id = str(state.get("mission_revision_id") or "").strip()
     note = state.get("approval_note", "")
-    try:
-        rt.draft_service.reject_draft(draft_id, note=note)
-    except Exception as exc:
-        return {
-            "approval_status": "rejected",
-            "errors": [{
-                "node": "record_rejection", "code": "service_error",
-                "severity": "warning", "message": str(exc), "recoverable": True,
-            }],
-            "node_trace": [_node_entry("record_rejection", ok=False, reason=str(exc))],
-        }
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
     mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
+    rejected = None
+    if mission_execution is not None and revision_id:
         try:
-            mission_execution.reject_revision_for_draft(draft_id, note=note)
+            rejected = mission_execution.reject_revision(revision_id, note=note)
         except Exception as exc:
             mission_errors.append({
                 "node": "record_rejection",
@@ -1065,6 +1413,14 @@ def record_rejection(state: WorkbenchGraphState, config: RunnableConfig) -> dict
                 "message": str(exc),
                 "recoverable": True,
             })
+    if rejected is None:
+        mission_errors.append({
+            "node": "record_rejection",
+            "code": "revision_rejection_missing",
+            "severity": "warning",
+            "message": "linked mission revision could not be rejected",
+            "recoverable": True,
+        })
     return {
         "approval_status": "rejected",
         "errors": mission_errors,
@@ -1074,7 +1430,7 @@ def record_rejection(state: WorkbenchGraphState, config: RunnableConfig) -> dict
 
 # ── Phase 3 nodes ─────────────────────────────────────────────────────────────
 
-async def prepare_clarification(state: WorkbenchGraphState, config: RunnableConfig) -> dict:
+async def prepare_clarification(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Interrupt to collect missing information from the operator, then refresh context.
 
     Rover pose and scene are re-fetched after the operator answers so the resumed
@@ -1144,21 +1500,27 @@ async def prepare_clarification(state: WorkbenchGraphState, config: RunnableConf
     }
 
 
-def _route_after_clarification(state: WorkbenchGraphState) -> str:
+def _route_after_clarification(state: PlanningShellGraphState) -> str:
     clarification_response = state.get("clarification_response") or {}
     if clarification_response.get("cancelled"):
         return "finalize_response"
     return "planner_loop_node"
 
 
-def _route_after_store_draft(state: WorkbenchGraphState) -> str:
+def _route_after_validate_draft(state: PlanningShellGraphState) -> str:
+    if state.get("clarification_request") and not state.get("clarification_response"):
+        return "prepare_clarification"
+    return "store_draft"
+
+
+def _route_after_store_draft(state: PlanningShellGraphState) -> str:
     status = state.get("approval_status", "")
     if status == "awaiting_approval":
-        return "request_workbench_approval"
+        return "request_planning_shell_approval"
     return "finalize_response"
 
 
-def _route_after_approval(state: WorkbenchGraphState) -> str:
+def _route_after_approval(state: PlanningShellGraphState) -> str:
     decision = state.get("operator_decision", "")
     if decision == "reject":
         return "record_rejection"
@@ -1170,13 +1532,13 @@ def _route_after_approval(state: WorkbenchGraphState) -> str:
 
 # ── Graph construction ────────────────────────────────────────────────────────
 
-def build_workbench_graph(checkpointer: Any = None):
-    """Build and compile the workbench planning graph.
+def build_planning_shell_graph(checkpointer: Any = None):
+    """Build and compile the planning-shell graph.
 
     Pass a LangGraph checkpointer to enable interrupt/resume approval.
     Without a checkpointer the graph falls back to REST-only approval.
     """
-    graph: StateGraph = StateGraph(WorkbenchGraphState)
+    graph: StateGraph = StateGraph(PlanningShellGraphState)
 
     graph.add_node("capture_request", capture_request)
     graph.add_node("retrieve_current_context", retrieve_current_context)
@@ -1184,7 +1546,7 @@ def build_workbench_graph(checkpointer: Any = None):
     graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("validate_draft", validate_draft)
     graph.add_node("store_draft", store_draft)
-    graph.add_node("request_workbench_approval", request_workbench_approval)
+    graph.add_node("request_planning_shell_approval", request_planning_shell_approval)
     graph.add_node("record_approval", record_approval)
     graph.add_node("record_rejection", record_rejection)
     graph.add_node("finalize_response", finalize_response)
@@ -1214,14 +1576,21 @@ def build_workbench_graph(checkpointer: Any = None):
             "finalize_response": "finalize_response",
         },
     )
-    graph.add_edge("validate_draft", "store_draft")
+    graph.add_conditional_edges(
+        "validate_draft",
+        _route_after_validate_draft,
+        {
+            "prepare_clarification": "prepare_clarification",
+            "store_draft": "store_draft",
+        },
+    )
     graph.add_conditional_edges(
         "store_draft",
         _route_after_store_draft,
-        {"request_workbench_approval": "request_workbench_approval", "finalize_response": "finalize_response"},
+        {"request_planning_shell_approval": "request_planning_shell_approval", "finalize_response": "finalize_response"},
     )
     graph.add_conditional_edges(
-        "request_workbench_approval",
+        "request_planning_shell_approval",
         _route_after_approval,
         {
             "record_approval": "record_approval",
@@ -1327,27 +1696,27 @@ async def _emit_chunk_events(
 
 # ── Streaming runner ──────────────────────────────────────────────────────────
 
-async def stream_workbench_graph(
-    runtime: WorkbenchGraphRuntime,
+async def stream_planning_shell_graph(
+    runtime: PlanningShellGraphRuntime,
     *,
     session_id: str,
     user_prompt: str,
     operator_timezone: str = "",
-    session_mode: str = "workbench",
+    session_mode: str = "planning_shell",
     source_message_id: str = "",
     source_controls: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Async generator that runs the graph and yields NDJSON event lines.
 
-    Phase 2: when the graph hits interrupt() at request_workbench_approval,
+    Phase 2: when the graph hits interrupt() at request_planning_shell_approval,
     emits graph_interrupt with the thread_id and stops streaming. The client
     then calls the resume endpoint with the operator decision.
     """
     run_id = uuid.uuid4().hex[:12]
     thread_id = f"ai-session:{session_id}:run:{run_id}"
-    graph = build_workbench_graph(checkpointer=runtime.checkpointer)
+    graph = build_planning_shell_graph(checkpointer=runtime.checkpointer)
 
-    initial_state: WorkbenchGraphState = {  # type: ignore[typeddict-item]
+    initial_state: PlanningShellGraphState = {  # type: ignore[typeddict-item]
         "session_id": session_id,
         "thread_id": thread_id,
         "user_prompt": user_prompt,
@@ -1373,7 +1742,7 @@ async def stream_workbench_graph(
         "run_id": run_id,
         "thread_id": thread_id,
         "session_id": session_id,
-        "planner_loop_enabled": bool(getattr(runtime.app_runtime.config, "ai_use_planner_loop", False)),
+        "planner_loop_enabled": True,
         "ts": time.time(),
     })
 
@@ -1424,8 +1793,8 @@ async def stream_workbench_graph(
         })
 
 
-async def resume_workbench_graph(
-    runtime: WorkbenchGraphRuntime,
+async def resume_planning_shell_graph(
+    runtime: PlanningShellGraphRuntime,
     *,
     thread_id: str,
     decision: str,
@@ -1455,7 +1824,7 @@ async def resume_workbench_graph(
         return
 
     run_id = thread_id.split(":")[-1] if ":" in thread_id else thread_id
-    graph = build_workbench_graph(checkpointer=runtime.checkpointer)
+    graph = build_planning_shell_graph(checkpointer=runtime.checkpointer)
     lg_config = {"configurable": {"runtime": runtime, "thread_id": thread_id}}
 
     yield _json_line({

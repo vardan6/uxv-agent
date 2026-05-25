@@ -1,7 +1,7 @@
 # Mission Execution Implementation
 
-Status date: 2026-05-16.
-Status: implemented backend foundation plus controller adapter seam; real external controller transport still pending.
+Status date: 2026-05-22.
+Status: backend foundation, controller adapter seam, and full waypoint mutation API surface implemented; real external controller transport still pending.
 
 ## Purpose
 
@@ -19,14 +19,17 @@ Implemented now:
 
 - canonical mission revision storage in `gcs_server/ai/mission_execution_service.py`
 - current mission-state lookup and current revision lookup
-- overlay payload generation from stored revisions
+- overlay payload generation from stored revisions, now including per-waypoint `provenance` (`ai` / `user` / `ai+edited`)
 - synchronization from draft approval/rejection/export into mission revision state
 - durable controller mission snapshot state in SQLite
 - durable execution-attempt records in SQLite
 - optimistic controller-version compare-and-swap checks on execution
+- optimistic client-version concurrency checks on waypoint mutation (stale-edit detection)
 - rollback-ready verified/previous-verified controller snapshots
 - injected controller mission adapter seam used for install/read-back verification
-- explicit execution APIs in `gcs_server/app.py`
+- client-authored revision creation with provenance inheritance
+- waypoint update, insert, and delete with automatic provenance promotion
+- explicit execution and mutation APIs in `gcs_server/app.py`
 
 Current API surface:
 
@@ -36,7 +39,11 @@ Current API surface:
 - `GET /api/ai/mission-revisions/{revision_id}/overlay`
 - `GET /api/ai/mission-overlays/current`
 - `GET /api/ai/controller-mission`
+- `POST /api/ai/mission-revisions` — create client-authored revision
 - `POST /api/ai/mission-revisions/{revision_id}/execute`
+- `PATCH /api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}` — update geometry; promotes to `ai+edited`
+- `POST /api/ai/mission-revisions/{revision_id}/waypoints` — insert waypoint; provenance = `user`
+- `DELETE /api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}`
 
 Approval compatibility path:
 
@@ -86,7 +93,7 @@ It does **not** yet provide:
 - autopilot read-back
 - controller-native mission normalization
 - external-controller truth
-- automatic rebase after stale-version rejection
+- real external controller transport
 
 ## Data Model
 
@@ -94,6 +101,7 @@ Implemented migrations:
 
 - migration `003`: `ai_mission_operations`, `ai_mission_revisions`
 - migration `004`: `ai_mission_controller_state`, `ai_mission_execution_attempts`
+- migration `005`: `client_version INTEGER NOT NULL DEFAULT 0` and `provenance_json TEXT NOT NULL DEFAULT '{}'` added to `ai_mission_revisions`
 
 Primary tables:
 
@@ -103,6 +111,8 @@ Primary tables:
 - `ai_mission_revisions`
   - canonical stored revision records
   - stores mission payload, intent, target resolution, validation, and review context
+  - `client_version`: monotonically incremented on each waypoint mutation; used for stale-edit detection
+  - `provenance_json`: `{waypoint_id: "ai" | "user" | "ai+edited"}` map; returned per-waypoint in overlay payloads
 - `ai_mission_controller_state`
   - backend projection of controller mission state
   - tracks current controller mission version, active revision, verified snapshot, previous verified snapshot, pending snapshot, and last cutover metadata
@@ -143,12 +153,12 @@ Controller-state statuses currently used include:
   - controller adapter protocol
   - default local file-backed adapter
 - `gcs_server/ai/migrations.py`
-  - schema migrations `003` and `004`
+  - schema migrations `003`, `004`, and `005`
 - `gcs_server/app.py`
   - mission revision, overlay, controller-state, and execute endpoints
 - `gcs_server/runtime.py`
   - wires `MissionExecutionService` and the default controller adapter into the app runtime
-- `gcs_server/ai/workbench_graph.py`
+- `gcs_server/ai/planning_shell_graph.py`
   - synchronizes stored planning artifacts into `mission_execution`
 
 ## Relationship To Legacy Draft Flow
@@ -167,6 +177,13 @@ Current reality:
 This means authoritative ownership is improved but not yet fully collapsed
 into one path.
 
+Implemented since the first cut:
+
+- stale controller-version rejection now auto-creates a rebased
+  `awaiting_approval` revision from the rejected revision payload and returns
+  it in the execute response so the operator can review and re-approve
+  against the latest verified controller snapshot
+
 ## Remaining Gaps
 
 The most important missing pieces are:
@@ -177,5 +194,4 @@ The most important missing pieces are:
   rather than legacy draft-flow compatibility code
 - project controller mission state and execution status more directly into
   the `/ai` UI
-- implement stale-version rebase/revision workflows
 - make the planner-loop path the default mission-planning runtime

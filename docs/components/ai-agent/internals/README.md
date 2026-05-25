@@ -10,7 +10,7 @@ Topic-level notes on how the agent is currently implemented. Regenerable from co
 | [mission-execution.md](./mission-execution.md) | Mission execution implementation |
 | [tool-contract.md](./tool-contract.md) | Standard contract every agent tool implements |
 | [replay-access.md](./replay-access.md) | How the agent reads replay state |
-| [workbench-mode.md](./workbench-mode.md) | The workbench planning shell (operator-facing chat mode) |
+| [planning-shell.md](./planning-shell.md) | The planning shell and its durable approval wrapper |
 | [intent-parsing.md](./intent-parsing.md) | Intent classification and parsing pipeline |
 | [route-planning.md](./route-planning.md) | Road graph, planner tools, QGC `.plan` export, and the manual validation checklist |
 | [token-efficiency.md](./token-efficiency.md) | Token-usage audit + phased optimization plan (Phase 1 + Phase 2 #6 shipped; Phase 3 outstanding) |

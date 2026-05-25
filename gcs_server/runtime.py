@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from gcs_server.ai.controller_mission_adapter import JsonFileControllerMissionAdapter
+    from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
     from gcs_server.ai.mission_draft_service import MissionDraftService
     from gcs_server.ai.mission_execution_service import MissionExecutionService
     from gcs_server.ai.secret_store import SecretStore
@@ -19,7 +19,7 @@ try:
     from gcs_server.telemetry import normalize_telemetry
     from gcs_server.ws import WebSocketManager
 except ModuleNotFoundError:
-    from ai.controller_mission_adapter import JsonFileControllerMissionAdapter
+    from ai.controller_mission_adapter_factory import build_controller_mission_adapter
     from ai.mission_draft_service import MissionDraftService
     from ai.mission_execution_service import MissionExecutionService
     from ai.secret_store import SecretStore
@@ -91,10 +91,9 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     )
     ai_store = AISessionStore(db_path=ai_sessions_db_path)
     mission_draft_service = MissionDraftService(db_path=ai_sessions_db_path)
-    controller_mission_adapter = JsonFileControllerMissionAdapter(
-        state_path=_resolve_replay_db_path(
-            config.logging.get("controller_mission_state_path", "data/controller_mission_adapter.json")
-        )
+    controller_mission_adapter = build_controller_mission_adapter(
+        config.logging,
+        path_resolver=_resolve_replay_db_path,
     )
     mission_execution_service = MissionExecutionService(
         db_path=ai_sessions_db_path,
