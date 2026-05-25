@@ -1,4 +1,6 @@
 .codex
+.codex/
+**/.codex/
 .obsidian/
 .DS_Store
 Thumbs.db
