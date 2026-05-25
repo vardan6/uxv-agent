@@ -94,15 +94,14 @@ Current next direction:
   the final owner of mission approval effects or controller behavior
 - execution cutover is available through mission-execution APIs, but the
   current planning-shell approval flow does not yet automatically invoke it
-- **provenance-aware regeneration (next workstream):** when the agent
-  regenerates or refines waypoints, it must diff against per-waypoint
-  provenance before overwriting. Waypoints with provenance `ai+edited`
-  (operator-modified after AI proposal) must not be silently overwritten —
-  the agent must surface the conflict and ask. Server-side enforcement
-  exists; planning-shell wiring is pending. See
-  [`mission-execution.md`](./mission-execution.md) for the provenance state
-  machine and [`map-widget.md`](../../gcs/internals/map-widget.md) for the
-  contract.
+- **provenance-aware regeneration:** when the agent regenerates or refines
+  waypoints, it must diff against per-waypoint provenance before
+  overwriting. Waypoints with provenance `ai+edited` (operator-modified
+  after AI proposal) are now blocked by server-side planning-shell
+  validation until the operator explicitly confirms replacement through the
+  clarification path. See [`mission-execution.md`](./mission-execution.md)
+  for the provenance state machine and
+  [`map-widget.md`](../../gcs/internals/map-widget.md) for the contract.
 
 Code identifiers:
 

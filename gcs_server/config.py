@@ -59,6 +59,12 @@ DEFAULT_GCS_SETTINGS["logging"] = {
     "llm_secrets_db_path": "data/gcs_llm_secrets.sqlite3",
     "agent_trace_dir": "data/agent_traces",
     "controller_mission_state_path": "data/controller_mission_adapter.json",
+    "controller_mission_adapter": "json_file",
+    "controller_mission_mavlink_url": "",
+    "controller_mission_heartbeat_timeout_s": 5.0,
+    "controller_mission_request_timeout_s": 5.0,
+    "controller_mission_source_system": 245,
+    "controller_mission_source_component": 190,
     "auto_start_session": True,
 }
 

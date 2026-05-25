@@ -1,7 +1,7 @@
-"""QGC .plan mission exporter for approved MissionDrafts.
+"""QGC .plan mission exporter for approved mission artifacts.
 
-Converts an approved draft's waypoints into a QGroundControl-compatible
-.plan JSON file at data/missions/<draft_id>.plan.
+Converts an approved draft or mission revision into a QGroundControl-compatible
+.plan JSON file at data/missions/<artifact_id>.plan.
 
 Coordinate projection: flat-earth from terrain_scene.v1.json georeference
 (origin_lat / origin_lon / origin_alt). Good to ~10 m over the ~300 m scene.
@@ -54,7 +54,7 @@ def local_to_latlon(x: float, y: float, z: float, geo: dict[str, float]) -> tupl
 
 
 class MissionExportService:
-    """Export approved MissionDraft to QGC .plan format.
+    """Export approved planning artifact to QGC .plan format.
 
     Usage:
         svc = MissionExportService()
@@ -85,12 +85,12 @@ class MissionExportService:
         if profile is None:
             profile = get_active_profile()
 
-        draft_id = str(draft.get("id") or "unknown")
+        draft_id = str(draft.get("id") or draft.get("draft_id") or "unknown")
         status = str(draft.get("status") or "")
         if status not in ("approved", "exported"):
             return {
                 "ok": False,
-                "error": f"draft '{draft_id}' is not approved or exported (status='{status}'); export requires approval",
+                "error": f"artifact '{draft_id}' is not approved or exported (status='{status}'); export requires approval",
                 "draft_id": draft_id,
             }
 
@@ -122,8 +122,10 @@ class MissionExportService:
     # ------------------------------------------------------------------
 
     def _collect_waypoints(self, draft: dict[str, Any]) -> list[dict[str, Any]]:
-        """Pull waypoints out of draft steps (from route planner results)."""
-        payload = draft.get("draft") or {}
+        """Pull waypoints out of draft or revision payloads."""
+        payload = draft.get("draft")
+        if not isinstance(payload, dict):
+            payload = draft.get("mission") or {}
         waypoints: list[dict[str, Any]] = []
 
         # Draft payload may carry a top-level waypoints list (set by route tools)

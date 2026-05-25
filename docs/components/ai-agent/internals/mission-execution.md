@@ -93,7 +93,7 @@ It does **not** yet provide:
 - autopilot read-back
 - controller-native mission normalization
 - external-controller truth
-- automatic rebase after stale-version rejection
+- real external controller transport
 
 ## Data Model
 
@@ -177,6 +177,13 @@ Current reality:
 This means authoritative ownership is improved but not yet fully collapsed
 into one path.
 
+Implemented since the first cut:
+
+- stale controller-version rejection now auto-creates a rebased
+  `awaiting_approval` revision from the rejected revision payload and returns
+  it in the execute response so the operator can review and re-approve
+  against the latest verified controller snapshot
+
 ## Remaining Gaps
 
 The most important missing pieces are:
@@ -187,5 +194,4 @@ The most important missing pieces are:
   rather than legacy draft-flow compatibility code
 - project controller mission state and execution status more directly into
   the `/ai` UI
-- implement stale-version rebase/revision workflows
 - make the planner-loop path the default mission-planning runtime

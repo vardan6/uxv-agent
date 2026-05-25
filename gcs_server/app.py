@@ -2089,42 +2089,11 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ai/sessions/{session_id}/mission-draft")
 async def create_mission_draft(session_id: str, request: Request) -> JSONResponse:
-    runtime = _runtime(request)
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="payload must be an object")
-
-    session = runtime.ai_store.get_session(session_id, include_messages=False)
-    if session is None or session.get("archived_at") is not None:
-        raise HTTPException(status_code=404, detail="AI session not found")
-
-    intent = payload.get("intent")
-    if not isinstance(intent, dict):
-        raise HTTPException(status_code=400, detail="intent is required and must be an object")
-    target_resolution = payload.get("target_resolution") or {}
-    if not isinstance(target_resolution, dict):
-        raise HTTPException(status_code=400, detail="target_resolution must be an object")
-    draft_payload = payload.get("draft")
-    if not isinstance(draft_payload, dict):
-        raise HTTPException(status_code=400, detail="draft is required and must be an object")
-    source_message_id = str(payload.get("source_message_id") or "")
-
-    context_snapshot = payload.get("context_snapshot") or {}
-    rover_state: dict[str, Any] | None = None
-    if isinstance(context_snapshot, dict):
-        meta = context_snapshot.get("meta") or {}
-        snap = meta.get("context_snapshot") if isinstance(meta, dict) else None
-        rover_state = snap.get("rover") if isinstance(snap, dict) else None
-
-    draft = runtime.mission_draft_service.create_draft(
-        session_id=session_id,
-        source_message_id=source_message_id,
-        intent=intent,
-        target_resolution=target_resolution,
-        draft_payload=draft_payload,
-        rover_state=rover_state if isinstance(rover_state, dict) else None,
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail="legacy mission draft writes are disabled; use /api/ai/mission-revisions and planning-shell endpoints",
     )
-    return JSONResponse({"ok": True, "draft": draft})
 
 
 @app.get("/api/ai/mission-drafts")
@@ -2401,9 +2370,21 @@ async def execute_mission_revision(revision_id: str, request: Request) -> JSONRe
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
-@app.post("/api/ai/mission-drafts/{draft_id}/approve")
-async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+def _mission_export_payload(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "file_path": result.get("file_path", ""),
+        "waypoint_count": result.get("waypoint_count", 0),
+        "vehicle_type": result.get("vehicle_type", 0),
+    }
+
+
+@app.post("/api/ai/mission-revisions/{revision_id}/approve")
+async def approve_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
         payload = await request.json()
     except Exception:
@@ -2417,83 +2398,93 @@ async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse
             expected_controller_version = int(expected_controller_version_raw)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="expected_controller_version must be an integer") from None
-    draft = runtime.mission_draft_service.approve_draft(draft_id, note=note)
-    if draft is None:
+
+    revision = mission_execution.approve_revision(revision_id, note=note)
+    if revision is None:
         raise HTTPException(
             status_code=409,
-            detail="draft not found or not in awaiting_approval status",
+            detail="revision not found or not in awaiting_approval status",
         )
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is not None:
-        mission_execution.approve_revision_for_draft(draft_id, note=note)
+
+    draft_id = str(revision.get("draft_id") or "")
     export_result: dict[str, Any] | None = None
     try:
-        result = MissionExportService().export(draft)
+        result = MissionExportService().export(revision)
         if result.get("ok"):
-            updated = runtime.mission_draft_service.mark_exported(draft_id, export_result=result)
+            updated = mission_execution.mark_revision_exported_by_revision_id(revision_id, export_result=result)
             if updated is not None:
-                draft = updated
-            if mission_execution is not None:
-                mission_execution.mark_revision_exported(draft_id, export_result=result)
-            export_result = {
-                "ok": True,
-                "file_path": result.get("file_path", ""),
-                "waypoint_count": result.get("waypoint_count", 0),
-                "vehicle_type": result.get("vehicle_type", 0),
-            }
+                revision = updated
+            export_result = _mission_export_payload(result)
         elif "no waypoints" not in str(result.get("error") or ""):
             export_result = {"ok": False, "error": result.get("error", "mission export failed")}
     except Exception as exc:
         export_result = {"ok": False, "error": str(exc)}
-    response = {"ok": True, "draft": draft}
+
+    response = {"ok": True, "revision": revision}
     if export_result is not None:
         response["mission_export"] = export_result
     if execute_after_approval:
-        revision = mission_execution.get_revision_by_draft_id(draft_id) if mission_execution is not None else None
-        if revision is None:
-            response["mission_execution"] = {
-                "ok": False,
-                "status": "revision_not_found",
-                "error": "approved draft does not have a mission revision to execute",
-            }
-        else:
-            execution_result = mission_execution.execute_revision(
-                str(revision.get("id") or ""),
-                expected_controller_version=expected_controller_version,
-            )
-            runtime.replay_store.log_runtime_event(
-                "mission_execution_cutover",
-                {
-                    "revision_id": revision.get("id", ""),
-                    "draft_id": draft_id,
-                    "status": execution_result.get("status", ""),
-                    "ok": bool(execution_result.get("ok")),
-                    "attempt_id": execution_result.get("attempt_id", ""),
-                    "expected_controller_version": expected_controller_version,
-                },
-            )
-            response["mission_execution"] = execution_result
+        execution_result = mission_execution.execute_revision(
+            revision_id,
+            expected_controller_version=expected_controller_version,
+        )
+        runtime.replay_store.log_runtime_event(
+            "mission_execution_cutover",
+            {
+                "revision_id": revision_id,
+                "draft_id": draft_id,
+                "status": execution_result.get("status", ""),
+                "ok": bool(execution_result.get("ok")),
+                "attempt_id": execution_result.get("attempt_id", ""),
+                "expected_controller_version": expected_controller_version,
+            },
+        )
+        response["mission_execution"] = execution_result
     return JSONResponse(response)
 
 
-@app.post("/api/ai/mission-drafts/{draft_id}/reject")
-async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+@app.post("/api/ai/mission-revisions/{revision_id}/reject")
+async def reject_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     note = str(payload.get("note", "") if isinstance(payload, dict) else "")
-    draft = runtime.mission_draft_service.reject_draft(draft_id, note=note)
-    if draft is None:
+    revision = mission_execution.reject_revision(revision_id, note=note)
+    if revision is None:
         raise HTTPException(
             status_code=409,
-            detail="draft not found or not in a rejectable status",
+            detail="revision not found or not in a rejectable status",
         )
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is not None:
-        mission_execution.reject_revision_for_draft(draft_id, note=note)
-    return JSONResponse({"ok": True, "draft": draft})
+    return JSONResponse({"ok": True, "revision": revision})
+
+
+@app.post("/api/ai/mission-drafts/{draft_id}/approve")
+async def approve_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "legacy mission draft approve is disabled; use "
+            "/api/ai/mission-revisions/{revision_id}/approve"
+        ),
+    )
+
+
+@app.post("/api/ai/mission-drafts/{draft_id}/reject")
+async def reject_mission_draft(draft_id: str, request: Request) -> JSONResponse:
+    _runtime(request)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "legacy mission draft reject is disabled; use "
+            "/api/ai/mission-revisions/{revision_id}/reject"
+        ),
+    )
 
 
 @app.post("/api/ai/sessions/{session_id}/planning-shell/stream")

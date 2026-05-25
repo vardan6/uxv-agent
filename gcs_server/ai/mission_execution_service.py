@@ -260,6 +260,12 @@ def _controller_snapshot_to_public(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rebased_mission_payload(mission: dict[str, Any]) -> dict[str, Any]:
+    rebased = _canonicalize_mission_payload(dict(mission or {}))
+    rebased.pop("mission_export", None)
+    return rebased
+
+
 class MissionExecutionService:
     """Backend-owned mission lifecycle and controller handoff boundary.
 
@@ -487,16 +493,31 @@ class MissionExecutionService:
             return None
         return self.get_revision(revision_id)
 
+    def approve_revision(self, revision_id: str, *, note: str = "") -> dict[str, Any] | None:
+        return self._set_revision_status_by_revision_id(revision_id, status="approved", note=note, timestamp_field="approved_at")
+
     def approve_revision_for_draft(self, draft_id: str, *, note: str = "") -> dict[str, Any] | None:
         return self._set_revision_status(draft_id, status="approved", note=note, timestamp_field="approved_at")
 
+    def reject_revision(self, revision_id: str, *, note: str = "") -> dict[str, Any] | None:
+        return self._set_revision_status_by_revision_id(revision_id, status="rejected", note=note, timestamp_field="rejected_at")
+
     def reject_revision_for_draft(self, draft_id: str, *, note: str = "") -> dict[str, Any] | None:
         return self._set_revision_status(draft_id, status="rejected", note=note, timestamp_field="rejected_at")
+
+    def mark_revision_exported_by_revision_id(self, revision_id: str, *, export_result: dict[str, Any]) -> dict[str, Any] | None:
+        revision = self.get_revision(str(revision_id or "").strip())
+        if revision is None:
+            return None
+        return self._mark_revision_exported(revision, export_result=export_result)
 
     def mark_revision_exported(self, draft_id: str, *, export_result: dict[str, Any]) -> dict[str, Any] | None:
         revision = self.get_revision_by_draft_id(draft_id)
         if revision is None:
             return None
+        return self._mark_revision_exported(revision, export_result=export_result)
+
+    def _mark_revision_exported(self, revision: dict[str, Any], *, export_result: dict[str, Any]) -> dict[str, Any] | None:
         mission = dict(revision.get("mission") or {})
         mission["mission_export"] = {
             "file_path": str(export_result.get("file_path") or ""),
@@ -668,8 +689,24 @@ class MissionExecutionService:
                     error_text="expected controller mission version does not match the latest verified version",
                     now=now,
                 )
+                rebased_revision = self._create_rebased_revision_from_controller_state(
+                    revision,
+                    conn=conn,
+                    controller_state=self._controller_state_from_row(
+                        conn.execute(
+                            """
+                            SELECT *
+                            FROM ai_mission_controller_state
+                            WHERE controller_id = ?
+                            """,
+                            (MISSION_CONTROLLER_ID,),
+                        ).fetchone()
+                    ),
+                    observed_controller_version=observed_version,
+                    expected_controller_version=expected_controller_version,
+                )
                 conn.commit()
-                return {
+                result = {
                     "ok": False,
                     "status": "stale_controller_version",
                     "error": "expected controller mission version does not match the latest verified version",
@@ -677,6 +714,10 @@ class MissionExecutionService:
                     "attempt_id": attempt_id,
                     "revision": revision,
                 }
+                if rebased_revision is not None:
+                    result["rebased_revision"] = rebased_revision
+                    result["rebased_revision_id"] = rebased_revision["id"]
+                return result
 
             next_version = observed_version + 1
             pending_snapshot = {
@@ -1148,6 +1189,130 @@ class MissionExecutionService:
         revision = self.get_revision(revision_id)
         return {"ok": True, "revision": revision}
 
+    def _create_rebased_revision_from_controller_state(
+        self,
+        revision: dict[str, Any],
+        *,
+        conn: sqlite3.Connection,
+        controller_state: dict[str, Any],
+        observed_controller_version: int,
+        expected_controller_version: int | None,
+    ) -> dict[str, Any] | None:
+        verified_snapshot = controller_state.get("verified_snapshot")
+        if not isinstance(verified_snapshot, dict) or not verified_snapshot:
+            return None
+        base_mission = verified_snapshot.get("mission")
+        if not isinstance(base_mission, dict) or not base_mission:
+            return None
+
+        base_revision_id = str(controller_state.get("active_revision_id") or verified_snapshot.get("revision_id") or "").strip()
+        if base_revision_id and base_revision_id == str(revision.get("id") or "").strip():
+            return None
+
+        now = time.time()
+        rebased_revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
+        rebased_mission = _rebased_mission_payload(revision.get("mission") if isinstance(revision.get("mission"), dict) else {})
+        review_context = dict(revision.get("review_context") or {})
+        review_context["rebase"] = {
+            "reason": "stale_controller_version",
+            "rebased_from_revision_id": str(revision.get("id") or ""),
+            "rebased_from_operation_id": str(revision.get("operation_id") or ""),
+            "expected_controller_version": expected_controller_version,
+            "observed_controller_version": observed_controller_version,
+            "base_controller_version": int(verified_snapshot.get("controller_version") or observed_controller_version),
+            "base_operation_id": str(controller_state.get("active_operation_id") or verified_snapshot.get("operation_id") or ""),
+            "base_revision_id": base_revision_id,
+            "base_draft_id": str(controller_state.get("active_draft_id") or verified_snapshot.get("draft_id") or ""),
+            "rebased_at": now,
+        }
+        review_context.setdefault(
+            "review_notes",
+            "Reapproval required after stale controller-version rejection.",
+        )
+        provenance = dict(revision.get("provenance") or {})
+
+        source_operation_id = str(revision.get("operation_id") or "").strip()
+        base_operation_id = str(controller_state.get("active_operation_id") or verified_snapshot.get("operation_id") or "").strip()
+        operation_id = source_operation_id
+        parent_revision_id = str(revision.get("id") or "").strip()
+
+        source_operation = conn.execute(
+            "SELECT * FROM ai_mission_operations WHERE id = ?",
+            (source_operation_id,),
+        ).fetchone()
+        if source_operation is None:
+            return None
+
+        if base_operation_id and base_operation_id != source_operation_id:
+            operation_id = f"mission-op-{uuid.uuid4().hex[:12]}"
+            parent_revision_id = base_revision_id
+            conn.execute(
+                """
+                INSERT INTO ai_mission_operations (
+                  id, session_id, source_message_id, status, active_revision_id,
+                  policy_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'awaiting_approval', ?, ?, ?, ?)
+                """,
+                (
+                    operation_id,
+                    str(source_operation["session_id"] or ""),
+                    str(source_operation["source_message_id"] or ""),
+                    rebased_revision_id,
+                    str(source_operation["policy_json"] or "{}"),
+                    now,
+                    now,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE ai_mission_operations
+                SET active_revision_id = ?, status = 'awaiting_approval', updated_at = ?
+                WHERE id = ?
+                """,
+                (rebased_revision_id, now, operation_id),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO ai_mission_revisions (
+              id, operation_id, draft_id, parent_revision_id, status,
+              mission_json, intent_json, target_resolution_json, validation_json,
+              review_context_json, provenance_json, client_version,
+              created_at, updated_at, approved_at, rejected_at
+            ) VALUES (?, ?, '', ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL)
+            """,
+            (
+                rebased_revision_id,
+                operation_id,
+                parent_revision_id,
+                _json(rebased_mission),
+                _json(revision.get("intent") if isinstance(revision.get("intent"), dict) else {}),
+                _json(revision.get("target_resolution") if isinstance(revision.get("target_resolution"), dict) else {}),
+                _json(revision.get("validation") if isinstance(revision.get("validation"), dict) else {}),
+                _json(review_context),
+                _json(provenance),
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT
+              r.*,
+              o.session_id AS operation_session_id,
+              o.source_message_id AS operation_source_message_id,
+              o.status AS operation_status,
+              o.policy_json AS operation_policy_json,
+              o.active_revision_id AS operation_active_revision_id
+            FROM ai_mission_revisions r
+            JOIN ai_mission_operations o ON o.id = r.operation_id
+            WHERE r.id = ?
+            """,
+            (rebased_revision_id,),
+        ).fetchone()
+        return _revision_row_to_dict(row) if row else None
+
     def update_waypoint(
         self,
         revision_id: str,
@@ -1306,6 +1471,29 @@ class MissionExecutionService:
         revision = self.get_revision_by_draft_id(draft_id)
         if revision is None:
             return None
+        return self._set_revision_status_row(revision, status=status, note=note, timestamp_field=timestamp_field)
+
+    def _set_revision_status_by_revision_id(
+        self,
+        revision_id: str,
+        *,
+        status: str,
+        note: str,
+        timestamp_field: str,
+    ) -> dict[str, Any] | None:
+        revision = self.get_revision(str(revision_id or "").strip())
+        if revision is None:
+            return None
+        return self._set_revision_status_row(revision, status=status, note=note, timestamp_field=timestamp_field)
+
+    def _set_revision_status_row(
+        self,
+        revision: dict[str, Any],
+        *,
+        status: str,
+        note: str,
+        timestamp_field: str,
+    ) -> dict[str, Any] | None:
         review_context = dict(revision.get("review_context") or {})
         review_context["approval_note"] = str(note or "")
         review_context["reviewed_at"] = time.time()

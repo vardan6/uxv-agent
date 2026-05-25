@@ -54,6 +54,7 @@ class PlanningShellGraphState(TypedDict, total=False):
     clarification_request: dict    # Phase 3
     clarification_response: dict   # Phase 3
     operator_edit_payload: dict    # Phase 2
+    provenance_conflict: dict      # planning-shell conflict gate for ai+edited waypoints
 
     # ── Draft layer ───────────────────────────────────────────────────────────
     draft: dict

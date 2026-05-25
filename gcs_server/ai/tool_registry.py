@@ -1591,6 +1591,67 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},
         "next_tools": [],
     },
+    "parse_rover_intent": {
+        "inputs": {
+            "prompt": "string — original operator mission request",
+            "context_summary": "string — compact planning context summary (optional)",
+        },
+        "required_inputs": ["prompt"],
+        "upstream_from_tools": ["operator mission request", "planning-shell context summary"],
+        "returns": {"ok": "boolean", "intent": "object", "parse_errors": "string[]"},
+        "next_tools": [
+            "lazy_load_replay",
+            "lazy_load_ai_memory",
+            "lazy_load_settings",
+            "lazy_load_sensor",
+            "resolve_spatial_target",
+            "request_clarification",
+            "propose_mission_draft",
+        ],
+    },
+    "lazy_load_replay": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": ["source_controls.replay_reports", "parse_rover_intent (when the request references prior missions or recorded data)"],
+        "returns": {"ok": "boolean", "replay_summary": "object", "available": "boolean"},
+        "next_tools": ["propose_mission_draft"],
+    },
+    "lazy_load_ai_memory": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": ["source_controls.ai_chat_history", "parse_rover_intent (when the request references earlier discussions)"],
+        "returns": {"ok": "boolean", "chat_history_summary": "object", "available": "boolean"},
+        "next_tools": ["propose_mission_draft"],
+    },
+    "lazy_load_settings": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": ["source_controls.settings_config", "parse_rover_intent (when the request depends on configuration or provider routing)"],
+        "returns": {"ok": "boolean", "settings_summary": "object", "available": "boolean"},
+        "next_tools": ["propose_mission_draft"],
+    },
+    "lazy_load_sensor": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": ["source_controls.sensor_context", "parse_rover_intent (when the request depends on live telemetry or camera freshness)"],
+        "returns": {
+            "ok": "boolean",
+            "telemetry_fresh": "boolean | null",
+            "camera_fresh": "boolean | null",
+            "available": "boolean",
+        },
+        "next_tools": ["propose_mission_draft"],
+    },
+    "request_clarification": {
+        "inputs": {
+            "questions": "object[] — clarification prompts derived from parse_rover_intent.missing_information",
+            "intent_summary": "string — compact explanation of the blocked intent (optional)",
+        },
+        "required_inputs": ["questions"],
+        "upstream_from_tools": ["parse_rover_intent.missing_information"],
+        "returns": {"ok": "boolean", "handoff": "object{type,questions,intent_summary}"},
+        "next_tools": [],
+    },
     "propose_mission_draft": {
         "inputs": {
             "intent": "object — from parse_rover_intent.intent",

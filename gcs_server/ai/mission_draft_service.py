@@ -178,6 +178,7 @@ class MissionDraftService:
         target_resolution: dict[str, Any],
         draft_payload: dict[str, Any],
         rover_state: dict[str, Any] | None = None,
+        draft_id: str = "",
     ) -> dict[str, Any]:
         validation = validate_draft_payload(intent, target_resolution, draft_payload, rover_state)
         status = _draft_status_from_validation(validation)
@@ -186,7 +187,7 @@ class MissionDraftService:
         draft_payload = dict(draft_payload)
         draft_payload["execution_allowed"] = False
 
-        draft_id = f"ai-draft-{uuid.uuid4().hex[:12]}"
+        draft_id = str(draft_id or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
         now = time.time()
         with self._connect() as conn:
             conn.execute(

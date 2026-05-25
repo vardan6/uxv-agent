@@ -940,8 +940,14 @@ export class MapWidget {
 
     const activeRevisionId = String(controllerState.active_revision_id || '').trim();
     const activeOperationId = String(controllerState.active_operation_id || '').trim();
+    const rebasedRevision = result.rebased_revision || {};
+    const rebasedRevisionId = String(rebasedRevision.id || result.rebased_revision_id || '').trim();
+    const rebasedOperationId = String(rebasedRevision.operation_id || '').trim();
     if (activeRevisionId) {
       this._pinRevisionInView(activeRevisionId, activeOperationId);
+    }
+    if (rebasedRevisionId) {
+      this._pinRevisionInView(rebasedRevisionId, rebasedOperationId || activeOperationId);
     }
 
     this._revisionCache.clear();
@@ -949,6 +955,13 @@ export class MapWidget {
 
     const requestedSuffix = String(requestedRevisionId).slice(-6);
     const versionText = latestVersion !== null && latestVersion !== undefined ? String(latestVersion) : 'unknown';
+    if (rebasedRevisionId) {
+      this.setFocus(rebasedRevisionId);
+      this._showError(
+        `Controller mission version changed to ${versionText}. Created rebased revision …${rebasedRevisionId.slice(-6)} from stale execute on …${requestedSuffix}; review and approve it before retrying.`,
+      );
+      return;
+    }
     if (activeRevisionId) {
       this.setFocus(activeRevisionId);
       this._showError(

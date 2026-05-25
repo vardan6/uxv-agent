@@ -4,20 +4,33 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-import pytest
-
+from ai.controller_mission_adapter import ControllerMissionAdapterState
 from ai.migrations import apply_ai_store_migrations
+from ai.mission_export_service import MissionExportService
 from ai.mission_execution_service import MissionExecutionService
 
 
-def _make_service() -> tuple[MissionExecutionService, Path]:
+class _FixedControllerStateAdapter:
+    adapter_name = "fixed_controller_state"
+
+    def __init__(self, state: ControllerMissionAdapterState) -> None:
+        self._state = state
+
+    def get_controller_state(self) -> ControllerMissionAdapterState:
+        return self._state
+
+    def install_mission(self, *, pending_snapshot: dict, expected_controller_version: int | None = None):
+        raise AssertionError("install_mission should not be called for stale-version rejection tests")
+
+
+def _make_service(adapter=None) -> tuple[MissionExecutionService, Path]:
     tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
     tmp.close()
     db_path = Path(tmp.name)
     with sqlite3.connect(db_path) as conn:
         apply_ai_store_migrations(conn)
         conn.commit()
-    return MissionExecutionService(db_path), db_path
+    return MissionExecutionService(db_path, controller_adapter=adapter), db_path
 
 
 def _make_proposal(svc: MissionExecutionService, *, n_waypoints: int = 3) -> dict:
@@ -185,6 +198,44 @@ def test_update_waypoint_locked_on_approved_revision() -> None:
     assert result["status"] == "revision_locked"
 
 
+def test_approve_revision_by_revision_id() -> None:
+    svc, _ = _make_service()
+    proposal = _make_proposal(svc)
+
+    approved = svc.approve_revision(proposal["id"], note="ship it")
+
+    assert approved is not None
+    assert approved["status"] == "approved"
+    assert approved["review_context"]["approval_note"] == "ship it"
+
+
+def test_mark_revision_exported_by_revision_id() -> None:
+    svc, _ = _make_service()
+    proposal = _make_proposal(svc)
+    svc.approve_revision(proposal["id"], note="ship it")
+
+    updated = svc.mark_revision_exported_by_revision_id(
+        proposal["id"],
+        export_result={"file_path": "/tmp/test.plan", "waypoint_count": 3, "vehicle_type": 10},
+    )
+
+    assert updated is not None
+    assert updated["status"] == "exported"
+    assert updated["mission"]["mission_export"]["file_path"] == "/tmp/test.plan"
+
+
+def test_export_service_accepts_revision_payload() -> None:
+    svc, tmp_path = _make_service()
+    proposal = _make_proposal(svc)
+    approved = svc.approve_revision(proposal["id"], note="ship it")
+
+    result = MissionExportService(missions_dir=tmp_path.parent).export(approved)
+
+    assert result["ok"] is True
+    assert result["draft_id"] == proposal["id"]
+    assert result["file_path"].endswith(f"{proposal['id']}.plan")
+
+
 # --- insert_waypoint ---
 
 def test_insert_waypoint_appends_when_after_index_is_negative() -> None:
@@ -285,6 +336,50 @@ def test_overlay_reflects_updated_provenance() -> None:
     waypoint_features = [f for f in overlay["features"] if f["type"] == "waypoint"]
     provenances = [f["provenance"] for f in waypoint_features]
     assert "ai+edited" in provenances
+
+
+def test_execute_revision_creates_rebased_revision_on_stale_controller_version() -> None:
+    live_waypoints = [{"id": "live-wp-1", "x": 50.0, "y": 60.0, "z": 0.0}]
+    live_mission = {
+        "goal": "controller live mission",
+        "waypoints": live_waypoints,
+        "steps": [],
+        "constraints": [],
+        "assumptions": [],
+        "risks": [],
+        "required_operator_approval": True,
+        "execution_allowed": False,
+    }
+    adapter = _FixedControllerStateAdapter(
+        ControllerMissionAdapterState(
+            controller_version=7,
+            status="executing",
+            operation_id="mission-op-live123",
+            revision_id="mission-rev-live123",
+            mission=live_mission,
+            mission_export={"file_path": "/tmp/live.plan", "waypoint_count": 1, "vehicle_type": 10},
+            plan={"fileType": "Plan"},
+        )
+    )
+    svc, db_path = _make_service(adapter=adapter)
+    proposal = _make_proposal(svc, n_waypoints=2)
+    approved = svc.approve_revision(proposal["id"], note="ship it")
+    export_result = MissionExportService(missions_dir=db_path.parent).export(approved)
+    assert export_result["ok"] is True
+    exported = svc.mark_revision_exported_by_revision_id(proposal["id"], export_result=export_result)
+
+    result = svc.execute_revision(exported["id"], expected_controller_version=6)
+
+    assert result["ok"] is False
+    assert result["status"] == "stale_controller_version"
+    rebased = result["rebased_revision"]
+    assert rebased["id"] != exported["id"]
+    assert rebased["status"] == "awaiting_approval"
+    assert rebased["operation_id"] != exported["operation_id"]
+    assert "mission_export" not in rebased["mission"]
+    assert rebased["review_context"]["rebase"]["base_controller_version"] == 7
+    assert rebased["review_context"]["rebase"]["rebased_from_revision_id"] == exported["id"]
+    assert rebased["review_context"]["rebase"]["base_revision_id"] == "mission-rev-live123"
 
 
 # --- helpers ---

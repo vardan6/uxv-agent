@@ -306,6 +306,143 @@ def _normalize_retrieval_request(value: Any, *, user_prompt: str = "", session_i
     return normalize_retrieval_request(value, user_prompt=user_prompt, session_id=session_id)
 
 
+def _coerce_scene_point(value: Any, *, fallback_id: str = "") -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        point = {
+            "x": float(value.get("x")),
+            "y": float(value.get("y")),
+            "z": float(value.get("z", 0.0) or 0.0),
+        }
+    except (TypeError, ValueError):
+        return None
+    point["id"] = str(value.get("id") or fallback_id or "")
+    point["label"] = str(value.get("label") or "")
+    point["kind"] = str(value.get("kind") or "")
+    return point
+
+
+def _collect_waypoints(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    if isinstance(payload.get("waypoints"), list):
+        direct = [
+            _coerce_scene_point(wp, fallback_id=f"wp-{index}")
+            for index, wp in enumerate(payload["waypoints"], start=1)
+        ]
+        direct_points = [wp for wp in direct if wp is not None]
+        if direct_points:
+            return direct_points
+
+    route_waypoints: list[dict[str, Any]] = []
+    for artifact_index, artifact in enumerate(payload.get("route_artifacts") or [], start=1):
+        if not isinstance(artifact, dict):
+            continue
+        for waypoint_index, waypoint in enumerate(artifact.get("waypoints") or [], start=1):
+            point = _coerce_scene_point(
+                waypoint,
+                fallback_id=f"route-{artifact_index}-wp-{waypoint_index}",
+            )
+            if point is not None:
+                route_waypoints.append(point)
+    if route_waypoints:
+        return route_waypoints
+
+    step_waypoints: list[dict[str, Any]] = []
+    for step_index, step in enumerate(payload.get("steps") or [], start=1):
+        if not isinstance(step, dict):
+            continue
+        for waypoint_index, waypoint in enumerate(step.get("waypoints") or [], start=1):
+            point = _coerce_scene_point(
+                waypoint,
+                fallback_id=f"step-{step_index}-wp-{waypoint_index}",
+            )
+            if point is not None:
+                step_waypoints.append(point)
+    return step_waypoints
+
+
+def _is_explicit_replace_confirmation(answer: str) -> bool:
+    text = str(answer or "").strip().lower()
+    if not text:
+        return False
+    phrases = (
+        "replace",
+        "overwrite",
+        "supersede",
+        "regenerate",
+        "start over",
+        "discard the edits",
+        "discard edits",
+        "ignore the edits",
+        "ignore edits",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShellGraphRuntime) -> dict[str, Any]:
+    draft = state.get("draft") or {}
+    mission = state.get("active_mission_context") or {}
+    parent_operation_id = str(state.get("parent_operation_id") or "").strip()
+    current_operation_id = str(mission.get("operation_id") or "").strip()
+    if not draft or not parent_operation_id or parent_operation_id != current_operation_id:
+        return {}
+    if not mission.get("has_operator_edits"):
+        return {}
+    answer = str((state.get("clarification_response") or {}).get("answer") or "")
+    if _is_explicit_replace_confirmation(answer):
+        return {}
+
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        return {}
+    current_revision = mission_execution.get_current_revision(session_id=str(state.get("session_id") or ""))
+    if not current_revision:
+        return {}
+
+    provenance = current_revision.get("provenance") if isinstance(current_revision.get("provenance"), dict) else {}
+    current_waypoints = _collect_waypoints(current_revision.get("mission") or {})
+    edited_waypoints = [
+        {
+            "id": str(point.get("id") or f"mission-wp-{index}"),
+            "label": str(point.get("label") or f"Waypoint {index}"),
+            "index": index,
+        }
+        for index, point in enumerate(current_waypoints, start=1)
+        if provenance.get(str(point.get("id") or f"mission-wp-{index}")) == "ai+edited"
+    ]
+    if not edited_waypoints:
+        return {}
+
+    proposed_waypoints = _collect_waypoints(draft)
+    if not proposed_waypoints:
+        return {}
+
+    summary = (
+        f"The active mission revision has {len(edited_waypoints)} operator-edited waypoint(s). "
+        "Creating a new AI proposal linked to this mission would supersede those edits."
+    )
+    edited_labels = ", ".join(item["label"] for item in edited_waypoints[:3])
+    if len(edited_waypoints) > 3:
+        edited_labels = f"{edited_labels}, and {len(edited_waypoints) - 3} more"
+    question = (
+        "Reply with 'replace' if you want the AI to supersede those edited waypoints, "
+        "or describe how the mission should preserve or extend them instead."
+    )
+    return {
+        "type": "provenance_conflict",
+        "intent_summary": summary,
+        "questions": [question],
+        "summary": summary,
+        "edited_waypoints": edited_waypoints,
+        "edited_waypoint_labels": edited_labels,
+        "current_revision_id": str(current_revision.get("id") or ""),
+        "current_waypoint_count": len(current_waypoints),
+        "proposed_waypoint_count": len(proposed_waypoints),
+    }
+
+
 # ── Planner loop helpers (Phase 5) ────────────────────────────────────────────
 
 def _planner_system_prompt_for_mode(run_mode: str) -> str:
@@ -658,6 +795,7 @@ async def retrieve_current_context(state: PlanningShellGraphState, config: Runna
 
 def validate_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     """Run deterministic validation rules on the draft payload."""
+    rt = _runtime(config)
     intent = state.get("intent") or {}
     target_resolution = state.get("target_resolution") or {}
     draft = state.get("draft") or {}
@@ -677,15 +815,36 @@ def validate_draft(state: PlanningShellGraphState, config: RunnableConfig) -> di
             "severity": "warning", "message": warning, "recoverable": True,
         })
 
+    provenance_conflict = _build_provenance_conflict(state, rt)
+    if provenance_conflict:
+        new_errors.append({
+            "node": "validate_draft",
+            "code": "provenance_conflict",
+            "severity": "warning",
+            "message": provenance_conflict.get("summary") or "operator-edited waypoints need confirmation before replacement",
+            "recoverable": True,
+        })
+
     return {
         "validation": validation,
+        "clarification_request": provenance_conflict,
+        "clarification_response": {} if provenance_conflict else (state.get("clarification_response") or {}),
+        "provenance_conflict": provenance_conflict,
         "errors": new_errors,
-        "node_trace": [_node_entry("validate_draft", status=validation.get("status", "unknown"))],
+        "node_trace": [_node_entry(
+            "validate_draft",
+            status=validation.get("status", "unknown"),
+            provenance_conflict=bool(provenance_conflict),
+        )],
     }
 
 
 def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Persist the draft and validation to the mission draft store."""
+    """Persist the draft with mission_execution as canonical storage.
+
+    Planning-shell writes are mission-revision-first: this node allocates a
+    stable draft_id and persists only through mission_execution.
+    """
     rt = _runtime(config)
     draft = state.get("draft") or {}
     intent = state.get("intent") or {}
@@ -697,69 +856,70 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="empty_draft_or_intent")],
         }
 
+    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    draft_id = str(state.get("draft_id") or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
+    draft_status = str(state.get("approval_status") or "awaiting_approval")
+    validation = state.get("validation") or {}
+    mission_operation_id = ""
+    mission_revision_id = ""
+    mission_errors: list[dict[str, Any]] = []
+    if mission_execution is None:
+        return {
+            "draft_id": "",
+            "approval_status": "validation_failed",
+            "errors": [{
+                "node": "store_draft",
+                "code": "mission_execution_unavailable",
+                "severity": "error",
+                "message": "mission execution service unavailable",
+                "recoverable": False,
+            }],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_unavailable")],
+        }
+
     try:
-        stored = rt.draft_service.create_draft(
+        revision = mission_execution.create_proposal(
             session_id=state.get("session_id", ""),
             source_message_id=state.get("source_message_id", ""),
+            draft_id=draft_id,
             intent=intent,
             target_resolution=state.get("target_resolution") or {},
             draft_payload=draft,
-            rover_state=state.get("rover_state") or None,
+            validation=validation,
+            draft_status=draft_status,
+            review_context={
+                "goal": draft.get("goal", ""),
+                "risks": draft.get("risks") or [],
+                "approval_scope": "planning_artifact_only",
+            },
+            parent_operation_id=state.get("parent_operation_id", ""),
         )
+        mission_operation_id = str(revision.get("operation_id") or "")
+        mission_revision_id = str(revision.get("id") or "")
     except Exception as exc:
         return {
             "draft_id": "",
             "approval_status": "validation_failed",
             "errors": [{
-                "node": "store_draft", "code": "store_error",
-                "severity": "error", "message": str(exc), "recoverable": False,
-            }],
-            "node_trace": [_node_entry("store_draft", ok=False, reason="store_exception")],
-        }
-
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    mission_operation_id = ""
-    mission_revision_id = ""
-    mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
-        try:
-            revision = mission_execution.create_proposal(
-                session_id=state.get("session_id", ""),
-                source_message_id=state.get("source_message_id", ""),
-                draft_id=stored.get("id", ""),
-                intent=intent,
-                target_resolution=state.get("target_resolution") or {},
-                draft_payload=stored.get("draft") or draft,
-                validation=stored.get("validation") or state.get("validation") or {},
-                draft_status=stored.get("status", ""),
-                review_context={
-                    "goal": (stored.get("draft") or draft).get("goal", ""),
-                    "risks": (stored.get("draft") or draft).get("risks") or [],
-                    "approval_scope": "planning_artifact_only",
-                },
-                parent_operation_id=state.get("parent_operation_id", ""),
-            )
-            mission_operation_id = str(revision.get("operation_id") or "")
-            mission_revision_id = str(revision.get("id") or "")
-        except Exception as exc:
-            mission_errors.append({
                 "node": "store_draft",
                 "code": "mission_execution_store_error",
-                "severity": "warning",
+                "severity": "error",
                 "message": str(exc),
-                "recoverable": True,
-            })
+                "recoverable": False,
+            }],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_store_exception")],
+        }
 
     return {
-        "draft_id": stored.get("id", ""),
+        "draft_id": draft_id,
         "mission_operation_id": mission_operation_id,
         "mission_revision_id": mission_revision_id,
-        "approval_status": stored.get("status", ""),
+        "approval_status": draft_status,
         "errors": mission_errors,
         "node_trace": [_node_entry(
             "store_draft", ok=True,
-            draft_id=stored.get("id", ""),
-            status=stored.get("status", ""),
+            draft_id=draft_id,
+            status=draft_status,
             mission_operation_id=mission_operation_id or None,
             mission_revision_id=mission_revision_id or None,
         )],
@@ -772,6 +932,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
     session_id = state.get("session_id", "")
     intent = state.get("intent") or {}
     draft_id = state.get("draft_id", "")
+    mission_revision_id = str(state.get("mission_revision_id") or "")
     approval_status = state.get("approval_status", "")
     validation = state.get("validation") or {}
     errors = state.get("errors") or []
@@ -796,13 +957,20 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
         )
     elif draft_id:
         parts.append(f"Mission draft created (ID: {draft_id}).")
+        if mission_revision_id:
+            parts.append(f"Mission revision ID: {mission_revision_id}.")
         parts.append(f"Status: {approval_status}.")
         for blocker in validation.get("blockers") or []:
             parts.append(f"Blocker: {blocker}")
         for warning in validation.get("warnings") or []:
             parts.append(f"Warning: {warning}")
         if approval_status == "awaiting_approval":
-            parts.append("Use POST /api/ai/mission-drafts/{draft_id}/approve to approve this draft.")
+            if mission_revision_id:
+                parts.append(
+                    "Use POST /api/ai/mission-revisions/{revision_id}/approve to approve this mission revision."
+                )
+            else:
+                parts.append("Mission revision link missing; retry planning to create a revision-backed draft.")
         elif approval_status == "approved":
             note = state.get("approval_note", "")
             parts.append("Mission draft approved as a planning artifact.")
@@ -837,6 +1005,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
         "run_mode": "planning_shell",
         "intent": intent,
         "draft_id": draft_id,
+        "mission_revision_id": mission_revision_id,
         "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
         "mission_export": state.get("mission_export") or {},
@@ -1144,23 +1313,14 @@ def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> d
     """Record operator approval on the stored draft."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
+    revision_id = str(state.get("mission_revision_id") or "").strip()
     note = state.get("approval_note", "")
-    try:
-        approved = rt.draft_service.approve_draft(draft_id, note=note)
-    except Exception as exc:
-        return {
-            "approval_status": "approved",
-            "errors": [{
-                "node": "record_approval", "code": "service_error",
-                "severity": "warning", "message": str(exc), "recoverable": True,
-            }],
-            "node_trace": [_node_entry("record_approval", ok=False, reason=str(exc))],
-        }
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
     mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
+    approved: dict[str, Any] | None = None
+    if mission_execution is not None and revision_id:
         try:
-            mission_execution.approve_revision_for_draft(draft_id, note=note)
+            approved = mission_execution.approve_revision(revision_id, note=note)
         except Exception as exc:
             mission_errors.append({
                 "node": "record_approval",
@@ -1169,24 +1329,30 @@ def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> d
                 "message": str(exc),
                 "recoverable": True,
             })
+    if approved is None:
+        mission_errors.append({
+            "node": "record_approval",
+            "code": "revision_approval_missing",
+            "severity": "warning",
+            "message": "linked mission revision could not be approved",
+            "recoverable": True,
+        })
     mission_export: dict[str, Any] = {}
     export_error = ""
-    if approved and _route_summary_for_approval(approved.get("draft") or {}).get("waypoint_count"):
+    if approved and _route_summary_for_approval(approved.get("mission") or approved.get("draft") or {}).get("waypoint_count"):
         try:
             result = MissionExportService().export(
                 approved,
                 home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
             )
             if result.get("ok"):
-                updated = rt.draft_service.mark_exported(draft_id, export_result=result)
-                mission_export = (updated or {}).get("draft", {}).get("mission_export") or {
-                    "file_path": result.get("file_path", ""),
-                    "waypoint_count": result.get("waypoint_count", 0),
-                    "vehicle_type": result.get("vehicle_type", 0),
-                }
-                if mission_execution is not None:
+                export_synced = None
+                if mission_execution is not None and revision_id:
                     try:
-                        mission_execution.mark_revision_exported(draft_id, export_result=result)
+                        export_synced = mission_execution.mark_revision_exported_by_revision_id(
+                            revision_id,
+                            export_result=result,
+                        )
                     except Exception as exc:
                         mission_errors.append({
                             "node": "record_approval",
@@ -1195,6 +1361,11 @@ def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> d
                             "message": str(exc),
                             "recoverable": True,
                         })
+                mission_export = (export_synced or {}).get("mission", {}).get("mission_export") or {
+                    "file_path": result.get("file_path", ""),
+                    "waypoint_count": result.get("waypoint_count", 0),
+                    "vehicle_type": result.get("vehicle_type", 0),
+                }
             else:
                 export_error = str(result.get("error") or "mission export failed")
         except Exception as exc:
@@ -1226,23 +1397,14 @@ def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> 
     """Record operator rejection on the stored draft."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
+    revision_id = str(state.get("mission_revision_id") or "").strip()
     note = state.get("approval_note", "")
-    try:
-        rt.draft_service.reject_draft(draft_id, note=note)
-    except Exception as exc:
-        return {
-            "approval_status": "rejected",
-            "errors": [{
-                "node": "record_rejection", "code": "service_error",
-                "severity": "warning", "message": str(exc), "recoverable": True,
-            }],
-            "node_trace": [_node_entry("record_rejection", ok=False, reason=str(exc))],
-        }
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
     mission_errors: list[dict[str, Any]] = []
-    if mission_execution is not None:
+    rejected = None
+    if mission_execution is not None and revision_id:
         try:
-            mission_execution.reject_revision_for_draft(draft_id, note=note)
+            rejected = mission_execution.reject_revision(revision_id, note=note)
         except Exception as exc:
             mission_errors.append({
                 "node": "record_rejection",
@@ -1251,6 +1413,14 @@ def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> 
                 "message": str(exc),
                 "recoverable": True,
             })
+    if rejected is None:
+        mission_errors.append({
+            "node": "record_rejection",
+            "code": "revision_rejection_missing",
+            "severity": "warning",
+            "message": "linked mission revision could not be rejected",
+            "recoverable": True,
+        })
     return {
         "approval_status": "rejected",
         "errors": mission_errors,
@@ -1337,6 +1507,12 @@ def _route_after_clarification(state: PlanningShellGraphState) -> str:
     return "planner_loop_node"
 
 
+def _route_after_validate_draft(state: PlanningShellGraphState) -> str:
+    if state.get("clarification_request") and not state.get("clarification_response"):
+        return "prepare_clarification"
+    return "store_draft"
+
+
 def _route_after_store_draft(state: PlanningShellGraphState) -> str:
     status = state.get("approval_status", "")
     if status == "awaiting_approval":
@@ -1400,7 +1576,14 @@ def build_planning_shell_graph(checkpointer: Any = None):
             "finalize_response": "finalize_response",
         },
     )
-    graph.add_edge("validate_draft", "store_draft")
+    graph.add_conditional_edges(
+        "validate_draft",
+        _route_after_validate_draft,
+        {
+            "prepare_clarification": "prepare_clarification",
+            "store_draft": "store_draft",
+        },
+    )
     graph.add_conditional_edges(
         "store_draft",
         _route_after_store_draft,
