@@ -148,6 +148,17 @@ A structured non-executing plan produced by the planning capability of the
 agent. Always created with `execution_allowed: false`. Has an approval
 status such as pending, approved, rejected, or superseded.
 
+## Mission Lifecycle Mode
+
+The configurable policy governing how a mission moves from creation to
+execution. One of **Strict** (AI may only propose; operator clicks play),
+**Confirm** (AI arms execution; operator confirms via banner within a
+timeout), or **Autonomous** (AI may execute directly). Build-time defaults:
+sim build → Autonomous, real-rover build → Strict. Runtime configurable via
+`Settings → Mission Lifecycle`. Defined in
+[decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md),
+which supersedes the historical two-approval model.
+
 ## Model Routing
 
 The mapping from AI purpose (General Chat, Mission Planner, Rover Intent

@@ -206,6 +206,8 @@ The three verbs are **Approve draft**, **Execute mission**, and **Export plan**.
 - The edit lock during execution is not bypassable from the frontend.
 - The map widget never issues low-level MQTT commands directly.
 
+The Mission CRUD and Safety Invariants sections above describe **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) supersedes [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md) and [ADR 0012](../../cross-cutting/decisions/0012-map-widget-safety-invariants.md) and introduces two additional modes — **Confirm** (operator confirms an AI-armed execution via a banner) and **Autonomous** (sim-build default; AI may execute directly). Mode lives in `Settings → Mission Lifecycle`. Invariants 2–4 of ADR 0012 (no client-side mutation of executing missions, no silent overwrites, no inventing backend contracts) survive all modes. ADR 0021 also defines the **flat Mission sidebar** (one row = one Mission, with `#index`, editable name, `origin`, `origin_chat_id`) and the **Visible / Selected / Active** three-state UI. See ADR 0021 for the full lifecycle and tool surface.
+
 ## Cross-Cutting Behavior
 
 ### Freshness Indicators
