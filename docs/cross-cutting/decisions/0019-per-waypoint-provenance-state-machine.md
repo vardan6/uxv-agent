@@ -5,7 +5,7 @@ Status: Accepted
 
 ## Context
 
-Mission waypoints can originate from AI planning, from direct operator authoring, or from operator edits on top of AI output. The planning shell can be invoked again on an existing mission to refine or regenerate waypoints. Without a provenance model, regeneration silently overwrites operator edits — including edits made specifically to correct an AI mistake — which is exactly the failure mode the human-in-the-loop two-approval model ([ADR 0002](./0002-two-approval-model.md)) exists to prevent.
+Mission waypoints can originate from AI planning, from direct operator authoring, or from operator edits on top of AI output. The planning shell can be invoked again on an existing mission to refine or regenerate waypoints. Without a provenance model, regeneration silently overwrites operator edits — including edits made specifically to correct an AI mistake — which is exactly the failure mode the mission-lifecycle approval gate ([ADR 0021](./0021-mission-lifecycle.md), superseding the original two-approval model in [ADR 0002](./0002-two-approval-model.md)) exists to prevent.
 
 The provenance signal must be carried through three surfaces consistently: the mission revision store (`mission_execution`), the planning shell's regeneration logic, and the map widget's editing UI.
 

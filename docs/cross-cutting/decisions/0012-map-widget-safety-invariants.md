@@ -1,7 +1,9 @@
 # 0012. Map Widget Safety Invariants: Approval ≠ Execution, No Client-Side Mutation Of Executing Missions, No Fake Backend Contracts
 
 Date: 2026-05-26
-Status: Accepted
+Status: Superseded by [ADR 0021](./0021-mission-lifecycle.md)
+
+> **Note (2026-05-26):** Invariant 1 ("Approval is not execution") is superseded by [ADR 0021](./0021-mission-lifecycle.md), which makes the approval/execution boundary mode-configurable. Invariant 1 remains true in Strict mode (the real-rover default) and softens in Confirm and Autonomous modes. **Invariants 2, 3, and 4 (no client-side mutation of executing missions, no silent overwrites of authoritative state, no inventing backend contracts) survive intact** and continue to govern the map widget — see ADR 0021 § Consequences. Original content preserved below per [STYLE.md](../../STYLE.md).
 
 ## Context
 

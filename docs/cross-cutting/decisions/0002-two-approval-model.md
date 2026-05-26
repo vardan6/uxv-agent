@@ -1,7 +1,9 @@
 # 0002. Two-Approval Model: Draft Approval ≠ Execution Approval
 
 Date: 2026-05-10
-Status: Accepted
+Status: Superseded by [ADR 0021](./0021-mission-lifecycle.md)
+
+> **Note (2026-05-26):** The structural "draft approval ≠ execution approval" framing recorded here was superseded by [ADR 0021](./0021-mission-lifecycle.md), which replaces it with a configurable mode (Strict / Confirm / Autonomous). Strict mode preserves this ADR's behaviour verbatim and is the shipped default for real-rover builds. The original content below is preserved as historical record per [STYLE.md](../../STYLE.md).
 
 ## Context
 
