@@ -32,15 +32,24 @@ docs/
     ai-agent/
       README.md             # short index of this component's docs
       requirements.md
-      design.md
+      design.md             # overview + cross-topic contracts + index of design/*.md
+      design/
+        <topic>.md          # per-topic design content (same tier as design.md)
+        ...
     gcs/
       README.md
       requirements.md
       design.md
+      design/
+        <topic>.md
+        ...
     simulator/
       README.md
       requirements.md
       design.md
+      design/
+        <topic>.md
+        ...
 
   cross-cutting/
     README.md
@@ -70,7 +79,7 @@ docs/
 - **Stable concept names, not session names.** `mission-execution.md`, not `mission-execution-plan-2026-05-12.md`.
 - **No dates in active filenames.** Git history provides dates. Date-stamped filenames belong only in `archive/` (format: `YYYY-MM-DD-<slug>.md`).
 - **Singular nouns by default.** `decision`, `provider`, `mode`.
-- **Tier filenames are fixed.** Always `requirements.md` and `design.md`. Never invent a third name.
+- **Tier filenames are fixed.** Always `requirements.md` and `design.md` at the component root. Per-topic design files live under `design/<topic>.md`. Never invent a third tier name.
 
 ## File Header
 
@@ -98,10 +107,13 @@ Soft targets. Split a file by topic when it grows past the cap.
 | Tier | Target lines | Hard cap |
 |---|---|---|
 | Requirements | ≤ 400 | 600 |
-| Design | 400-1500 | 3500 |
+| Design (top-level `design.md`) | ≤ 1500 | 2500 |
+| Design (single topic file under `design/`) | 100-500 | 800 |
 | Folder README | ≤ 80 | 150 |
 
-`design.md` now absorbs topic-level implementation notes (formerly the `internals/` tier). When a design file would exceed its hard cap, split by topic into sibling files in the same component folder (e.g., `design-mission-execution.md`) rather than re-introducing a nested tier.
+Each component has a top-level `design.md` (overview + cross-topic contracts + index) and an optional sibling `design/` directory holding per-topic files. The `design/` directory is **topic organization within the design tier**, not a separate tier — every file there carries the same stability rules as `design.md` itself (changes need discussion + approval). This differs from the historical `internals/` tier, which had relaxed stability rules and was eliminated 2026-05-26 (see ADR 0010).
+
+When a topic file would exceed its hard cap, split it by sub-topic into sibling files in the same `design/` directory rather than nesting further.
 
 ## Cross-Linking
 

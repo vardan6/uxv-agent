@@ -41,6 +41,8 @@ After the Pass-1 + Pass-2 trim, every surviving `internals/*.md` file was ≥80%
 
 The third tier was folded into the second. Each component's `internals/*.md` files were concatenated into the corresponding `design.md`, each preserving its original `# Title` heading as a top-level section. The `internals/` directories were deleted. STYLE.md was rewritten to describe a two-tier model. Component READMEs and the components index were updated.
 
+A follow-on pass the same day split the merged `design.md` into a thin top-level `design.md` (overview + cross-topic contracts + index) plus per-topic files under a `design/` directory (`design/<topic>.md`). This is topic-level organization *within* the design tier — every file in `design/` carries the same stability rules as `design.md`. It is **not** a re-introduction of the `internals/` tier (which had relaxed stability rules); it is purely navigation/readability for agent and human readers.
+
 Pre-drop state is preserved at the git tag `pre-drop-internals-docs-2026-05-26`.
 
 Rationale carried forward from this ADR: "internals" still names a real distinction (the layer an agent may freely rewrite from code), but at this point that label applies to the *bottom half* of each component's `design.md` rather than to a separate folder. The folder-path-conveys-tier convention is preserved: top of `design.md` is contract; the merged-from-internals section at the bottom is implementation-living.

@@ -11,9 +11,10 @@ Two simulator implementations exist:
 | Tier | File | Status |
 |---|---|---|
 | Requirements | [requirements.md](./requirements.md) | Complete |
-| Design | [design.md](./design.md) | Complete |
+| Design (overview) | [design.md](./design.md) | Complete |
+| Design (per topic) | [design/*.md](./design/) — terrain-scene, technical-details, rover-physics-tuning, rover-sim-next-phase-1, shadow-enhancement | Complete |
 
-Topic-level internals (terrain-scene, technical-details, rover-physics-tuning, rover-sim-next-phase-1, shadow-enhancement) are folded into [design.md](./design.md) at the end of the file as of 2026-05-26.
+`design/` files share the same stability tier as `design.md` — topic organization, not a separate tier.
 
 ## Code Locations
 
