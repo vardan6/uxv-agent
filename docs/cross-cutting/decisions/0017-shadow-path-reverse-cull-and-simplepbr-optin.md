@@ -34,4 +34,4 @@ The escalation order for any future quality improvement is: (1) shadow-pass geom
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/simulator/internals/shadow-enhancement.md`](../../components/simulator/internals/shadow-enhancement.md).
+- Companion design lives in [`docs/components/simulator/design.md`](../../components/simulator/design.md).

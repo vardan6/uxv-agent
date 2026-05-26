@@ -47,4 +47,4 @@ Selection priority when multiple sources could supply the session:
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/ai-agent/internals/replay-access.md`](../../components/ai-agent/internals/replay-access.md) § "Session Reference Resolution".
+- Companion design lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Session Reference Resolution".

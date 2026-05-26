@@ -5,5 +5,4 @@ The browser-facing Ground Control Station: dashboard, replay, settings, and the 
 | Doc | Tier | Purpose |
 |---|---|---|
 | [requirements.md](./requirements.md) | Requirements | Product target: operator workflow, pages, controls, safety invariants, acceptance criteria |
-| [design.md](./design.md) | Design | Implementation strategy: runtime model, browser workflow, MQTT, AI chat, settings, current limitations |
-| [internals/](./internals/) | Internals | Topic-level notes on the current implementation |
+| [design.md](./design.md) | Design | Implementation strategy: runtime model, browser workflow, MQTT, AI chat, settings, current limitations. Topic-level internals (api-and-runtime, map-widget, llm-capability-matrix) are folded in at the end of this file as of 2026-05-26. |

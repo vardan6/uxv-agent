@@ -37,6 +37,6 @@ Four non-negotiable safety invariants govern the widget:
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/gcs/internals/map-widget.md`](../../components/gcs/internals/map-widget.md) § "Safety Invariants" and § "Editing Model".
+- Companion design lives in [`docs/components/gcs/design.md`](../../components/gcs/design.md) § "Safety Invariants" and § "Editing Model".
 - Per-waypoint provenance enforcement is the subject of [ADR 0019](./0019-per-waypoint-provenance-state-machine.md).
 - Optimistic concurrency on revision mutation is the subject of [ADR 0020](./0020-optimistic-mission-revision-concurrency.md).

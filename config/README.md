@@ -21,4 +21,4 @@ Rules:
 
 More detail:
 - `../docs/cross-cutting/operations/run-and-config.md`
-- `../docs/components/simulator/internals/terrain-scene.md`
+- `../docs/components/simulator/design.md`

@@ -5,13 +5,13 @@ What the AI agent must be from the operator's point of view. The product-level s
 Companion documents:
 
 - [design.md](./design.md) — implementation strategy, runtime seams, file layout, migration plan.
-- [internals/graph-spec.md](./internals/graph-spec.md) — diagrams and state-machine views.
+- [design.md](./design.md) — diagrams and state-machine views.
 
 If documents disagree:
 
 - this document wins for product intent and fixed requirements
 - `design.md` wins for implementation details
-- `internals/graph-spec.md` wins for diagrams only
+- `design.md` wins for diagrams only
 
 Superseded framing:
 

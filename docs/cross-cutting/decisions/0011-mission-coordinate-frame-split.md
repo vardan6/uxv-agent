@@ -32,5 +32,5 @@ Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportSer
 
 ## Follow-Ups
 
-- See [`docs/components/ai-agent/internals/route-planning.md`](../../components/ai-agent/internals/route-planning.md) § "Coordinate frame split" for the algorithmic detail.
-- See [`docs/components/gcs/internals/map-widget.md`](../../components/gcs/internals/map-widget.md) § "Coordinate System" for the rendering rule.
+- See [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Coordinate frame split" for the algorithmic detail.
+- See [`docs/components/gcs/design.md`](../../components/gcs/design.md) § "Coordinate System" for the rendering rule.

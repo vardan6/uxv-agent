@@ -97,7 +97,7 @@ focus releases the lock.
 The compact set of live structured facts (rover state, runtime, settings,
 scene summary, replay summary) injected into AI prompts before larger
 retrieval is used. See
-[components/ai-agent/internals/context-layer.md](./components/ai-agent/internals/context-layer.md).
+[components/ai-agent/design.md](./components/ai-agent/design.md).
 
 ## Draft Approval
 
@@ -271,7 +271,7 @@ The reusable Leaflet-based map component (`static/map/MapWidget.js`) used
 on the `/ai` page and the Approval Card. Uses `L.CRS.Simple` with local
 scene metres for all overlay coordinates — not lat/lon. Vehicle-aware: reads
 the active `VehicleProfile` to drive property panels and dispatch validation.
-See [internals/map-widget.md](./components/gcs/internals/map-widget.md).
+See [design.md](./components/gcs/design.md).
 
 ## Mission Revision
 
@@ -299,7 +299,7 @@ revision. Values:
 
 The agent must diff and ask before overwriting `ai+edited` waypoints during
 regeneration; this is enforced server-side. See
-[internals/mission-execution.md](./components/ai-agent/internals/mission-execution.md).
+[design.md](./components/ai-agent/design.md).
 
 ## Universal Agent Runtime
 

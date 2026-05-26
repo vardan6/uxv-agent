@@ -43,6 +43,6 @@ Enforcement points:
 
 ## Follow-Ups
 
-- Backend state machine lives in [`docs/components/ai-agent/internals/mission-execution.md`](../../components/ai-agent/internals/mission-execution.md) § "Provenance State Machine".
-- Regeneration guard lives in [`docs/components/ai-agent/internals/planning-shell.md`](../../components/ai-agent/internals/planning-shell.md) § "Provenance-Aware Regeneration Rule".
-- UI contract lives in [`docs/components/gcs/internals/map-widget.md`](../../components/gcs/internals/map-widget.md) § "Provenance State Machine".
+- Backend state machine lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Provenance State Machine".
+- Regeneration guard lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Provenance-Aware Regeneration Rule".
+- UI contract lives in [`docs/components/gcs/design.md`](../../components/gcs/design.md) § "Provenance State Machine".

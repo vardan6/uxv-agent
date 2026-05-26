@@ -34,4 +34,4 @@ Each pass is evaluated against the same fixed four-checkpoint route and the same
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/simulator/internals/rover-physics-tuning.md`](../../components/simulator/internals/rover-physics-tuning.md) § "Tuning Sequence" and § "Acceptance Behavior".
+- Companion design lives in [`docs/components/simulator/design.md`](../../components/simulator/design.md) § "Tuning Sequence" and § "Acceptance Behavior".

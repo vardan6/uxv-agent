@@ -36,5 +36,5 @@ Two optimistic concurrency controls protect mission state:
 
 ## Follow-Ups
 
-- Backend contract lives in [`docs/components/ai-agent/internals/mission-execution.md`](../../components/ai-agent/internals/mission-execution.md) § "Concurrency Rules" and § "Data Model".
+- Backend contract lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Concurrency Rules" and § "Data Model".
 - Related provenance guarding for regeneration is [ADR 0019](./0019-per-waypoint-provenance-state-machine.md).

@@ -2,7 +2,7 @@
 
 Status date: 2026-05-20.
 
-**How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [internals/graph-spec.md](./internals/graph-spec.md) wins on diagrams only.
+**How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [design.md](./design.md) wins on diagrams only.
 
 Status note (implementation reality):
 
@@ -487,7 +487,7 @@ Rules:
 - Retrieved sources cited via source IDs or `loaded_data_refs`.
 - Prompt-injected retrieved documents are untrusted data.
 
-Detail: [internals/context-layer.md](./internals/context-layer.md).
+Detail: [design.md](./design.md).
 
 ## Planning-Shell Integration
 
@@ -543,13 +543,13 @@ class PlanningShellGraphState(TypedDict, total=False):
     thought_trace: Annotated[list, add]    # planned: user-safe summaries only
 ```
 
-Detail: [internals/planning-shell.md](./internals/planning-shell.md), [internals/graph-spec.md](./internals/graph-spec.md), [internals/intent-parsing.md](./internals/intent-parsing.md).
+Detail: [design.md](./design.md), [design.md](./design.md), [design.md](./design.md).
 
 ## Route Planning, Vehicle Profiles, and Mission Export
 
 A mission draft is incomplete unless it carries a drivable route and an exporter that serialises it into a flight-controller-ready artifact. This subsystem slots into the existing planning-shell as tools (no new graph nodes), behind a first-class vehicle abstraction.
 
-Detail: [internals/route-planning.md](./internals/route-planning.md), [internals/spatial-tools.md](./internals/spatial-tools.md).
+Detail: [design.md](./design.md), [design.md](./design.md).
 
 ### Design principle
 
@@ -1052,7 +1052,7 @@ Each event:
 
 OpenTelemetry exporter is a later phase. Start with JSONL.
 
-Replay: given a `trace_id` and the world snapshot referenced by that run, the run can be re-executed offline against a different model, a tightened policy, or an updated tool catalog. Tier ≥ 3 tools mocked by their `side_effects` declaration. Replay never publishes commands. Detail: [internals/replay-access.md](./internals/replay-access.md).
+Replay: given a `trace_id` and the world snapshot referenced by that run, the run can be re-executed offline against a different model, a tightened policy, or an updated tool catalog. Tier ≥ 3 tools mocked by their `side_effects` declaration. Replay never publishes commands. Detail: [design.md](./design.md).
 
 Evaluation: current project policy says **do not spend implementation effort on tests unless explicitly requested**. The eval harness is optional during platform phases but **becomes mandatory before any tier-3+ feature ships.**
 
@@ -1240,7 +1240,7 @@ Agent-chat handles tool-calling-unsupported providers through `AgentLoopRuntime.
 
 Phase 6 onward (deterministic-DAG removed): providers without tool calling cannot be assigned to the `planner` role. Provider settings UI shows a capability badge.
 
-Detail: [internals/llm-capability-matrix.md](../gcs/internals/llm-capability-matrix.md) *(currently in gcs internals; will migrate during step 6)*.
+Detail: [design.md](../gcs/design.md) *(currently in gcs internals; will migrate during step 6)*.
 
 ## Open Engineering Questions
 
@@ -1264,3 +1264,1941 @@ Paired so reviewers can decide together. Product-level questions live in [requir
 | 14 | Multi-operator memory scope default? | Per-operator private; team scope is explicit grant kind. |
 | 15 | Onboard fallback failure for tier ≥ 3? | Refuse by default; operator can override with confirmation prompt. |
 | 16 | E-stop latency target? | ≤ 200 ms across UI, voice, API, hardware. |
+
+
+---
+
+# Merged from internals/ (2026-05-26)
+
+The following sections were previously maintained as separate files under `docs/components/ai-agent/internals/`. Pass-1 + Pass-2 trim left them ≥80% design-shaped, so they have been folded into this design.md verbatim. ADR 0010 (which named the `internals/` tier) is superseded by this consolidation.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# AI Current Context Layer
+
+## Purpose
+
+The AI Current Context Layer gives `/ai` live, exact facts before any RAG system is added.
+
+This layer exists because some facts are already known by the GCS and should not be recovered through vector search:
+- latest rover telemetry
+- telemetry and camera freshness
+- broker/runtime state
+- active controller state
+- saved GCS/settings values such as MQTT topics, key bindings, video mode, and simulation identity
+- configured LLM providers and model routing
+- simulator backend identity
+- current replay session summary
+- structured terrain bounds, roads, and object geometry
+- current mission state once mission storage exists
+
+RAG is still planned, but it should be used for documents, reports, object definitions, mission memory, operator notes, and other knowledge sources where semantic retrieval is useful. It should not be the first source for exact live state or map geometry.
+
+The current-context layer should remain compact. Larger terrain/object/replay/perception details are obtained on demand through deterministic tools served by `SpatialQueryService` and `ToolRegistry`. Bounded lazy retrieval/source controls cover replay, AI memory, settings, and sensor metadata; RAG source controls and web-grounded retrieval are out of scope here.
+
+Retry intentionally rebuilds context from the latest rover/runtime/settings/map state instead of reusing the original assistant response context. This makes retry behave as "answer the latest user message again with current GCS facts." The original assistant message's stored `context_snapshot` remains available in message metadata for audit/debugging until that assistant message is deleted by retry.
+
+## Current Context Sources
+
+### Runtime And State Store Meaning
+
+The current context layer does not create a second runtime or a second state database.
+
+`AppRuntime` is the assembled live GCS process object. It holds:
+- loaded `AppConfig`
+- `LocalStateBackend`
+- MQTT runtime
+- control service
+- replay store
+- AI session store
+- LLM secret store
+- WebSocket manager
+
+`LocalStateBackend` is the in-memory current-state store for the running GCS process. It holds facts that change while the GCS is running:
+- latest telemetry snapshot
+- broker connection state and freshness timestamps
+- active browser controller and last input timestamp
+- video mode state and latest video-frame metadata
+
+The AI current context reads from these existing objects. It does not create a new control path and does not publish commands.
+
+### Rover Current State
+
+Source:
+- latest telemetry received by the GCS from MQTT
+
+Store:
+- `LocalStateBackend`
+
+Included facts:
+- telemetry freshness
+- last telemetry timestamp and age
+- backend identity
+- local position
+- GPS position
+- heading
+- speed
+- battery/power data
+- camera mode
+- camera freshness
+
+### Runtime Current State
+
+Source:
+- GCS runtime state and loaded configuration
+
+Store:
+- `LocalStateBackend`
+- loaded `AppConfig`
+- active `ReplayStore`
+
+Included facts:
+- MQTT broker state
+- active controller summary
+- video modes
+- simulation backend identity
+- configured map/site data
+- current replay session ID
+
+### Settings Current Context
+
+Source:
+- loaded `AppConfig`
+- `config/common.local.json` when present
+- `config/common.example.json` fallback values
+
+Included facts:
+- settings file path
+- MQTT broker host and port
+- MQTT topic prefix
+- MQTT control, telemetry, camera, and GCS presence topics
+- MQTT control rate and telemetry policy values
+- configured key bindings for control actions
+- configured video ingest/delivery modes
+- GCS host/port and freshness settings
+- simulator backend identity and available backend names
+- map/site defaults
+- AI text-to-speech settings
+
+This source is intended for exact settings questions such as:
+- broker host or port
+- configured MQTT topics
+- key used for a control action
+- video ingest/delivery mode
+- simulator backend
+- AI voice/TTS settings
+
+These are examples, not a fixed whitelist. Any setting included in the context can be answered using the same mechanism.
+
+### LLM Current Context
+
+Source:
+- `llm_providers` in the loaded GCS config
+- `model_routing` in the loaded GCS config
+- stored-secret availability from the GCS LLM secret store
+
+Included facts:
+- active AI session ID and provider override state
+- purpose-based model routing
+- General Chat routing rule
+- active chat provider resolved for the current request
+- active chat provider source: session override, General Chat route, first enabled provider, or none
+- provider IDs and display names
+- provider type
+- model ID
+- base URL
+- enabled/disabled state
+- capabilities
+- authentication mode summary
+- whether a secret reference is configured
+- whether a stored secret exists for stored-secret providers
+- latest provider check status fields
+
+Secret handling:
+- raw API keys are not included
+- stored secret values are not included
+- environment variable values are not included
+- the context may include safe booleans such as `uses_secret`, `secret_ref_configured`, and `has_stored_secret`
+
+This is what "redacted settings" means in this project: sensitive values are withheld, not merely shortened.
+
+Session-specific behavior:
+- AI send and retry endpoints pass the active `session_id` into `AIContextService`
+- if the session has a provider override, that provider is reported as the active chat provider
+- otherwise the active provider is resolved from General Chat routing, then the first enabled provider fallback
+- assistant message metadata still stores the provider/model actually used for each response
+
+### Scene Map And Object Facts
+
+Source:
+- `config/terrain_scene.v1.json`
+
+Included facts:
+- backend
+- terrain bounds
+- terrain size
+- source path
+- road count
+- object count
+- object kinds
+- spawn point
+- site name
+
+Deterministic object queries:
+- objects in front of the rover within a max distance and field of view
+- objects near the rover within a radius
+- objects by kind
+
+Scene payload grid size:
+- AI context currently loads the scene map with `grid_size=32`.
+- `grid_size` controls the sampled heightmap resolution included in the scene payload. It does not change object centers, object sizes, terrain bounds, roads, or spawn coordinates, which come from the source scene manifest.
+- The low grid size is intentional for compact context and tool payloads. If future spatial queries use terrain height/collision detail rather than object centers and 2D distances, those queries should request a higher or native-resolution terrain representation explicitly.
+
+### Mission Current State
+
+Planned facts:
+- active mission ID
+- goal
+- status
+- plan summary
+- approval state
+- execution state
+- monitoring notes
+
+### Recent History
+
+Source:
+- replay SQLite database
+
+Current surfaces:
+- active replay session summary
+- recent telemetry samples
+
+Future additions:
+- recent controls
+- recent runtime events
+- compact active replay narrative
+- later RAG-backed document/project knowledge and optional web-grounded retrieval
+
+## Chat-Time Flow
+
+Current flow:
+
+```text
+user message
+  -> FastAPI AI endpoint
+  -> AIContextService.build_compact_context()
+  -> selected detail providers based on the question
+  -> AIChatService
+  -> LangChain message list
+  -> SystemMessage(read-only behavior)
+  -> SystemMessage(live GCS current context)
+  -> conversation messages
+  -> configured chat model
+  -> assistant response
+  -> ai_messages.meta_json stores context snapshot/provider names
+```
+
+The context block is intentionally compact. It is meant to keep high-signal live facts in the model input without turning every prompt into a full telemetry dump.
+
+## Query Behavior
+
+The current context has two kinds of data.
+
+Always included:
+- compact rover state
+- compact runtime state
+- compact settings context
+- compact LLM/provider context
+- compact mission state
+- compact scene-map summary
+
+Query-triggered details:
+- larger or more specific data added only when the user asks for it
+- examples include objects in front of the rover, objects near the rover, objects by kind, current replay summary, and recent telemetry samples
+- future examples include objects to the left/right, objects inside a sector, route-intersecting objects, dynamic detected objects, and mission validation details
+- in agent mode, spatial query-triggered details are not preloaded into the prompt; the read-only agent tools fetch them on demand
+
+This keeps normal questions small while still allowing richer answers for spatial and recent-history questions.
+
+Examples:
+
+```text
+What is the rover state?
+```
+
+Uses:
+- current rover state
+- runtime context
+- mission placeholder
+- scene summary
+
+```text
+Where is the rover?
+```
+
+Uses:
+- local position
+- GPS
+- heading
+- freshness
+
+```text
+What objects are in front of the rover within 100 meters and 20 degrees?
+```
+
+Uses:
+- current rover pose
+- structured scene-map objects
+- deterministic distance and bearing calculation
+
+Does not use:
+- vector RAG
+- MQTT control
+
+```text
+What is the current mission?
+```
+
+Uses:
+- mission current-state provider
+
+Current answer should indicate:
+- no active mission storage/workflow exists yet
+
+```text
+What is the broker port?
+```
+
+Uses:
+- settings current context
+- `settings.mqtt.broker_port`
+
+```text
+What key moves forward?
+```
+
+Uses:
+- settings current context
+- `settings.key_bindings.forward`
+
+```text
+What model is configured for General Chat?
+```
+
+Uses:
+- LLM current context
+- `llm.general_chat_route`
+- matching provider entry in `llm.providers`
+
+```text
+What happened recently?
+```
+
+Uses:
+- active replay session summary
+- recent telemetry samples
+
+## Important Architecture Decision
+
+The project will not add a retained MQTT current-state topic for now.
+
+Current decision:
+- MQTT remains the telemetry/control transport
+- GCS owns the first current-state layer because it already receives telemetry and owns browser/runtime state
+- AI Chat uses structured current-state providers before RAG
+- RAG comes later for docs, reports, object definitions, mission history, and source-linked knowledge
+- Redis or another shared state service is deferred until multiple processes or multiple GCS backends need shared low-latency state
+
+## Boundaries
+
+The current context layer is read-only.
+
+It must not:
+- publish MQTT control commands
+- stage rover commands
+- start missions
+- bypass the existing controller lock
+- claim that AI Chat can operate the rover
+
+It may:
+- summarize current rover/runtime/map state
+- answer object-position questions from structured scene geometry
+- report stale telemetry or missing camera data
+- say that no active mission state exists
+- provide context for future read-only tools and mission drafting
+
+## Forward-Looking Plan
+
+RAG integration plan:
+- keep exact live state in this context layer
+- add RAG collections for project docs, rover docs, operator notes, reports, mission memory, and semantic object definitions
+- merge current-context metadata and RAG citation metadata on assistant messages
+- extend the existing `/ai` source controls to future RAG/web-grounded surfaces only after those providers exist
+
+Mission workflow plan:
+- use current context for initial mission drafting
+- store mission drafts and approval state separately from chat text
+- keep execution behind explicit operator approval and controller/safety checks
+
+Related: [Spatial Tools](./spatial-tools.md) · [Graph Spec](./graph-spec.md) · [Replay Access](./replay-access.md) · [Requirements](../requirements.md).
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# AI Agent — Graph and State Machine Specification
+
+This document is the visual companion to:
+
+- [`../requirements.md`](../requirements.md)
+- [`../design.md`](../design.md)
+
+If anything here contradicts the requirements doc, the requirements doc wins.
+
+## Reading Guide
+
+The diagrams in this document answer four durable questions:
+
+1. what the agent system looks like overall
+2. what the current planning shell looks like
+3. what one agent run does internally
+4. how authority expands in later phases
+
+## 1. Top-Level System Map
+
+```mermaid
+flowchart TB
+    subgraph Edge["Operator Edges"]
+        TXT[Text Terminal]
+        VC[Voice Adapter<br/>future]
+        ES[E-Stop 🔒<br/>synchronous bypass]
+    end
+
+    subgraph Surfaces["Session Surfaces"]
+        CHAT[AIChatService<br/>session + persistence]
+        SHELL[PlanningShellGraph<br/>durable HITL wrapper]
+        SCHED[Task Scheduler<br/>future]
+    end
+
+    subgraph Core["Shared Agent Runtime"]
+        LOOP[AgentLoopRuntime<br/>bounded loop]
+        CTX[ContextManifest<br/>compact context + manifest]
+        REG[ToolRegistry<br/>tier · scope · side_effects]
+        POL[PolicyEngine<br/>grants · freshness · budget]
+        TRC[AgentTraceStore<br/>JSONL trace per run]
+        MEM[MemoryStore<br/>layered memory]
+        PRV[ProviderRegistry<br/>role-routed]
+    end
+
+    subgraph Roles["Specialist Roles"]
+        PL[planner]
+        CR[critic]
+        RS[researcher]
+        MN[monitor]
+        RP[reporter]
+        EX[executor]
+    end
+
+    subgraph Auth["Backend Physical Authority"]
+        MX[mission_execution<br/>revisions · CAS · rollback]
+        STG[CommandStaging]
+        SIM[Simulator]
+        APH[Autopilot]
+        HW[Rover Hardware]
+    end
+
+    TXT --> CHAT
+    TXT --> SHELL
+    VC --> CHAT
+    VC --> SHELL
+    ES ===> HW
+
+    CHAT --> LOOP
+    SHELL --> LOOP
+    SCHED --> LOOP
+
+    LOOP --- CTX
+    LOOP --- REG
+    LOOP --- POL
+    LOOP --- TRC
+    LOOP --- MEM
+    LOOP --- PRV
+
+    LOOP -.-> PL & CR & RS & MN & RP & EX
+
+    SHELL ==> MX
+    EX -.-> STG
+    STG -.-> SIM
+    STG -.-> APH
+    APH -.-> HW
+    MN -.-> APH
+```
+
+Three load-bearing boundaries:
+
+- reasoning lives in `AgentLoopRuntime`
+- capability enforcement lives in `ToolRegistry` plus `PolicyEngine`
+- physical authority lives in backend services, autopilot, and hardware rather
+  than in the model loop
+
+## 2. Current Planning Shell
+
+The planner loop is the sole planning core. Deterministic validation and
+approval remain outside free-form model reasoning.
+
+```mermaid
+flowchart TB
+    S([START]) --> CAP[capture_request]
+    CAP --> INIT[retrieve_current_context<br/>compact snapshot + manifest]
+    INIT --> LP[planner_loop_node<br/>AgentLoopRuntime · role=planner]
+    LP -.-> PCL[prepare_clarification ⏸<br/>resume into LP]
+    PCL -.-> LP
+    LP -.-> CR[critic_loop_node<br/>optional future]
+    LP --> VD[validate_draft 🔒]
+    CR --> VD
+    VD --> ST["store_draft<br/>(mission_execution.create_proposal)"]
+    ST --> AP[request_planning_shell_approval ⏸]
+    AP --> D{approved?}
+    D -- yes --> RA["record_approval<br/>(mission_execution.approve + export)"] --> FN[finalize_response]
+    D -- no --> RJ["record_rejection<br/>(mission_execution.reject)"] --> FN
+    FN --> E([END])
+```
+
+Durable properties:
+
+- `validate_draft` is the last deterministic gate before storage
+- draft approval is the only operator approval at this planning tier
+- canonical mission storage lives in `mission_execution`
+- clarification resumes the same planning loop rather than switching to a
+  separate planning path
+
+## 3. AgentLoopRuntime — Internal State Machine
+
+Every chat run, planner run, specialist run, and future voice/task/monitor
+invocation passes through this machine.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Seed
+
+    Seed --> Plan: system + manifest + user
+    Plan --> Decide: model.ainvoke
+    Decide --> Final: no tool_calls
+    Decide --> Guard: tool_calls present
+
+    Guard --> Act: allow
+    Guard --> Deny: deny
+    Guard --> Esc: escalate
+
+    Act --> Terminal: call == terminal_action
+    Act --> Clarify: call == request_clarification
+    Act --> Invoke: otherwise
+
+    Clarify --> Resume: interrupt(question)
+    Resume --> Plan: operator answered<br/>state refreshed
+
+    Invoke --> Observe: ToolRegistry.invoke
+    Observe --> Reflect: append observation
+    Reflect --> Plan: iter < cap & no repeat fail
+    Reflect --> Cap: iter >= cap
+    Reflect --> Repeat: same (tool, args) failed N times
+
+    Terminal --> Artifact
+
+    Final --> [*]: final_answer
+    Artifact --> [*]: artifact_proposed / draft_proposed
+    Deny --> [*]: policy_denied / guardrail_blocked
+    Esc --> [*]: requires_execution_approval / requires_command_staging
+    Cap --> [*]: iteration_limit
+    Repeat --> [*]: repeated_tool_failure
+```
+
+Invariants:
+
+- exactly one stop reason per run
+- every tool call passes through a policy/guard step first
+- terminal artifacts are schema-defined tools, not prompt-parsed blobs
+- clarification is durable resume, not a fresh run
+- execution-capable tools are not bound in the ordinary loop by default
+
+### 3.1 Per-Iteration Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor OP as Operator
+    participant L as AgentLoopRuntime
+    participant M as Model
+    participant P as PolicyEngine
+    participant R as ToolRegistry
+    participant X as AgentTraceStore
+
+    OP->>L: prompt + state
+    L->>X: agent_run_start
+
+    loop until stop_reason
+      L->>X: agent_iteration_start
+      L->>M: messages + bound tools
+      M-->>L: tool_calls | text
+      L->>X: agent_plan_update
+
+      alt has tool_calls
+        loop each call
+          L->>P: evaluate(call, grants, ctx)
+          P-->>L: allow | deny | escalate
+          alt allow + ordinary tool
+            L->>X: agent_tool_start
+            L->>R: invoke(call)
+            R-->>L: result
+            L->>X: agent_tool_result
+          else allow + terminal tool
+            L->>L: capture artifact
+          else allow + request_clarification
+            L-->>OP: interrupt(question)
+            OP-->>L: answer
+          else deny / escalate
+            L->>X: agent_guardrail_result
+            L-->>OP: stop_reason
+          end
+        end
+        L->>X: agent_iteration_end
+      else no tool_calls
+        L-->>OP: final_answer
+      end
+    end
+
+    L->>X: agent_run_end
+```
+
+## 4. Stop Reasons
+
+Every run exits with exactly one stop reason.
+
+```mermaid
+flowchart LR
+    subgraph Success
+      FA[final_answer]
+      AP[artifact_proposed]
+      DP[draft_proposed]
+      CC[critique_complete]
+      RC[report_complete]
+    end
+    subgraph Halt
+      RQ[requires_clarification]
+      RPS[requires_planning_shell]
+      RCS[requires_command_staging]
+      REA[requires_execution_approval]
+      HR[handoff_requested]
+    end
+    subgraph Limits
+      IL[iteration_limit]
+      RTF[repeated_tool_failure]
+      BE[budget_exceeded]
+    end
+    subgraph Blocks
+      GB[guardrail_blocked]
+      PD[policy_denied]
+      TU[tool_unavailable]
+      TCU[tool_calling_unsupported]
+    end
+    subgraph Faults
+      PE[provider_error]
+      CX[cancelled]
+    end
+```
+
+The runtime contract is that a run chooses one terminal reason, traces it, and
+ projects that reason to the caller.
+
+## 5. Task Lifecycle
+
+Future long-horizon task handling should follow this lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> requested
+    requested --> understood: parse_rover_intent ok
+    understood --> clarified: clarification answered<br/>(or not needed)
+    clarified --> planned: draft validated
+    planned --> draft_approved: draft approval ⏸
+    draft_approved --> staged: tier 3
+    staged --> execution_approved: live grant ⏸
+    execution_approved --> running: executor + monitor active
+
+    running --> paused: operator / monitor pause
+    paused --> running: resume
+    running --> blocked: policy / obstacle hold
+    blocked --> running: condition cleared
+    blocked --> failed
+    running --> completed: goal reached
+    running --> failed: irrecoverable
+    running --> cancelled: operator / e-stop
+    paused --> cancelled
+    blocked --> cancelled
+
+    completed --> reported: reporter wrote episode
+    failed --> reported
+    cancelled --> reported
+    reported --> [*]
+```
+
+Hard invariants:
+
+- `running` is only reachable after both draft approval and execution approval
+- stopping transitions stay cheap
+- every terminal state reaches reporting
+
+## 6. Capability Ladder
+
+```mermaid
+flowchart LR
+    L0[L0 Chat<br/>compact context only<br/>no tool authority]
+    L1[L1 Read-only Agent<br/>tier 0–1 tools]
+    L2[L2 Planner Agent<br/>tier 2 tools<br/>DRAFT APPROVAL]
+    L3[L3 Staging Agent<br/>tier 3<br/>STAGING APPROVAL]
+    L4[L4 Sim Execution<br/>tier 4<br/>SIM CONFIRMATION]
+    L5[L5 Live Execution<br/>tier 5<br/>PER-MISSION LIVE GRANT]
+    L6[L6 Autonomous Scoped<br/>tier 6<br/>PRE-GRANT + TTL]
+    L7[L7 Multi-Robot<br/>fleet scopes]
+
+    L0 --> L1 --> L2
+    L2 -.-> L3
+    L3 -.-> L4
+    L4 -.-> L5
+    L5 -.-> L6
+    L6 -.-> L7
+```
+
+Authority only increases when a new tool tier, policy surface, and approval
+surface are added together.
+
+## 7. Future Live Execution With Monitor
+
+The platform is intended to support live execution without letting the model
+directly publish commands.
+
+```mermaid
+flowchart TB
+    OP([operator: run approved inspection])
+    G{grant valid?<br/>TTL · scope}
+    EXE[executor specialist · tier 5]
+    MX[mission_execution<br/>revision · CAS]
+    STG[command staging]
+    SIM{simulator available?}
+    SR[run in simulator]
+    DF{operator accepts diff?}
+    APH[autopilot handoff]
+    HW[rover hardware]
+
+    MON[monitor specialist]
+    TEL[(telemetry)]
+    PER[(perception)]
+    LOCK[(controller lock)]
+    BAT[(battery)]
+
+    POL{policy:<br/>geofence · freshness · lock · battery · obstacle}
+    PAUSE[executor.pause]
+    REPL[planner.replan]
+    ESTOP[E-Stop 🔒<br/>synchronous bypass]
+    REP[reporter]
+
+    OP --> G
+    G -- no --> X1([refuse: requires_execution_approval])
+    G -- yes --> EXE --> MX --> STG --> SIM
+    SIM -- yes --> SR --> DF
+    DF -- no --> X2([rejected at sim diff])
+    DF -- yes --> APH
+    SIM -- no --> APH
+    APH --> HW
+
+    HW --> TEL
+    HW --> PER
+    HW --> LOCK
+    HW --> BAT
+    TEL & PER & LOCK & BAT --> MON
+    MON --> POL
+
+    POL -- breach .-> ESTOP
+    POL -- stale .-> PAUSE
+    POL -- replan .-> REPL
+    POL -- ok --> HW
+
+    HW -. completed .-> REP
+    HW -. failed .-> REP
+    PAUSE -. cancelled .-> REP
+    ESTOP ===> HW
+```
+
+Properties:
+
+- the agent requests through `mission_execution` and staging; it does not
+  directly publish commands
+- the monitor escalates rather than directly acting
+- e-stop remains a synchronous bypass
+- all terminal outcomes still reach reporting
+
+## 8. Out Of Scope
+
+Out of scope for this graph document:
+
+- exact runtime dataclass shapes
+- exact tool schemas and side-effect declarations
+- memory-layer schemas
+- event JSON payload shapes
+- detailed staging schema and hardware-latency execution specs
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Rover Intents And Intent Test
+
+## Purpose
+
+This document explains two closely related concepts in the GCS AI page:
+- the rover intent model used to convert an operator request into structured fields
+- the rover-intent inspection surface, reached via the `/intent <prompt>` slash command in the `/ai` composer, which exists to inspect that parsing step without executing anything
+
+This is an operator-safety and engineering-debugging feature. It answers a simple but important question: *what did the system think the operator meant?*
+
+That question needs an explicit surface because later planning and execution layers depend on it. If the system misreads the request at this stage, every later step is built on the wrong input.
+
+> Throughout this document, "Intent Test mode" refers to the mode of use reached via the `/intent` slash command, which calls `POST /api/ai/sessions/{id}/intent-test`. There is no separate UI mode button.
+
+## What A Rover Intent Is
+
+A rover intent is a structured interpretation of a natural-language operator request. Instead of keeping the request only as free text, the GCS asks an LLM to convert it into a predictable JSON object.
+
+Current intent fields include:
+- `intent_type`
+- `summary`
+- `target`
+- `area`
+- `requested_actions`
+- `constraints`
+- `requires_rover_motion`
+- `requires_operator_approval`
+- `missing_information`
+- `confidence`
+
+The current parser is designed for rover-task understanding, not open-ended chat. It is deliberately narrower than the normal Chat mode and more constrained than Agent mode.
+
+## Why The System Needs Structured Intent
+
+Natural-language prompts are convenient for operators, but they are not a stable interface for planning or safety logic. The system needs a machine-readable intermediate form so downstream components can reason about:
+- whether motion is being requested
+- what object or area the operator is referring to
+- what information is still missing
+- whether a later plan should be blocked pending clarification
+- whether operator approval is mandatory before any rover motion
+
+This intermediate representation is the contract between free-form language and later structured workflows.
+
+In practical terms, structured intent is what allows the system to distinguish:
+- "tell me what is in front of the rover"
+- "inspect the solar plant on the left"
+- "drive to the operations building"
+- "compare this replay to the current rover state"
+
+Those requests may all look similar at the chat layer, but they lead to different planning and safety behavior.
+
+## Current Intent Types
+
+The current prompt/schema expects one of these `intent_type` values:
+- `navigate_to_object`
+- `inspect_area`
+- `search_area`
+- `report_status`
+- `compare_replay`
+- `unknown`
+
+The parser may still return `unknown` when the message is ambiguous, outside scope, or malformed. That is valid behavior and should not be treated as a system failure by itself.
+
+## What The `/intent` Slash Command Does
+
+The `/intent <prompt>` slash command in the AI page composer is non-executing.
+
+When typed, the GCS does not run normal chat and does not run the read-only tool-using agent loop for that message. Instead, it sends the prompt body (everything after `/intent`) to the intent parser endpoint `POST /api/ai/sessions/{session_id}/intent-test`.
+
+The backend then:
+1. resolves the model to use for intent parsing
+2. builds a compact current-context summary
+3. invokes the structured parser prompt
+4. validates and repairs the JSON once if needed
+5. stores both the user prompt and assistant result in the AI session
+6. renders a dedicated intent panel in the UI
+
+If the parsed intent implies rover motion and includes a target description, the backend may also run deterministic spatial target resolution to show likely matching scene objects. This is still analysis only. It does not move the rover or stage commands.
+
+## What Intent Test Mode Does Not Do
+
+Intent Test does not:
+- drive the rover
+- publish MQTT control commands
+- create an execution-capable plan
+- enter the normal Agent tool loop
+- approve anything
+- bypass human approval rules
+
+It is intentionally non-executing. Even when the parser says a task requires motion, the result is only a structured interpretation and optional target-resolution aid.
+
+## Why Intent Test Exists As A Separate Mode
+
+The main reason is isolation.
+
+If parsing is blended invisibly into general chat, it becomes hard to answer basic diagnostic questions:
+- Did the model understand the task?
+- Did it classify the task type correctly?
+- Did it identify the right target?
+- Is it missing critical information?
+- Is the problem in parsing, spatial resolution, mission drafting, or later workflow logic?
+
+Intent Test separates those concerns. It gives operators and developers a safe place to validate the language-to-structure step before any planning layer is involved.
+
+## How It Differs From Other AI Modes
+
+### Chat
+
+`Chat` is general conversational use of the selected provider with compact live rover/GCS context. It is read-only, but it is not constrained to return a rover-intent schema.
+
+Use `Chat` when you want explanation, discussion, summarization, or ordinary question-answer behavior.
+
+### Agent
+
+`Agent` is still read-only, but it can use deterministic tools such as rover-state, scene-summary, object-query, mission-state, and replay-analytics tools when the provider/runtime supports tool calling.
+
+Use `Agent` when you want grounded answers that may need tool lookups.
+
+### Intent Test
+
+`Intent Test` is not for general conversation. It is for parsing an operator task into structured intent and showing the result explicitly.
+
+Use it when the key question is: *did the system understand the requested rover task correctly?*
+
+### Planning Shell
+
+The planning shell reaches intent parsing through planner tools inside the shared agent runtime. The planner combines parsed intent with only the target/context resolution it needs to propose a mission draft that requires draft approval. Reached via `/plan <prompt>`.
+
+Use it when you want a supervised mission-planning flow.
+
+In short:
+- `Chat` explains
+- `Agent` investigates with read-only tools
+- `Intent Test` parses operator intent
+- the planning shell (via `/plan`) plans a supervised mission draft
+
+## Provider Routing For Intent Parsing
+
+Intent parsing does not have to use the same model as general chat.
+
+The provider resolution order is:
+1. `command_parser`
+2. `planner`
+3. `general_chat`
+
+This allows the system to use a model specialized or selected for structured parsing even when the operator is otherwise chatting with another provider. That separation matters because good conversational models and good structured-parser models are not always the same choice.
+
+## Current Parser Prompt Contract
+
+The parser prompt tells the model to:
+- return only a JSON object
+- keep `intent_type` within the allowed enum
+- mark motion tasks as requiring operator approval
+- avoid inventing coordinates, distances, or object identifiers
+- list missing required information explicitly
+- provide a confidence score
+
+The parser gets one repair attempt if the first model output is invalid JSON or fails schema validation.
+
+This is deliberately stricter than normal chat because downstream systems need predictable fields rather than prose.
+
+## Examples
+
+### Example 1: Read-Only Question
+
+Operator prompt:
+`What objects are directly in front of the rover?`
+
+Likely parse outcome:
+- `intent_type`: `report_status` or `unknown`, depending on wording
+- `requires_rover_motion`: `false`
+- no planning should follow from this alone
+
+This is often a better fit for `Agent` than `Intent Test`, but `Intent Test` can still show how the parser classifies it.
+
+### Example 2: Motion Task
+
+Operator prompt:
+`Drive to the operations building and inspect the entrance.`
+
+Expected characteristics:
+- motion-related intent type
+- `requires_rover_motion: true`
+- `requires_operator_approval: true`
+- target description preserved from the prompt
+
+If the target can be matched in the scene map, candidate objects may be shown.
+
+### Example 3: Ambiguous Task
+
+Operator prompt:
+`Go over there and check it out.`
+
+Expected characteristics:
+- low confidence
+- incomplete or `unknown` target
+- `missing_information` populated
+- possible clarification need instead of a confident plan
+
+This is a good example of why the feature exists: it lets you see ambiguity clearly instead of hiding it inside a later plan.
+
+## Relationship To Future Workflow
+
+The long-term intended flow is:
+1. operator provides a natural-language task
+2. system parses structured intent
+3. system resolves targets and context
+4. system generates a draft mission
+5. operator reviews and approves or rejects
+6. a future controlled execution layer may stage commands under separate safety rules
+
+`Intent Test` is the explicit inspection window for step 2. That makes it a foundational feature even though it does not execute anything by itself.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Mission Execution
+
+## Purpose
+
+This document defines the backend-owned `mission_execution` boundary.
+See [../requirements.md](../requirements.md) for product behavior and
+[../design.md](../design.md) (§ "Mission Execution Boundary") for system context.
+
+## Data Model
+
+Primary tables:
+
+- `ai_mission_operations`
+  - top-level mission-affecting operation record
+  - tracks `status`, `active_revision_id`, and stored policy JSON
+- `ai_mission_revisions`
+  - canonical stored revision records and mission payload
+  - `client_version`: monotonically incremented on each waypoint mutation; used for optimistic stale-edit detection
+  - `provenance_json`: `{waypoint_id: "ai" | "user" | "ai+edited"}` map; returned per-waypoint in overlay payloads
+- `ai_mission_controller_state`
+  - backend projection of controller mission state and cutover lifecycle
+  - tracks current controller mission version, active revision, verified snapshot, previous verified snapshot, pending snapshot, and last cutover metadata
+- `ai_mission_execution_attempts`
+  - append-only execution/cutover attempt log
+  - tracks expected version, observed version, installed version, status, request payload, result payload, and error text
+
+## Status Model
+
+Revision/operation statuses currently used by the backend include:
+
+- `planning`
+- `awaiting_approval`
+- `approved`
+- `exported`
+- `cutover_pending`
+- `executing`
+- `rejected`
+- `validation_failed`
+- `needs_clarification`
+
+Controller-state statuses currently used include:
+
+- `idle`
+- `verifying`
+- `executing`
+- `rolled_back`
+- `cutover_failed`
+
+## Provenance State Machine (Per Waypoint)
+
+Waypoints use a strict provenance model:
+
+- `ai`: created by planning output without manual edits
+- `user`: created directly by the operator
+- `ai+edited`: originally AI-created, then operator-modified
+
+Promotion rule:
+
+- any operator edit to an `ai` waypoint promotes it to `ai+edited`
+
+Regeneration guard:
+
+- AI regeneration that would overwrite `ai+edited` waypoints is blocked
+  unless the operator explicitly confirms replacement via clarification flow
+
+## Concurrency Rules
+
+Two optimistic concurrency controls protect mission state:
+
+- `client_version` guards revision mutation:
+  mutation requests must target the latest client version, else the request is rejected as stale
+- `controller_version` guards execution cutover:
+  execution checks expected live controller version before install/read-back
+
+Stale-cutover handling:
+
+- when execution rejects on stale controller version, the system creates a rebased `awaiting_approval` revision for re-review against latest verified controller state
+
+## Adapter Boundary Contract
+
+Mission installation and read-back verification must pass through a controller adapter boundary.
+This boundary is the seam for controller transport implementations.
+
+Required adapter semantics:
+
+- compare controller mission version before cutover
+- install mission payload
+- verify installed mission by read-back
+- surface failure details for audit and rollback logic
+
+The default local adapter is implementation detail; contract behavior is stable regardless of transport.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Planning Shell
+
+## Purpose
+
+This document defines the planning shell as a durable human-in-the-loop
+planning wrapper around the shared agent runtime.
+
+Framing:
+
+- the long-term target is one primary Agent experience
+- the shell exists to provide durable human-in-the-loop planning behavior
+  around the shared agent runtime
+- the shell is not the long-term owner of authoritative mission lifecycle
+  state; that responsibility lives in backend mission execution (see
+  [`mission-execution.md`](./mission-execution.md) and [`../design.md`](../design.md) § "Mission Execution Boundary")
+
+The planning shell is intentionally:
+
+- non-executing
+- approval-gated
+- resumable after pause/interrupt
+
+It differs from ordinary chat/agent turns because it adds durable workflow
+control around the core agent loop.
+
+## When To Use This Path
+
+Use the planning shell when the operator asks for:
+
+- multi-step rover mission drafts
+- safety-conscious navigation/inspection/search planning
+- explicit review checkpoints before proceeding
+- structured draft output that can be approved or rejected
+
+Use ordinary Agent turns when the operator needs:
+
+- interactive Q&A
+- tool-assisted situational analysis
+- fast iterative back-and-forth without approval gates
+
+Long-term direction:
+
+- more planning behavior should become reachable from the primary Agent
+  experience without requiring a separate top-level product mode
+- until that path is designed, `/plan` remains the explicit product entry
+  point for this shell; do not expose a separate planning product mode
+- this shell should remain a durable orchestration layer, not a separate
+  reasoning system
+
+## Flow Shape
+
+`capture_request` → `retrieve_current_context` → `planner_loop_node`
+→ [`prepare_clarification`] → `validate_draft` → `store_draft`
+→ `request_planning_shell_approval`
+→ `record_approval` | `record_rejection` → `finalize_response`
+
+Design rule:
+
+- the planner loop is the sole planning core; deterministic validation and
+  approval/cutover boundaries remain outside free-form model reasoning
+
+## High-Level Flow
+
+Happy path:
+
+1. Operator types `/plan <planning prompt>` in the `/ai` composer.
+2. Frontend calls the planning-shell stream endpoint.
+3. Backend runs the planning graph and streams NDJSON events.
+4. The planner loop uses bounded tools to parse intent, retrieve or resolve
+   needed context, propose a mission draft, and pass it to deterministic
+   validation.
+5. Graph reaches `request_planning_shell_approval` and interrupts.
+6. UI shows an approval card.
+7. Frontend calls the resume endpoint with operator decision.
+8. Graph records the decision and emits final assistant response.
+
+Clarification path:
+
+1. Same initial flow.
+2. The planner requests missing information through the clarification tool.
+3. Graph reaches `prepare_clarification` and interrupts before drafting.
+4. UI shows a clarification card.
+5. Operator supplies answers and resumes.
+6. Graph refreshes rover pose and scene, then continues to drafting and
+   approval.
+
+## Interrupt Types
+
+Two interrupt types can appear in the stream. The UI distinguishes them by
+`interrupt_value.type`:
+
+| `interrupt_value.type` | UI card shown | Resume decisions | Where in graph |
+|---|---|---|---|
+| `planning_shell_draft_approval` | Approval card | `approve` / `reject` | `request_planning_shell_approval` |
+| `clarification_request` | Clarification card | `continue` / `cancel` | `prepare_clarification` |
+
+Both use the same resume endpoint:
+
+- `POST /api/ai/sessions/{session_id}/planning-shell/thread/{thread_id}/resume`
+
+## Relationship To Agent Mode
+
+Agent mode:
+
+- one request loop with optional tools
+- optimized for interactive analysis and dialogue
+
+Planning shell:
+
+- durable workflow wrapper with clarification and approval checkpoints
+- increasingly expected to route its reasoning through the shared
+  `AgentLoopRuntime`
+
+Both are non-executing today. The shell adds process control and
+resumability, not a separate long-term AI brain.
+
+## Provenance-Aware Regeneration Rule
+
+When planning regenerates or refines waypoints, waypoint provenance must be
+checked before overwrite:
+
+- `ai` waypoints can be replaced by new AI output
+- `user` and `ai+edited` waypoints require explicit operator confirmation
+  when replacement is proposed
+
+The `ai+edited` block is enforced through clarification flow prior to draft
+replacement. See [`mission-execution.md`](./mission-execution.md) for the
+provenance state machine and
+[`map-widget.md`](../../gcs/design.md) for the UI contract.
+
+## Safety Model
+
+This path is designed to preserve operator control:
+
+- no direct command publication in the planning path
+- explicit draft approval before continuation
+- transparent inspection before approval
+
+It is the bridge between free-form agent reasoning and future supervised
+execution pipelines.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Replay Session Access
+
+## Scope
+
+This document defines how AI surfaces access replay sessions for read-only
+analysis.
+
+It covers:
+
+- replay session selection and reference resolution
+- deterministic replay analytics and metric definitions
+- replay-specific tool and API surface expectations
+
+It does not cover mission execution, write-capable tools, or generic
+document/RAG retrieval.
+
+## Core Principle
+
+Do not make the model infer replay facts from raw timelines when backend code
+can compute them deterministically.
+
+Replay access should follow this split:
+
+- backend services resolve target sessions and compute metrics
+- AI receives compact structured results
+- the model handles interpretation, explanation, and comparison
+
+## Replay Analytics Surface
+
+Replay analytics should be exposed as backend query primitives that can be
+used by both the replay UI and AI surfaces.
+
+Recommended responsibilities:
+
+- list replay sessions with filters and ordering
+- fetch one session summary
+- compute deterministic session metrics
+- fetch timeline slices and event search results
+- compare multiple sessions
+- provide downsampled path geometry when needed
+
+Recommended service methods:
+
+- `list_sessions(limit, filters)`
+- `get_session_summary(session_id)`
+- `get_session_metrics(session_id)`
+- `get_session_path(session_id, downsample=None)`
+- `get_session_event_slice(session_id, start_ts=None, end_ts=None, limit=...)`
+- `search_session_events(session_id, text=None, event_type=None, limit=...)`
+- `compare_sessions(session_ids, metrics=None)`
+
+Recommended AI-facing tool surface:
+
+- `list_replay_sessions`
+- `get_replay_session_summary`
+- `get_replay_session_metrics`
+- `get_replay_session_path`
+- `search_replay_session_events`
+- `compare_replay_sessions`
+
+## Session Reference Resolution
+
+Session reference resolution must happen in backend code before model
+reasoning.
+
+The model should not be the source of truth for:
+
+- what `last` means
+- what `yesterday` means
+- which timezone defines a calendar day
+- whether sorting uses `started_at` or `ended_at`
+
+Selection priority:
+
+1. explicit session ID in the user request
+2. replay sessions explicitly attached or selected by the UI
+3. the active replay session for live-context questions
+4. clarification when multiple sessions are plausible
+
+### Ordering Semantics
+
+Canonical ordinal rule:
+
+- default sort: `started_at DESC`
+
+Examples:
+
+- `last session` means the most recently started session
+- `the one before last` means the second item in `started_at DESC`
+- `third from last` means the third item in `started_at DESC`
+- `first session` means the oldest item in `started_at ASC`
+
+If product language later needs a different meaning, use explicit phrasing such
+as `last completed session` rather than changing the default ordinal rule.
+
+### Date Semantics
+
+Date selectors must resolve against an explicit timezone and compare against
+`started_at`.
+
+Examples:
+
+- `today's sessions` means sessions whose `started_at` falls inside the current
+  local calendar day
+- `yesterday's sessions` means sessions whose `started_at` falls inside the
+  previous local calendar day
+
+## Session Metrics Contract
+
+The first replay analytics set should remain deterministic and cheap.
+
+Recommended baseline metrics:
+
+- `duration_s`
+- `telemetry_sample_count`
+- `control_count`
+- `runtime_event_count`
+- `path_length_m`
+- `net_displacement_m`
+- `max_distance_from_start_m`
+- `max_speed_m_s`
+- `max_speed_km_h`
+- `position_frame`
+- `position_coverage_ratio`
+
+Definitions must be explicit and stable.
+
+### Duration
+
+Preferred definition:
+
+- `max(valid observed timestamp) - min(valid observed timestamp)` across replay
+  data for the session
+
+Fallback order:
+
+- telemetry timestamps
+- control timestamps
+- runtime event timestamps
+- `ended_at - started_at`
+
+The response should include the method used.
+
+### Path Length
+
+Preferred definition:
+
+- sum of Euclidean distances between consecutive valid position samples in
+  local coordinates
+
+Requirements:
+
+- ignore samples without valid position
+- ignore non-finite values
+- optionally ignore obvious duplicates or zero-delta spam
+
+### Maximum Distance From Start
+
+Preferred definition:
+
+- greatest Euclidean distance from the first valid position sample used as the
+  session origin
+
+Return:
+
+- `origin_sample_ts`
+- `origin_source`
+- `max_distance_from_start_m`
+- optionally the timestamp of the max-distance point
+
+### Net Displacement
+
+Definition:
+
+- Euclidean distance from the first valid position sample to the last valid
+  position sample used in metric computation
+
+## Replay Telemetry Storage Invariants
+
+Replay analytics must preserve the difference between zero and missing data.
+
+Do not collapse absent numeric values to `0.0` in analytics storage, because
+that merges:
+
+- real zero
+- missing value
+- malformed value
+- unavailable position source
+
+Recommended extracted telemetry semantics:
+
+- preserve nullability for position, GPS, heading, and speed fields
+- track `has_position`
+- track `has_gps`
+- track `position_frame`
+
+`position_frame` values should distinguish at least:
+
+- `local_xy`
+- `gps_wgs84`
+- `unknown`
+
+## Caching Strategy
+
+Replay metrics should be computed on demand, then cached when the session is
+large or queried repeatedly.
+
+Recommended cache behavior:
+
+- compute metrics on first request
+- store common metric results in a dedicated cache table
+- invalidate or recompute while the session is still active and new telemetry
+  arrives
+
+Keep the canonical formulas in code, not in SQL-only logic.
+
+## Integration Direction
+
+The replay UI and AI should share the same backend analytics endpoints or
+service methods.
+
+Recommended additions:
+
+- `GET /api/replay/sessions/{session_id}/summary`
+- `GET /api/replay/sessions/{session_id}/metrics`
+- `GET /api/replay/sessions/{session_id}/path`
+- `GET /api/replay/sessions/{session_id}/events/search`
+- `POST /api/replay/sessions/compare`
+
+AI integration should reuse the same replay analytics surface whether the
+calling path is:
+
+- server-side request planning before a model call
+- provider tool calling
+- a later workflow-orchestration layer
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Route Planning — Internals
+
+Design reference for the road-graph + route-planner-tool + QGC `.plan` exporter slice. The product target and design rationale live in [../requirements.md](../requirements.md) (§ "Route Planning and Mission Export Requirement") and [../design.md](../design.md) (§ "Route Planning, Vehicle Profiles, and Mission Export").
+
+## Algorithm reference
+
+### Graph build
+
+Source: `config/terrain_scene.v1.json`. Each road carries `centerline=[start,end]`, `geometry.width`, `metadata.drivable=true`, `metadata.route_planning_cost`, and `metadata.group`.
+
+Build order:
+
+1. **Endpoint snap.** Configurable epsilon (Settings: `road_graph_epsilon_m`, default ~0.5 m). The authored scene does not guarantee endpoint coordinates coincide exactly at junctions. Snap each endpoint to a canonical node within epsilon.
+2. **T-junction / crossroad split.** For each road, find points where another road's endpoint (or another road's segment) lies within epsilon of its interior. Split the road at those points into sub-edges sharing a node. Segment-intersection pass during graph build; O(n²) over a small edge count is trivial.
+3. **Edge weighting.** `length × cost_multiplier`. `cost_multiplier`: `preferred=1.0`, default `1.5`, `avoid=∞` (removed from the graph entirely).
+4. **Group tagging.** Read `metadata.group` directly. No id-prefix parsing — fragile to renames and breaks for ad-hoc IDs. Current groups: `plant_a`, `plant_b`, `connector`, `building`, `start_hub`.
+
+### Public interface
+
+```python
+class RoadGraphService:
+    def nearest_node(self, x: float, y: float) -> NodeId: ...
+    def shortest_path(self, a: NodeId, b: NodeId) -> list[NodeId]:
+        """Dijkstra via heapq. No extra deps."""
+    def cover_group(self, group: str, entry: NodeId) -> list[NodeId]:
+        """Node-ordered tour visiting every group-tagged edge at least once.
+
+        If the tagged subgraph is connected and all nodes have even degree,
+        returns the Eulerian circuit. Otherwise pairs odd-degree nodes and
+        duplicates shortest paths between each pair before computing the
+        Euler circuit (Chinese-postman variant). For ≤ ~20 sub-edges per
+        group, this is fast and gives a minimum-retrace tour.
+        """
+    def route_to_then_around_then_back(
+        self, start_xy: tuple[float, float], group: str
+    ) -> list[Waypoint]:
+        """Composes:
+           shortest_path(start → entry)
+         + cover_group(group, entry)
+         + shortest_path(entry → start)
+
+        `entry` is the tagged-subgraph node with shortest graph distance
+        from `start`.
+        """
+```
+
+### Startup sanity check
+
+Log node count, edge count, connected-component count. Single component expected for the current scene. A non-`1` component count surfaces graph-build bugs immediately rather than at dispatch time.
+
+## Mission export reference
+
+Output format: QGC `.plan` JSON. Reference: [../../../cross-cutting/research/flight-controllers/mission-formats.md](../../../cross-cutting/research/flight-controllers/mission-formats.md).
+
+- `fileType="Plan"`, `version=1`
+- `mission.firmwareType=3` (ArduPilot)
+- `mission.vehicleType` from active `VehicleProfile.mav_vehicle_type` (10=rover, 2=multirotor, 1=fixed-wing)
+- `plannedHomePosition` from current vehicle pose
+- One `SimpleItem` per waypoint with `command=16` (`MAV_CMD_NAV_WAYPOINT`), `frame=3` (`GLOBAL_RELATIVE_ALT`), `params=[hold_s, accept_radius_m, 0, yaw_rad_or_NaN, lat, lon, alt]`
+- Trailing `command=20` (`NAV_RETURN_TO_LAUNCH`) for `route_to_then_around_then_back` outputs
+- Empty `geoFence` and `rallyPoints` blocks (schema requires the keys)
+- Local→geo projection: flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent
+
+Output path: `data/missions/<draft_id>.plan`. Recorded on the draft. The `.plan` file is the current hand-off boundary to the flight controller; MAVSDK `import_qgroundcontrol_mission` → `upload_mission` over UDP 14550 is the documented next slice and lives outside this PR.
+
+**Coordinate frame split.** All mission overlay coordinates inside the system (planner output, revision storage, map widget rendering) use **local scene metres** with `L.CRS.Simple` as the coordinate reference system. Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportService` via a flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`. Nothing upstream of the exporter deals in lat/lon.
+
+**Coordinate caveat.** The current scene and its `coordinate_system.georeference` are development placeholders. When real rover hardware and real-world scene data arrive, both the map and its georeference are expected to be regenerated together. The projection code consumes the new origin without changes.
+
+## Tool result shape
+
+Planner-tool results returned to the agent are a **compact summary** — not the raw waypoint list — so the agent's context budget is preserved:
+
+```python
+{
+  "waypoint_count": int,
+  "total_distance_m": float,
+  "estimated_duration_s": float,
+  "legs": [{"from": str, "to": str, "edge_ids": list[str], "distance_m": float}],
+  "route_hash": str,
+  "draft_step_id": str,
+}
+```
+
+The full waypoint list is persisted on the Mission Draft step and fetched by the UI for map rendering and by `export_mission` for serialisation. The wire contract between agent and tools stays small and inspectable.
+
+## Per-waypoint defaults
+
+- `accept_radius_m` is set per-waypoint by the route planner as `min(road_width / 2, default_accept_radius_m)`. `None` means "use Settings default" (allowed when road width is unknown).
+- `hold_s` defaults to `0.0` from Settings. Route planner does not set per-waypoint values in this slice.
+- `yaw_rad` is always `None` at the route-planner layer (a navigation path has no opinion on heading). Task-layer steps (e.g., `inspect`) may override yaw. Exporter renders `None → NaN` for vehicles where that means "keep current heading" (rover, copter); profiles where yaw cannot be honored (fixed-wing) strip the value.
+- Altitude `z` is always carried. Exporter rendering depends on the active profile (ground → clamp to 0, aerial → use `z` or task/profile cruise altitude).
+
+## Mission Draft schema additions
+
+- `step.waypoints: list[Waypoint] | None` — populated when the step is materialised by a route tool.
+- `step.route_summary: RouteSummary | None` — the compact result the agent saw.
+- `draft.lifecycle: Literal["draft", "approved", "exported", "uploading", "uploaded", "executing", "completed", "failed", "cancelled"]` — declared in full; reachable today: `draft / approved / exported / failed / cancelled`.
+- `draft.lifecycle_history: list[{state, ts, actor}]` — append-only audit trail.
+- `draft.dispatch_mode: Literal["plan_only", "plan_and_execute"]` — inferred by the agent from prompt context.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# AI Spatial Tools
+
+## Purpose
+
+This document defines the spatial-tool architecture for terrain/object
+reasoning and future agent workflows.
+
+The decision is:
+- keep the always-injected AI context compact
+- move larger map, object, replay, and perception detail behind on-demand tools
+- implement deterministic spatial query services before full mission execution
+- make those query services agent-tool-ready from the beginning
+- use RAG for semantic knowledge, documents, definitions, reports, and memory, not exact geometry
+
+This is the bridge between compact always-on AI context and later mission agents.
+
+## Core Architecture
+
+The AI system should use three separate knowledge layers:
+
+```text
+Current state layer
+  -> latest rover pose, heading, speed, freshness, controller, active mission
+  -> exact structured data from GCS runtime and telemetry
+
+Spatial world model
+  -> static terrain/map objects and later dynamic detected objects
+  -> exact geometric queries from a structured map/perception store
+
+RAG knowledge layer
+  -> project docs, manuals, definitions, mission history, reports, operator notes
+  -> semantic retrieval with citations
+```
+
+The LLM or agent should interpret the operator request and choose tools. The backend should calculate distances, bearings, sectors, route intersections, and object candidates.
+
+## Always-On Context Versus On-Demand Tools
+
+Always-on AI context should stay small and high-signal:
+- rover telemetry freshness
+- current rover pose and heading
+- runtime/broker summary
+- active controller summary
+- active mission summary or no-active-mission state
+- scene summary: bounds, object counts, object kinds, source path
+- safe LLM/provider/routing summary
+
+On-demand tools should provide larger detail:
+- objects in front of the rover
+- objects to the left or right
+- nearest objects by kind
+- objects within radius
+- objects inside a sector
+- objects along a proposed route
+- terrain/road/pad details
+- recent telemetry/control/runtime events
+- replay summaries
+- mission drafts and validation results
+
+## Spatial Query Service
+
+Spatial query behavior should live in a dedicated deterministic service with
+these responsibilities:
+- load object geometry from `scene_map.py`
+- read rover pose from the current rover state passed by the caller
+- calculate distance, bearing, and relative bearing
+- filter objects by distance, field of view, side, kind, and sector
+- return compact structured hits suitable for LLM/tool output
+
+Representative methods:
+
+```text
+get_scene_summary()
+find_objects_in_front(max_distance_m, fov_deg, kinds=None)
+find_objects_near(radius_m, kinds=None)
+find_objects_by_kind(kind)
+find_objects_to_left(max_distance_m, angle_width_deg, kinds=None)
+find_objects_to_right(max_distance_m, angle_width_deg, kinds=None)
+find_nearest_objects(limit, max_distance_m=None, kinds=None)
+find_objects_in_sector(center_bearing_deg, fov_deg, max_distance_m, kinds=None)
+resolve_target_description(scene, rover_state, target)
+```
+
+The `target` argument is the structured target dict produced by the intent
+parser. It should combine structured intent fields with deterministic
+candidate filtering. For example:
+
+```text
+"tree on the right around 20-30 meters"
+  -> target.kind = tree
+  -> target.side = right
+  -> target.min_distance_m = 20
+  -> target.max_distance_m = 30
+  -> rank candidates by distance and relative bearing
+```
+
+## Agent Tool Registry
+
+The same registry serves:
+- Agent mode (Chat page)
+- Rover Intent Test
+- LangGraph planning-shell workflows
+- future MCP server adapters
+
+Initial read-only tools:
+
+```text
+get_current_rover_state()
+get_scene_summary()
+query_objects_in_front(max_distance_m, fov_deg, kinds=None)
+query_objects_near(radius_m, kinds=None)
+query_objects_by_kind(kind)
+query_objects_to_left(max_distance_m, angle_width_deg, kinds=None)
+query_objects_to_right(max_distance_m, angle_width_deg, kinds=None)
+get_recent_telemetry(seconds, limit)
+get_replay_summary(session_id=None)
+```
+
+Planning-only tools:
+
+```text
+parse_rover_intent(prompt)
+resolve_spatial_target(intent)
+draft_mission(goal, target_candidates, constraints)
+validate_mission_draft(plan)
+```
+
+Do not add execution tools in the first pass.
+
+## Tool Permission Classes
+
+Every tool should declare a permission class:
+
+```text
+read_only
+analysis
+planning
+command_staging
+execution
+```
+
+Rules:
+- `read_only` tools can run automatically and should be logged.
+- `analysis` tools can run automatically but may be more expensive or verbose.
+- `planning` tools can create drafts only.
+- `command_staging` tools require explicit operator approval before anything is staged.
+- `execution` tools require explicit approval plus controller and safety checks.
+
+The initial safe surface includes only `read_only`, `analysis`, and `planning`.
+
+### Async/Sync Boundary For Spatial Tools
+
+`SpatialQueryService` should stay synchronous and deterministic. It should accept already-resolved inputs such as rover pose, heading, scene payload, and query parameters, then return geometry results without touching async runtime state.
+
+Callers are responsible for resolving async state before invoking spatial tools:
+- API/context callers should `await get_current_rover_state()` or use an already-built context snapshot.
+- LangChain tools must remain synchronous. They should close over the request's preloaded rover/context snapshot rather than calling `asyncio.run()` inside the tool loop.
+
+This keeps spatial queries testable without an event loop and avoids nested-event-loop failures inside FastAPI/uvicorn.
+
+## Future Perception Data Model
+
+When lidar/camera/object detection is added, do not feed raw point clouds or long frame descriptions directly into normal chat context.
+
+The perception subsystem should produce structured detected objects or tracks:
+
+```json
+{
+  "track_id": "dyn_0012",
+  "class_label": "rock",
+  "confidence": 0.87,
+  "pose": {
+    "frame_id": "map",
+    "x": 18.2,
+    "y": -4.5,
+    "z": 0.3
+  },
+  "relative_to_rover": {
+    "distance_m": 14.8,
+    "bearing_deg": 12.5,
+    "zone": "front"
+  },
+  "geometry": {
+    "type": "bbox_3d",
+    "size_m": [1.2, 0.8, 0.6]
+  },
+  "source": {
+    "sensors": ["lidar", "camera"],
+    "timestamp": 1778270000.0
+  },
+  "status": "active"
+}
+```
+
+Later storage can split the world model into:
+
+```text
+static_map_objects
+dynamic_object_tracks
+sensor_observations
+missions
+mission_events
+```
+
+For current simulator scale, JSON plus SQLite metadata is enough. For larger
+real sites, use a spatial database such as PostGIS or SpatiaLite.
+
+## MCP Direction
+
+MCP should be treated as an adapter layer, not the first internal implementation.
+
+First build normal Python services and a tool registry. Later, expose stable read-only and planning tools through MCP for external agents:
+
+```text
+query_objects_in_front
+query_objects_near
+get_current_rover_state
+get_scene_summary
+get_recent_telemetry
+retrieve_project_docs
+draft_mission
+validate_mission_draft
+```
+
+This avoids coupling the core GCS logic to one agent transport while still keeping the project MCP-ready.
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# AI Agent Token Efficiency
+
+## Motivation
+
+Agent turns can become expensive when stable prompt material, full context
+snapshots, and verbose tool history are resent on every request. The durable
+design goal is to reduce repeated token cost without degrading tool-selection
+accuracy or mission-planning safety.
+
+## Primary Cost Drivers
+
+The main recurring cost sources are:
+
+- conversation history replay
+- full live-context snapshots even when little changed
+- eager detail pre-fetch in chat mode when equivalent tools exist
+- verbose tool descriptions and tool-result retransmission
+
+## Optimization Priorities
+
+Apply improvements in this order:
+
+- enable provider-side prompt caching for stable prompt prefixes
+- prefer context-delta mode over replaying full snapshots every turn
+- disable or aggressively trim eager-detail pre-fetch when tools can fetch the same facts on demand
+- reduce redundant tool-result replay and repeated failed tool invocations
+- shrink tool descriptions only behind evaluation coverage
+
+## Safety Rules
+
+Optimization work must preserve these constraints:
+
+- accuracy is more important than token reduction for planning and mission workflows
+- tool-description trimming should not ship without an eval harness
+- history compaction should keep enough recent detail for correct follow-up reasoning
+- caches must invalidate on relevant scene, telemetry, config, or mission changes
+- provider-specific caching telemetry should be surfaced so savings are measurable rather than inferred
+
+## Small-Model Recovery Rule
+
+When a tool failure includes structured recovery hints, weaker models should
+prefer the hinted fallback before asking the operator for clarification or
+repeating the failed call. This is a robustness rule first, but it also
+reduces waste from repeated failed iterations.
+
+## Operational Guidance
+
+Use these practices:
+
+- cache stable prompt prefixes when the provider supports cached input
+- prefer full snapshot on session start, then deltas after meaningful state changes
+- avoid injecting detail eagerly when an equivalent read-only tool exists
+- short-circuit repeated identical tool failures
+- cache stable read-only tool results within a session when invalidation is trustworthy
+- minimize JSON formatting overhead where readability is not required
+
+
+---
+
+<!-- source: docs/components/ai-agent/design.md -->
+
+# Tool Contract Standard (AI Agent Tools)
+
+Mandatory for any new or modified agent tool.
+
+## Required Contract Fields
+
+Every tool must define a contract entry in `TOOL_CONTRACTS` with:
+
+- `inputs`: argument name -> type string
+- `required_inputs`: required argument names
+- `upstream_from_tools`: which tool outputs can supply required args
+- `returns`: returned field -> type string
+- `next_tools`: recommended downstream tools for chaining
+
+## Required Implementation Rules
+
+When adding a tool:
+
+1. Register a `ToolDefinition(...)` entry in the tool registry.
+2. Set the tool metadata fields on `ToolDefinition`: `permission`, `tier`, `required_scopes`, and `side_effects`.
+3. Add/update the tool contract in `TOOL_CONTRACTS`.
+4. Ensure the tool description explains the operational intent.
+5. Ensure inputs/returns include actual field names used by code paths.
+6. Ensure chaining guidance reflects realistic sequences (not hypothetical).
+
+## Why This Is Required
+
+The LLM performs better when it sees explicit:
+
+- argument types and required fields
+- where required arguments come from
+- what the tool returns
+- what to call next
+
+This reduces clarification loops and improves autonomous tool chaining.
+
+## Exposure
+
+Contract metadata is injected into each tool description and surfaced in:
+
+- model-facing tool descriptions (tool-calling runtime)
+- `/tools` command output in AI chat
+
+So the contract is available both at runtime and in operator-visible docs.
+

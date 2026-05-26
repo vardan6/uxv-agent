@@ -18,7 +18,7 @@ Work on `rover-sim-next` is sequenced after the current high-priority AI agent a
 ## Consequences
 
 - Documentation about future simulator capability (physics tuning, headless mode, shared URDF) targets `rover-sim-next` by name, not a generic "future simulator."
-- `components/simulator/design.md` includes a "planned" section describing the `rover-sim-next` direction; `internals/rover-sim-next-phase-1.md` tracks the implementation as it lands.
+- `components/simulator/design.md` includes a "planned" section describing the `rover-sim-next` direction; `design.md` tracks the implementation as it lands.
 - New simulator capability work that does not fit in `3d-env` lands in `rover-sim-next/` rather than as a third scaffold.
 - If `rover-sim-next` is abandoned, this ADR is superseded; it is not edited.
 

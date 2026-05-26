@@ -83,7 +83,7 @@ The backend assembles four main runtime concerns:
 - MQTT runtime integration
 - control publication loop
 
-For the HTTP and WebSocket surface, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
+For the HTTP and WebSocket surface, see [design.md](./design.md).
 
 ## Browser Workflow
 
@@ -156,9 +156,9 @@ Key frontend modules under `static/map/`:
 
 The widget uses `L.CRS.Simple` with local scene metres for all overlay coordinates. Export-side projection (local → WGS84) is handled by `MissionExportService` on the backend. Lat/lon is never used inside the widget itself.
 
-For the map widget design spec and phase 1A–1E delivery plan, see [internals/map-widget.md](./internals/map-widget.md).
+For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
-For AI context, intent parsing, and planning-shell wiring, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
+For AI context, intent parsing, and planning-shell wiring, see [design.md](./design.md).
 
 Current status of follow-on map work:
 
@@ -207,3 +207,418 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 - command staging and execution approval require a separate future safety design
 - AI chat is read-only and cannot publish rover control commands
 - mission lifecycle now includes a durable backend execution transition, but it still stops before real external flight-controller/MAVLink handoff; that is the next implementation slice
+
+
+---
+
+# Merged from internals/ (2026-05-26)
+
+The following sections were previously maintained as separate files under `docs/components/gcs/internals/`. Pass-1 + Pass-2 trim left them ≥80% design-shaped, so they have been folded into this design.md verbatim. ADR 0010 (which named the `internals/` tier) is superseded by this consolidation.
+
+
+---
+
+<!-- source: docs/components/gcs/design.md -->
+
+# GCS Technical Details
+
+## Runtime Model
+
+The GCS is a FastAPI application with a WebSocket-driven browser UI.
+
+Its durable runtime concerns are:
+
+- browser connection management
+- in-memory current-state tracking
+- MQTT runtime integration
+- control publication
+- AI session and context orchestration
+
+## Control Ownership Model
+
+Browser control is owned by one active dashboard client at a time.
+
+Design rules:
+
+- the latest focused and visible dashboard browser becomes the active
+  controller
+- other connected browsers may observe without becoming the publisher
+- browser button states are collected by the GCS, not published directly by
+  browsers to MQTT
+- browser blur or hidden state clears inputs and deactivates browser control
+- the GCS publishes MQTT control frames at `control_hz`
+
+This keeps browser clients off the broker directly and preserves the GCS as the
+control-plane authority.
+
+Keyboard bindings come from shared config. UI defaults are fallback behavior,
+not the source of truth.
+
+## MQTT Runtime Behavior
+
+The GCS subscribes to simulator state and camera topics and publishes:
+
+- control frames
+- presence frames keyed by `gcs_id`
+
+### Presence Rule
+
+Presence payloads include `gcs_id`, `active`, `timestamp`, browser-count
+information, and the current active-controller identity.
+
+Default `active` semantics:
+
+- `active` is true when at least one browser WebSocket is connected, unless a
+  forced value is used for shutdown or will-handling
+
+## In-Memory State Boundary
+
+The local state backend tracks:
+
+- latest telemetry payload
+- latest video-frame metadata
+- broker connection status and freshness timestamps
+- active controller and last-input timestamp
+- video-mode settings
+
+That model is sufficient for the current single-process deployment and is not a
+multi-instance coordination design.
+
+## Frontend Delivery Model
+
+Current browser updates are delivered over WebSocket.
+
+Telemetry, broker status, controller state, and video updates should continue
+to be projected from backend-owned runtime state rather than letting browsers
+infer those facts from independent broker reads.
+
+## Settings Model
+
+Settings remain config-backed rather than route-backed.
+
+Durable rules:
+
+- `llm_providers` stores provider configuration
+- `model_routing` stores purpose-based model routing
+- selected-section JSON import/export ignores missing sections rather than
+  deleting newer settings
+- raw API keys are never exported; provider settings use `secret_ref` names
+- shared config also owns `key_bindings`, which are consumed consistently by
+  both dashboard control UI and AI settings answers
+
+Provider checks validate reachability and secret availability only. They do not
+send prompts or publish rover control commands.
+
+## AI Chat Boundary
+
+The `/ai` surface is a provider-backed Chat/Agent workspace with supervised
+non-executing side paths such as intent testing and the planning shell.
+
+Durable rules:
+
+- ordinary chat requests receive a compact read-only current-context block
+- current context is assembled from runtime state, loaded settings, configured
+  LLM provider metadata, scene-map data, replay summaries, and current mission
+  state
+- sensitive values stay redacted from AI context
+- retry rebuilds context from the latest GCS state rather than replaying the
+  old assistant context snapshot
+- Agent mode uses tool surfaces for on-demand detail instead of preloading all
+  large context into the prompt
+
+Mission-execution boundary:
+
+- canonical mission revision and controller-cutover state live behind the
+  backend `mission_execution` boundary
+- planning-shell compatibility flows may still sync into that boundary, but the
+  GCS should treat `mission_execution` as the durable owner of mission state
+
+## Current Architecture Limits
+
+Open architectural limits still include:
+
+- no shared-state backend for coordinated multi-instance deployment
+- presence semantics are still single-GCS oriented
+- video transport remains a practical path, not a final production transport
+
+
+---
+
+<!-- source: docs/components/gcs/design.md -->
+
+# LLM Provider Agent Capability Rule
+
+## How GCS currently decides “agent-capable”
+
+In Agent mode, UI/runtime currently treats a provider as tool-capable when either:
+- provider capabilities include `tool_calling` or `planner`, or
+- provider type is not `ollama` (fallback heuristic in UI).
+
+Reference: [static/ai.js](/mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server/static/ai.js)
+
+## Durable Rule
+
+The durable product rule is:
+
+- explicit capability metadata should be the primary signal
+- `tool_calling` is sufficient for tool-using agent mode
+- `planner` also qualifies a provider for agentic planning paths
+- non-`ollama` fallback should be treated as a compatibility heuristic, not a long-term contract
+- placeholder model IDs must be treated as unknown until replaced with concrete models and validated
+- local models may need explicit conformance checks even when the serving stack advertises tool support
+
+## Operational Guidance
+
+- Prefer provider entries that declare `tool_calling` directly instead of relying on fallback inference.
+- Keep `ollama` models behind tool-call conformance validation unless they have been verified in this environment.
+- Do not rank placeholder or vendor-agnostic model IDs as agent-capable without concrete validation.
+- Keep context-window comparisons out of durable design docs; they are dated operational snapshots.
+
+The full provider-by-provider matrix is archival audit material rather than durable system design.
+
+
+---
+
+<!-- source: docs/components/gcs/design.md -->
+
+# Map Widget
+
+This document defines the durable design contract for the reusable mission map
+widget used on `/ai` and later available to other GCS surfaces.
+
+## Purpose
+
+The widget gives operators spatial review of mission revisions and safe direct
+manipulation of non-executing missions without collapsing approval and
+execution into one action.
+
+## Safety Invariants
+
+These rules are non-negotiable:
+
+1. approval is not execution
+2. the client never mutates an executing mission
+3. the client never silently overwrites authoritative mission state
+4. the widget never invents backend contracts that do not exist
+
+Implications:
+
+- approval, rejection, and execution remain separate user actions
+- all geometry mutation goes through backend round-trips
+- missing backend features are hidden or disabled explicitly
+
+## Backend Contracts
+
+### Mission Overlay Payload
+
+The widget consumes mission overlays from the backend mission-execution
+surface.
+
+The durable payload concepts are:
+
+- `operation_id`
+- `revision_id`
+- `draft_id`
+- `status`
+- `goal`
+- `waypoint_count`
+- overlay `bounds`
+- route-line and waypoint features
+
+The backend overlay builder remains the source of truth for exact field shape.
+
+### Coordinate System
+
+Mission overlay points are local scene metres `{x, y, z}`, not WGS84
+lat/lon.
+
+Design rule:
+
+- scene-mode rendering uses `L.CRS.Simple`
+- WGS84 export remains a server-side concern
+- any future WGS84 basemap mode must be a distinct widget mode with explicit
+  CRS metadata
+
+### Mission Revision List
+
+Revision rows are grouped client-side by `operation_id`.
+
+Design rules:
+
+- one top-level row per operation
+- default visible revision is the operation's active revision, falling back to
+  the newest revision
+- earlier revisions live under a collapsed earlier-revisions affordance
+- executing revisions remain force-visible
+
+### Approval, Rejection, And Execution
+
+The widget uses existing backend transitions rather than inventing new ones.
+
+Design rules:
+
+- approval writes mission approval/export state but does not execute the rover
+- execution is a separate explicit action with controller-version staleness
+  checks
+- rejection is a separate explicit action
+- after any of these actions, the widget refreshes revision and overlay state
+
+### Telemetry Source
+
+The live vehicle layer uses existing GCS telemetry projection.
+
+Design rule:
+
+- the widget does not open an unrelated parallel telemetry model when `/ws`
+  already provides the needed state
+
+### Deferred Sources
+
+These remain gated on real backend sources:
+
+- mission revision push events
+- geofence display and validation
+- standalone export affordances
+- home-point editing
+
+## Frontend Module Boundary
+
+The widget remains a small ES-module surface without a framework or build step.
+
+Durable separation:
+
+- one orchestrator widget
+- layer modules for overlays and live vehicle state
+- UI modules for mission list, selection, context actions, and help
+- data modules for backend wrappers
+- pure state/logic modules for edit state, mission grouping, and profile logic
+
+Pure logic modules should remain DOM- and Leaflet-free so they stay easy to
+test later.
+
+## AI Chat Integration
+
+The map is a secondary surface on `/ai`, below the main chat area.
+
+Design rules:
+
+- chat remains the primary interaction surface
+- the widget supports container re-parenting and resize invalidation
+- map state is driven by the active AI session
+
+## Mission List Rules
+
+Each operation row carries:
+
+- visibility control
+- status indication
+- vehicle/profile identity
+- mission name or equivalent label
+- provenance/origin indicator
+- action affordances appropriate to the revision state
+
+Behavior rules:
+
+- visible overlays are capped softly to avoid clutter
+- focus applies fit-to-bounds and dims non-focused visible missions
+- numbered waypoint badges remain visible because color alone is insufficient
+
+## Map Rendering Rules
+
+- proposed revisions render dashed and visually weaker
+- approved revisions render solid and fully emphasized
+- executing revisions render as locked
+- superseded or completed revisions render dimmed
+- fit-to-bounds uses the focused mission when one exists, else the visible-set
+  union
+
+## Accessibility And Keyboard Ownership
+
+The widget shares a page with a keyboard-heavy chat composer.
+
+Design rules:
+
+- icon-only controls still require explicit accessible labels
+- color never carries meaning by itself
+- map keyboard shortcuts only fire when focus is inside the widget and not in a
+  free-text input
+- `Esc` closes menus/modals before clearing selection and exiting edit mode
+- touch/mobile may degrade to read-only editing behavior, but the surface must
+  remain usable
+
+## Empty, Error, And Offline States
+
+- when no mission overlay exists, the widget shows a no-mission state rather
+  than a broken map
+- overlay API failures surface as non-blocking retryable errors
+- missing vehicle telemetry hides the live vehicle marker without blocking
+  mission rendering
+- missing vehicle-profile data falls back safely rather than blocking the UI
+
+## Editing Model
+
+### Core Rules
+
+- editing is available only for non-executing revisions
+- gesture handlers short-circuit on locked revisions
+- client edits operate against backend-backed revision state with optimistic
+  concurrency checks
+- starting edits on a locked but non-executing revision may fork a new
+  client-authored revision
+
+### Gestures And Keyboard
+
+The widget supports:
+
+- waypoint selection and multi-selection
+- waypoint dragging
+- insert-before / insert-after behavior
+- add-waypoint mode
+- delete and focus shortcuts
+- explicit help and context actions
+
+The exact input affordances may evolve, but they must continue to respect the
+locking and concurrency rules above.
+
+### Provenance State Machine
+
+Per-waypoint provenance stays explicit:
+
+- `ai`
+- `user`
+- `ai+edited`
+
+Design rule:
+
+- once a waypoint is `ai+edited`, later AI regeneration must treat it as
+  operator-modified and require explicit confirmation before replacement
+
+### Hard Lock During Execution
+
+While a revision is executing:
+
+- edit, reject, and approve affordances are disabled
+- drag/insert/delete gestures are blocked before state changes
+- the revision remains visibly locked in both the list and map rendering
+
+## Vehicle Profile Boundary
+
+Vehicle profiles represent mission capability context, not per-waypoint editing
+schema by themselves.
+
+The widget may render profile identity and use it to drive map hints, but
+vehicle capability fields and per-waypoint property editing remain separate
+concerns.
+
+## Deferred Beyond The Current Widget Contract
+
+These stay outside the core widget contract until real backend/platform support
+exists:
+
+- replay-page migration details
+- geofence display and validation
+- WGS84 basemap mode
+- edit-during-execution
+- richer per-waypoint property schema editing
+- floating/second-monitor window behavior beyond re-parenting support
+

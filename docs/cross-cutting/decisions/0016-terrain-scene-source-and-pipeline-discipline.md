@@ -37,4 +37,4 @@ Hand-editing the manifest directly is permitted only as an intentional debugging
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/simulator/internals/terrain-scene.md`](../../components/simulator/internals/terrain-scene.md) § "Source And Pipeline Discipline" and § "Editing Rule".
+- Companion design lives in [`docs/components/simulator/design.md`](../../components/simulator/design.md) § "Source And Pipeline Discipline" and § "Editing Rule".

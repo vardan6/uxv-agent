@@ -33,4 +33,4 @@ The first non-null resolution wins.
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/ai-agent/internals/intent-parsing.md`](../../components/ai-agent/internals/intent-parsing.md) § "Provider Routing For Intent Parsing".
+- Companion design lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "Provider Routing For Intent Parsing".

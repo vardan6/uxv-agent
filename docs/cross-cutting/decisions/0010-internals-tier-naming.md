@@ -1,7 +1,7 @@
 # 0010. "Internals" Is The Name Of The Third Documentation Tier
 
 Date: 2026-05-20
-Status: Accepted
+Status: Superseded 2026-05-26 — the `internals/` tier was eliminated and its content folded into each component's `design.md`. See § Supersession at the bottom of this ADR.
 
 ## Context
 
@@ -16,7 +16,7 @@ The user proposed "internals" as the alternative.
 
 ## Decision
 
-The third documentation tier is named **internals**. The folder is `internals/`, with one file per concept (`internals/graph-spec.md`, `internals/context-layer.md`, etc.). The name appears in folder paths only — never inside file content, since tier is conveyed by location, not by labels.
+The third documentation tier is named **internals**. The folder is `internals/`, with one file per concept (`design.md`, `design.md`, etc.). The name appears in folder paths only — never inside file content, since tier is conveyed by location, not by labels.
 
 ## Consequences
 
@@ -34,3 +34,15 @@ The third documentation tier is named **internals**. The folder is `internals/`,
 ## Follow-Ups
 
 - STYLE.md and every component README use "internals" consistently. Any drift gets fixed under the rename-everywhere rule.
+
+## Supersession (2026-05-26)
+
+After the Pass-1 + Pass-2 trim, every surviving `internals/*.md` file was ≥80% design-shaped (contracts, invariants, state machines, decisions), with implementation snapshots and dated narrative stripped out. The remaining distinction between `design.md` and `internals/<topic>.md` had collapsed: both tiers now held design-shaped content, just at different topic-granularity.
+
+The third tier was folded into the second. Each component's `internals/*.md` files were concatenated into the corresponding `design.md`, each preserving its original `# Title` heading as a top-level section. The `internals/` directories were deleted. STYLE.md was rewritten to describe a two-tier model. Component READMEs and the components index were updated.
+
+Pre-drop state is preserved at the git tag `pre-drop-internals-docs-2026-05-26`.
+
+Rationale carried forward from this ADR: "internals" still names a real distinction (the layer an agent may freely rewrite from code), but at this point that label applies to the *bottom half* of each component's `design.md` rather than to a separate folder. The folder-path-conveys-tier convention is preserved: top of `design.md` is contract; the merged-from-internals section at the bottom is implementation-living.
+
+Future re-introduction of a third tier would need a new ADR and a strong reason — the trim pass demonstrated that the previous split was producing more navigation overhead than navigation aid.

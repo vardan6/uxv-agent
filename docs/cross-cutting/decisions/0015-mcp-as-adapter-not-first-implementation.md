@@ -31,4 +31,4 @@ MCP is treated as an adapter layer, not the first implementation. The order of w
 
 ## Follow-Ups
 
-- Companion design lives in [`docs/components/ai-agent/internals/spatial-tools.md`](../../components/ai-agent/internals/spatial-tools.md) § "MCP Direction" and § "Agent Tool Registry".
+- Companion design lives in [`docs/components/ai-agent/design.md`](../../components/ai-agent/design.md) § "MCP Direction" and § "Agent Tool Registry".

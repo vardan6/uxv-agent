@@ -5,7 +5,7 @@ What the Ground Control Station must provide from the operator's point of view. 
 Companion documents:
 
 - [design.md](./design.md) — implementation strategy, runtime seams, file layout, current limitations.
-- [internals/api-and-runtime.md](./internals/api-and-runtime.md) — HTTP/WebSocket surface, control model, settings model.
+- [design.md](./design.md) — HTTP/WebSocket surface, control model, settings model.
 
 If documents disagree:
 

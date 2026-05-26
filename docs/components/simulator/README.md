@@ -12,17 +12,8 @@ Two simulator implementations exist:
 |---|---|---|
 | Requirements | [requirements.md](./requirements.md) | Complete |
 | Design | [design.md](./design.md) | Complete |
-| Internals | [internals/](./internals/) | Complete |
 
-## Internals Index
-
-| File | Topic |
-|---|---|
-| [terrain-scene.md](./internals/terrain-scene.md) | Terrain scene manifest format, generation, and pipeline |
-| [technical-details.md](./internals/technical-details.md) | MQTT integration details, publish gating, rover runtime baseline |
-| [rover-physics-tuning.md](./internals/rover-physics-tuning.md) | Physics tuning method, accepted parameter baseline, test sequence |
-| [rover-sim-next-phase-1.md](./internals/rover-sim-next-phase-1.md) | Phase 1 implementation checklist for `rover-sim-next` |
-| [shadow-enhancement.md](./internals/shadow-enhancement.md) | Shadow quality implementation: tiers, fixes applied, deferred work |
+Topic-level internals (terrain-scene, technical-details, rover-physics-tuning, rover-sim-next-phase-1, shadow-enhancement) are folded into [design.md](./design.md) at the end of the file as of 2026-05-26.
 
 ## Code Locations
 

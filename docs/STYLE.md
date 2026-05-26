@@ -6,17 +6,18 @@ This guide is **agent-neutral**: every convention here works for any AI agent or
 
 ## Stability Tiers
 
-Every documented component has up to three tiers of documentation. The tier determines who can change it and when.
+Every documented component has two tiers of documentation. The tier determines who can change it and when.
 
 | Tier | Filename pattern | Changes when |
 |---|---|---|
 | **Requirements** | `<component>/requirements.md` | Only when the user explicitly asks. Locked otherwise. |
-| **Design** | `<component>/design.md` | Only after discussion and approval. Captures agreed behavior and contracts. |
-| **Internals** | `<component>/internals/<topic>.md` | Freely, to track what the code currently does. Regenerable from code. |
+| **Design** | `<component>/design.md` | Only after discussion and approval. Captures agreed behavior, contracts, and topic-level implementation notes that are durable enough to commit to. |
 
-A component is "fully documented" when all three tiers exist. Internals is the layer an AI agent can rewrite during normal work; the other two are not.
+A component is "fully documented" when both tiers exist.
 
 Tier is **not** stated inside the file. The folder path conveys it. Don't restate the obvious.
+
+A third `internals/` tier existed until 2026-05-26 — its content (≥80% design-shaped after the Pass-1 + Pass-2 trim) has been folded into `design.md`. See ADR 0010 for the supersession note.
 
 ## Folder Layout
 
@@ -32,20 +33,14 @@ docs/
       README.md             # short index of this component's docs
       requirements.md
       design.md
-      internals/
-        README.md
-        <topic>.md
-        ...
     gcs/
       README.md
       requirements.md
       design.md
-      internals/...
     simulator/
       README.md
       requirements.md
       design.md
-      internals/...
 
   cross-cutting/
     README.md
@@ -75,7 +70,7 @@ docs/
 - **Stable concept names, not session names.** `mission-execution.md`, not `mission-execution-plan-2026-05-12.md`.
 - **No dates in active filenames.** Git history provides dates. Date-stamped filenames belong only in `archive/` (format: `YYYY-MM-DD-<slug>.md`).
 - **Singular nouns by default.** `decision`, `provider`, `mode`.
-- **Tier filenames are fixed.** Always `requirements.md`, `design.md`, `internals/<topic>.md`. Never invent a fourth name.
+- **Tier filenames are fixed.** Always `requirements.md` and `design.md`. Never invent a third name.
 
 ## File Header
 
@@ -103,11 +98,10 @@ Soft targets. Split a file by topic when it grows past the cap.
 | Tier | Target lines | Hard cap |
 |---|---|---|
 | Requirements | ≤ 400 | 600 |
-| Design | 400-700 | 1000 |
-| Internals (single topic) | 300-500 | 800 |
+| Design | 400-1500 | 3500 |
 | Folder README | ≤ 80 | 150 |
 
-When an internals file would exceed its cap, split by topic, not by length. Each new file gets a clear single-concept name.
+`design.md` now absorbs topic-level implementation notes (formerly the `internals/` tier). When a design file would exceed its hard cap, split by topic into sibling files in the same component folder (e.g., `design-mission-execution.md`) rather than re-introducing a nested tier.
 
 ## Cross-Linking
 
@@ -115,15 +109,14 @@ When an internals file would exceed its cap, split by topic, not by length. Each
 - **Repo paths for code.** `gcs_server/ai/context_service.py`, not a URL.
 - **Always link with `.md` extension.** Renders on GitHub; agent-friendly.
 - **Glossary on first use.** When introducing a project term in a doc, link it to `glossary.md` on first use.
-- **Two-link rule between tiers.** `requirements.md` links to `design.md`. `design.md` links back to `requirements.md` and out to relevant `internals/*.md` files. `internals/*.md` links back to `design.md`. No tier reads as an island.
+- **Two-link rule between tiers.** `requirements.md` links to `design.md`. `design.md` links back to `requirements.md`. No tier reads as an island.
 
 ## Single Source Of Truth
 
 If two docs say the same thing, one is wrong. Link instead of restate.
 
 - Requirements states *what* and *why*. Design links to requirements; does not restate them.
-- Design states *how it behaves* externally and *what it commits to*. Internals link to design; do not restate the contract.
-- Internals state *how the code currently does it*.
+- Design states *how it behaves* externally, *what it commits to*, and *how the code currently does it* at the topic level (the former internals content).
 
 When a fact in a doc could be derived from the folder path (tier, component), don't write the fact in the doc.
 
@@ -154,7 +147,7 @@ A doc moves to `archive/` when any of the following are true:
 - **Dated filename.** A `YYYY-MM-DD-...` filename is inherently transient.
 - **Abandoned.** A plan for an approach that was not taken.
 
-**Extract before archive.** Before moving anything to archive, port its non-obvious decisions, design rationale, diagrams, and implementation knowledge into the appropriate canonical doc (component `design.md`, an `internals/*.md`, or a new ADR). Archive is for traceability, not for hiding still-useful content. "Implemented already" is *not* sufficient cause to archive without extraction — the *why* often outlives the *what*.
+**Extract before archive.** Before moving anything to archive, port its non-obvious decisions, design rationale, diagrams, and implementation knowledge into the appropriate canonical doc (component `design.md`, or a new ADR). Archive is for traceability, not for hiding still-useful content. "Implemented already" is *not* sufficient cause to archive without extraction — the *why* often outlives the *what*.
 
 Archive folder structure mirrors the live tree, with dated filenames:
 
@@ -197,7 +190,7 @@ When superseding an ADR, change its status to "Superseded by <link>" and add a n
 
 A "plan" doc captures intended future work. When the work is done:
 
-- if the plan content is now description of the implementation, fold it into the matching `design.md` and `internals/*.md`
+- if the plan content is now description of the implementation, fold it into the matching `design.md`
 - if the plan content is no longer relevant, extract any still-useful decisions to an ADR and archive
 - never leave executed plans on the active surface
 
@@ -205,7 +198,7 @@ A "plan" doc captures intended future work. When the work is done:
 
 Do not maintain a second active status hub under `docs/`.
 
-- Put current implementation reality in the relevant component `design.md` or `internals/*.md` file.
+- Put current implementation reality in the relevant component `design.md` file.
 - Put current product intent in the relevant component `requirements.md`.
 - Put cross-component rationale in `cross-cutting/vision.md`, `cross-cutting/architecture.md`, or an ADR.
 - When retiring a high-level summary or plan doc, move the old file to `archive/cross-cutting/` and leave at most a short compatibility stub at the old path if historical links need to keep resolving.
@@ -246,15 +239,14 @@ Every folder in `docs/` (excluding `archive/<area>/`) has a `README.md`. It is s
 | Doc | Purpose |
 |---|---|
 | [requirements.md](./requirements.md) | What the agent must do and why |
-| [design.md](./design.md) | Agreed behavior, state machine, contracts |
-| [internals/](./internals/) | How the code currently implements it |
+| [design.md](./design.md) | Agreed behavior, state machine, contracts, and topic-level implementation notes |
 ```
 
 No tier labels, no metadata, no convention lists. The README points; STYLE.md governs.
 
-## Component Folder Triplet — What Each File Holds
+## Component Folder Pair — What Each File Holds
 
-For any component with all three tiers:
+For any component with both tiers:
 
 **`requirements.md`** — what users / stakeholders need. Locked.
 - Goals, success criteria, scope boundaries
@@ -262,17 +254,12 @@ For any component with all three tiers:
 - Fixed decisions (with rationale where non-obvious)
 - Out-of-scope items, explicitly
 
-**`design.md`** — what the component does, externally. Agreed.
+**`design.md`** — what the component does, externally, and how the code currently does it at the topic level. Agreed.
 - High-level behavior and state machine
 - API surface and contracts with other components
 - Events, data shapes, invariants
 - Decisions section (component-local; cross-cutting decisions go to an ADR)
-
-**`internals/<topic>.md`** — how the code currently does it. Living.
-- Internal modules and their responsibilities
-- File paths, function names, code namespaces
-- Algorithms, data structures, gotchas
-- One concept per file; split when growing past the cap
+- Topic-level implementation notes (the former `internals/` content): module responsibilities, file paths, function names, algorithms, gotchas. Group by topic with `##` headings.
 
 ## When In Doubt
 

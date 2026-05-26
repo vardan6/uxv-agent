@@ -72,6 +72,6 @@ For technical readers:
 1. [Architecture](./architecture.md)
 2. [GCS Design](../components/gcs/design.md)
 3. [AI Agent Design](../components/ai-agent/design.md)
-4. [AI Agent Graph Spec](../components/ai-agent/internals/graph-spec.md)
+4. [AI Agent Graph Spec](../components/ai-agent/design.md)
 5. [Simulator Design](../components/simulator/design.md)
 6. [Run And Config Guide](./operations/run-and-config.md)
