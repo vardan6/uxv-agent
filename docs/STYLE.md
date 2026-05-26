@@ -25,8 +25,6 @@ docs/
   README.md                 # short index of this folder
   STYLE.md                  # this file
   glossary.md               # shared vocabulary, on-demand reference
-  current-state.md          # living: what is implemented today
-  roadmap.md                # living: prioritized forward plan
 
   components/
     README.md               # one-screen table: per-component tier completeness
@@ -69,8 +67,7 @@ docs/
 - **A component folder** (`components/<name>/`) exists only for components with stakeholder-facing requirements. Internal helpers (e.g., `tts`, `config`) collapse into a single README and fold their requirements into a parent component's docs.
 - **Cross-cutting** is for content that doesn't belong to one component: system architecture, ADRs, operations, third-party research.
 - **Archive** is for traceability. Anything in archive is not the source of truth.
-
-Living-status docs at the root (`current-state.md`, `roadmap.md`) are the only docs the user actively maintains after each implementation. Everything else is discovery-on-demand.
+- **Repo-root workflow files** such as `activeContext.md` and `roadmap.md` are outside `docs/`. They track session/workflow state, not canonical product design.
 
 ## Naming
 
@@ -204,13 +201,14 @@ A "plan" doc captures intended future work. When the work is done:
 - if the plan content is no longer relevant, extract any still-useful decisions to an ADR and archive
 - never leave executed plans on the active surface
 
-## Living Status Docs
+## Repo-Wide Status
 
-`current-state.md` and `roadmap.md` are the only living docs the user maintains by hand. When updating them:
+Do not maintain a second active status hub under `docs/`.
 
-- include a date heading for new sections (e.g., `## 2026-05-15`)
-- keep section structure stable ("Implemented", "Partial", "Not implemented" / "Now", "Next", "Later") so readers and agents can predict where to look
-- when superseding old content, move it to `archive/cross-cutting/` rather than deleting
+- Put current implementation reality in the relevant component `design.md` or `internals/*.md` file.
+- Put current product intent in the relevant component `requirements.md`.
+- Put cross-component rationale in `cross-cutting/vision.md`, `cross-cutting/architecture.md`, or an ADR.
+- When retiring a high-level summary or plan doc, move the old file to `archive/cross-cutting/` and leave at most a short compatibility stub at the old path if historical links need to keep resolving.
 
 Everything else is discovery-on-demand. Do not add new "mandatory load" docs. Predictable paths and folder READMEs do the job.
 

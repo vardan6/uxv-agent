@@ -6,7 +6,6 @@ Companion documents:
 
 - [design.md](./design.md) — implementation strategy, runtime seams, file layout, current limitations.
 - [internals/api-and-runtime.md](./internals/api-and-runtime.md) — HTTP/WebSocket surface, control model, settings model.
-- [../../current-state.md](../../current-state.md) — what ships today.
 
 If documents disagree:
 
@@ -221,7 +220,7 @@ The operator should treat stale telemetry as suspect — the rover may not actua
 
 ### Single-Operator Assumption
 
-The current GCS is single-instance. Multi-browser use within one GCS works (focus determines who drives), but multi-GCS deployment is not fully defined yet. See [roadmap.md](../../roadmap.md) for the planned direction.
+The current GCS is single-instance. Multi-browser use within one GCS works (focus determines who drives), but multi-GCS deployment is not fully defined yet.
 
 ### No Authentication Yet
 

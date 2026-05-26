@@ -1,6 +1,6 @@
 # Tool Contract Standard (AI Agent Tools)
 
-This document is mandatory for any new or modified agent tool in `ai/tool_registry.py`.
+Mandatory for any new or modified agent tool.
 
 ## Required Contract Fields
 
@@ -16,7 +16,7 @@ Every tool must define a contract entry in `TOOL_CONTRACTS` with:
 
 When adding a tool:
 
-1. Add a `ToolDefinition(...)` entry in `_build_definitions`.
+1. Register a `ToolDefinition(...)` entry in the tool registry.
 2. Set the tool metadata fields on `ToolDefinition`: `permission`, `tier`, `required_scopes`, and `side_effects`.
 3. Add/update the tool contract in `TOOL_CONTRACTS`.
 4. Ensure the tool description explains the operational intent.
@@ -34,12 +34,11 @@ The LLM performs better when it sees explicit:
 
 This reduces clarification loops and improves autonomous tool chaining.
 
-## Existing Behavior
+## Exposure
 
-Tool contracts are automatically injected into each tool description via
-`_with_tool_contract()` and exposed in:
+Contract metadata is injected into each tool description and surfaced in:
 
 - model-facing tool descriptions (tool-calling runtime)
 - `/tools` command output in AI chat
 
-So contract metadata is available both at runtime and in operator-visible docs.
+So the contract is available both at runtime and in operator-visible docs.

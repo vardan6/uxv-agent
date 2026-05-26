@@ -4,12 +4,14 @@ Status date: 2026-05-20.
 
 **How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [internals/graph-spec.md](./internals/graph-spec.md) wins on diagrams only.
 
-Status note (implementation reality, kept in sync with [`../../current-state.md`](../../current-state.md)):
+Status note (implementation reality):
 
 - `AgentLoopRuntime` is implemented and powers Agent chat.
+- The visible `/ai` product surface is still Chat plus read-only Agent, with the planning shell entered explicitly through `/plan`.
 - The planning shell wraps the planning flow.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
-- `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, and a local execution-transition adapter. Real external controller transport remains the next slice.
+- `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
+- Canonical mission storage and approval/execution writes now flow through `mission_execution`, but planning-shell draft compatibility seams still exist around the current wrapper flow and real external controller transport remains the next slice.
 
 This document is **expected to evolve** as implementation lands. File names, phase ordering, and runtime interface shapes can be updated in place through normal review.
 

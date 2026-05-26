@@ -160,7 +160,7 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
 
 `rover-sim-next/` is currently a scaffold, not a runnable replacement simulator.
 
-Use `3d-env/` for the current working simulator until the ROS 2 + Gazebo successor path has a supported launch flow.
+Use `3d-env/` for the current working simulator until any alternative simulator path has a supported launch flow.
 
 ## Current Operational Sequence
 

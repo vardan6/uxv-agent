@@ -4,7 +4,7 @@ The simulator is the vehicle-side runtime. It provides a simulated rover with ph
 
 Two simulator implementations exist:
 - **`3d-env/`** — current working baseline (Panda3D + Bullet)
-- **`rover-sim-next/`** — planned ROS 2 + Gazebo successor (scaffold only)
+- **`rover-sim-next/`** — ROS 2 + Gazebo scaffolded side path (not part of the working runtime)
 
 ## Documentation Tier
 
@@ -27,6 +27,6 @@ Two simulator implementations exist:
 ## Code Locations
 
 - `3d-env/` — current Panda3D simulator
-- `rover-sim-next/` — ROS 2 + Gazebo successor scaffold
+- `rover-sim-next/` — ROS 2 + Gazebo scaffolded side path
 - `config/terrain_scene.v1.json` — canonical scene manifest
 - `config/common.example.json` — shared MQTT/GCS config contract

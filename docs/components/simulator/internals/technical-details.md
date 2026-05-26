@@ -1,138 +1,68 @@
 # Simulator Technical Details
 
-## Runtime Structure
+## Purpose
 
-The simulator is a Panda3D application centered on `simulator/main.py`.
+This document records the durable simulator runtime rules that shape how the
+simulator interacts with MQTT and the GCS.
 
-Important responsibilities inside the runtime:
-- build terrain and scene geometry from `config/terrain_scene.v1.json`
-- create rover physics objects
-- merge local and MQTT control input
-- generate telemetry payloads
-- publish telemetry and camera frames through the MQTT bridge
-- expose menu and settings behavior
+## MQTT Runtime Contract
 
-## Terrain Scene Data
+The simulator uses MQTT for three distinct responsibilities:
 
-Current terrain and static scene data are manifest-driven.
+- subscribe to control input
+- publish rover state telemetry
+- publish camera frames
 
-Runtime source:
-- `config/terrain_scene.v1.json`
+Telemetry should continue to include the current GCS-facing essentials:
 
-Generator and validation:
-- `tools/generate_terrain_scene.py`
-- `tools/validate_terrain_scene.py`
-
-`simulator/terrain.py` reads the explicit heightfield and road definitions. `simulator/main.py` reads the explicit object list and creates boxes, ellipsoid rocks, compound trees, collision proxies, and the configured spawn point.
-
-The legacy compact file `config/terrain_scene.json` is only generator input during this transition. Runtime code should not use it directly.
-
-## MQTT Integration
-
-### Control Subscription
-
-The simulator subscribes to:
-- `{topic_prefix}/{control_topic}`
-
-It accepts control frames with button-based and optional analog fields, then applies them according to the configured control mode and failsafe timeout.
-
-### Telemetry Publication
-
-The simulator publishes telemetry payloads to:
-- `{topic_prefix}/{state_topic}`
-
-The payload currently includes:
 - timestamp
 - position
-- deterministic virtual GPS derived from the terrain georeference
+- GPS-compatible location
 - orientation
-- IMU placeholders and angular velocity
-- barometer altitude
-- speed and velocity
-- physics debug state (`visible`, wheel contacts, throttle, steering)
-- manual tuning-route reminder metadata used by the HUD
+- speed/velocity
 - camera mode metadata
-- power placeholder values
+- power placeholders
 
-### Camera Publication
+Camera publication remains a separate MQTT media path, but it is governed by
+the same publish policy as state telemetry.
 
-The simulator publishes JPEG bytes to:
-- `{topic_prefix}/{camera_topic}`
+## GCS Presence Semantics
 
-Current source:
-- POV offscreen buffer capture
+The simulator treats a GCS as active only when all of these are true:
 
-### GCS Presence Tracking
-
-The simulator subscribes to:
-- `{topic_prefix}/{gcs_presence_topic}/+`
-
-It stores presence by `gcs_id` and considers a GCS active only when:
-- the payload says `active: true`
+- the presence payload marks it as active
 - the payload contains a recent timestamp
-- the timestamp age is within `gcs_presence_timeout_ms`
+- that timestamp is still inside `gcs_presence_timeout_ms`
 
-## Publish Gating Logic
+Presence should remain keyed by `gcs_id`.
 
-The simulator uses one gate for all outbound MQTT publishing.
+## Publish Gating Rule
 
-Current gate behavior:
-- state telemetry publish is blocked when policy does not allow it
-- camera frame publish is blocked when policy does not allow it
+The simulator uses one outbound publish gate for all MQTT publishing.
 
-This matters because disabling only state telemetry would still leak bandwidth through camera frames.
+Design rule:
 
-## UI Surface
+- state telemetry publish is blocked when policy disallows outbound publishing
+- camera-frame publish is blocked by the same policy
 
-Current operator-visible UI related to MQTT includes:
-- bottom status bar with MQTT state and telemetry policy/effective state
-- menu item `Settings -> Telemetry Policy`
-- MQTT settings dialog fields for:
-  - broker host and port
-  - topics
-  - rates
-  - control mode
-  - telemetry policy
-  - GCS presence topic
-  - GCS presence timeout
+This rule is important because allowing camera publication while blocking state
+telemetry would still leak bandwidth and partially bypass operator policy.
 
-Current operator-visible UI related to rover tuning includes:
-- a physics debug HUD line for pitch, roll, wheel contacts, throttle, and steering
-- a manual test-route HUD reminder: straight bump, uphill climb, side-slope traverse, downhill turn
-- a condensed pass/fail reminder in the HUD: climb not worse than baseline, one main rebound, slide before roll, no uncontrolled washout
+## Rover Baseline Boundaries
 
-## Rover Runtime Baseline
+The accepted rover baseline currently assumes:
 
-The accepted rover baseline in `simulator/rover.py` now combines geometry and dynamics decisions from the completed tuning loop.
+- graded dirt roads, pads, and light uneven ground are in scope
+- extreme rock crawling is out of scope
+- the tower remains visual-only in this phase and does not contribute mass,
+  inertia, or collision
 
-Visual/geometry baseline:
-- larger wheel radius than the original baseline
-- rendered body lowered through derived visual-offset variables rather than ad hoc node edits
-- visual-only tower with thicker post/base/head and reduced height relative to the first tower pass
-- raised POV camera carried by the tower-oriented rover silhouette
+These boundaries should remain explicit while simulator tuning continues.
 
-Dynamics baseline:
-- suspension tuned for medium travel with quicker settling after drop or bump
-- speed-dependent drift allowed through a modest reduction in friction and speed-based planting force
-- side-slope stability improved through lower roll influence and stronger rotational damping
-- steering input smoothed with a steering-response ramp so the front wheels do not snap instantly to full angle
+## Current Practical Limits
 
-Important boundary:
-- the tower remains visual-only in this phase; it does not contribute mass, inertia, or collision
-- the current baseline is accepted for graded dirt roads, pads, and light uneven ground, not for extreme rock crawling
-
-## Current Technical Limitations
+These limits are still part of the runtime boundary:
 
 - camera transport is still MQTT JPEG publishing
-- there is no dedicated simulator-side diagnostics screen for presence entries yet
-- shared runtime config is practical but still broad
-- power values are placeholders rather than a modeled vehicle power system
-- the manual route is currently an overlay reminder, not an in-world marked course or automatic checkpoint detector
-
-## Current Testing Reality
-
-The current codebase supports real runtime testing, but the project still depends heavily on manual end-to-end validation for:
-- broker reconnect behavior
-- stale presence behavior
-- video freshness
-- cross-platform launcher behavior
+- power values remain placeholders rather than a modeled power system
+- the tuning route is an operator reminder, not an in-world checkpoint system

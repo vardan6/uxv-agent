@@ -1,7 +1,5 @@
 # AI Current Context Layer
 
-Status date: 2026-05-09.
-
 ## Purpose
 
 The AI Current Context Layer gives `/ai` live, exact facts before any RAG system is added.
@@ -20,57 +18,9 @@ This layer exists because some facts are already known by the GCS and should not
 
 RAG is still planned, but it should be used for documents, reports, object definitions, mission memory, operator notes, and other knowledge sources where semantic retrieval is useful. It should not be the first source for exact live state or map geometry.
 
-The current-context layer should remain compact. Larger terrain/object/replay/perception details are obtained on demand through deterministic tools. The `SpatialQueryService` and `ToolRegistry` are implemented and serve Agent mode, Rover Intent Test, and the planning shell. Phase 4 bounded lazy retrieval/source controls are now implemented for replay, AI memory, settings, and sensor metadata; later work remains focused on RAG source controls and web-grounded retrieval.
+The current-context layer should remain compact. Larger terrain/object/replay/perception details are obtained on demand through deterministic tools served by `SpatialQueryService` and `ToolRegistry`. Bounded lazy retrieval/source controls cover replay, AI memory, settings, and sensor metadata; RAG source controls and web-grounded retrieval are out of scope here.
 
-## Implemented Now
-
-Implemented modules:
-- `gcs_server/ai/context_service.py`
-- `gcs_server/ai/spatial_query_service.py`
-- `gcs_server/ai/tool_registry.py`
-
-Current provider methods:
-- `build_compact_context(user_message, session_id, timezone_name, run_mode)`
-- `get_current_rover_state()`
-- `get_runtime_context()`
-- `get_settings_context()`
-- `get_llm_context()`
-- `get_scene_map_summary()`
-- `find_objects_in_front(max_distance_m, fov_deg)`
-- `find_objects_near_rover(radius_m)`
-- `find_objects_by_kind(kind)`
-- `get_current_replay_summary()`
-- `get_recent_telemetry(seconds, limit)`
-- `get_current_mission_state()`
-
-Current read-only agent tools:
-- `get_current_rover_state()`
-- `get_scene_summary()`
-- `query_objects_in_front(max_distance_m, fov_deg, kinds=None)`
-- `query_objects_near(radius_m, kinds=None)`
-- `query_objects_by_kind(kind)`
-- `get_current_mission_state()`
-- replay tools for current summary, recent telemetry, session resolution, session summaries, metrics, paths, events, comparison, and aggregation
-- bounded retrieval/memory/config tools: `list_data_surfaces()`, `list_ai_sessions()`, `search_ai_messages()`, `get_ai_session_messages()`, `get_settings_summary()`, `get_settings_section()`, `get_llm_provider_summary()`, `get_sensor_status()`
-
-Implemented service split:
-- `AIContextService` (`context_service.py`): compact always-on prompt context and query-triggered orchestration
-- `SpatialQueryService` (`spatial_query_service.py`): deterministic map/object geometry calculations; 9 methods; tested
-- `ToolRegistry` (`tool_registry.py`): permissioned per-request tool definitions for Agent mode, Intent Test, and the planning shell; `command_staging` and `execution` permission classes are rejected at registration time (any tool attempting to declare them raises an error)
-
-Current AI Chat integration:
-- `app.py` builds a context snapshot before send and retry calls
-- `ai/chat_service.py` inserts the compact context after the read-only system prompt
-- agent mode passes the request's context snapshot into synchronous tool closures so tools do not await runtime state inside LangChain's synchronous tool loop
-- in agent mode, keyword-triggered spatial context details are skipped and the agent is expected to call the read-only tools instead
-- assistant messages store `context_snapshot` and `context_providers` in `ai_messages.meta_json`
-- assistant and planning-shell metadata also store bounded retrieval state as `retrieved_sources`, `loaded_data_refs`, and `retrieval_citations`
-- the same context path is used for streaming and non-streaming sends and retries
-- retry intentionally rebuilds context from the latest rover/runtime/settings/map state instead of reusing the original assistant response context. This makes retry behave as "answer the latest user message again with current GCS facts." The original assistant message's stored `context_snapshot` remains available in message metadata for audit/debugging until that assistant message is deleted by retry.
-
-Current replay support:
-- `ReplayStore.get_session_summary(session_id)` returns active session counts and last timestamps
-- `ReplayStore.get_recent_telemetry(seconds, limit)` returns recent telemetry from the current replay session
+Retry intentionally rebuilds context from the latest rover/runtime/settings/map state instead of reusing the original assistant response context. This makes retry behave as "answer the latest user message again with current GCS facts." The original assistant message's stored `context_snapshot` remains available in message metadata for audit/debugging until that assistant message is deleted by retry.
 
 ## Current Context Sources
 
@@ -78,7 +28,7 @@ Current replay support:
 
 The current context layer does not create a second runtime or a second state database.
 
-`AppRuntime` already exists in `gcs_server/runtime.py`. It is the assembled live GCS process object. It holds:
+`AppRuntime` is the assembled live GCS process object. It holds:
 - loaded `AppConfig`
 - `LocalStateBackend`
 - MQTT runtime
@@ -88,7 +38,7 @@ The current context layer does not create a second runtime or a second state dat
 - LLM secret store
 - WebSocket manager
 
-`LocalStateBackend` already exists in `gcs_server/state.py`. It is the in-memory current-state store for the running GCS process. It holds facts that change while the GCS is running:
+`LocalStateBackend` is the in-memory current-state store for the running GCS process. It holds facts that change while the GCS is running:
 - latest telemetry snapshot
 - broker connection state and freshness timestamps
 - active browser controller and last input timestamp
@@ -116,9 +66,6 @@ Included facts:
 - camera mode
 - camera freshness
 
-Access:
-- `get_current_rover_state()`
-
 ### Runtime Current State
 
 Source:
@@ -136,9 +83,6 @@ Included facts:
 - simulation backend identity
 - configured map/site data
 - current replay session ID
-
-Access:
-- `get_runtime_context()`
 
 ### Settings Current Context
 
@@ -159,9 +103,6 @@ Included facts:
 - simulator backend identity and available backend names
 - map/site defaults
 - AI text-to-speech settings
-
-Access:
-- `get_settings_context()`
 
 This source is intended for exact settings questions such as:
 - broker host or port
@@ -197,9 +138,6 @@ Included facts:
 - whether a stored secret exists for stored-secret providers
 - latest provider check status fields
 
-Access:
-- `get_llm_context()`
-
 Secret handling:
 - raw API keys are not included
 - stored secret values are not included
@@ -218,7 +156,6 @@ Session-specific behavior:
 
 Source:
 - `config/terrain_scene.v1.json`
-- `gcs_server/scene_map.py`
 
 Included facts:
 - backend
@@ -236,24 +173,12 @@ Deterministic object queries:
 - objects near the rover within a radius
 - objects by kind
 
-Access:
-- `get_scene_map_summary()`
-- `find_objects_in_front(max_distance_m, fov_deg)`
-- `find_objects_near_rover(radius_m)`
-- `find_objects_by_kind(kind)`
-
 Scene payload grid size:
 - AI context currently loads the scene map with `grid_size=32`.
 - `grid_size` controls the sampled heightmap resolution included in the scene payload. It does not change object centers, object sizes, terrain bounds, roads, or spawn coordinates, which come from the source scene manifest.
 - The low grid size is intentional for compact context and tool payloads. If future spatial queries use terrain height/collision detail rather than object centers and 2D distances, those queries should request a higher or native-resolution terrain representation explicitly.
 
 ### Mission Current State
-
-Source:
-- future mission tables/workflow
-
-Current behavior:
-- `get_current_mission_state()` returns a clear no-active-mission state
 
 Planned facts:
 - active mission ID
@@ -269,13 +194,9 @@ Planned facts:
 Source:
 - replay SQLite database
 
-Current behavior:
-- active replay session summary is available
-- recent telemetry samples are available
-
-Access:
-- `get_current_replay_summary()`
-- `get_recent_telemetry(seconds, limit)`
+Current surfaces:
+- active replay session summary
+- recent telemetry samples
 
 Future additions:
 - recent controls
@@ -431,24 +352,7 @@ It may:
 - say that no active mission state exists
 - provide context for future read-only tools and mission drafting
 
-## Next Steps
-
-Completed:
-- `SpatialQueryService` and `ToolRegistry` implemented; Agent mode rewired through registry
-- LangGraph planning shell with planner-loop tool selection plus approval and clarification interrupts
-- Phase 4 bounded lazy retrieval/source controls implemented for replay, AI memory, settings, and sensor metadata
-
-Near-term improvements:
-- expand beyond the current bounded retrieval surfaces only when a new non-RAG surface has a clear bounded contract
-- keep always-on context compact and move larger object/replay/perception details behind on-demand tool calls
-- keep runtime NDJSON progress events for agent tool-loop calls aligned with future `ToolRegistry` events
-- add a public or internal debug endpoint for inspecting the current AI context snapshot during development
-- make object-query intent detection less keyword-based
-- include recent controls and runtime events in recent-history context
-- add mission SQLite tables and replace the mission placeholder with real active mission state
-- add compact provider-specific formatting so the prompt stays small as providers grow
-- store context schema version in `ai_messages.meta_json`
-- add focused tests for front/near object geometry and stale telemetry reporting
+## Forward-Looking Plan
 
 RAG integration plan:
 - keep exact live state in this context layer
@@ -459,13 +363,6 @@ RAG integration plan:
 Mission workflow plan:
 - use current context for initial mission drafting
 - store mission drafts and approval state separately from chat text
-- use LangGraph only after mission state, approval checkpoints, and resume behavior are needed
 - keep execution behind explicit operator approval and controller/safety checks
 
-Detailed next-step plan:
-- [AI Spatial Tools And Agent Plan](./spatial-tools.md)
-- [AI Agent Design](../design.md)
-- [AI Agent Graph Spec](./graph-spec.md)
-- [Replay Access](./replay-access.md)
-
-Requirements: see [../requirements.md](../requirements.md).
+Related: [Spatial Tools](./spatial-tools.md) · [Graph Spec](./graph-spec.md) · [Replay Access](./replay-access.md) · [Requirements](../requirements.md).

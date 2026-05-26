@@ -4,11 +4,11 @@
 
 Remote Rover is a foundation for a remote robot operations stack. The current prototype focuses on a simulated rover because it is the fastest safe path for validating control, telemetry, maps, replay, and operator workflows. The longer-term goal is to support real rovers and other robot types through the same operating model.
 
-The system is built around two working applications and one in-progress successor simulator:
+The system is built around two working applications and one separate simulator experiment:
 
 - **3D Simulator** (`3d-env/`): a Panda3D + Bullet physics rover that publishes telemetry and camera frames over MQTT and accepts control input
 - **Ground Control Station** (`gcs_server/`): a FastAPI + browser application operators use to monitor, drive, and reason about the rover
-- **rover-sim-next** (`rover-sim-next/`): scaffolded ROS 2 + Gazebo successor backend, not yet runnable
+- **rover-sim-next** (`rover-sim-next/`): scaffolded ROS 2 + Gazebo simulator path in the repository, not part of the working runtime today
 
 MQTT is the integration backbone between simulator and GCS.
 
@@ -23,7 +23,7 @@ The full operator loop is implemented:
 5. The simulator publishes telemetry and camera frames back over MQTT
 6. The GCS shows telemetry and video in the browser
 
-Beyond the live loop, the system has session replay, configurable LLM providers, an AI Chat workspace with persistent sessions, a read-only Agent mode with deterministic tools, structured rover-intent parsing, mission-draft workflow, and a LangGraph-based planning shell with human-in-the-loop approval. Detailed status lives in [current-state.md](../current-state.md).
+Beyond the live loop, the system has session replay, configurable LLM providers, an AI Chat workspace with persistent sessions, a read-only Agent mode with deterministic tools, structured rover-intent parsing, mission-draft workflow, and a LangGraph-based planning shell with human-in-the-loop approval. Current implementation reality lives in the component design docs rather than in a separate status-hub file.
 
 ## Long-Term Target: AI-Assisted Robot Operation
 
@@ -62,10 +62,10 @@ The project is not yet in a final production architecture. It should be understo
 
 For a general or product-focused audience:
 
-1. [Current State](../current-state.md) — what works today
-2. [GCS Requirements](../components/gcs/requirements.md) — operator workflow and UI expectations
-3. [AI Agent Requirements](../components/ai-agent/requirements.md) — AI behavior, safety, and mission workflow
-4. [Roadmap](../roadmap.md) — what comes next
+1. [GCS Requirements](../components/gcs/requirements.md) — operator workflow and UI expectations
+2. [AI Agent Requirements](../components/ai-agent/requirements.md) — AI behavior, safety, and mission workflow
+3. [Simulator Requirements](../components/simulator/requirements.md) — current simulator baseline and future simulator constraints
+4. [AI Agent Design](../components/ai-agent/design.md) — current implementation direction
 
 For technical readers:
 

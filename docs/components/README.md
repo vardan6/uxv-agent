@@ -6,4 +6,4 @@ This index shows the stakeholder-facing components that use the three-tier docum
 |---|---|---|---|---|
 | [ai-agent](./ai-agent/README.md) | Complete | Complete | Complete | Includes mission execution and route planning per [ADR 0009](../cross-cutting/decisions/0009-mission-execution-fold-under-ai-agent.md) |
 | [gcs](./gcs/README.md) | Complete | Complete | Complete | Includes AI workspace hosting, settings, replay, and operator UI |
-| [simulator](./simulator/README.md) | Complete | Complete | Complete | Covers both `3d-env` as current runtime and `rover-sim-next` as successor path |
+| [simulator](./simulator/README.md) | Complete | Complete | Complete | Covers `3d-env` as the current runtime and `rover-sim-next` as a scaffolded side path |

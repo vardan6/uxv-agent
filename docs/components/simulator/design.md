@@ -28,7 +28,7 @@ Sources consolidated here:
 | GCS presence-aware publish gating | **Implemented** |
 | Settings UI (MQTT, bindings, appearance, import/export) | **Implemented** |
 | Terrain scene manifest (`terrain_scene.v1.json`) | **Implemented** |
-| `rover-sim-next` ROS 2/Gazebo scaffold | **Scaffold only** — working backend not yet implemented |
+| `rover-sim-next` ROS 2/Gazebo scaffold | **Scaffold only** — side path in the repo, not a working backend |
 | Simulator-side replay logging | **Deferred** — until `rover-sim-next` works end-to-end |
 | Authoritative CAD/asset pipeline | **Not started** |
 
@@ -45,7 +45,7 @@ The current `3d-env` simulator is built on:
 
 This stack was chosen in the earliest design phase when the project was prototyping quickly. It remains the working baseline.
 
-The planned `rover-sim-next` successor targets:
+The current `rover-sim-next` scaffold targets:
 - **ROS 2** — runtime and topic framework
 - **Gazebo** — physics and world simulation
 

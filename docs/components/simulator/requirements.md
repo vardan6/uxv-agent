@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document captures the requirements for the simulation-platform work across both the current `3d-env` simulator and the planned `rover-sim-next` successor.
+This document captures the requirements for the simulation-platform work across the current `3d-env` simulator and any future successor path. The repository's current experimental side path is `rover-sim-next/`.
 
 Sources consolidated here:
 - `docs/archive/simulator/2026-05-16-simulator-requirements.md` (primary)
@@ -15,7 +15,7 @@ For vocabulary, see [docs/glossary.md](../../glossary.md).
 
 ## Scope
 
-These requirements apply to the current `3d-env` simulator (the working prototype) and the planned `rover-sim-next` successor project beside it.
+These requirements apply to the current `3d-env` simulator (the working prototype) and to any future successor project beside it. The repository currently contains `rover-sim-next/` as that experimental side path.
 
 The goals are:
 - continue supporting the current working prototype during any transition
@@ -37,9 +37,9 @@ Any new simulator work must:
 
 If needed, `gcs_server` may be updated, but compatibility with the current working system must be preserved during migration.
 
-### 2. Create A New Simulator Sub-Project
+### 2. Keep Any Successor Simulator Isolated
 
-A new simulator sub-project (`rover-sim-next`) must be created under the `remote-rover` repository to:
+Any successor simulator effort should live as a separate sub-project under the `remote-rover` repository. The current candidate path is `rover-sim-next/`. That isolated path exists to:
 - improve the 3D environment and physics quality
 - improve rover/world interaction
 - improve modularity and future maintainability
@@ -47,7 +47,7 @@ A new simulator sub-project (`rover-sim-next`) must be created under the `remote
 
 ### 3. Preserve And Extend GCS Compatibility
 
-The new simulator must work with the existing `gcs_server` MQTT contract during transition.
+Any successor simulator path must work with the existing `gcs_server` MQTT contract during transition.
 
 Required compatibility surface:
 - rover control
@@ -56,7 +56,7 @@ Required compatibility surface:
 - map integration
 - replay visualization in the GCS
 
-The GCS must be able to support both `3d-env` and `rover-sim-next` until the new backend fully replaces the old one.
+The GCS must be able to support both `3d-env` and the active successor path until the new backend fully replaces the old one.
 
 ---
 

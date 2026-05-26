@@ -6,7 +6,6 @@ Companion documents:
 
 - [design.md](./design.md) — implementation strategy, runtime seams, file layout, migration plan.
 - [internals/graph-spec.md](./internals/graph-spec.md) — diagrams and state-machine views.
-- [../../current-state.md](../../current-state.md) — what ships today.
 
 If documents disagree:
 
