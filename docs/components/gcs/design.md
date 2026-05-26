@@ -4,7 +4,7 @@ Status date: 2026-05-20.
 
 **How** the GCS is built — runtime model, browser workflow, MQTT integration, AI chat model, settings, file layout, and current limitations. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and operator-visible behavior; this doc wins on implementation specifics.
 
-Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes. Mission execution boundary, planning shell, and JSON settings export/import are all shipped. Real external controller handoff and video transport hardening remain the next slices.
+Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. Replay still uses its separate `static/replay.js` surface, and real external controller handoff plus video transport hardening remain the next slices.
 
 ## Table of Contents
 
@@ -55,6 +55,7 @@ It is responsible for:
 - route-planning drafts and QGC `.plan` export for approved route-bearing drafts
 - backend-owned mission revision storage, current mission-state APIs, overlay APIs, and controller mission-state APIs
 - durable mission execution transition with controller-version checks and execution-attempt persistence
+- stale execute recovery that refocuses the active revision and can auto-create a rebased revision on controller-version mismatch
 - persistent AI sessions and messages
 - streaming chat responses, retry, archive/restore, purge, session search, and per-session provider override
 - compact live current-context injection for AI Chat
@@ -82,7 +83,7 @@ The backend assembles four main runtime concerns:
 - MQTT runtime integration
 - control publication loop
 
-For the HTTP and WebSocket surface, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
+For the HTTP and WebSocket surface, see [design.md](./design.md).
 
 ## Browser Workflow
 
@@ -95,6 +96,12 @@ For the HTTP and WebSocket surface, see [internals/api-and-runtime.md](./interna
 7. telemetry and video received from MQTT are pushed back to all connected browsers
 
 Keyboard bindings are read from shared config `key_bindings`. The default arrow-key and `W/A/S/D` mapping remains a fallback only. This keeps dashboard control answers in AI Chat aligned with the actual browser controls.
+
+Control activation invariants (do not regress):
+
+- Control must not auto-release on a timeout; only focus/visibility changes or a real disconnect may deactivate browser control.
+- The focused and visible dashboard browser is the active controller inside `gcs_server`.
+- Losing dashboard focus must publish neutral controls immediately so motion cannot stick.
 
 ## Presence And Telemetry Enablement
 
@@ -143,14 +150,22 @@ Key frontend modules under `static/map/`:
 | `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
 | `ui/HintToasts.js` | Gesture hint toasts |
 | `ui/KeyboardHelpOverlay.js` | Keyboard shortcut reference overlay |
+| `ui/ElevationProfilePanel.js` | Mission elevation profile panel for the selected overlay |
 | `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
 | `state/` | Frontend mission state management |
 
 The widget uses `L.CRS.Simple` with local scene metres for all overlay coordinates. Export-side projection (local → WGS84) is handled by `MissionExportService` on the backend. Lat/lon is never used inside the widget itself.
 
-For the map widget design spec and phase 1A–1E delivery plan, see [internals/map-widget.md](./internals/map-widget.md).
+For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
-For AI context, intent parsing, and planning-shell wiring, see [internals/api-and-runtime.md](./internals/api-and-runtime.md).
+For AI context, intent parsing, and planning-shell wiring, see [design.md](./design.md).
+
+Current status of follow-on map work:
+
+- the mission elevation profile panel is implemented on `/ai`
+- the replay page still renders through `static/replay.js`, not through `MapWidget`
+- geofence display and validation are still gated on a real backend source
+- the main dashboard still does not have a dedicated live map panel
 
 ## Settings Model
 
@@ -184,9 +199,19 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 - no authentication or authorization
 - current video delivery is still the bootstrap WebSocket path fed from MQTT frames
 - multi-instance GCS behavior is not yet fully hardened
+- replay map rendering still lives in `static/replay.js`; replay has not been migrated onto `MapWidget`
+- geofence display and validation await a real backend source
 - LLM provider checks are simple endpoint probes, not full chat completions
 - bounded lazy data branches/source controls are implemented for replay, AI memory, settings, and sensor metadata; RAG/document retrieval and web research/search are still not implemented
 - perception tool contract and video-frame understanding are not implemented yet
 - command staging and execution approval require a separate future safety design
 - AI chat is read-only and cannot publish rover control commands
 - mission lifecycle now includes a durable backend execution transition, but it still stops before real external flight-controller/MAVLink handoff; that is the next implementation slice
+
+## Topic-Level Design Files
+
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+
+- [`design/api-and-runtime.md`](./design/api-and-runtime.md) — Api And Runtime
+- [`design/llm-capability-matrix.md`](./design/llm-capability-matrix.md) — Llm Capability Matrix
+- [`design/map-widget.md`](./design/map-widget.md) — Map Widget

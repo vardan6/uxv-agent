@@ -5,5 +5,5 @@ The planning and execution agent that turns operator intent into rover missions:
 | Doc | Tier | Purpose |
 |---|---|---|
 | [requirements.md](./requirements.md) | Requirements | Product target: behavior, safety, capability ladder, approval, mission execution, route planning, vehicle profiles |
-| [design.md](./design.md) | Design | Implementation strategy: runtime seams, mission execution boundary, route planning + vehicle profiles + export, phase plan, rollback |
-| [internals/](./internals/) | Internals | Topic-level notes on the current implementation |
+| [design.md](./design.md) | Design (overview) | Implementation strategy: runtime seams, mission execution boundary, route planning + vehicle profiles + export, phase plan, rollback. Indexes per-topic files in [`design/`](./design/). |
+| [design/*.md](./design/) | Design (per topic) | Graph spec, intent parsing, planning shell, mission execution, context layer, replay access, route planning, spatial tools, token efficiency, tool contract. Same stability tier as `design.md`. |

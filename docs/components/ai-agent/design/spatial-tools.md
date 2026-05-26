@@ -1,10 +1,9 @@
-# AI Spatial Tools And Agent Plan
-
-Status date: 2026-05-09.
+# AI Spatial Tools
 
 ## Purpose
 
-This document defines the next AI implementation slice for terrain/object reasoning and future agent workflows.
+This document defines the spatial-tool architecture for terrain/object
+reasoning and future agent workflows.
 
 The decision is:
 - keep the always-injected AI context compact
@@ -13,7 +12,7 @@ The decision is:
 - make those query services agent-tool-ready from the beginning
 - use RAG for semantic knowledge, documents, definitions, reports, and memory, not exact geometry
 
-This is the bridge between the implemented AI current-context layer and later LangGraph mission agents.
+This is the bridge between compact always-on AI context and later mission agents.
 
 ## Core Architecture
 
@@ -58,24 +57,17 @@ On-demand tools should provide larger detail:
 - replay summaries
 - mission drafts and validation results
 
-The `AIContextService` proves the pattern with query-triggered object details. Spatial query logic has been extracted into `SpatialQueryService` and agent tools are now exposed through `ToolRegistry`, which serves Agent mode, Rover Intent Test, and the LangGraph planning shell via the same definitions.
-
 ## Spatial Query Service
 
-Add a dedicated backend service:
-
-```text
-gcs_server/ai/spatial_query_service.py
-```
-
-Initial responsibilities:
+Spatial query behavior should live in a dedicated deterministic service with
+these responsibilities:
 - load object geometry from `scene_map.py`
 - read rover pose from the current rover state passed by the caller
 - calculate distance, bearing, and relative bearing
 - filter objects by distance, field of view, side, kind, and sector
 - return compact structured hits suitable for LLM/tool output
 
-Initial methods:
+Representative methods:
 
 ```text
 get_scene_summary()
@@ -89,7 +81,9 @@ find_objects_in_sector(center_bearing_deg, fov_deg, max_distance_m, kinds=None)
 resolve_target_description(scene, rover_state, target)
 ```
 
-Authoritative signature — implemented in `gcs_server/ai/spatial_query_service.py`. The `target` argument is the structured target dict produced by the intent parser. It should combine structured intent fields with deterministic candidate filtering. For example:
+The `target` argument is the structured target dict produced by the intent
+parser. It should combine structured intent fields with deterministic
+candidate filtering. For example:
 
 ```text
 "tree on the right around 20-30 meters"
@@ -101,15 +95,6 @@ Authoritative signature — implemented in `gcs_server/ai/spatial_query_service.
 ```
 
 ## Agent Tool Registry
-
-Implemented:
-- `gcs_server/ai/tool_registry.py` defines `ToolRegistry` with `ToolDefinition`/`ToolInvocationContext`.
-- Permission classes: `read_only`, `analysis`, `planning`; `command_staging`/`execution` explicitly rejected.
-- `build_langchain_tools(runtime, context_snapshot, timezone_name, permissions)` is called per-request.
-- Tools close over the request's prebuilt context snapshot for async runtime facts, keeping LangChain tool invocation synchronous.
-- Agent mode skips keyword-triggered spatial prompt enrichment and asks the model to call these tools instead.
-- Runtime streaming emits `agent_tool_start` and `agent_tool_result` progress events before the final agent answer.
-- Agent mode in `chat_service.py` was rewired through `ToolRegistry`; `ReadOnlyAgentToolset` removed from `agent_tools.py`.
 
 The same registry serves:
 - Agent mode (Chat page)
@@ -130,15 +115,6 @@ query_objects_to_right(max_distance_m, angle_width_deg, kinds=None)
 get_recent_telemetry(seconds, limit)
 get_replay_summary(session_id=None)
 ```
-
-Implemented in `ToolRegistry` (via `SpatialQueryService`):
-- `get_current_rover_state()`
-- `get_scene_summary()`
-- `query_objects_in_front(max_distance_m, fov_deg, kinds=None)`
-- `query_objects_near(radius_m, kinds=None)`
-- `query_objects_by_kind(kind)`
-- `get_current_mission_state()`
-- replay summary, recent telemetry, replay session resolution, metrics, paths, events, comparison, and aggregation
 
 Planning-only tools:
 
@@ -170,31 +146,7 @@ Rules:
 - `command_staging` tools require explicit operator approval before anything is staged.
 - `execution` tools require explicit approval plus controller and safety checks.
 
-The next implementation should only include `read_only`, `analysis`, and `planning`.
-
-## Agent Implementation Timing
-
-It is reasonable to start agent implementation now if "agent" means:
-- structured tool definitions
-- tool invocation logging
-- Rover Intent Test mode
-- mission draft generation
-- explicit approval state
-
-It is too early to start autonomous rover execution.
-
-Completed sequence (Milestones A–F + LangGraph Phases 1–3):
-
-1. ✅ Extracted spatial query logic from `AIContextService` into `SpatialQueryService`.
-2. ✅ Added tests for front/near/kind/left/right/sector queries, including heading wraparound.
-3. ✅ Replaced the direct toolset with a `ToolRegistry` with explicit permission classes.
-4. ✅ `AIContextService` uses the registry/service for on-demand details.
-5. ✅ Rover Intent Test mode with structured output.
-6. ✅ Session mode → provider-routing purpose mapping.
-7. ✅ Target resolution using spatial tools.
-8. ✅ Mission draft storage, approval, and reject status.
-9. ✅ LangGraph planning shell: planner-loop tool selection → deterministic validation → approval or clarification interrupt.
-10. Bounded non-RAG source controls are implemented; later milestone is true RAG/document/web retrieval.
+The initial safe surface includes only `read_only`, `analysis`, and `planning`.
 
 ### Async/Sync Boundary For Spatial Tools
 
@@ -205,18 +157,6 @@ Callers are responsible for resolving async state before invoking spatial tools:
 - LangChain tools must remain synchronous. They should close over the request's preloaded rover/context snapshot rather than calling `asyncio.run()` inside the tool loop.
 
 This keeps spatial queries testable without an event loop and avoids nested-event-loop failures inside FastAPI/uvicorn.
-
-### Agent Progress Streaming
-
-The current chat streaming transport is newline-delimited JSON (`application/x-ndjson`). Agent mode uses the same transport unless the API is intentionally changed to SSE.
-
-Recommended event protocol:
-- `{"type":"agent_tool_start","tool_call":{"id":"...","name":"...","args":{},"iteration":1}}`
-- `{"type":"agent_tool_result","tool_call":{"id":"...","name":"...","args":{},"result":{},"iteration":1,"latency_ms":12}}`
-- `{"type":"assistant_delta","delta":"..."}` for final answer text
-- `{"type":"assistant_message","message":{...}}` after the assistant message is stored
-
-The UI should render tool-call progress above or near the final answer so operators can see what the agent inspected while waiting.
 
 ## Future Perception Data Model
 
@@ -262,7 +202,8 @@ missions
 mission_events
 ```
 
-For the current simulator scale, JSON plus SQLite metadata is enough. For large real sites, use a spatial database such as PostGIS or SpatiaLite.
+For current simulator scale, JSON plus SQLite metadata is enough. For larger
+real sites, use a spatial database such as PostGIS or SpatiaLite.
 
 ## MCP Direction
 

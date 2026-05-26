@@ -23,7 +23,7 @@ In the meantime, the AI agent and GCS provide best-effort live state via the str
 
 - Operator-experience requirements documents flag these features as "planned, blocked on `rover-sim-next`" rather than as in-progress work.
 - No partial replay or sync implementation lands in `3d-env`-era code, which avoids creating cleanup debt at cutover.
-- Roadmap entries for these features are tracked in `roadmap.md` under "Later" or equivalent, with a back-reference to this ADR.
+- These features stay explicitly deferred in the active simulator and GCS design docs until a future simulator path makes them practical.
 - Stakeholders asking about these features get a single answer with a clear unblock condition.
 
 ## Alternatives Considered

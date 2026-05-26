@@ -16,7 +16,7 @@ There is no mission-execution code or runtime that lives outside the agent.
 
 ## Decision
 
-Mission execution is documented as part of the `ai-agent` component, not as a peer component. Its requirements fold into `components/ai-agent/requirements.md`, its design into `components/ai-agent/design.md`, and its implementation lives in `components/ai-agent/internals/mission-execution.md`.
+Mission execution is documented as part of the `ai-agent` component, not as a peer component. Its requirements fold into `components/ai-agent/requirements.md`, its design into `components/ai-agent/design.md`, and its implementation lives in `components/ai-agent/design.md`.
 
 The same applies to closely related concerns: route planning and mission export are also folded under `ai-agent` for the same reason — the agent is the implementing surface.
 

@@ -5,7 +5,7 @@ Remote Rover is a rover-control platform built around these main local applicati
 - `3d-env/`: a Panda3D-based 3D rover simulator
 - `tts_service/`: a local text-to-speech service for AI chat response playback
 
-It also contains `rover-sim-next/`, the scaffold for the planned ROS 2 + Gazebo successor simulator.
+It also contains `rover-sim-next/`, a ROS 2 + Gazebo simulator scaffold that is not part of the working runtime today.
 
 The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
 
@@ -24,14 +24,14 @@ Main documentation entry point:
 
 Recommended reading order:
 - [Vision](./docs/cross-cutting/vision.md)
-- [Current State](./docs/current-state.md)
 - [Architecture](./docs/cross-cutting/architecture.md)
+- [GCS Requirements](./docs/components/gcs/requirements.md)
 - [AI Agent Requirements](./docs/components/ai-agent/requirements.md)
 - [AI Agent Design](./docs/components/ai-agent/design.md)
 - [AI Agent Graph Spec](./docs/components/ai-agent/internals/graph-spec.md)
 - [AI Current Context Layer](./docs/components/ai-agent/internals/context-layer.md)
 - [AI Spatial Tools](./docs/components/ai-agent/internals/spatial-tools.md)
-- [Roadmap](./docs/roadmap.md)
+- [Simulator Design](./docs/components/simulator/design.md)
 - [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
 
 Subproject documentation:
@@ -152,4 +152,4 @@ For cross-platform launcher details, shared config behavior, and telemetry polic
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. `rover-sim-next` is scaffolded but not yet a working backend, and remains the next major simulator-platform milestone.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. The active runtime is still `3d-env`; `rover-sim-next/` exists only as a scaffolded side path in the repository.

@@ -1,38 +1,17 @@
 # Route Planning — Internals
 
-Implementation notes for the road-graph + route-planner-tool + QGC `.plan` exporter slice. The product target and design rationale live in [../requirements.md](../requirements.md) (§ "Route Planning and Mission Export Requirement") and [../design.md](../design.md) (§ "Route Planning, Vehicle Profiles, and Mission Export"). This file is the implementation reference and the validation checklist.
-
-## Implementation status (2026-05-16)
-
-Implemented and ready for manual validation:
-
-- `VehicleProfile` presets and active ground profile
-- `RoadGraphService` graph build from terrain scene roads with explicit `metadata.group`
-- `plan_route_around_group` and `plan_route_between` planner tools
-- planner-loop route artifact preservation in stored mission drafts
-- approval-card compact route summary
-- approval-time QGC `.plan` export for route-bearing drafts
-- `export_mission` side-effect metadata (`writes_file`) and approved/exported draft gating
-- durable planner-loop trace IDs through the shared JSONL trace store
-
-Committed follow-up work (not optional, separated only to keep this slice shippable):
-
-- corridor/blockage creation, viewing, editing, enabling/disabling, and deletion UI on the `/ai` map
-- planned-vs-actual replay overlay
-- MAVLink upload, execution, stop/abort, and mission monitoring
-
-Note: manual waypoint editing and the shared map component shipped as the `MapWidget` on `/ai` (Phase 1D). The separate "Mission template library" and `MissionMapView` concepts were superseded by client-authored revisions on the `/ai` map widget.
+Design reference for the road-graph + route-planner-tool + QGC `.plan` exporter slice. The product target and design rationale live in [../requirements.md](../requirements.md) (§ "Route Planning and Mission Export Requirement") and [../design.md](../design.md) (§ "Route Planning, Vehicle Profiles, and Mission Export").
 
 ## Algorithm reference
 
 ### Graph build
 
-Source: `config/terrain_scene.v1.json`. Currently 16 road segments forming an explicit network. Each road carries `centerline=[start,end]`, `geometry.width`, `metadata.drivable=true`, `metadata.route_planning_cost`, and (schema bump) `metadata.group`.
+Source: `config/terrain_scene.v1.json`. Each road carries `centerline=[start,end]`, `geometry.width`, `metadata.drivable=true`, `metadata.route_planning_cost`, and `metadata.group`.
 
 Build order:
 
 1. **Endpoint snap.** Configurable epsilon (Settings: `road_graph_epsilon_m`, default ~0.5 m). The authored scene does not guarantee endpoint coordinates coincide exactly at junctions. Snap each endpoint to a canonical node within epsilon.
-2. **T-junction / crossroad split.** For each road, find points where another road's endpoint (or another road's segment) lies within epsilon of its interior. Split the road at those points into sub-edges sharing a node. Segment-intersection pass during graph build; O(n²) over ~16 edges is trivial.
+2. **T-junction / crossroad split.** For each road, find points where another road's endpoint (or another road's segment) lies within epsilon of its interior. Split the road at those points into sub-edges sharing a node. Segment-intersection pass during graph build; O(n²) over a small edge count is trivial.
 3. **Edge weighting.** `length × cost_multiplier`. `cost_multiplier`: `preferred=1.0`, default `1.5`, `avoid=∞` (removed from the graph entirely).
 4. **Group tagging.** Read `metadata.group` directly. No id-prefix parsing — fragile to renames and breaks for ad-hoc IDs. Current groups: `plant_a`, `plant_b`, `connector`, `building`, `start_hub`.
 
@@ -84,7 +63,7 @@ Output format: QGC `.plan` JSON. Reference: [../../../cross-cutting/research/fli
 
 Output path: `data/missions/<draft_id>.plan`. Recorded on the draft. The `.plan` file is the current hand-off boundary to the flight controller; MAVSDK `import_qgroundcontrol_mission` → `upload_mission` over UDP 14550 is the documented next slice and lives outside this PR.
 
-**Coordinate frame split.** All mission overlay coordinates inside the system (planner output, revision storage, map widget rendering) use **local scene metres** with `L.CRS.Simple` as the coordinate reference system. Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportService` via a flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent. Nothing upstream of the exporter deals in lat/lon.
+**Coordinate frame split.** All mission overlay coordinates inside the system (planner output, revision storage, map widget rendering) use **local scene metres** with `L.CRS.Simple` as the coordinate reference system. Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportService` via a flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`. Nothing upstream of the exporter deals in lat/lon.
 
 **Coordinate caveat.** The current scene and its `coordinate_system.georeference` are development placeholders. When real rover hardware and real-world scene data arrive, both the map and its georeference are expected to be regenerated together. The projection code consumes the new origin without changes.
 
@@ -116,26 +95,6 @@ The full waypoint list is persisted on the Mission Draft step and fetched by the
 
 - `step.waypoints: list[Waypoint] | None` — populated when the step is materialised by a route tool.
 - `step.route_summary: RouteSummary | None` — the compact result the agent saw.
-- `draft.lifecycle: Literal["draft", "approved", "exported", "uploading", "uploaded", "executing", "completed", "failed", "cancelled"]` — declared in full now. Reachable in this slice: `draft / approved / exported / failed / cancelled`.
+- `draft.lifecycle: Literal["draft", "approved", "exported", "uploading", "uploaded", "executing", "completed", "failed", "cancelled"]` — declared in full; reachable today: `draft / approved / exported / failed / cancelled`.
 - `draft.lifecycle_history: list[{state, ts, actor}]` — append-only audit trail.
 - `draft.dispatch_mode: Literal["plan_only", "plan_and_execute"]` — inferred by the agent from prompt context.
-
-## Manual validation checklist
-
-Automated tests are intentionally deferred for this prototype phase. Validate end-to-end by running the following from a clean dev environment.
-
-1. Start the GCS normally.
-2. Open `/ai` and run `/plan drive around the second solar plantation and come back`.
-3. Confirm the planning-shell stream starts with `planner_loop_enabled: true`.
-4. Confirm the approval card appears and shows a Route row with waypoint count and distance.
-5. Approve the draft.
-6. Confirm the final assistant metadata includes `planner_agent_trace_id`.
-7. Confirm the stored draft contains `route_artifacts` with waypoints and route hash.
-8. Confirm `data/missions/<draft_id>.plan` exists after approval.
-9. Open the `.plan` JSON and confirm QGC `Plan` shape with rover `vehicleType`, waypoint items, and trailing RTL item.
-10. (Optional) Open the `.plan` in QGroundControl; waypoints render at the right location.
-11. (Optional) Load into ArduRover SITL per [../../../cross-cutting/research/flight-controllers/simulation.md](../../../cross-cutting/research/flight-controllers/simulation.md) and confirm AUTO mode runs.
-
-Expected result: route-bearing planning-shell drafts can be planned, reviewed, approved, exported to a `.plan` file, and traced without any rover command dispatch.
-
-> **Note (post-Phase-6).** Earlier validation steps that toggled `ai_use_planner_loop` to exercise a deterministic-DAG fallback path are obsolete — that path was removed when the planner-loop became default. The planner-loop path is the only path; the toggle is gone.

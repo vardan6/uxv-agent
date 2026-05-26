@@ -2,14 +2,16 @@
 
 Status date: 2026-05-20.
 
-**How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [internals/graph-spec.md](./internals/graph-spec.md) wins on diagrams only.
+**How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [design.md](./design.md) wins on diagrams only.
 
-Status note (implementation reality, kept in sync with [`../../current-state.md`](../../current-state.md)):
+Status note (implementation reality):
 
 - `AgentLoopRuntime` is implemented and powers Agent chat.
+- The visible `/ai` product surface is still Chat plus read-only Agent, with the planning shell entered explicitly through `/plan`.
 - The planning shell wraps the planning flow.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
-- `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, and a local execution-transition adapter. Real external controller transport remains the next slice.
+- `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
+- Canonical mission storage and approval/execution writes now flow through `mission_execution`, but planning-shell draft compatibility seams still exist around the current wrapper flow and real external controller transport remains the next slice.
 
 This document is **expected to evolve** as implementation lands. File names, phase ordering, and runtime interface shapes can be updated in place through normal review.
 
@@ -485,7 +487,7 @@ Rules:
 - Retrieved sources cited via source IDs or `loaded_data_refs`.
 - Prompt-injected retrieved documents are untrusted data.
 
-Detail: [internals/context-layer.md](./internals/context-layer.md).
+Detail: [design.md](./design.md).
 
 ## Planning-Shell Integration
 
@@ -541,13 +543,13 @@ class PlanningShellGraphState(TypedDict, total=False):
     thought_trace: Annotated[list, add]    # planned: user-safe summaries only
 ```
 
-Detail: [internals/planning-shell.md](./internals/planning-shell.md), [internals/graph-spec.md](./internals/graph-spec.md), [internals/intent-parsing.md](./internals/intent-parsing.md).
+Detail: [design.md](./design.md), [design.md](./design.md), [design.md](./design.md).
 
 ## Route Planning, Vehicle Profiles, and Mission Export
 
 A mission draft is incomplete unless it carries a drivable route and an exporter that serialises it into a flight-controller-ready artifact. This subsystem slots into the existing planning-shell as tools (no new graph nodes), behind a first-class vehicle abstraction.
 
-Detail: [internals/route-planning.md](./internals/route-planning.md), [internals/spatial-tools.md](./internals/spatial-tools.md).
+Detail: [design.md](./design.md), [design.md](./design.md).
 
 ### Design principle
 
@@ -1050,7 +1052,7 @@ Each event:
 
 OpenTelemetry exporter is a later phase. Start with JSONL.
 
-Replay: given a `trace_id` and the world snapshot referenced by that run, the run can be re-executed offline against a different model, a tightened policy, or an updated tool catalog. Tier ≥ 3 tools mocked by their `side_effects` declaration. Replay never publishes commands. Detail: [internals/replay-access.md](./internals/replay-access.md).
+Replay: given a `trace_id` and the world snapshot referenced by that run, the run can be re-executed offline against a different model, a tightened policy, or an updated tool catalog. Tier ≥ 3 tools mocked by their `side_effects` declaration. Replay never publishes commands. Detail: [design.md](./design.md).
 
 Evaluation: current project policy says **do not spend implementation effort on tests unless explicitly requested**. The eval harness is optional during platform phases but **becomes mandatory before any tier-3+ feature ships.**
 
@@ -1238,7 +1240,7 @@ Agent-chat handles tool-calling-unsupported providers through `AgentLoopRuntime.
 
 Phase 6 onward (deterministic-DAG removed): providers without tool calling cannot be assigned to the `planner` role. Provider settings UI shows a capability badge.
 
-Detail: [internals/llm-capability-matrix.md](../gcs/internals/llm-capability-matrix.md) *(currently in gcs internals; will migrate during step 6)*.
+Detail: [design.md](../gcs/design.md) *(currently in gcs internals; will migrate during step 6)*.
 
 ## Open Engineering Questions
 
@@ -1262,3 +1264,18 @@ Paired so reviewers can decide together. Product-level questions live in [requir
 | 14 | Multi-operator memory scope default? | Per-operator private; team scope is explicit grant kind. |
 | 15 | Onboard fallback failure for tier ≥ 3? | Refuse by default; operator can override with confirmation prompt. |
 | 16 | E-stop latency target? | ≤ 200 ms across UI, voice, API, hardware. |
+
+## Topic-Level Design Files
+
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+
+- [`design/context-layer.md`](./design/context-layer.md) — Context Layer
+- [`design/graph-spec.md`](./design/graph-spec.md) — Graph Spec
+- [`design/intent-parsing.md`](./design/intent-parsing.md) — Intent Parsing
+- [`design/mission-execution.md`](./design/mission-execution.md) — Mission Execution
+- [`design/planning-shell.md`](./design/planning-shell.md) — Planning Shell
+- [`design/replay-access.md`](./design/replay-access.md) — Replay Access
+- [`design/route-planning.md`](./design/route-planning.md) — Route Planning
+- [`design/spatial-tools.md`](./design/spatial-tools.md) — Spatial Tools
+- [`design/token-efficiency.md`](./design/token-efficiency.md) — Token Efficiency
+- [`design/tool-contract.md`](./design/tool-contract.md) — Tool Contract

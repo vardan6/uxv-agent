@@ -5,7 +5,7 @@
 The simulator is the vehicle-side runtime of the project. It provides a simulated rover with physics and terrain interaction, a local operator view, MQTT control intake, telemetry generation, simulated camera output, and the settings and diagnostics needed during development and demos.
 
 For requirements, see [requirements.md](./requirements.md).
-For implementation internals, see [internals/](./internals/).
+Per-topic design files live under [`design/`](./design/) — terrain-scene, technical-details, rover-physics-tuning, rover-sim-next-phase-1, shadow-enhancement.
 
 Sources consolidated here:
 - `docs/archive/simulator/2026-05-16-simulator-overview.md` (primary)
@@ -28,7 +28,7 @@ Sources consolidated here:
 | GCS presence-aware publish gating | **Implemented** |
 | Settings UI (MQTT, bindings, appearance, import/export) | **Implemented** |
 | Terrain scene manifest (`terrain_scene.v1.json`) | **Implemented** |
-| `rover-sim-next` ROS 2/Gazebo scaffold | **Scaffold only** — working backend not yet implemented |
+| `rover-sim-next` ROS 2/Gazebo scaffold | **Scaffold only** — side path in the repo, not a working backend |
 | Simulator-side replay logging | **Deferred** — until `rover-sim-next` works end-to-end |
 | Authoritative CAD/asset pipeline | **Not started** |
 
@@ -45,7 +45,7 @@ The current `3d-env` simulator is built on:
 
 This stack was chosen in the earliest design phase when the project was prototyping quickly. It remains the working baseline.
 
-The planned `rover-sim-next` successor targets:
+The current `rover-sim-next` scaffold targets:
 - **ROS 2** — runtime and topic framework
 - **Gazebo** — physics and world simulation
 
@@ -208,7 +208,7 @@ python3 tools/validate_terrain_scene.py
 
 ## Active Rover Tuning (3d-env Baseline)
 
-The first rover physics tuning loop is complete and accepted. For the detailed tuning targets, parameters, and test sequence, see [internals/rover-physics-tuning.md](./internals/rover-physics-tuning.md).
+The first rover physics tuning loop is complete and accepted. For the detailed tuning targets, parameters, and test sequence, see [design.md](./design.md).
 
 Accepted behavior summary:
 - quick suspension settling after bumps/drops
@@ -381,3 +381,13 @@ The new simulator should support headless or minimally interactive execution ear
 | MQTT/GCS compatibility | hard transition requirement |
 | Center area strategy | replace geometry by design, not patch |
 | Rover physics before center fix | blocked — center redesign comes first |
+
+## Topic-Level Design Files
+
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+
+- [`design/rover-physics-tuning.md`](./design/rover-physics-tuning.md) — Rover Physics Tuning
+- [`design/rover-sim-next-phase-1.md`](./design/rover-sim-next-phase-1.md) — Rover Sim Next Phase 1
+- [`design/shadow-enhancement.md`](./design/shadow-enhancement.md) — Shadow Enhancement
+- [`design/technical-details.md`](./design/technical-details.md) — Technical Details
+- [`design/terrain-scene.md`](./design/terrain-scene.md) — Terrain Scene

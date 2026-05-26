@@ -20,7 +20,7 @@ Earlier planning documents left it ambiguous which one was "the simulator." This
 
 ## Consequences
 
-- `components/simulator/design.md` describes `3d-env` behavior in present tense; `rover-sim-next` content lives under planned-work sections and `internals/rover-sim-next-phase-1.md`.
+- `components/simulator/design.md` describes `3d-env` behavior in present tense; `rover-sim-next` content lives under planned-work sections and `design.md`.
 - MQTT contract documentation in `cross-cutting/architecture.md` reflects what `3d-env` publishes today, not what `rover-sim-next` will publish.
 - Anyone running the system end-to-end runs `3d-env`. The `rover-sim-next/` README is a quickstart for development on that prototype, not a production runtime.
 - When `rover-sim-next` becomes the runtime, this ADR is superseded by a new ADR that records the cutover, not edited in place.
