@@ -181,7 +181,7 @@ Required properties:
 - Approval must refer to a real stored revision, never to transient stream output.
 - The effective policy must be recorded on each mission operation so later review shows which rules were active at creation and approval time.
 
-See [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md).
+The bullets above describe the **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) supersedes [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md) and introduces additional Confirm and Autonomous modes (sim-build default = Autonomous). See ADR 0021 for the full lifecycle.
 
 ## Mission Execution Requirement
 

@@ -253,9 +253,13 @@ registration time.
 
 ## Two-Approval Model
 
-The boundary that separates draft approval ("this planning artifact is
-acceptable") from execution approval ("publish these commands to the
-rover"). Currently only the first exists. See
+Historical term. Originally the boundary that separated draft approval
+("this planning artifact is acceptable") from execution approval
+("publish these commands to the rover"). Superseded by the
+configurable **Mission Lifecycle Modes** (Strict / Confirm / Autonomous);
+see [decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md).
+The original two-approval behaviour is preserved as Strict mode — the
+shipped default for real-rover builds. The original ADR is
 [decisions/0002-two-approval-model.md](./cross-cutting/decisions/0002-two-approval-model.md).
 
 The three canonical operator verbs are:
