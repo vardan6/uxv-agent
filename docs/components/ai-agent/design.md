@@ -1275,7 +1275,7 @@ The following sections were previously maintained as separate files under `docs/
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/context-layer.md -->
 
 # AI Current Context Layer
 
@@ -1649,7 +1649,7 @@ Related: [Spatial Tools](./spatial-tools.md) · [Graph Spec](./graph-spec.md) ·
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/graph-spec.md -->
 
 # AI Agent — Graph and State Machine Specification
 
@@ -2055,7 +2055,7 @@ Out of scope for this graph document:
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/intent-parsing.md -->
 
 # Rover Intents And Intent Test
 
@@ -2273,7 +2273,7 @@ The long-term intended flow is:
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/mission-execution.md -->
 
 # Mission Execution
 
@@ -2370,7 +2370,7 @@ The default local adapter is implementation detail; contract behavior is stable 
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/planning-shell.md -->
 
 # Planning Shell
 
@@ -2516,7 +2516,7 @@ execution pipelines.
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/replay-access.md -->
 
 # Replay Session Access
 
@@ -2757,7 +2757,7 @@ calling path is:
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/route-planning.md -->
 
 # Route Planning — Internals
 
@@ -2863,7 +2863,7 @@ The full waypoint list is persisted on the Mission Draft step and fetched by the
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/spatial-tools.md -->
 
 # AI Spatial Tools
 
@@ -3094,7 +3094,7 @@ This avoids coupling the core GCS logic to one agent transport while still keepi
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/token-efficiency.md -->
 
 # AI Agent Token Efficiency
 
@@ -3155,7 +3155,7 @@ Use these practices:
 
 ---
 
-<!-- source: docs/components/ai-agent/design.md -->
+<!-- source: docs/components/ai-agent/internals/tool-contract.md -->
 
 # Tool Contract Standard (AI Agent Tools)
 

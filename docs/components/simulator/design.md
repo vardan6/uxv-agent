@@ -392,7 +392,7 @@ The following sections were previously maintained as separate files under `docs/
 
 ---
 
-<!-- source: docs/components/simulator/design.md -->
+<!-- source: docs/components/simulator/internals/rover-physics-tuning.md -->
 
 # Rover Physics Tuning
 
@@ -465,7 +465,7 @@ These are outside the scope of this tuning document:
 
 ---
 
-<!-- source: docs/components/simulator/design.md -->
+<!-- source: docs/components/simulator/internals/rover-sim-next-phase-1.md -->
 
 # rover-sim-next Phase 1 Contract
 
@@ -583,7 +583,7 @@ These do not block the Phase 1 compatibility milestone:
 
 ---
 
-<!-- source: docs/components/simulator/design.md -->
+<!-- source: docs/components/simulator/internals/shadow-enhancement.md -->
 
 # Shadow Enhancement
 
@@ -671,7 +671,7 @@ across terrain, rover, and prop rendering.
 
 ---
 
-<!-- source: docs/components/simulator/design.md -->
+<!-- source: docs/components/simulator/internals/technical-details.md -->
 
 # Simulator Technical Details
 
@@ -745,7 +745,7 @@ These limits are still part of the runtime boundary:
 
 ---
 
-<!-- source: docs/components/simulator/design.md -->
+<!-- source: docs/components/simulator/internals/terrain-scene.md -->
 
 # Terrain Scene Manifest
 

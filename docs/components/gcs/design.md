@@ -218,7 +218,7 @@ The following sections were previously maintained as separate files under `docs/
 
 ---
 
-<!-- source: docs/components/gcs/design.md -->
+<!-- source: docs/components/gcs/internals/api-and-runtime.md -->
 
 # GCS Technical Details
 
@@ -344,7 +344,7 @@ Open architectural limits still include:
 
 ---
 
-<!-- source: docs/components/gcs/design.md -->
+<!-- source: docs/components/gcs/internals/llm-capability-matrix.md -->
 
 # LLM Provider Agent Capability Rule
 
@@ -379,7 +379,7 @@ The full provider-by-provider matrix is archival audit material rather than dura
 
 ---
 
-<!-- source: docs/components/gcs/design.md -->
+<!-- source: docs/components/gcs/internals/map-widget.md -->
 
 # Map Widget
 
