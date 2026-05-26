@@ -266,6 +266,53 @@ def _rebased_mission_payload(mission: dict[str, Any]) -> dict[str, Any]:
     return rebased
 
 
+def _mission_row_to_compat_revision(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        mission_payload = json.loads(row["mission_json"]) if row["mission_json"] else {}
+    except json.JSONDecodeError:
+        mission_payload = {}
+    if not isinstance(mission_payload, dict):
+        mission_payload = {}
+    mission_payload = _canonicalize_mission_payload(mission_payload)
+    revision_id = str(row["id"])
+    status = str(
+        mission_payload.get("lifecycle_status")
+        or mission_payload.get("status")
+        or "stored"
+    ).strip() or "stored"
+    created_at = float(row["created_at"])
+    provenance = mission_payload.get("provenance")
+    return {
+        "id": revision_id,
+        "operation_id": revision_id,
+        "draft_id": "",
+        "parent_revision_id": "",
+        "status": status,
+        "mission": mission_payload,
+        "intent": {},
+        "target_resolution": {},
+        "validation": {},
+        "review_context": {},
+        "created_at": created_at,
+        "updated_at": created_at,
+        "approved_at": None,
+        "rejected_at": None,
+        "session_id": row["origin_chat_id"] or "",
+        "source_message_id": "",
+        "operation_status": status,
+        "policy": {},
+        "active_revision_id": revision_id,
+        "goal": str(mission_payload.get("goal") or row["name"] or "").strip(),
+        "name": str(row["name"] or ""),
+        "origin": str(row["origin"] or ""),
+        "origin_chat_id": row["origin_chat_id"],
+        "client_version": int(row["client_version"] or 0),
+        "created_by_user_id": str(row["created_by_user_id"] or ""),
+        "mission_id": int(row["id"]),
+        "provenance": provenance if isinstance(provenance, dict) else {},
+    }
+
+
 class MissionExecutionService:
     """Backend-owned mission lifecycle and controller handoff boundary.
 
@@ -407,6 +454,8 @@ class MissionExecutionService:
 
     def get_revision(self, revision_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
+            if not self._legacy_revision_tables_available(conn):
+                return self._get_repo_revision(conn, revision_id)
             row = conn.execute(
                 """
                 SELECT
@@ -426,6 +475,8 @@ class MissionExecutionService:
 
     def get_revision_by_draft_id(self, draft_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
+            if not self._legacy_revision_tables_available(conn):
+                return None
             row = conn.execute(
                 """
                 SELECT
@@ -467,6 +518,12 @@ class MissionExecutionService:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(max(1, int(limit)))
         with self._connect() as conn:
+            if not self._legacy_revision_tables_available(conn):
+                return self._list_repo_revisions(
+                    conn,
+                    session_id=session_id,
+                    limit=max(1, int(limit)),
+                )
             rows = conn.execute(
                 f"""
                 SELECT
@@ -970,8 +1027,171 @@ class MissionExecutionService:
             "controller_state": self.get_controller_state(),
         }
 
+    def execute_mission_by_id(
+        self,
+        *,
+        mission_id: int,
+        mission_json: dict[str, Any],
+        expected_controller_version: int | None = None,
+    ) -> dict[str, Any]:
+        """ADR 0021 mode-aware execute: hand a flat Mission to the controller.
+
+        Bypasses the legacy revision/operation/export-file audit path. Builds an
+        in-memory plan via MissionExportService and calls install_mission on the
+        configured controller adapter. No DB writes — the audit trail for flat
+        missions is an Open Question on ADR 0021.
+        """
+        try:
+            from .mission_export_service import MissionExportService
+        except ImportError:
+            return {"ok": False, "status": "mission_export_unavailable", "error": "MissionExportService is unavailable"}
+
+        try:
+            mid = int(mission_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "status": "invalid_mission_id", "error": f"mission_id must be an integer, got {mission_id!r}"}
+
+        if not isinstance(mission_json, dict) or not mission_json:
+            return {"ok": False, "status": "mission_empty", "error": "mission_json is empty"}
+
+        export_draft = {
+            "id": f"mission-{mid}",
+            "status": "approved",
+            "mission": mission_json,
+        }
+        export_result = MissionExportService().export(export_draft)
+        if not export_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "mission_export_invalid",
+                "error": str(export_result.get("error") or "mission export failed"),
+                "mission_id": mid,
+            }
+
+        plan = export_result.get("plan") if isinstance(export_result.get("plan"), dict) else {}
+        pending_snapshot = {
+            "operation_id": "",
+            "revision_id": "",
+            "draft_id": f"mission-{mid}",
+            "mission_id": mid,
+            "captured_at": time.time(),
+            "mission_export": {
+                "file_path": str(export_result.get("file_path") or ""),
+                "waypoint_count": int(export_result.get("waypoint_count") or 0),
+                "vehicle_type": str(export_result.get("vehicle_type") or ""),
+            },
+            "mission": mission_json,
+            "plan": plan,
+        }
+
+        try:
+            install_result = self._controller_adapter.install_mission(
+                pending_snapshot=pending_snapshot,
+                expected_controller_version=expected_controller_version,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "cutover_failed",
+                "error": str(exc),
+                "mission_id": mid,
+                "controller_state": self.get_controller_state(),
+            }
+
+        final_state = install_result.controller_state
+        return {
+            "ok": bool(install_result.ok),
+            "status": str(install_result.status or ("executing" if install_result.ok else "cutover_failed")),
+            "error": install_result.error or "",
+            "mission_id": mid,
+            "controller_state": final_state.to_public_dict() if final_state is not None else {},
+            "adapter_result": install_result.raw_result,
+        }
+
+    def arm_execution_by_id(
+        self,
+        *,
+        mission_id: int,
+        mission_json: dict[str, Any],
+        expected_controller_version: int | None = None,
+    ) -> dict[str, Any]:
+        """ADR 0021 § 1 Confirm-mode arm: install the mission after operator confirm.
+
+        Mechanically identical to `execute_mission_by_id` today — the distinction
+        exists at the AI-tool boundary (only bound in Confirm mode) so the chat
+        operator's explicit confirm is what triggers this path, not the model.
+        """
+        result = self.execute_mission_by_id(
+            mission_id=mission_id,
+            mission_json=mission_json,
+            expected_controller_version=expected_controller_version,
+        )
+        if result.get("ok") and result.get("status") == "executing":
+            result["status"] = "armed"
+        return result
+
+    def cancel_execution_by_id(
+        self,
+        *,
+        mode: str = "clear",
+        expected_controller_version: int | None = None,
+    ) -> dict[str, Any]:
+        """ADR 0021 § 1 cancel: abort the controller mission via the adapter."""
+        cancel = getattr(self._controller_adapter, "cancel_mission", None)
+        if not callable(cancel):
+            return {
+                "ok": False,
+                "status": "cancel_unsupported",
+                "error": f"adapter {getattr(self._controller_adapter, 'adapter_name', '?')} does not implement cancel_mission",
+                "controller_state": self.get_controller_state(),
+            }
+        try:
+            result = cancel(mode=mode, expected_controller_version=expected_controller_version)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "cutover_failed",
+                "error": str(exc),
+                "controller_state": self.get_controller_state(),
+            }
+        final_state = result.controller_state
+        return {
+            "ok": bool(result.ok),
+            "status": str(result.status or ("cancelled" if result.ok else "cutover_failed")),
+            "error": result.error or "",
+            "cancel_mode": str(mode or "clear"),
+            "controller_state": final_state.to_public_dict() if final_state is not None else {},
+            "adapter_result": result.raw_result,
+        }
+
     def get_controller_state(self) -> dict[str, Any]:
+        adapter_state = self._controller_adapter.get_controller_state()
         with self._connect() as conn:
+            if not self._controller_state_table_available(conn):
+                summary = f"Controller mission state: {adapter_state.status}."
+                if adapter_state.controller_version:
+                    summary = f"{summary} Version: {adapter_state.controller_version}."
+                if adapter_state.revision_id:
+                    summary = f"{summary} Active revision: {adapter_state.revision_id}."
+                return {
+                    "available": True,
+                    "controller_id": MISSION_CONTROLLER_ID,
+                    "controller_version": int(adapter_state.controller_version or 0),
+                    "active_operation_id": adapter_state.operation_id,
+                    "active_revision_id": adapter_state.revision_id,
+                    "active_draft_id": adapter_state.draft_id,
+                    "status": str(adapter_state.status or "idle"),
+                    "summary": summary,
+                    "verified_snapshot": adapter_state.to_snapshot(),
+                    "previous_verified_snapshot": {},
+                    "pending_snapshot": {},
+                    "last_cutover_attempt": {},
+                    "last_error": "",
+                    "last_cutover_at": None,
+                    "verified_at": adapter_state.captured_at,
+                    "updated_at": adapter_state.captured_at,
+                    "adapter": self._controller_adapter.adapter_name,
+                }
             row = self._ensure_controller_state_row(conn)
             conn.commit()
         return self._controller_state_from_row(row)
@@ -984,6 +1204,53 @@ class MissionExecutionService:
             params.append(str(session_id).strip())
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
+            if not self._legacy_revision_tables_available(conn):
+                current_revision = self._get_current_repo_revision(conn, session_id=session_id)
+                if current_revision is None:
+                    return {
+                        "active": False,
+                        "status": "no_active_mission",
+                        "summary": "No backend-owned mission proposal is stored yet.",
+                    }
+                mission = current_revision.get("mission") if isinstance(current_revision.get("mission"), dict) else {}
+                goal = str(current_revision.get("goal") or "").strip()
+                waypoints = _collect_waypoints(mission)
+                status = str(current_revision.get("status") or "stored")
+                summary = f"Latest stored mission status: {status}."
+                if goal:
+                    summary = f"{summary} Goal: {goal}."
+                if waypoints:
+                    summary = f"{summary} Waypoints: {len(waypoints)}."
+                controller_state = self.get_controller_state()
+                controller_version = int(controller_state.get("controller_version") or 0)
+                controller_status = str(controller_state.get("status") or "")
+                executing_revision_id = str(controller_state.get("active_revision_id") or "")
+                if controller_status:
+                    summary = f"{summary} Controller status: {controller_status}."
+                if controller_version:
+                    summary = f"{summary} Controller mission version: {controller_version}."
+                return {
+                    "active": False,
+                    "status": status,
+                    "summary": summary,
+                    "operation_id": current_revision["operation_id"],
+                    "revision_id": current_revision["id"],
+                    "draft_id": "",
+                    "session_id": current_revision.get("session_id", ""),
+                    "goal": goal,
+                    "mission": mission,
+                    "validation": {},
+                    "review_context": {},
+                    "waypoint_count": len(waypoints),
+                    "created_at": current_revision.get("created_at"),
+                    "updated_at": current_revision.get("updated_at"),
+                    "approved_at": None,
+                    "rejected_at": None,
+                    "controller_state": controller_state,
+                    "controller_status": controller_status,
+                    "controller_version": controller_version,
+                    "executing_revision_id": executing_revision_id,
+                }
             row = conn.execute(
                 f"""
                 SELECT
@@ -1677,6 +1944,74 @@ class MissionExecutionService:
         with self._connect() as conn:
             apply_ai_store_migrations(conn)
             conn.commit()
+
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _legacy_revision_tables_available(self, conn: sqlite3.Connection) -> bool:
+        return self._table_exists(conn, "ai_mission_operations") and self._table_exists(
+            conn, "ai_mission_revisions"
+        )
+
+    def _controller_state_table_available(self, conn: sqlite3.Connection) -> bool:
+        return self._table_exists(conn, "ai_mission_controller_state")
+
+    def _missions_table_available(self, conn: sqlite3.Connection) -> bool:
+        return self._table_exists(conn, "missions")
+
+    def _get_repo_revision(
+        self,
+        conn: sqlite3.Connection,
+        revision_id: str,
+    ) -> dict[str, Any] | None:
+        if not self._missions_table_available(conn):
+            return None
+        try:
+            mission_id = int(str(revision_id or "").strip())
+        except (TypeError, ValueError):
+            return None
+        row = conn.execute("SELECT * FROM missions WHERE id = ?", (mission_id,)).fetchone()
+        return _mission_row_to_compat_revision(row) if row is not None else None
+
+    def _list_repo_revisions(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        session_id: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not self._missions_table_available(conn):
+            return []
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id is not None and str(session_id).strip():
+            clauses.append("origin_chat_id = ?")
+            params.append(str(session_id).strip())
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, int(limit)))
+        rows = conn.execute(
+            f"""
+            SELECT * FROM missions
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [_mission_row_to_compat_revision(row) for row in rows]
+
+    def _get_current_repo_revision(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        session_id: str = "",
+    ) -> dict[str, Any] | None:
+        revisions = self._list_repo_revisions(conn, session_id=session_id, limit=1)
+        return revisions[0] if revisions else None
 
     @contextmanager
     def _connect(self):

@@ -39,7 +39,6 @@ try:
     from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.intent_service import IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
     from gcs_server.ai.retrieval import (
@@ -62,7 +61,6 @@ except ModuleNotFoundError:
     from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.intent_service import IntentService
-    from ai.mission_draft_service import MissionDraftService, validate_draft_payload
     from ai.mission_export_service import MissionExportService
     from ai.provider_registry import evict_model_cache, resolve_intent_provider
     from ai.retrieval import (
@@ -209,7 +207,6 @@ async def lifespan(app: FastAPI):
         tool_registry=_tool_registry,
         context_service=AIContextService(runtime),
         intent_service=IntentService(),
-        draft_service=runtime.mission_draft_service,
         ai_session_store=runtime.ai_store,
         secret_resolver=runtime.secret_store.get_secret,
         checkpointer=_checkpointer,
@@ -2085,40 +2082,6 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
         "assistant_message": assistant_message,
         "session": _public_ai_session(runtime, session),
     })
-
-
-@app.post("/api/ai/sessions/{session_id}/mission-draft")
-async def create_mission_draft(session_id: str, request: Request) -> JSONResponse:
-    _runtime(request)
-    raise HTTPException(
-        status_code=409,
-        detail="legacy mission draft writes are disabled; use /api/ai/mission-revisions and planning-shell endpoints",
-    )
-
-
-@app.get("/api/ai/mission-drafts")
-async def list_mission_drafts(
-    request: Request,
-    session_id: str | None = None,
-    status: str | None = None,
-    limit: int = 50,
-) -> JSONResponse:
-    runtime = _runtime(request)
-    drafts = runtime.mission_draft_service.list_drafts(
-        session_id=session_id,
-        status_filter=status,
-        limit=max(1, min(200, limit)),
-    )
-    return JSONResponse({"ok": True, "drafts": drafts, "count": len(drafts)})
-
-
-@app.get("/api/ai/mission-drafts/{draft_id}")
-async def get_mission_draft(draft_id: str, request: Request) -> JSONResponse:
-    runtime = _runtime(request)
-    draft = runtime.mission_draft_service.get_draft(draft_id)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="mission draft not found")
-    return JSONResponse({"ok": True, "draft": draft})
 
 
 @app.get("/api/ai/mission-revisions")

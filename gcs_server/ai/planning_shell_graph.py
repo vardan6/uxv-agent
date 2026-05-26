@@ -51,7 +51,7 @@ try:
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.graph_state import PlanningShellGraphState
     from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai.mission_draft_service import validate_draft_payload
+    from gcs_server.ai.mission_repository import validate_mission_json
     from gcs_server.ai.provider_registry import resolve_provider
     from gcs_server.ai.retrieval import (
         build_loaded_data_refs,
@@ -67,7 +67,7 @@ except ModuleNotFoundError:
     from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.graph_state import PlanningShellGraphState
     from ai.mission_export_service import MissionExportService
-    from ai.mission_draft_service import validate_draft_payload
+    from ai.mission_repository import validate_mission_json
     from ai.provider_registry import resolve_provider
     from ai.retrieval import (
         build_loaded_data_refs,
@@ -801,7 +801,16 @@ def validate_draft(state: PlanningShellGraphState, config: RunnableConfig) -> di
     draft = state.get("draft") or {}
     rover_state = state.get("rover_state") or None
 
-    validation = validate_draft_payload(intent, target_resolution, draft, rover_state)
+    # ADR 0021 Slice 2b.2: repo-driven structural validation against the
+    # mission_json shape persisted by MissionRepository / executed by
+    # MissionExportService. The planner draft can wrap the mission payload as
+    # `draft['draft']`, `draft['mission']`, or be the payload itself.
+    mission_payload = draft.get("draft") if isinstance(draft.get("draft"), dict) else None
+    if not isinstance(mission_payload, dict):
+        mission_payload = draft.get("mission") if isinstance(draft.get("mission"), dict) else None
+    if not isinstance(mission_payload, dict):
+        mission_payload = draft if isinstance(draft, dict) else {}
+    validation = validate_mission_json(mission_payload)
 
     new_errors: list[dict] = []
     for blocker in validation.get("blockers") or []:

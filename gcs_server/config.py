@@ -29,6 +29,10 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
+        "mission_lifecycle": {
+            "execution_mode": "autonomous",
+            "confirm_timeout_s": 10,
+        },
     },
     "llm_providers": [
         {
