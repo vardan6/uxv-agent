@@ -111,13 +111,12 @@ class MissionExecutionService:
                 "controller_state": self.get_controller_state(),
             }
 
-        final_state = install_result.controller_state
         return {
             "ok": bool(install_result.ok),
             "status": str(install_result.status or ("executing" if install_result.ok else "cutover_failed")),
             "error": install_result.error or "",
             "mission_id": mid,
-            "controller_state": final_state.to_public_dict() if final_state is not None else {},
+            "controller_state": self.get_controller_state(),
             "adapter_result": install_result.raw_result,
         }
 
@@ -167,13 +166,12 @@ class MissionExecutionService:
                 "error": str(exc),
                 "controller_state": self.get_controller_state(),
             }
-        final_state = result.controller_state
         return {
             "ok": bool(result.ok),
             "status": str(result.status or ("cancelled" if result.ok else "cutover_failed")),
             "error": result.error or "",
             "cancel_mode": str(mode or "clear"),
-            "controller_state": final_state.to_public_dict() if final_state is not None else {},
+            "controller_state": self.get_controller_state(),
             "adapter_result": result.raw_result,
         }
 
@@ -183,13 +181,13 @@ class MissionExecutionService:
         if adapter_state.controller_version:
             summary = f"{summary} Version: {adapter_state.controller_version}."
         if adapter_state.revision_id:
-            summary = f"{summary} Active revision: {adapter_state.revision_id}."
+            summary = f"{summary} Active mission: {adapter_state.revision_id}."
         return {
             "available": True,
             "controller_id": MISSION_CONTROLLER_ID,
             "controller_version": int(adapter_state.controller_version or 0),
             "active_operation_id": adapter_state.operation_id,
-            "active_revision_id": adapter_state.revision_id,
+            "active_mission_id": adapter_state.revision_id,
             "active_draft_id": adapter_state.draft_id,
             "status": str(adapter_state.status or "idle"),
             "summary": summary,

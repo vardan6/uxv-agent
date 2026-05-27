@@ -174,6 +174,13 @@ def _parse_mission_id(raw: Any, *, field_name: str) -> int:
         raise HTTPException(status_code=400, detail=f"{field_name} must be an integer") from None
 
 
+def _default_manual_mission_name(runtime: AppRuntime) -> str:
+    ai_settings = getattr(getattr(runtime, "config", None), "ai_settings", {})
+    normalized = _normalize_ai_settings(ai_settings if isinstance(ai_settings, dict) else {})
+    lifecycle = normalized.get("mission_lifecycle", {})
+    return str(lifecycle.get("default_manual_mission_name", "Untitled mission") or "").strip() or "Untitled mission"
+
+
 def _coerce_waypoint_payload(value: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise HTTPException(status_code=400, detail=f"waypoint #{index} must be an object")
@@ -239,13 +246,14 @@ def _mission_to_api_row(mission: Any, controller_state: dict[str, Any] | None = 
         )
         for index, waypoint in enumerate(waypoints, start=1)
     }
-    status = str(getattr(mission, "approval_status", "") or "approved")
     controller = controller_state or {}
     active_snapshot = controller.get("verified_snapshot") if isinstance(controller.get("verified_snapshot"), dict) else {}
     active_mission_id = active_snapshot.get("mission_id")
     controller_status = str(controller.get("status") or "")
     if active_mission_id == mission.id and controller_status in {"executing", "armed"}:
         status = controller_status
+    else:
+        status = "approved"
     return {
         "id": mission.id,
         "status": status,
@@ -257,15 +265,13 @@ def _mission_to_api_row(mission: Any, controller_state: dict[str, Any] | None = 
         "goal": str(materialized_mission.get("goal") or mission.name or ""),
         "mission": materialized_mission,
         "provenance": provenance,
-        "approval_status": str(getattr(mission, "approval_status", "") or "approved"),
     }
 
 
 def _overlay_for_mission(mission: Any) -> dict[str, Any]:
     overlay = build_mission_overlay(mission.id, mission.mission_json)
-    overlay["revision_id"] = mission.id
     overlay["mission_id"] = mission.id
-    overlay["status"] = str(getattr(mission, "approval_status", "") or "approved")
+    overlay["status"] = "approved"
     return overlay
 
 
@@ -2241,59 +2247,10 @@ async def get_mission_overlay(request: Request, mission_id: str) -> JSONResponse
     return JSONResponse({"ok": True, "overlay": _overlay_for_mission(mission)})
 
 
-@app.post("/api/ai/missions/{mission_id}/approve")
-async def approve_mission(mission_id: str, request: Request) -> JSONResponse:
-    repository = _mission_repository(request)
-    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
-    if mission is None:
-        raise HTTPException(status_code=404, detail="mission not found")
-    try:
-        updated = repository.update(
-            mission.id,
-            expected_client_version=mission.client_version,
-            approval_status="approved",
-        )
-    except MissionVersionConflict as exc:
-        return JSONResponse(
-            {
-                "ok": False,
-                "status": "version_conflict",
-                "error": str(exc),
-                "current_client_version": exc.actual,
-            },
-            status_code=409,
-        )
-    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
-
-
-@app.post("/api/ai/missions/{mission_id}/reject")
-async def reject_mission(mission_id: str, request: Request) -> JSONResponse:
-    repository = _mission_repository(request)
-    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
-    if mission is None:
-        raise HTTPException(status_code=404, detail="mission not found")
-    try:
-        updated = repository.update(
-            mission.id,
-            expected_client_version=mission.client_version,
-            approval_status="rejected",
-        )
-    except MissionVersionConflict as exc:
-        return JSONResponse(
-            {
-                "ok": False,
-                "status": "version_conflict",
-                "error": str(exc),
-                "current_client_version": exc.actual,
-            },
-            status_code=409,
-        )
-    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
-
-
 @app.post("/api/ai/missions")
 async def create_mission(request: Request) -> JSONResponse:
     repository = _mission_repository(request)
+    runtime = _runtime(request)
     payload = await _read_mission_mutation_payload(request)
     source_id = payload.get("from_mission_id")
     source = None
@@ -2306,12 +2263,17 @@ async def create_mission(request: Request) -> JSONResponse:
     waypoints = _normalize_waypoints_payload(payload.get("waypoints"))
     mission_json["waypoints"] = waypoints
     label = str(payload.get("label") or "").strip()
+    payload_session_id = str(payload.get("session_id") or "").strip()
+    if source is not None:
+        origin_chat_id = str(source.origin_chat_id or "").strip() or None
+    else:
+        origin_chat_id = payload_session_id or None
     new_mission = repository.create(
-        name=label or (source.name if source is not None else "Untitled mission"),
+        name=label or (source.name if source is not None else _default_manual_mission_name(runtime)),
         origin="manual",
-        origin_chat_id=(str(source.origin_chat_id or "").strip() if source is not None else None),
+        origin_chat_id=origin_chat_id,
         mission_json=mission_json,
-        approval_status="awaiting_approval",
+        approval_status="approved",
     )
     return JSONResponse({"ok": True, "mission": _mission_to_api_row(new_mission)})
 
@@ -2433,6 +2395,33 @@ async def delete_mission_waypoint(mission_id: str, waypoint_index: int, request:
             status_code=409,
         )
     return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.delete("/api/ai/missions/{mission_id}")
+async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    parsed_id = _parse_mission_id(mission_id, field_name="mission_id")
+    mission = repository.get(parsed_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    controller_state = _mission_execution(request).get_controller_state()
+    snapshot = controller_state.get("verified_snapshot") if isinstance(controller_state, dict) else None
+    active_id = snapshot.get("mission_id") if isinstance(snapshot, dict) else None
+    controller_status = str((controller_state or {}).get("status") or "")
+    if active_id == parsed_id and controller_status in {"executing", "armed"}:
+        raise HTTPException(status_code=409, detail="cannot delete an active mission (executing or armed)")
+    repository.delete(parsed_id)
+    return JSONResponse({"ok": True, "deleted_mission_id": parsed_id})
+
+
+@app.post("/api/ai/missions/{mission_id}/restore")
+async def restore_mission(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    parsed_id = _parse_mission_id(mission_id, field_name="mission_id")
+    restored = repository.restore(parsed_id)
+    if restored is None:
+        raise HTTPException(status_code=404, detail="mission not found or not deleted")
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(restored)})
 
 
 @app.post("/api/ai/missions/{mission_id}/execute")

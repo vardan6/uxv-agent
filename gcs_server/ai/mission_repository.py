@@ -127,12 +127,16 @@ class MissionRepository:
             mission_json=mission_json or {},
         )
 
-    def get(self, mission_id: int) -> Mission | None:
+    def get(self, mission_id: int, *, include_deleted: bool = False) -> Mission | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM missions WHERE id = ?", (mission_id,)
             ).fetchone()
-        return _row_to_mission(row) if row is not None else None
+        if row is None:
+            return None
+        if not include_deleted and row["deleted_at"] is not None:
+            return None
+        return _row_to_mission(row)
 
     def list(
         self,
@@ -140,11 +144,12 @@ class MissionRepository:
         origin_chat_id: str | None = None,
         limit: int | None = None,
     ) -> list[Mission]:
-        query = "SELECT * FROM missions"
+        clauses: list[str] = ["deleted_at IS NULL"]
         params: list[Any] = []
         if origin_chat_id is not None:
-            query += " WHERE origin_chat_id = ?"
+            clauses.append("origin_chat_id = ?")
             params.append(origin_chat_id)
+        query = "SELECT * FROM missions WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at DESC"
         if limit is not None:
             query += " LIMIT ?"
@@ -212,10 +217,29 @@ class MissionRepository:
         return _row_to_mission(row)
 
     def delete(self, mission_id: int) -> bool:
+        """Soft delete: stamps `deleted_at`. The row stays so `restore` can
+        flip it back without renumbering. `#index` is never reused (ADR 0021)."""
         with self._connect() as conn:
-            cursor = conn.execute("DELETE FROM missions WHERE id = ?", (mission_id,))
+            cursor = conn.execute(
+                "UPDATE missions SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+                (time.time(), mission_id),
+            )
             conn.commit()
         return cursor.rowcount > 0
+
+    def restore(self, mission_id: int) -> Mission | None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE missions SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+                (mission_id,),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+            row = conn.execute(
+                "SELECT * FROM missions WHERE id = ?", (mission_id,)
+            ).fetchone()
+        return _row_to_mission(row) if row is not None else None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

@@ -21,11 +21,11 @@ export async function getMission(missionId) {
   return { ok: true, ...mission };
 }
 
-export async function createMission({ operation_id, waypoints, label = '', from_mission_id = '' }) {
+export async function createMission({ operation_id, waypoints, label = '', from_mission_id = '', session_id = '' }) {
   return _safeFetch('/api/ai/missions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operation_id, waypoints, label, from_mission_id }),
+    body: JSON.stringify({ operation_id, waypoints, label, from_mission_id, session_id }),
   });
 }
 
@@ -51,6 +51,18 @@ export async function insertMissionWaypoint(missionId, { point, expected_version
       body: JSON.stringify({ point, expected_version, after_index }),
     },
   );
+}
+
+export async function deleteMission(missionId) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function restoreMission(missionId) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}/restore`, {
+    method: 'POST',
+  });
 }
 
 // waypointIndex is 1-based.

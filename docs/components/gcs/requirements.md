@@ -187,23 +187,21 @@ Operators must be able to:
 - **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually on the map
 - **Review AI-created missions** — the agent emits a new Mission row; the map renders it immediately
 - **Edit missions** — drag waypoints, add/delete waypoints, reorder
-- **Approve a mission for execution** using the "Approve draft" affordance; approval updates durable Mission lifecycle state but does not execute
-- **Reject a mission** using the explicit reject affordance; rejection updates durable Mission lifecycle state and keeps the Mission visible for later review or deletion
-- **Execute mission** — a separate action from approval that hands the Mission to the controller
-- **Export plan** — export the approved Mission as a `.plan` file without executing when export is surfaced in the UI
+- **Execute mission** — hand the Mission to the controller via the row's `▶` button (Strict) or via AI tool calls per the active execution mode (Confirm / Autonomous)
+- **Export plan** — export a Mission as a `.plan` file without executing when export is surfaced in the UI
 
-The three verbs are **Approve draft**, **Execute mission**, and **Export plan**. The word "Accept" is not used.
+Per [ADR 0022](../../cross-cutting/decisions/0022-drop-operator-approval-gate.md), Missions no longer carry an operator-facing approval state. Every Mission row is immediately playable; the safety gate lives in the execution mode (Strict / Confirm / Autonomous) and the executing-mission edit lock, not in a per-Mission approval flag.
 
 ### Concurrency and edit-lock invariants
 
 - All edits carry `client_version` for optimistic CAS. The backend rejects stale writes with `409 Conflict`.
 - Manual edits mutate the Active Mission in place. AI-driven changes default to clone-and-edit, producing a new Mission row unless the operator explicitly requests an in-place AI edit.
 - No mutation of an executing mission is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
-- The current `/ai` widget still speaks to a temporary revision-shaped compatibility API backed one-to-one by Missions. That bridge is transitional; new UI work should target Missions directly.
+- The widget consumes the flat Mission API directly; overlay payloads still emit `revision_id` as an alias of `mission_id` (cosmetic).
 
 ### Safety invariants
 
-- Approval does not execute in Strict mode. Execution requires a separate explicit action in Strict, an operator confirmation banner in Confirm, or may be AI-triggered directly in Autonomous.
+- Execution requires a separate explicit operator action in Strict, an operator confirmation banner in Confirm, or an AI tool call in Autonomous. Per [ADR 0022](../../cross-cutting/decisions/0022-drop-operator-approval-gate.md), there is no per-Mission approval gate in front of any of these.
 - The edit lock during execution is not bypassable from the frontend.
 - The map widget never issues low-level MQTT commands directly.
 

@@ -1,5 +1,5 @@
-import { getCurrentOverlay, getRevisionOverlay, listRevisions, approveDraft, rejectDraft, executeMission, getControllerState } from './data/missionApi.js';
-import { getMission, createMission, updateMissionWaypoint, insertMissionWaypoint, deleteMissionWaypoint } from './data/missionMutationApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState } from './data/missionApi.js';
+import { getMission, createMission, updateMissionWaypoint, insertMissionWaypoint, deleteMissionWaypoint, deleteMission, restoreMission } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
@@ -77,9 +77,9 @@ function boundsUnion(boundsList = []) {
   };
 }
 
-function opacityForRevision(revisionId, focusedRevisionId) {
-  if (!focusedRevisionId) return 1;
-  return revisionId === focusedRevisionId ? 1 : 0.25;
+function opacityForMission(missionId, focusedMissionId) {
+  if (!focusedMissionId) return 1;
+  return missionId === focusedMissionId ? 1 : 0.25;
 }
 
 function missionIdOf(row) {
@@ -108,7 +108,7 @@ export class MapWidget {
     this._selectionPanelWrap = null;
     this._mounted = false;
     this._missions = [];
-    this._revisionCache = new Map();
+    this._missionCache = new Map();
     this._visibleMissionOrder = [];
     this._selectedMissionIds = new Set();
     this._activeMissionId = '';
@@ -120,7 +120,7 @@ export class MapWidget {
     this._confirmModal = null;
     this._confirmResolve = null;
     this._actionBusy = false;
-    this._paletteByRevisionId = new Map();
+    this._paletteByMissionId = new Map();
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -131,6 +131,7 @@ export class MapWidget {
     this._sampleHeight = () => 0;
     this._terrainLayer = null;
     this._bulkActionBar = null;
+    this._didInitialFit = false;
   }
 
   mount() {
@@ -160,7 +161,7 @@ export class MapWidget {
       if (editState.editMode === 'add' && editState.isEditable()) {
         const ll = e.latlng;
         this._handleGhostClick(editState.waypoints.length, { x: ll.lng, y: ll.lat, z: 0 });
-      } else if (editState.revisionId) {
+      } else if (editState.missionId) {
         editState.clearSelection();
       }
     });
@@ -169,10 +170,10 @@ export class MapWidget {
       onActivateRequested: (missionId, opts) => this._handleMissionActivated(missionId, opts),
       onVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
       onSelectionToggled: (missionId, opts) => this._toggleMissionSelection(missionId, opts),
-      onApproveRequested: (draftId) => this._handleApprove(draftId),
-      onRejectRequested: (draftId) => this._handleReject(draftId),
       onExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
       onEditRequested: (missionId) => this._onEditRequested(missionId),
+      onCreateRequested: () => this._handleCreateMission(),
+      onDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
     });
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
@@ -205,10 +206,10 @@ export class MapWidget {
 
     // Marquee multi-select: capture-phase mousedown on empty map starts a rubber-band selector.
     // stopImmediatePropagation prevents Leaflet's drag handler from panning during the gesture.
-    // Only active when a revision is loaded and not in add mode (add mode uses click-to-append).
+    // Only active when a mission is loaded and not in add mode (add mode uses click-to-append).
     this._marqueeHandler = (e) => {
       if (e.button !== 0) return;
-      if (!editState.revisionId || editState.editMode === 'add') return;
+      if (!editState.missionId || editState.editMode === 'add') return;
       if (e.target.closest('.leaflet-interactive')) return;
       e.stopImmediatePropagation();
       this._startMarquee(e);
@@ -228,7 +229,7 @@ export class MapWidget {
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
     this._terrainLayer = null;
-    this._revisionCache.clear();
+    this._missionCache.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
       this._editStateSubscriber = null;
@@ -255,7 +256,7 @@ export class MapWidget {
     const nextSessionId = sessionId || '';
     if (nextSessionId !== this._sessionId) {
       this._sessionId = nextSessionId;
-      this._revisionCache.clear();
+      this._missionCache.clear();
       this._missions = [];
       this._visibleMissionOrder = [];
       this._selectedMissionIds.clear();
@@ -268,9 +269,9 @@ export class MapWidget {
     if (!this._map) return;
     this._hideError();
     await Promise.all([this._loadVehicleProfiles(), this._loadControllerState()]);
-    const revisionsPayload = await listRevisions({ sessionId: this._sessionId, limit: 100 });
-    if (!revisionsPayload.ok) {
-      this._showError(revisionsPayload.error || 'fetch failed');
+    const missionsPayload = await listMissions({ sessionId: this._sessionId, limit: 100 });
+    if (!missionsPayload.ok) {
+      this._showError(missionsPayload.error || 'fetch failed');
       this._overlayLayer.clear();
       this._listPanel.render();
       this._showEmpty(true);
@@ -278,12 +279,14 @@ export class MapWidget {
     }
 
     const previousMissionIds = new Set(this._missions.map((mission) => missionIdOf(mission)));
-    const missions = normalizeMissionRows(revisionsPayload.revisions || []);
+    const missions = normalizeMissionRows(missionsPayload.missions || []);
     this._missions = missions;
     const preferredMissionId = missions.find((mission) => !previousMissionIds.has(missionIdOf(mission)))?.id || '';
+    const isInitialFit = !this._didInitialFit;
     this._syncVisibilityState(missions, { preferredMissionId });
     await this._primeVisibleOverlays();
-    this._render();
+    this._render({ fit: isInitialFit });
+    if (isInitialFit && this._missions.length) this._didInitialFit = true;
   }
 
   async _loadVehicleProfiles() {
@@ -314,7 +317,7 @@ export class MapWidget {
     const tick = () => {
       if (!this._mounted) return;
       // Skip automatic refresh while user has an active edit session.
-      if (document.visibilityState !== 'hidden' && !editState.revisionId) {
+      if (document.visibilityState !== 'hidden' && !editState.missionId) {
         this.refresh().catch(() => {});
       }
       this._pollTimer = setTimeout(tick, 5000);
@@ -329,65 +332,79 @@ export class MapWidget {
     }
   }
 
-  async _handleApprove(draftId) {
-    if (this._actionBusy || !draftId) return;
+  async _handleCreateMission() {
+    if (this._actionBusy) return;
     this._actionBusy = true;
-    const result = await approveDraft(draftId);
+    const result = await createMission({ waypoints: [], label: '', session_id: this._sessionId });
     this._actionBusy = false;
     if (!result.ok) {
-      this._showError(result.error || 'Approve failed');
+      this._showError(result.error || 'Create mission failed');
       return;
     }
-    this._revisionCache.clear();
+    this._missionCache.clear();
+    await this.refresh();
+    const newId = result.mission && result.mission.id;
+    if (newId) this.setFocus(String(newId));
+  }
+
+  async _handleDeleteMission(missionId) {
+    if (this._actionBusy || !missionId) return;
+    this._actionBusy = true;
+    const result = await deleteMission(missionId);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Delete failed');
+      return;
+    }
+    this._missionCache.clear();
+    await this.refresh();
+    this._hintToasts?.showWithAction(`Mission #${missionId} deleted.`, {
+      actionLabel: 'Undo',
+      onAction: () => this._handleRestoreMission(missionId),
+    });
+  }
+
+  async _handleRestoreMission(missionId) {
+    if (this._actionBusy || !missionId) return;
+    this._actionBusy = true;
+    const result = await restoreMission(missionId);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Restore failed');
+      return;
+    }
+    this._missionCache.clear();
     await this.refresh();
   }
 
-  async _handleReject(draftId) {
-    if (this._actionBusy || !draftId) return;
-    this._actionBusy = true;
-    const result = await rejectDraft(draftId);
-    this._actionBusy = false;
-    if (!result.ok) {
-      this._showError(result.error || 'Reject failed');
-      return;
-    }
-    this._revisionCache.clear();
-    await this.refresh();
-  }
-
-  async _handleExecuteRequest(revisionId) {
-    if (this._actionBusy || !revisionId) return;
-    const confirmed = await this._showConfirmModal(revisionId);
+  async _handleExecuteRequest(missionId) {
+    if (this._actionBusy || !missionId) return;
+    const confirmed = await this._showConfirmModal(missionId);
     if (!confirmed) return;
     this._actionBusy = true;
-    const result = await executeMission(revisionId, { expectedControllerVersion: this._controllerVersion });
+    const result = await executeMission(missionId, { expectedControllerVersion: this._controllerVersion });
     this._actionBusy = false;
     if (!result.ok) {
-      if (result.status === 'stale_revision') {
-        await this._recoverFromStaleExecution(result, revisionId);
-        return;
-      }
       if (result.status === 'stale_controller_version') {
-        await this._recoverFromStaleControllerVersion(result, revisionId);
+        await this._recoverFromStaleControllerVersion(result, missionId);
         return;
       }
       this._showError(result.error || 'Execute failed');
       return;
     }
-    this._revisionCache.clear();
+    this._missionCache.clear();
     await this.refresh();
   }
 
   // --- Edit flow ---
 
-  async _onEditRequested(revisionId) {
-    const rawResult = await getMission(revisionId);
+  async _onEditRequested(missionId) {
+    const rawResult = await getMission(missionId);
     if (!rawResult.ok) {
-      this._showError(rawResult.error || 'Could not load revision for editing');
+      this._showError(rawResult.error || 'Could not load mission for editing');
       return;
     }
-    // rawResult has revision fields spread at the top level (normalized in missionMutationApi).
-    let revisionToEdit = rawResult;
+    let missionToEdit = rawResult;
 
     if (LOCKED_STATUSES.has(String(rawResult.status || ''))) {
       // Fork: create a new proposed successor so the original stays intact.
@@ -395,29 +412,29 @@ export class MapWidget {
       const forkResult = await createMission({
         operation_id: rawResult.operation_id,
         waypoints,
-        label: `Edit of …${String(revisionId).slice(-6)}`,
-        from_mission_id: revisionId,
+        label: `Edit of …${String(missionId).slice(-6)}`,
+        from_mission_id: missionId,
       });
       if (!forkResult.ok) {
-        this._showError(forkResult.error || 'Could not fork revision for editing');
+        this._showError(forkResult.error || 'Could not fork mission for editing');
         return;
       }
-      revisionToEdit = forkResult.mission;
-      this._prepareRevisionForEditing(revisionToEdit.id || revisionId);
-      this._revisionCache.clear();
+      missionToEdit = forkResult.mission;
+      this._prepareMissionForEditing(missionToEdit.id || missionId);
+      this._missionCache.clear();
       await this.refresh();
     }
 
-    this._prepareRevisionForEditing(revisionToEdit.id || revisionId);
-    editState.beginEdit(revisionToEdit);
-    this.setFocus(revisionToEdit.id || revisionId);
-    this._render(); // drop edited revision from renderMany
+    this._prepareMissionForEditing(missionToEdit.id || missionId);
+    editState.beginEdit(missionToEdit);
+    this.setFocus(missionToEdit.id || missionId, { fit: false });
+    this._render(); // drop edited mission from renderMany
   }
 
   async _handleDragEnd(idx, newPoint, preDragLatLng, marker) {
     if (!editState.isEditable()) return;
     editState.setBusy(true);
-    const result = await updateMissionWaypoint(editState.revisionId, idx + 1, {
+    const result = await updateMissionWaypoint(editState.missionId, idx + 1, {
       point: newPoint,
       expected_version: editState.clientVersion,
     });
@@ -429,10 +446,10 @@ export class MapWidget {
       editState.setBusy(false);
       if (result.status === 'version_conflict') {
         this._showError('Edit conflict — refreshing.');
-        const fresh = await getMission(editState.revisionId);
+        const fresh = await getMission(editState.missionId);
         if (fresh.ok) editState.beginEdit(fresh);
-      } else if (result.status === 'revision_locked') {
-        this._showError('This revision is locked. Use the Edit button to create an editable copy.');
+      } else if (result.status === 'mission_locked' || result.status === 'revision_locked') {
+        this._showError('This mission is locked. Use the Edit button to create an editable copy.');
       } else {
         this._showError(result.error || 'Waypoint update failed');
       }
@@ -443,7 +460,7 @@ export class MapWidget {
   async _handleGhostClick(afterIndex, point) {
     if (!editState.isEditable()) return;
     editState.setBusy(true);
-    const result = await insertMissionWaypoint(editState.revisionId, {
+    const result = await insertMissionWaypoint(editState.missionId, {
       point,
       expected_version: editState.clientVersion,
       after_index: afterIndex,
@@ -461,20 +478,20 @@ export class MapWidget {
     const sortedIndices = [...editState.selectedIndices].sort((a, b) => b - a); // descending
     if (!sortedIndices.length) return;
     editState.setBusy(true);
-    let prevRevision = null;
+    let prevMission = null;
     for (const idx of sortedIndices) {
-      const revId = prevRevision ? prevRevision.id : editState.revisionId;
-      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
-      const result = await deleteMissionWaypoint(revId, idx + 1, version);
+      const missionRowId = prevMission ? prevMission.id : editState.missionId;
+      const version = prevMission ? prevMission.client_version : editState.clientVersion;
+      const result = await deleteMissionWaypoint(missionRowId, idx + 1, version);
       if (!result.ok) {
         editState.setBusy(false);
         this._showError(result.error || 'Delete failed');
-        if (prevRevision) editState.beginEdit(prevRevision);
+        if (prevMission) editState.beginEdit(prevMission);
         return;
       }
-      prevRevision = result.mission;
+      prevMission = result.mission;
     }
-    if (prevRevision) editState.beginEdit(prevRevision);
+    if (prevMission) editState.beginEdit(prevMission);
   }
 
   async _handleBulkSetAltitude(z) {
@@ -482,25 +499,25 @@ export class MapWidget {
     const sortedIndices = [...editState.selectedIndices].sort((a, b) => a - b);
     if (!sortedIndices.length) return;
     editState.setBusy(true);
-    let prevRevision = null;
+    let prevMission = null;
     for (const idx of sortedIndices) {
-      const revId = prevRevision ? prevRevision.id : editState.revisionId;
-      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
+      const missionRowId = prevMission ? prevMission.id : editState.missionId;
+      const version = prevMission ? prevMission.client_version : editState.clientVersion;
       const wp = editState.waypoints[idx];
       if (!wp) continue;
-        const result = await updateMissionWaypoint(revId, idx + 1, {
+        const result = await updateMissionWaypoint(missionRowId, idx + 1, {
         point: { x: wp.x, y: wp.y, z },
         expected_version: version,
       });
       if (!result.ok) {
         editState.setBusy(false);
         this._showError(result.error || 'Altitude update failed');
-        if (prevRevision) editState.beginEdit(prevRevision);
+        if (prevMission) editState.beginEdit(prevMission);
         return;
       }
-      prevRevision = result.mission;
+      prevMission = result.mission;
     }
-    if (prevRevision) editState.beginEdit(prevRevision);
+    if (prevMission) editState.beginEdit(prevMission);
   }
 
   _handleMarkerClick(idx, event) {
@@ -607,7 +624,7 @@ export class MapWidget {
   // --- editState subscriber ---
 
   _onEditStateChange(snapshot) {
-    if (!snapshot.revisionId) {
+    if (!snapshot.missionId) {
       this._overlayLayer.clearEditable();
       this._selectionPanel.hide();
       this._bulkActionBar?.hide();
@@ -624,7 +641,7 @@ export class MapWidget {
     this._editBanner.hidden = false;
     const modeLabel = snapshot.editMode === 'vertex' ? ' · vertex edit' : snapshot.editMode === 'add' ? ' · add mode' : '';
     this._editBannerText.textContent =
-      `Editing — ${snapshot.status} · rev …${snapshot.revisionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
+      `Editing — ${snapshot.status} · rev …${snapshot.missionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
 
     if (snapshot.selectedIndices.size === 1) {
       const idx = [...snapshot.selectedIndices][0];
@@ -637,7 +654,7 @@ export class MapWidget {
 
     this._bulkActionBar?.update(snapshot.selectedIndices, snapshot.waypoints, editState.isEditable());
 
-    const color = this._paletteByRevisionId.get(snapshot.revisionId) || '#4a90d9';
+    const color = this._paletteByMissionId.get(snapshot.missionId) || '#4a90d9';
     this._overlayLayer.renderEditable(snapshot.waypoints, {
       color,
       selectedIndices: snapshot.selectedIndices,
@@ -678,17 +695,17 @@ export class MapWidget {
       if (this._contextMenu.isOpen) { this._contextMenu.close(); return; }
       if (editState.selectedIndices.size) { editState.clearSelection(); return; }
       if (editState.editMode) { editState.setEditMode(null); return; }
-      if (editState.revisionId) {
+      if (editState.missionId) {
         editState.clearEdit();
-        this._revisionCache.clear();
+        this._missionCache.clear();
         this.refresh();
       }
       return;
     }
 
-    if (!editState.revisionId) return;
+    if (!editState.missionId) return;
 
-    if (key === 'f' || key === 'F') { e.preventDefault(); this.setFocus(editState.revisionId); return; }
+    if (key === 'f' || key === 'F') { e.preventDefault(); this.setFocus(editState.missionId); return; }
     if (key === '[') { e.preventDefault(); editState.stepSelection(-1); return; }
     if (key === ']') { e.preventDefault(); editState.stepSelection(1); return; }
 
@@ -707,12 +724,12 @@ export class MapWidget {
 
   // --- Confirm modal ---
 
-  _showConfirmModal(revisionId) {
+  _showConfirmModal(missionId) {
     return new Promise((resolve) => {
       this._confirmResolve = resolve;
       const modal = this._confirmModal;
       if (!modal) { resolve(false); return; }
-      modal.querySelector('.map-confirm-revision-id').textContent = String(revisionId).slice(-8);
+      modal.querySelector('.map-confirm-mission-id').textContent = String(missionId).slice(-8);
       modal.querySelector('.map-confirm-controller-version').textContent =
         this._controllerVersion !== null ? String(this._controllerVersion) : 'unknown';
       modal.hidden = false;
@@ -750,12 +767,11 @@ export class MapWidget {
     const executingIds = this._executingMissionIds();
     if (!this._visibleMissionOrder.length) {
       const defaults = missions
-        .slice(0, 3)
         .map((mission) => missionIdOf(mission))
         .filter(Boolean);
-      this._visibleMissionOrder = enforceVisibilityCap(defaults, 3, executingIds);
+      this._visibleMissionOrder = enforceVisibilityCap(defaults, Infinity, executingIds);
     } else {
-      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, executingIds);
+      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
     }
 
     if (preferredMissionId && knownMissionIds.has(preferredMissionId)) {
@@ -768,28 +784,28 @@ export class MapWidget {
 
   async _primeVisibleOverlays() {
     const loads = this._visibleMissionOrder.map(async (missionId) => {
-      if (this._revisionCache.has(missionId)) return;
-      const payload = await getRevisionOverlay(missionId);
+      if (this._missionCache.has(missionId)) return;
+      const payload = await getMissionOverlay(missionId);
       if (payload.ok) {
-        this._revisionCache.set(missionId, payload);
+        this._missionCache.set(missionId, payload);
       }
     });
     await Promise.all(loads);
 
-    if (!this._revisionCache.size && this._sessionId) {
+    if (!this._missionCache.size && this._sessionId) {
       const payload = await getCurrentOverlay(this._sessionId);
-      const overlayMissionId = String(payload.mission_id || payload.revision_id || '').trim();
+      const overlayMissionId = String(payload.mission_id || '').trim();
       if (payload.ok && overlayMissionId) {
-        this._revisionCache.set(overlayMissionId, payload);
+        this._missionCache.set(overlayMissionId, payload);
       }
     }
   }
 
-  _render() {
-    const editedRevisionId = editState.revisionId;
+  _render({ fit = false } = {}) {
+    const editedMissionId = editState.missionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
-    const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder);
-    this._paletteByRevisionId = paletteByMissionId;
+    const paletteByMissionId = assignPaletteColor(this._missions.map((m) => missionIdOf(m)));
+    this._paletteByMissionId = paletteByMissionId;
 
     this._listPanel.render({
       missions: this._missions,
@@ -801,48 +817,50 @@ export class MapWidget {
       activeProfileId: this._activeProfileId,
     });
 
-    // Exclude the actively-edited revision from the read-only overlay so only
+    // Exclude the actively-edited mission from the read-only overlay so only
     // the editable layer shows it.
     const overlays = this._visibleMissionOrder
-      .filter((missionId) => missionId !== editedRevisionId)
+      .filter((missionId) => missionId !== editedMissionId)
       .map((missionId) => {
-        const payload = this._revisionCache.get(missionId);
+        const payload = this._missionCache.get(missionId);
         if (!payload?.available) return null;
         return {
-          revisionId: missionId,
+          missionId: missionId,
           payload,
           color: paletteByMissionId.get(missionId),
-          opacity: opacityForRevision(missionId, this._activeMissionId),
+          opacity: opacityForMission(missionId, this._activeMissionId),
         };
       })
       .filter(Boolean);
 
     this._overlayLayer.renderMany(overlays);
-    const focusedPayload = this._activeMissionId ? this._revisionCache.get(this._activeMissionId) : null;
-    const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
-    this._fitBounds(focusedPayload?.bounds || unionBounds);
-    this._showEmpty(!overlays.length && !editedRevisionId);
+    if (fit) {
+      const focusedPayload = this._activeMissionId ? this._missionCache.get(this._activeMissionId) : null;
+      const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
+      this._fitBounds(focusedPayload?.bounds || unionBounds);
+    }
+    this._showEmpty(!this._missions.length);
     this._updateElevationProfile();
   }
 
   _updateElevationProfile() {
     if (!this._elevationPanel) return;
     // During active edit: show live edit waypoints
-    if (editState.revisionId && editState.waypoints.length) {
-      const color = this._paletteByRevisionId.get(editState.revisionId) || '#4a90d9';
+    if (editState.missionId && editState.waypoints.length) {
+      const color = this._paletteByMissionId.get(editState.missionId) || '#4a90d9';
       const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
       this._elevationPanel.update(editState.waypoints, this._sampleHeight, { color, vehicleKind });
       return;
     }
-    // Otherwise: show focused revision
-    const payload = this._activeMissionId ? this._revisionCache.get(this._activeMissionId) : null;
+    // Otherwise: show focused mission
+    const payload = this._activeMissionId ? this._missionCache.get(this._activeMissionId) : null;
     if (!payload?.available) { this._elevationPanel.clear(); return; }
     const wps = (payload.features || [])
       .filter((f) => f.type === 'waypoint')
       .sort((a, b) => a.index - b.index)
       .map((f) => ({ ...f.point, index: f.index }));
     if (!wps.length) { this._elevationPanel.clear(); return; }
-    const color = this._paletteByRevisionId.get(this._activeMissionId) || '#4a90d9';
+    const color = this._paletteByMissionId.get(this._activeMissionId) || '#4a90d9';
     const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
     this._elevationPanel.update(wps, this._sampleHeight, { color, vehicleKind });
   }
@@ -869,12 +887,13 @@ export class MapWidget {
       this._render();
       return;
     }
-    this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== missionId);
-    this._visibleMissionOrder.push(missionId);
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, executingIds);
-    if (!this._revisionCache.has(missionId)) {
-      const payload = await getRevisionOverlay(missionId);
-      if (payload.ok) this._revisionCache.set(missionId, payload);
+    if (!this._visibleMissionOrder.includes(missionId)) {
+      this._visibleMissionOrder.push(missionId);
+    }
+    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
+    if (!this._missionCache.has(missionId)) {
+      const payload = await getMissionOverlay(missionId);
+      if (payload.ok) this._missionCache.set(missionId, payload);
       else this._showError(payload.error || 'Overlay fetch failed');
     }
     if (!this._activeMissionId) this._activeMissionId = missionId;
@@ -896,88 +915,56 @@ export class MapWidget {
     this._render();
   }
 
-  async setFocus(missionId) {
+  async setFocus(missionId, { fit = true } = {}) {
     const nextMissionId = String(missionId || '').trim();
     this._activeMissionId = nextMissionId;
     if (nextMissionId && !this._visibleMissionOrder.includes(nextMissionId)) {
       this._visibleMissionOrder.push(nextMissionId);
-      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, this._executingMissionIds());
+      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
     }
-    if (nextMissionId && !this._revisionCache.has(nextMissionId)) {
-      const payload = await getRevisionOverlay(nextMissionId);
-      if (payload.ok) this._revisionCache.set(nextMissionId, payload);
+    if (nextMissionId && !this._missionCache.has(nextMissionId)) {
+      const payload = await getMissionOverlay(nextMissionId);
+      if (payload.ok) this._missionCache.set(nextMissionId, payload);
       else this._showError(payload.error || 'Overlay fetch failed');
     }
-    this._render();
+    this._render({ fit });
   }
 
   _pinMissionInView(missionId) {
     const nextMissionId = String(missionId || '').trim();
     if (!nextMissionId) return;
-    this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== nextMissionId);
-    this._visibleMissionOrder.push(nextMissionId);
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, this._executingMissionIds());
+    if (!this._visibleMissionOrder.includes(nextMissionId)) {
+      this._visibleMissionOrder.push(nextMissionId);
+      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
+    }
     this._activeMissionId = nextMissionId;
   }
 
-  _prepareRevisionForEditing(missionId) {
+  _prepareMissionForEditing(missionId) {
     this._pinMissionInView(missionId);
   }
 
-  async _recoverFromStaleExecution(result, requestedRevisionId) {
-    const activeRevision = result.active_revision || null;
-    const activeRevisionId = String(result.active_revision_id || activeRevision?.id || '').trim();
-    if (activeRevisionId) {
-      this._pinMissionInView(activeRevisionId);
-    }
-
-    this._revisionCache.clear();
-    await this.refresh();
-
-    if (activeRevisionId) {
-      this.setFocus(activeRevisionId);
-      this._showError(
-        `Revision …${String(requestedRevisionId).slice(-6)} is stale. Focused active revision …${activeRevisionId.slice(-6)} instead.`,
-      );
-      return;
-    }
-
-    this._showError(result.error || 'Execute failed');
-  }
-
-  async _recoverFromStaleControllerVersion(result, requestedRevisionId) {
+  async _recoverFromStaleControllerVersion(result, requestedMissionId) {
     const controllerState = result.controller_state || {};
     const latestVersion = controllerState.controller_version ?? null;
     if (latestVersion !== null && latestVersion !== undefined) {
       this._controllerVersion = latestVersion;
     }
 
-    const activeRevisionId = String(controllerState.active_revision_id || '').trim();
-    const rebasedRevision = result.rebased_revision || {};
-    const rebasedRevisionId = String(rebasedRevision.id || result.rebased_revision_id || '').trim();
-    if (activeRevisionId) {
-      this._pinMissionInView(activeRevisionId);
-    }
-    if (rebasedRevisionId) {
-      this._pinMissionInView(rebasedRevisionId);
+    const controllerActiveMissionId = String(controllerState.active_mission_id || '').trim();
+    if (controllerActiveMissionId) {
+      this._pinMissionInView(controllerActiveMissionId);
     }
 
-    this._revisionCache.clear();
+    this._missionCache.clear();
     await this.refresh();
 
-    const requestedSuffix = String(requestedRevisionId).slice(-6);
+    const requestedSuffix = String(requestedMissionId).slice(-6);
     const versionText = latestVersion !== null && latestVersion !== undefined ? String(latestVersion) : 'unknown';
-    if (rebasedRevisionId) {
-      this.setFocus(rebasedRevisionId);
+    if (controllerActiveMissionId) {
+      this.setFocus(controllerActiveMissionId);
       this._showError(
-        `Controller mission version changed to ${versionText}. Created rebased revision …${rebasedRevisionId.slice(-6)} from stale execute on …${requestedSuffix}; review and approve it before retrying.`,
-      );
-      return;
-    }
-    if (activeRevisionId) {
-      this.setFocus(activeRevisionId);
-      this._showError(
-        `Controller mission version changed to ${versionText}. Refreshed from stale execute on …${requestedSuffix}; review active revision …${activeRevisionId.slice(-6)} and retry.`,
+        `Controller mission version changed to ${versionText}. Refreshed from stale execute on …${requestedSuffix}; review active mission …${controllerActiveMissionId.slice(-6)} and retry.`,
       );
       return;
     }
@@ -1052,7 +1039,7 @@ export class MapWidget {
     exitEditBtn.setAttribute('aria-label', 'Exit edit mode');
     exitEditBtn.addEventListener('click', () => {
       editState.clearEdit();
-      this._revisionCache.clear();
+      this._missionCache.clear();
       this.refresh();
     });
     editBanner.append(editBannerText, exitEditBtn);
@@ -1079,7 +1066,32 @@ export class MapWidget {
     this._hintToasts = new HintToasts(mapWrap);
 
     mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl);
-    shell.append(listEl, mapWrap);
+
+    const layoutResizer = document.createElement('button');
+    layoutResizer.type = 'button';
+    layoutResizer.className = 'map-widget-layout-resizer';
+    layoutResizer.setAttribute('role', 'separator');
+    layoutResizer.setAttribute('aria-label', 'Resize mission sidebar');
+    layoutResizer.setAttribute('aria-orientation', 'vertical');
+    layoutResizer.setAttribute('aria-valuemin', '240');
+    layoutResizer.setAttribute('aria-valuemax', '640');
+    layoutResizer.setAttribute('aria-valuenow', '340');
+    layoutResizer.title = 'Drag to resize mission sidebar';
+    this._layoutResizer = layoutResizer;
+
+    const heightResizer = document.createElement('button');
+    heightResizer.type = 'button';
+    heightResizer.className = 'map-widget-height-resizer';
+    heightResizer.setAttribute('role', 'separator');
+    heightResizer.setAttribute('aria-label', 'Resize map height');
+    heightResizer.setAttribute('aria-orientation', 'horizontal');
+    heightResizer.setAttribute('aria-valuemin', '320');
+    heightResizer.setAttribute('aria-valuemax', '1100');
+    heightResizer.setAttribute('aria-valuenow', '540');
+    heightResizer.title = 'Drag to resize map height';
+    this._heightResizer = heightResizer;
+
+    shell.append(listEl, layoutResizer, mapWrap, heightResizer);
 
     // Context menu (absolute-positioned inside container)
     this._contextMenu = new ContextMenu(this._container);
@@ -1096,7 +1108,7 @@ export class MapWidget {
         <h3 id="map-confirm-title" class="map-confirm-title">Execute mission on rover?</h3>
         <p class="map-confirm-body">
           This will upload the mission to the rover and start execution.<br>
-          Revision: <code class="map-confirm-revision-id"></code> &nbsp;
+          Mission: <code class="map-confirm-mission-id"></code> &nbsp;
           Controller version: <code class="map-confirm-controller-version"></code>
         </p>
         <div class="map-confirm-actions">
@@ -1120,6 +1132,89 @@ export class MapWidget {
 
     // Keyboard help overlay (<dialog> appended to container by constructor)
     this._keyboardHelp = new KeyboardHelpOverlay(this._container);
+
+    this._setupResizing(shell);
+  }
+
+  _setupResizing(shell) {
+    const W_KEY = 'gcs-map-widget-sidebar-width';
+    const H_KEY = 'gcs-map-widget-shell-height';
+    const W_MIN = 240, W_MAX = 640, W_DEFAULT = 340;
+    const H_MIN = 320, H_MAX = 1100, H_DEFAULT = 540;
+    const MOBILE_QUERY = '(max-width: 1100px)';
+    const clampW = (v) => Math.max(W_MIN, Math.min(W_MAX, Number(v) || W_DEFAULT));
+    const clampH = (v) => Math.max(H_MIN, Math.min(H_MAX, Number(v) || H_DEFAULT));
+
+    const setWidth = (v, persist = true) => {
+      const w = clampW(v);
+      shell.style.setProperty('--map-sidebar-w', `${w}px`);
+      this._layoutResizer.setAttribute('aria-valuenow', String(w));
+      if (persist) {
+        try { localStorage.setItem(W_KEY, String(w)); } catch (_) {}
+      }
+    };
+    const setHeight = (v, persist = true) => {
+      const h = clampH(v);
+      shell.style.setProperty('--map-shell-h', `${h}px`);
+      this._heightResizer.setAttribute('aria-valuenow', String(h));
+      if (persist) {
+        try { localStorage.setItem(H_KEY, String(h)); } catch (_) {}
+      }
+      window.requestAnimationFrame(() => this.invalidateSize());
+    };
+
+    try { setWidth(localStorage.getItem(W_KEY) || W_DEFAULT, false); } catch (_) { setWidth(W_DEFAULT, false); }
+    try { setHeight(localStorage.getItem(H_KEY) || H_DEFAULT, false); } catch (_) { setHeight(H_DEFAULT, false); }
+
+    const bindPointerDrag = (handle, dragClass, onPointer) => {
+      handle.addEventListener('pointerdown', (event) => {
+        if (window.matchMedia(MOBILE_QUERY).matches) return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        shell.classList.add(dragClass);
+        onPointer(event);
+      });
+      handle.addEventListener('pointermove', (event) => {
+        if (!handle.hasPointerCapture(event.pointerId)) return;
+        onPointer(event);
+      });
+      const release = (event) => {
+        if (event && handle.hasPointerCapture(event.pointerId)) {
+          handle.releasePointerCapture(event.pointerId);
+        }
+        shell.classList.remove(dragClass);
+        window.requestAnimationFrame(() => this.invalidateSize());
+      };
+      handle.addEventListener('pointerup', release);
+      handle.addEventListener('pointercancel', () => shell.classList.remove(dragClass));
+      handle.addEventListener('lostpointercapture', () => shell.classList.remove(dragClass));
+    };
+
+    bindPointerDrag(this._layoutResizer, 'is-resizing', (event) => {
+      const rect = shell.getBoundingClientRect();
+      setWidth(event.clientX - rect.left);
+    });
+    bindPointerDrag(this._heightResizer, 'is-height-resizing', (event) => {
+      const rect = shell.getBoundingClientRect();
+      setHeight(event.clientY - rect.top);
+    });
+
+    this._layoutResizer.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const current = Number(this._layoutResizer.getAttribute('aria-valuenow')) || W_DEFAULT;
+      if (event.key === 'Home') setWidth(W_MIN);
+      else if (event.key === 'End') setWidth(W_MAX);
+      else setWidth(current + (event.key === 'ArrowRight' ? 24 : -24));
+    });
+    this._heightResizer.addEventListener('keydown', (event) => {
+      if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const current = Number(this._heightResizer.getAttribute('aria-valuenow')) || H_DEFAULT;
+      if (event.key === 'Home') setHeight(H_MIN);
+      else if (event.key === 'End') setHeight(H_MAX);
+      else setHeight(current + (event.key === 'ArrowDown' ? 24 : -24));
+    });
   }
 
   _showError(msg) {

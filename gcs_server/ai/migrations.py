@@ -60,9 +60,24 @@ def _migration_011_add_mission_approval_status(conn: sqlite3.Connection) -> None
     )
 
 
+def _migration_012_add_mission_deleted_at(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(missions)").fetchall()
+    }
+    if "deleted_at" not in columns:
+        conn.execute(
+            "ALTER TABLE missions ADD COLUMN deleted_at REAL"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_deleted_at ON missions(deleted_at)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (10, "adr_0021_flat_missions", _migration_010_adr_0021_flat_missions),
     (11, "add_mission_approval_status", _migration_011_add_mission_approval_status),
+    (12, "add_mission_deleted_at", _migration_012_add_mission_deleted_at),
 )
 
 

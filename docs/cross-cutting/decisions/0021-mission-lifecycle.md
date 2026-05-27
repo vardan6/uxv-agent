@@ -3,6 +3,12 @@
 Date: 2026-05-26
 Status: Accepted
 
+> **Note (2026-05-28):** [ADR 0022](./0022-drop-operator-approval-gate.md)
+> retires the per-Mission operator approval gate. Execution gating now lives
+> entirely in the mode (Strict / Confirm / Autonomous) plus the
+> executing-mission edit lock; there is no separate per-Mission approval
+> step. ADR 0021's mode framing is unchanged.
+
 ## Context
 
 ADR 0002 made "AI cannot cause rover motion" a *structural* invariant. ADR 0012 made "approval is not execution" a non-negotiable map-widget invariant. Together they hard-coded a single safety stance for every build, every operator, every environment.

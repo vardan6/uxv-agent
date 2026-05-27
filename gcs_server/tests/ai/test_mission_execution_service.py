@@ -50,10 +50,11 @@ def test_execute_mission_by_id_installs_mission_and_returns_controller_state(tmp
     controller_state = result["controller_state"]
     assert controller_state["status"] == "executing"
     assert controller_state["controller_version"] == 1
-    assert controller_state["draft_id"] == "mission-42"
-    assert controller_state["revision_id"] == ""
-    assert controller_state["mission"]["goal"] == "Inspect the north loop"
-    assert controller_state["mission_export"]["waypoint_count"] == 2
+    assert controller_state["active_draft_id"] == "mission-42"
+    assert controller_state["active_mission_id"] == ""
+    snapshot = controller_state["verified_snapshot"]
+    assert snapshot["mission"]["goal"] == "Inspect the north loop"
+    assert snapshot["mission_export"]["waypoint_count"] == 2
 
 
 def test_arm_execution_by_id_maps_success_status_to_armed(tmp_path) -> None:
@@ -90,5 +91,5 @@ def test_cancel_execution_by_id_clears_controller_snapshot(tmp_path) -> None:
     controller_state = result["controller_state"]
     assert controller_state["status"] == "cancelled"
     assert controller_state["controller_version"] == 2
-    assert controller_state["active_revision_id"] == ""
+    assert controller_state["active_mission_id"] == ""
     assert controller_state["verified_snapshot"] == {}

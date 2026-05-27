@@ -482,8 +482,6 @@ class AIContextService:
             return empty_mission_overlay()
         mission = missions[0]
         overlay = build_mission_overlay(mission.id, mission.mission_json)
-        overlay["approval_status"] = str(mission.approval_status or "approved")
-        overlay["revision_id"] = mission.id
         waypoint_count = int(overlay.get("waypoint_count") or 0)
         plural = "" if waypoint_count == 1 else "s"
         overlay["summary"] = (
@@ -592,7 +590,6 @@ def _mission_to_state(mission: Any, controller_state: dict[str, Any]) -> dict[st
     goal = str(mission_json.get("goal") or "").strip()
     waypoint_count = len(waypoints)
     name = str(mission.name or "").strip()
-    status = str(getattr(mission, "approval_status", "") or "approved")
 
     summary_parts = [f"Mission #{mission.id}"]
     if name:
@@ -613,14 +610,12 @@ def _mission_to_state(mission: Any, controller_state: dict[str, Any]) -> dict[st
 
     return {
         "active": True,
-        "status": status,
         "summary": summary,
         "mission_id": mission.id,
         "session_id": str(mission.origin_chat_id or ""),
         "name": name,
         "origin": str(mission.origin or ""),
         "client_version": int(mission.client_version or 0),
-        "approval_status": status,
         "goal": goal,
         "mission": mission_json,
         "waypoint_count": waypoint_count,

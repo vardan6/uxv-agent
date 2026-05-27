@@ -8,21 +8,19 @@ shape described below is compatibility-only unless stated otherwise.
 ## Purpose
 
 The widget gives operators spatial review of Missions and safe direct
-manipulation of non-executing missions without collapsing approval and
-execution into one action.
+manipulation of non-executing missions.
 
 ## Safety Invariants
 
-These rules are non-negotiable:
+These rules are non-negotiable (originally [ADR 0012](../../../cross-cutting/decisions/0012-map-widget-safety-invariants.md);
+invariant 1 retired by [ADR 0022](../../../cross-cutting/decisions/0022-drop-operator-approval-gate.md)):
 
-1. approval is not execution
-2. the client never mutates an executing mission
-3. the client never silently overwrites authoritative mission state
-4. the widget never invents backend contracts that do not exist
+1. the client never mutates an executing mission
+2. the client never silently overwrites authoritative mission state
+3. the widget never invents backend contracts that do not exist
 
 Implications:
 
-- approval, rejection, and execution remain separate user actions
 - all geometry mutation goes through backend round-trips
 - missing backend features are hidden or disabled explicitly
 
@@ -35,18 +33,18 @@ The widget consumes mission overlays from the backend Mission surface.
 The durable payload concepts are:
 
 - `mission_id`
-- Mission lifecycle status (`awaiting_approval`, `approved`, `rejected`,
-  `executing`, ...)
-- `status`
+- `status` — runtime state only (`approved` as the steady-state default,
+  `executing` / `armed` when the controller has the mission; legacy
+  approval-flavored values may still appear on missions touched by the AI
+  planning graph until ADR 0022 follow-up removal lands)
 - `goal`
 - `waypoint_count`
 - overlay `bounds`
 - route-line and waypoint features
 
 The backend overlay builder remains the source of truth for exact field shape.
-The current `/ai` widget is still bridged by temporary compat fields such as
-`revision_id` and `draft_id`; new UI work should not make those fields more
-central.
+There is no separate revision resource; all frontend code keys off
+`mission_id`.
 
 ### Coordinate System
 
@@ -77,17 +75,19 @@ Transitional note:
 - the current widget still groups rows through a one-Mission-per-operation
   compatibility projection because the direct sidebar rewrite is Slice 4
 
-### Approval, Rejection, And Execution
+### Execution
 
 The widget uses existing backend transitions rather than inventing new ones.
 
 Design rules:
 
-- approval writes mission approval/export state but does not execute the rover
-- execution is a separate explicit action with controller-version staleness
-  checks
-- rejection is a separate explicit action
-- after any of these actions, the widget refreshes mission and overlay state
+- per [ADR 0022](../../../cross-cutting/decisions/0022-drop-operator-approval-gate.md),
+  Missions carry no operator-facing approval state; every row is immediately
+  playable
+- execution is an explicit action (operator `▶` button in Strict, banner
+  click in Confirm, AI tool call in Autonomous) with controller-version
+  staleness checks
+- after execution, the widget refreshes mission and overlay state
 
 ### Telemetry Source
 
@@ -145,8 +145,12 @@ Each Mission row carries:
 
 Behavior rules:
 
-- visible overlays are capped softly to avoid clutter
-- focus applies fit-to-bounds and dims non-focused visible missions
+- visibility is per-row and uncapped (per ADR 0021 § 4, Visible is 0..N); the
+  widget does not silently hide missions to "avoid clutter"
+- focus dims non-focused visible missions
+- fit-to-bounds runs only on the widget's first non-empty load; subsequent
+  visibility toggles, selection changes, focus changes, and in-place edits
+  must not pan or zoom the map. Re-fit is an explicit user action only.
 - numbered waypoint badges remain visible because color alone is insufficient
 - the sidebar header exposes a settings affordance that deep-links to
   `Settings → Mission Lifecycle` (`/settings?tab=mission-lifecycle`) in a new
@@ -154,12 +158,11 @@ Behavior rules:
 
 ## Map Rendering Rules
 
-- awaiting-approval missions render dashed or visually weaker
-- approved missions render solid and fully emphasized
+- non-executing missions render solid
 - executing missions render as locked
-- rejected or completed missions render dimmed
-- fit-to-bounds uses the focused mission when one exists, else the visible-set
-  union
+- completed or otherwise-superseded missions render dimmed
+- fit-to-bounds (initial-load only, per Mission List Rules) uses the focused
+  mission when one exists, else the visible-set union
 
 ## Accessibility And Keyboard Ownership
 
@@ -211,11 +214,25 @@ locking and concurrency rules above.
 
 ### Hard Lock During Execution
 
-While a mission is executing:
+While a mission is executing (or armed):
 
-- edit, reject, and approve affordances are disabled
+- edit affordances are disabled
 - drag/insert/delete gestures are blocked before state changes
+- mission-level delete is rejected by the backend with HTTP 409 when the
+  controller has the mission in `executing` or `armed` state; the widget must
+  not present delete as available on such a row
 - the mission remains visibly locked in both the list and map rendering
+
+### Delete And Undo
+
+- Deletes are **soft**: the backend sets `deleted_at` on the row instead of
+  removing it. `MissionRepository.list` filters out soft-deleted rows; `get`
+  hides them by default. `#index` is never reused, per ADR 0021 § 2.
+- `POST /api/ai/missions/{id}/restore` flips `deleted_at` back to `NULL`.
+- The widget surfaces undo via a toast with an "Undo" button after each
+  successful delete; the operator is not interrupted by a confirm dialog.
+- Hard purge of soft-deleted rows is deferred — there is no automatic
+  reaper yet.
 
 ## Vehicle Profile Boundary
 

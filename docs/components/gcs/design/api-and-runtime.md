@@ -106,11 +106,16 @@ Durable rules:
 
 Mission boundary:
 
-- canonical mission state now lives in the flat `MissionRepository`
+- canonical mission state lives in the flat `MissionRepository`
 - `mission_execution_service` is the controller handoff boundary only
-- the current `/ai` map widget still talks to a temporary revision/draft
-  compatibility API in `app.py`, but that API projects one-to-one from
-  Missions and should be treated as transitional
+- the `/ai` map widget consumes the flat Mission API directly
+  (`/api/ai/missions[...]`); legacy revision/draft endpoints and the
+  transitional `revision_id` overlay alias have been removed. The
+  controller-state field is `active_mission_id`.
+- mission-level `DELETE /api/ai/missions/{id}` is **soft** (sets
+  `deleted_at`); it is rejected with HTTP 409 when the controller has the
+  mission `executing` or `armed`. `POST /api/ai/missions/{id}/restore` flips
+  the row back. `#index` is never reused (ADR 0021 § 2).
 
 ## Current Architecture Limits
 

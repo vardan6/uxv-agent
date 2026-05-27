@@ -1,17 +1,9 @@
 import { vehicleIcon } from '../vehicleProfiles.js';
 
-const APPROVABLE = new Set(['proposed', 'awaiting_approval', 'planning']);
-const EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
+const EXECUTABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
 const EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
 
 const STATUS_CLASS = {
-  proposed: 'is-proposed',
-  awaiting_approval: 'is-proposed',
-  planning: 'is-proposed',
-  approved: 'is-approved',
-  exported: 'is-approved',
-  cutover_pending: 'is-approved',
-  armed: 'is-approved',
   executing: 'is-executing',
   completed: 'is-completed',
   superseded: 'is-superseded',
@@ -19,8 +11,29 @@ const STATUS_CLASS = {
   validation_failed: 'is-superseded',
 };
 
+// Approval-flavored lifecycle states are not surfaced in the row label —
+// any mission is manually launchable, so "awaiting approval" / "approved"
+// would be noise. Only show statuses the operator can act on.
+const HIDDEN_ROW_STATUSES = new Set([
+  'proposed',
+  'awaiting_approval',
+  'planning',
+  'approved',
+  'exported',
+  'cutover_pending',
+  'unknown',
+  '',
+]);
+
 function statusLabel(status) {
-  return String(status || 'unknown').replaceAll('_', ' ');
+  const s = String(status || '');
+  if (HIDDEN_ROW_STATUSES.has(s)) return '';
+  return s.replaceAll('_', ' ');
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function missionTitle(missionRow) {
@@ -49,23 +62,24 @@ function renderActionButtons(missionRow, status) {
     parts.push(`<button class="mission-row-action-btn is-edit" type="button"
       data-edit-mission-id="${missionId}"
       title="Edit mission waypoints"
-      aria-label="Edit mission waypoints">✏</button>`);
-  }
-  if (APPROVABLE.has(status) && missionId) {
-    parts.push(`<button class="mission-row-action-btn is-approve" type="button"
-      data-approve-draft-id="${missionId}"
-      title="Approve mission (does not execute)"
-      aria-label="Approve mission (does not execute)">✓</button>`);
-    parts.push(`<button class="mission-row-action-btn is-reject" type="button"
-      data-reject-draft-id="${missionId}"
-      title="Reject mission"
-      aria-label="Reject mission">✕</button>`);
+      aria-label="Edit mission waypoints">
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 20h9"/>
+        <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+      </svg>
+    </button>`);
   }
   if (EXECUTABLE.has(status)) {
     parts.push(`<button class="mission-row-action-btn is-execute" type="button"
       data-execute-mission-id="${missionId}"
       title="Execute mission on rover"
       aria-label="Execute mission on rover">▶</button>`);
+  }
+  if (status !== 'executing' && status !== 'armed' && missionId) {
+    parts.push(`<button class="mission-row-action-btn is-delete" type="button"
+      data-delete-mission-id="${missionId}"
+      title="Delete mission"
+      aria-label="Delete mission">🗑</button>`);
   }
   return parts.join('');
 }
@@ -84,12 +98,21 @@ function renderRow(missionRow, ctx) {
   const isSelected = selectedMissionIds.has(missionId);
   const isActive = activeMissionId === missionId;
   const status = String(missionRow.status || '');
-  const color = paletteByMissionId.get(missionId) || 'transparent';
+  const color = paletteByMissionId.get(missionId) || '#b8c1c5';
   const profileId = String(missionRow?.mission?.vehicle_profile_id || activeProfileId || 'rover_default');
   const profileIcon = vehicleIcon(profileId, profilesById, activeProfileId);
   return `
     <div class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}">
-      <span class="mission-row-status" aria-hidden="true"></span>
+      <span class="mission-row-status" aria-hidden="true" style="background:${color}"></span>
+      <label class="mission-row-select" title="${isSelected ? 'Deselect mission' : 'Select mission'}">
+        <input
+          type="checkbox"
+          data-select-mission-id="${missionId}"
+          aria-label="${isSelected ? 'Deselect mission' : 'Select mission'}"
+          ${isSelected ? 'checked' : ''}
+        >
+        <span class="mission-row-select-text">Selected</span>
+      </label>
       <button
         class="mission-row-focus"
         type="button"
@@ -97,25 +120,14 @@ function renderRow(missionRow, ctx) {
         aria-pressed="${isActive ? 'true' : 'false'}"
         title="Make mission active"
       >
-        <span class="mission-row-color-dot" style="--mission-color:${color}"></span>
         <span class="mission-row-vehicle" aria-hidden="true">${profileIcon}</span>
+        <span class="mission-row-origin" title="Mission origin">${computeOriginBadge(missionRow)}</span>
         <span class="mission-row-main">
           <span class="mission-row-title">${missionTitle(missionRow)}</span>
-          <span class="mission-row-meta">${statusLabel(status)} · #${missionId}</span>
+          <span class="mission-row-meta">${[statusLabel(status), `#${missionId}`, missionRow.created_at ? formatDate(missionRow.created_at) : ''].filter(Boolean).join(' · ')}</span>
         </span>
-        <span class="mission-row-origin" title="Mission origin">${computeOriginBadge(missionRow)}</span>
-        ${isActive ? '<span class="mission-row-active-badge">Active</span>' : ''}
       </button>
       <span class="mission-row-actions">
-        <label class="mission-row-select" title="${isSelected ? 'Deselect mission' : 'Select mission'}">
-          <input
-            type="checkbox"
-            data-select-mission-id="${missionId}"
-            aria-label="${isSelected ? 'Deselect mission' : 'Select mission'}"
-            ${isSelected ? 'checked' : ''}
-          >
-          <span>Selected</span>
-        </label>
         ${renderActionButtons(missionRow, status)}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
@@ -137,10 +149,10 @@ export class MissionListPanel {
     this._onActivateRequested = opts.onActivateRequested || (() => {});
     this._onVisibilityToggled = opts.onVisibilityToggled || (() => {});
     this._onSelectionToggled = opts.onSelectionToggled || (() => {});
-    this._onApproveRequested = opts.onApproveRequested || (() => {});
-    this._onRejectRequested = opts.onRejectRequested || (() => {});
     this._onExecuteRequested = opts.onExecuteRequested || (() => {});
     this._onEditRequested = opts.onEditRequested || (() => {});
+    this._onCreateRequested = opts.onCreateRequested || (() => {});
+    this._onDeleteRequested = opts.onDeleteRequested || (() => {});
   }
 
   render({
@@ -172,15 +184,27 @@ export class MissionListPanel {
 
     const header = `
       <div class="mission-list-header">
-        <span class="mission-list-header-title">Missions</span>
-        <a
-          class="mission-list-settings-link"
-          href="/settings?tab=mission-lifecycle"
-          target="_blank"
-          rel="noopener"
-          title="Open Mission Lifecycle settings in a new tab"
-          aria-label="Open Mission Lifecycle settings in a new tab"
-        >⚙</a>
+        <div>
+          <p class="section-kicker">Missions</p>
+          <h2 class="mission-list-header-title">Routes</h2>
+        </div>
+        <div class="mission-list-header-actions">
+          <button
+            class="mission-list-new-btn"
+            type="button"
+            data-create-mission="1"
+            title="Create a new empty mission"
+            aria-label="Create a new empty mission"
+          >+ New</button>
+          <a
+            class="mission-list-settings-link"
+            href="/settings?tab=mission-lifecycle"
+            target="_blank"
+            rel="noopener"
+            title="Open Mission Lifecycle settings in a new tab"
+            aria-label="Open Mission Lifecycle settings in a new tab"
+          >⚙</a>
+        </div>
       </div>
     `;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
@@ -206,18 +230,6 @@ export class MissionListPanel {
         this._onSelectionToggled(input.dataset.selectMissionId || '', { checked: !!input.checked });
       });
     });
-    this._container.querySelectorAll('[data-approve-draft-id]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._onApproveRequested(button.dataset.approveDraftId || '');
-      });
-    });
-    this._container.querySelectorAll('[data-reject-draft-id]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this._onRejectRequested(button.dataset.rejectDraftId || '');
-      });
-    });
     this._container.querySelectorAll('[data-execute-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -230,5 +242,18 @@ export class MissionListPanel {
         this._onEditRequested(button.dataset.editMissionId || '');
       });
     });
+    this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onDeleteRequested(button.dataset.deleteMissionId || '');
+      });
+    });
+    const createBtn = this._container.querySelector('[data-create-mission="1"]');
+    if (createBtn) {
+      createBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onCreateRequested();
+      });
+    }
   }
 }
