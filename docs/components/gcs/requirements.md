@@ -166,16 +166,16 @@ For the full AI agent product requirements — intent parsing, planning shell, m
 
 ### Map widget
 
-The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and all mission overlays. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.
+The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and mission overlays. The durable operator-facing entity is the flat **Mission** from ADR 0021: one sidebar row = one Mission, with stable `#index`, editable name, `origin`, and `origin_chat_id`. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.
 
 The map widget must:
 
 - render the terrain scene (scene objects, road graph, blockages, corridors) at all times
-- display a `MissionListPanel` showing revisions grouped by operation, with status badges
-- render mission overlays (AI-proposed and operator-authored) as distinct visual layers with provenance-aware per-waypoint styling (`ai` / `user` / `ai+edited`)
+- display a `MissionListPanel` showing one row per Mission, with the independent **Visible / Selected / Active** states defined by ADR 0021
+- render mission overlays for AI-created and operator-created Missions as distinct visual layers; per-waypoint provenance styling is no longer a load-bearing requirement for the flat Mission model
 - track and display the live vehicle position via the `/ws` telemetry stream (polling fallback at 2 s)
-- support a `SelectionPanel` that shows waypoint-level details and provenance for any selected waypoint
-- support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home, detach from AI proposal)
+- support a `SelectionPanel` that shows waypoint-level details for any selected waypoint
+- support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home)
 - display hint toasts for gestures and a keyboard help overlay
 
 ### Mission CRUD
@@ -185,24 +185,25 @@ The map widget is the primary mission authoring surface on `/ai`. No separate Mi
 Operators must be able to:
 
 - **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually on the map
-- **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
-- **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
-- **Approve a draft** (does not execute) using the "Approve draft" button; semantics: approval locks the revision for the `Execute mission` gate
-- **Execute mission** — a separate, explicit second action that hands the approved revision to the flight controller
-- **Export plan** — export the approved revision as a `.plan` file without executing
+- **Review AI-created missions** — the agent emits a new Mission row; the map renders it immediately
+- **Edit missions** — drag waypoints, add/delete waypoints, reorder
+- **Approve a mission for execution** using the "Approve draft" affordance; approval updates durable Mission lifecycle state but does not execute
+- **Reject a mission** using the explicit reject affordance; rejection updates durable Mission lifecycle state and keeps the Mission visible for later review or deletion
+- **Execute mission** — a separate action from approval that hands the Mission to the controller
+- **Export plan** — export the approved Mission as a `.plan` file without executing when export is surfaced in the UI
 
 The three verbs are **Approve draft**, **Execute mission**, and **Export plan**. The word "Accept" is not used.
 
 ### Concurrency and edit-lock invariants
 
 - All edits carry `client_version` for optimistic CAS. The backend rejects stale writes with `409 Conflict`.
-- Editing a locked revision (`approved`, `executing`, `completed`) forks a new client-authored revision with provenance inheritance rather than mutating in place.
-- No mutation of an executing revision is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
-- The `Execute mission` button is shown only for the operation's **active** revision. Attempting to execute a sibling revision is rejected with `stale_revision`.
+- Manual edits mutate the Active Mission in place. AI-driven changes default to clone-and-edit, producing a new Mission row unless the operator explicitly requests an in-place AI edit.
+- No mutation of an executing mission is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
+- The current `/ai` widget still speaks to a temporary revision-shaped compatibility API backed one-to-one by Missions. That bridge is transitional; new UI work should target Missions directly.
 
 ### Safety invariants
 
-- Approval does not execute. Execution requires a second explicit operator action.
+- Approval does not execute in Strict mode. Execution requires a separate explicit action in Strict, an operator confirmation banner in Confirm, or may be AI-triggered directly in Autonomous.
 - The edit lock during execution is not bypassable from the frontend.
 - The map widget never issues low-level MQTT commands directly.
 

@@ -43,6 +43,7 @@
         <a class="settings-tab" data-settings-tab-link href="?tab=video">Video</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=appearance">Appearance</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=ai-settings">AI Settings</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=mission-lifecycle">Mission Lifecycle</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=llm-provider">Add LLM Provider</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=json">Config I/O</a>
       </section>
@@ -265,6 +266,50 @@
               </div>
               <p class="settings-note">Kokoro local service should run on port 9101. Browser voices remain available as a fallback, but their quality depends on the operating system.</p>
               <p id="ai-settings-status" class="status-banner">Loading AI settings.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-mission-lifecycle" class="settings-pane" data-settings-tab="mission-lifecycle" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Execution policy</p>
+                  <h2>Mission Lifecycle</h2>
+                </div>
+                <span id="mission-lifecycle-pill" class="pill">Loading</span>
+              </div>
+              <p class="settings-note">Controls how the AI may move from a planned Mission to rover execution (ADR 0021). Strict requires a human to call <code>execute_mission</code>; Confirm lets the AI arm a Mission for a brief operator confirm; Autonomous lets the AI execute directly. Defaults are configured per build target.</p>
+              <label>
+                <span>Execution Mode</span>
+                <select id="mission-execution-mode">
+                  <option value="strict">Strict — operator only</option>
+                  <option value="confirm">Confirm — AI arms, operator confirms</option>
+                  <option value="autonomous">Autonomous — AI may execute</option>
+                </select>
+              </label>
+              <label id="mission-confirm-timeout-row">
+                <span>Confirm Timeout (seconds)</span>
+                <input id="mission-confirm-timeout" type="range" min="3" max="60" step="1" value="10">
+                <span id="mission-confirm-timeout-value" class="hint">10 s</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="mission-auto-overlay" type="checkbox" checked>
+                <span>Auto-overlay newly created missions on the map</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="mission-steal-focus" type="checkbox" checked>
+                <span>Steal map focus when the active chat creates a mission</span>
+              </label>
+              <label>
+                <span>Default name for manual missions</span>
+                <input id="mission-default-name" type="text" value="Untitled mission">
+              </label>
+              <div class="form-actions form-actions-inline">
+                <button id="save-mission-lifecycle" type="button">Save Mission Lifecycle</button>
+              </div>
+              <p id="mission-lifecycle-status" class="status-banner">Loading mission lifecycle settings.</p>
             </article>
           </div>
         </section>

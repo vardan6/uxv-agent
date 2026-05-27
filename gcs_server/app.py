@@ -39,6 +39,8 @@ try:
     from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.intent_service import IntentService
+    from gcs_server.ai.mission_overlay import build_mission_overlay, collect_waypoints
+    from gcs_server.ai.mission_repository import MissionNotFound, MissionVersionConflict
     from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
     from gcs_server.ai.retrieval import (
         build_loaded_data_refs,
@@ -60,6 +62,8 @@ except ModuleNotFoundError:
     from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.intent_service import IntentService
+    from ai.mission_overlay import build_mission_overlay, collect_waypoints
+    from ai.mission_repository import MissionNotFound, MissionVersionConflict
     from ai.provider_registry import evict_model_cache, resolve_intent_provider
     from ai.retrieval import (
         build_loaded_data_refs,
@@ -145,6 +149,124 @@ DEFAULT_ROVER_AVAILABILITY_POLICY = {
     "unavailable_threshold_seconds": 60,
     "rollover_on_reconnect": True,
 }
+
+
+def _mission_repository(request: Request):
+    runtime = _runtime(request)
+    repository = getattr(runtime, "mission_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="mission repository unavailable")
+    return repository
+
+
+def _mission_execution(request: Request):
+    runtime = _runtime(request)
+    service = getattr(runtime, "mission_execution_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    return service
+
+
+def _parse_mission_id(raw: Any, *, field_name: str) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer") from None
+
+
+def _coerce_waypoint_payload(value: Any, *, index: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail=f"waypoint #{index} must be an object")
+    try:
+        point = {
+            "id": str(value.get("id") or f"wp-{index}"),
+            "x": float(value.get("x")),
+            "y": float(value.get("y")),
+            "z": float(value.get("z", 0.0) or 0.0),
+        }
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail=f"waypoint #{index} must include numeric x/y coordinates",
+        ) from None
+    if value.get("label") is not None:
+        point["label"] = str(value.get("label") or "")
+    if value.get("kind") is not None:
+        point["kind"] = str(value.get("kind") or "")
+    if value.get("provenance") is not None:
+        point["provenance"] = str(value.get("provenance") or "")
+    return point
+
+
+def _normalize_waypoints_payload(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail="waypoints must be a list")
+    return [
+        _coerce_waypoint_payload(item, index=index)
+        for index, item in enumerate(value, start=1)
+    ]
+
+
+def _waypoints_with_defaults(mission_json: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, waypoint in enumerate(collect_waypoints(mission_json), start=1):
+        point = {
+            "id": str(waypoint.get("id") or f"wp-{index}"),
+            "x": float(waypoint.get("x") or 0.0),
+            "y": float(waypoint.get("y") or 0.0),
+            "z": float(waypoint.get("z") or 0.0),
+            "label": str(waypoint.get("label") or ""),
+            "kind": str(waypoint.get("kind") or "waypoint"),
+        }
+        provenance = str(waypoint.get("provenance") or "").strip()
+        if provenance:
+            point["provenance"] = provenance
+        normalized.append(point)
+    return normalized
+
+
+def _mission_to_api_row(mission: Any, controller_state: dict[str, Any] | None = None) -> dict[str, Any]:
+    mission_json = mission.mission_json if isinstance(mission.mission_json, dict) else {}
+    materialized_mission = dict(mission_json)
+    waypoints = _waypoints_with_defaults(mission_json)
+    if waypoints:
+        materialized_mission["waypoints"] = waypoints
+    provenance = {
+        str(waypoint.get("id") or f"wp-{index}"): str(
+            waypoint.get("provenance") or ("user" if str(mission.origin or "") == "manual" else "ai")
+        )
+        for index, waypoint in enumerate(waypoints, start=1)
+    }
+    status = str(getattr(mission, "approval_status", "") or "approved")
+    controller = controller_state or {}
+    active_snapshot = controller.get("verified_snapshot") if isinstance(controller.get("verified_snapshot"), dict) else {}
+    active_mission_id = active_snapshot.get("mission_id")
+    controller_status = str(controller.get("status") or "")
+    if active_mission_id == mission.id and controller_status in {"executing", "armed"}:
+        status = controller_status
+    return {
+        "id": mission.id,
+        "status": status,
+        "client_version": int(mission.client_version or 0),
+        "created_at": float(mission.created_at or 0.0),
+        "origin": str(mission.origin or ""),
+        "origin_chat_id": str(mission.origin_chat_id or ""),
+        "name": str(mission.name or ""),
+        "goal": str(materialized_mission.get("goal") or mission.name or ""),
+        "mission": materialized_mission,
+        "provenance": provenance,
+        "approval_status": str(getattr(mission, "approval_status", "") or "approved"),
+    }
+
+
+def _overlay_for_mission(mission: Any) -> dict[str, Any]:
+    overlay = build_mission_overlay(mission.id, mission.mission_json)
+    overlay["revision_id"] = mission.id
+    overlay["mission_id"] = mission.id
+    overlay["status"] = str(getattr(mission, "approval_status", "") or "approved")
+    return overlay
 
 
 def _sanitize_secret_ref(value: Any) -> str:
@@ -607,6 +729,13 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
     audio_format = str(tts.get("format", "wav") or "wav").strip().lower()
     if audio_format not in {"wav"}:
         audio_format = "wav"
+    lifecycle = source.get("mission_lifecycle", {})
+    if not isinstance(lifecycle, dict):
+        lifecycle = {}
+    execution_mode = str(lifecycle.get("execution_mode", "autonomous") or "autonomous").strip().lower()
+    if execution_mode not in {"strict", "confirm", "autonomous"}:
+        execution_mode = "autonomous"
+    default_name = str(lifecycle.get("default_manual_mission_name", "Untitled mission") or "").strip() or "Untitled mission"
     return {
         "tts": {
             "enabled": _bool_setting(tts.get("enabled", True), default=True),
@@ -627,6 +756,19 @@ def _normalize_ai_settings(payload: dict[str, Any] | None) -> dict[str, Any]:
             minimum=4000,
             maximum=200000,
         ),
+        "mission_lifecycle": {
+            "execution_mode": execution_mode,
+            "confirm_timeout_s": _bounded_int(
+                lifecycle.get("confirm_timeout_s", 10), default=10, minimum=3, maximum=60,
+            ),
+            "auto_overlay_new_missions": _bool_setting(
+                lifecycle.get("auto_overlay_new_missions", True), default=True,
+            ),
+            "steal_map_focus_on_active_chat_mission": _bool_setting(
+                lifecycle.get("steal_map_focus_on_active_chat_mission", True), default=True,
+            ),
+            "default_manual_mission_name": default_name,
+        },
     }
 
 
@@ -1055,31 +1197,9 @@ async def set_llm_settings(request: Request) -> JSONResponse:
 
 
 def _session_mission_snapshot(runtime: AppRuntime, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is None or not str(session_id or "").strip():
-        return (
-            {"active": False, "status": "no_active_mission", "summary": "No backend-owned mission proposal is stored yet."},
-            {"available": False, "status": "no_mission_overlay", "summary": "No mission overlay is available.", "features": [], "waypoint_count": 0, "bounds": None},
-        )
-    try:
-        mission_state = mission_execution.get_current_mission_state(session_id=session_id)
-    except Exception as exc:
-        mission_state = {
-            "active": False,
-            "status": "mission_state_unavailable",
-            "summary": f"Mission state unavailable: {exc}",
-        }
-    try:
-        mission_overlay = mission_execution.get_revision_overlay(session_id=session_id)
-    except Exception as exc:
-        mission_overlay = {
-            "available": False,
-            "status": "mission_overlay_unavailable",
-            "summary": f"Mission overlay unavailable: {exc}",
-            "features": [],
-            "waypoint_count": 0,
-            "bounds": None,
-        }
+    context_service = AIContextService(runtime)
+    mission_state = context_service.get_current_mission_state(session_id=session_id)
+    mission_overlay = context_service.get_current_mission_overlay(session_id=session_id)
     return mission_state, mission_overlay
 
 
@@ -2085,10 +2205,257 @@ async def rover_intent_test(session_id: str, request: Request) -> JSONResponse:
 @app.get("/api/ai/mission-overlays/current")
 async def get_current_mission_overlay(request: Request, session_id: str = "") -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    if mission_execution is None:
-        raise HTTPException(status_code=503, detail="mission execution service unavailable")
-    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
+    overlay = AIContextService(runtime).get_current_mission_overlay(session_id=session_id)
+    return JSONResponse({"ok": True, "overlay": overlay})
+
+
+@app.get("/api/ai/missions")
+async def list_missions(request: Request, session_id: str = "", limit: int = 50) -> JSONResponse:
+    repository = _mission_repository(request)
+    clean_session_id = str(session_id or "").strip()
+    missions = repository.list(
+        origin_chat_id=clean_session_id or None,
+        limit=max(1, min(int(limit or 50), 200)),
+    )
+    controller_state = _mission_execution(request).get_controller_state()
+    rows = [_mission_to_api_row(mission, controller_state) for mission in missions]
+    return JSONResponse({"ok": True, "missions": rows})
+
+
+@app.get("/api/ai/missions/{mission_id}")
+async def get_mission(request: Request, mission_id: str) -> JSONResponse:
+    repository = _mission_repository(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    controller_state = _mission_execution(request).get_controller_state()
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(mission, controller_state)})
+
+
+@app.get("/api/ai/missions/{mission_id}/overlay")
+async def get_mission_overlay(request: Request, mission_id: str) -> JSONResponse:
+    repository = _mission_repository(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    return JSONResponse({"ok": True, "overlay": _overlay_for_mission(mission)})
+
+
+@app.post("/api/ai/missions/{mission_id}/approve")
+async def approve_mission(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    try:
+        updated = repository.update(
+            mission.id,
+            expected_client_version=mission.client_version,
+            approval_status="approved",
+        )
+    except MissionVersionConflict as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "version_conflict",
+                "error": str(exc),
+                "current_client_version": exc.actual,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.post("/api/ai/missions/{mission_id}/reject")
+async def reject_mission(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    try:
+        updated = repository.update(
+            mission.id,
+            expected_client_version=mission.client_version,
+            approval_status="rejected",
+        )
+    except MissionVersionConflict as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "version_conflict",
+                "error": str(exc),
+                "current_client_version": exc.actual,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.post("/api/ai/missions")
+async def create_mission(request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    payload = await _read_mission_mutation_payload(request)
+    source_id = payload.get("from_mission_id")
+    source = None
+    mission_json: dict[str, Any] = {}
+    if source_id not in ("", None):
+        source = repository.get(_parse_mission_id(source_id, field_name="from_mission_id"))
+        if source is None:
+            raise HTTPException(status_code=404, detail="source mission not found")
+        mission_json = dict(source.mission_json if isinstance(source.mission_json, dict) else {})
+    waypoints = _normalize_waypoints_payload(payload.get("waypoints"))
+    mission_json["waypoints"] = waypoints
+    label = str(payload.get("label") or "").strip()
+    new_mission = repository.create(
+        name=label or (source.name if source is not None else "Untitled mission"),
+        origin="manual",
+        origin_chat_id=(str(source.origin_chat_id or "").strip() if source is not None else None),
+        mission_json=mission_json,
+        approval_status="awaiting_approval",
+    )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(new_mission)})
+
+
+async def _read_mission_mutation_payload(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _updated_waypoint_mission_json(mission_json: dict[str, Any], waypoints: list[dict[str, Any]]) -> dict[str, Any]:
+    updated = dict(mission_json)
+    updated["waypoints"] = waypoints
+    return updated
+
+
+@app.patch("/api/ai/missions/{mission_id}/waypoints/{waypoint_index}")
+async def update_mission_waypoint(mission_id: str, waypoint_index: int, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    payload = await _read_mission_mutation_payload(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    waypoints = _waypoints_with_defaults(mission.mission_json)
+    zero_index = int(waypoint_index) - 1
+    if zero_index < 0 or zero_index >= len(waypoints):
+        raise HTTPException(status_code=404, detail="waypoint not found")
+    raw_point = payload.get("point")
+    point = _coerce_waypoint_payload(raw_point, index=waypoint_index)
+    if isinstance(raw_point, dict) and not str(raw_point.get("id") or "").strip():
+        point["id"] = str(waypoints[zero_index].get("id") or f"wp-{waypoint_index}")
+    waypoints[zero_index] = point
+    expected = _parse_mission_id(payload.get("expected_version"), field_name="expected_version")
+    try:
+        updated = repository.update(
+            mission.id,
+            expected_client_version=expected,
+            mission_json=_updated_waypoint_mission_json(mission.mission_json, waypoints),
+        )
+    except MissionVersionConflict as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "version_conflict",
+                "error": str(exc),
+                "current_client_version": exc.actual,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.post("/api/ai/missions/{mission_id}/waypoints")
+async def insert_mission_waypoint(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    payload = await _read_mission_mutation_payload(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    waypoints = _waypoints_with_defaults(mission.mission_json)
+    point = _coerce_waypoint_payload(payload.get("point"), index=len(waypoints) + 1)
+    after_index = int(payload.get("after_index", -1))
+    if after_index < 0:
+        insert_at = len(waypoints)
+    elif after_index == 0:
+        insert_at = 0
+    else:
+        insert_at = min(after_index, len(waypoints))
+    waypoints.insert(insert_at, point)
+    expected = _parse_mission_id(payload.get("expected_version"), field_name="expected_version")
+    try:
+        updated = repository.update(
+            mission.id,
+            expected_client_version=expected,
+            mission_json=_updated_waypoint_mission_json(mission.mission_json, waypoints),
+        )
+    except MissionVersionConflict as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "version_conflict",
+                "error": str(exc),
+                "current_client_version": exc.actual,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.delete("/api/ai/missions/{mission_id}/waypoints/{waypoint_index}")
+async def delete_mission_waypoint(mission_id: str, waypoint_index: int, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    payload = await _read_mission_mutation_payload(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    waypoints = _waypoints_with_defaults(mission.mission_json)
+    zero_index = int(waypoint_index) - 1
+    if zero_index < 0 or zero_index >= len(waypoints):
+        raise HTTPException(status_code=404, detail="waypoint not found")
+    del waypoints[zero_index]
+    expected = _parse_mission_id(payload.get("expected_version"), field_name="expected_version")
+    try:
+        updated = repository.update(
+            mission.id,
+            expected_client_version=expected,
+            mission_json=_updated_waypoint_mission_json(mission.mission_json, waypoints),
+        )
+    except MissionVersionConflict as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "version_conflict",
+                "error": str(exc),
+                "current_client_version": exc.actual,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
+
+
+@app.post("/api/ai/missions/{mission_id}/execute")
+async def execute_mission(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    service = _mission_execution(request)
+    payload = await _read_mission_mutation_payload(request)
+    mission = repository.get(_parse_mission_id(mission_id, field_name="mission_id"))
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    expected = payload.get("expected_controller_version")
+    expected_controller_version = None if expected is None else _parse_mission_id(
+        expected,
+        field_name="expected_controller_version",
+    )
+    result = service.execute_mission_by_id(
+        mission_id=mission.id,
+        mission_json=mission.mission_json,
+        expected_controller_version=expected_controller_version,
+    )
+    status_code = 200 if result.get("ok") else 409 if result.get("status") == "stale_controller_version" else 400
+    result.setdefault("mission", _mission_to_api_row(mission, result.get("controller_state")))
+    return JSONResponse(result, status_code=status_code)
 
 
 @app.get("/api/vehicle-profile/active")

@@ -104,12 +104,13 @@ Durable rules:
 - Agent mode uses tool surfaces for on-demand detail instead of preloading all
   large context into the prompt
 
-Mission-execution boundary:
+Mission boundary:
 
-- canonical mission revision and controller-cutover state live behind the
-  backend `mission_execution` boundary
-- planning-shell compatibility flows may still sync into that boundary, but the
-  GCS should treat `mission_execution` as the durable owner of mission state
+- canonical mission state now lives in the flat `MissionRepository`
+- `mission_execution_service` is the controller handoff boundary only
+- the current `/ai` map widget still talks to a temporary revision/draft
+  compatibility API in `app.py`, but that API projects one-to-one from
+  Missions and should be treated as transitional
 
 ## Current Architecture Limits
 

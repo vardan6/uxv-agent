@@ -1,4 +1,4 @@
-// session_id="" or omitted → no session filter (returns ALL revisions globally).
+// session_id="" or omitted → no session filter (returns ALL missions globally).
 // Always pass a real sessionId when known so results are scoped to the session.
 
 export async function getCurrentOverlay(sessionId) {
@@ -18,9 +18,10 @@ export async function listRevisions({ sessionId = '', limit = 50 } = {}) {
   if (sessionId) params.set('session_id', sessionId);
   params.set('limit', String(limit));
   try {
-    const res = await fetch(`/api/ai/mission-revisions?${params.toString()}`);
+    const res = await fetch(`/api/ai/missions?${params.toString()}`);
     if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
-    return { ok: true, ...(await res.json()) };
+    const data = await res.json();
+    return { ok: true, revisions: data.missions || [] };
   } catch (err) {
     return { ok: false, error: err.message || 'Network error' };
   }
@@ -28,7 +29,7 @@ export async function listRevisions({ sessionId = '', limit = 50 } = {}) {
 
 export async function getRevisionOverlay(revisionId) {
   try {
-    const res = await fetch(`/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/overlay`);
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(revisionId)}/overlay`);
     if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     const data = await res.json();
     return { ok: true, ...(data.overlay ?? data) };
@@ -39,7 +40,7 @@ export async function getRevisionOverlay(revisionId) {
 
 export async function approveDraft(draftId, { note = '' } = {}) {
   try {
-    const res = await fetch(`/api/ai/mission-drafts/${encodeURIComponent(draftId)}/approve`, {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(draftId)}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ note, execute_after_approval: false }),
@@ -57,7 +58,7 @@ export async function approveDraft(draftId, { note = '' } = {}) {
 
 export async function rejectDraft(draftId, { note = '' } = {}) {
   try {
-    const res = await fetch(`/api/ai/mission-drafts/${encodeURIComponent(draftId)}/reject`, {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(draftId)}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ note }),
@@ -75,7 +76,7 @@ export async function rejectDraft(draftId, { note = '' } = {}) {
 
 export async function executeMission(revisionId, { expectedControllerVersion = null } = {}) {
   try {
-    const res = await fetch(`/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/execute`, {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(revisionId)}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expected_controller_version: expectedControllerVersion }),

@@ -32,6 +32,7 @@ def _migration_010_adr_0021_flat_missions(conn: sqlite3.Connection) -> None:
           created_at REAL NOT NULL,
           created_by_user_id TEXT NOT NULL DEFAULT '',
           client_version INTEGER NOT NULL DEFAULT 0,
+          approval_status TEXT NOT NULL DEFAULT 'approved',
           mission_json TEXT NOT NULL DEFAULT '{}'
         )
         """
@@ -44,8 +45,24 @@ def _migration_010_adr_0021_flat_missions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_011_add_mission_approval_status(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(missions)").fetchall()
+    }
+    if "approval_status" not in columns:
+        conn.execute(
+            "ALTER TABLE missions ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'"
+        )
+    conn.execute(
+        "UPDATE missions SET approval_status = 'approved' "
+        "WHERE approval_status IS NULL OR TRIM(approval_status) = ''"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (10, "adr_0021_flat_missions", _migration_010_adr_0021_flat_missions),
+    (11, "add_mission_approval_status", _migration_011_add_mission_approval_status),
 )
 
 

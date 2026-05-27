@@ -9,30 +9,14 @@ const SET2 = [
   '#b3b3b3',
 ];
 
-export function groupRevisionsByOperation(rows = []) {
-  const groups = new Map();
-  for (const row of rows) {
-    const operationId = String(row.operation_id || row.id || '');
-    if (!operationId) continue;
-    let group = groups.get(operationId);
-    if (!group) {
-      group = {
-        operationId,
-        operationStatus: String(row.operation_status || ''),
-        activeRevisionId: String(row.active_revision_id || ''),
-        revisions: [],
-        defaultRevisionId: '',
-      };
-      groups.set(operationId, group);
-    }
-    group.revisions.push(row);
-  }
-
-  for (const group of groups.values()) {
-    const newestRevisionId = String(group.revisions[0]?.id || '');
-    group.defaultRevisionId = group.activeRevisionId || newestRevisionId;
-  }
-  return groups;
+export function normalizeMissionRows(rows = []) {
+  return rows
+    .filter((row) => row && row.id !== undefined && row.id !== null)
+    .map((row) => ({
+      ...row,
+      id: String(row.id),
+      status: String(row.status || row.approval_status || 'unknown'),
+    }));
 }
 
 export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
@@ -51,8 +35,8 @@ export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
 
 export function assignPaletteColor(visibleIds) {
   const palette = new Map();
-  Array.from(visibleIds || []).forEach((revisionId, index) => {
-    palette.set(revisionId, SET2[index % SET2.length]);
+  Array.from(visibleIds || []).forEach((missionId, index) => {
+    palette.set(missionId, SET2[index % SET2.length]);
   });
   return palette;
 }

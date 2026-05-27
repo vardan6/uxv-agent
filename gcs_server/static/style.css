@@ -3392,6 +3392,44 @@ code {
   padding: 12px;
 }
 
+.mission-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mission-list-header-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-soft, inherit);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.mission-list-settings-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.mission-list-settings-link:hover,
+.mission-list-settings-link:focus-visible {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  opacity: 1;
+  outline: none;
+}
+
 .mission-list-empty {
   display: flex;
   flex-direction: column;
@@ -3510,8 +3548,8 @@ code {
   background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel));
 }
 
-.mission-list-row.is-earlier {
-  margin-left: 12px;
+.mission-list-row.is-selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 55%, transparent);
 }
 
 .mission-row-color-dot {
@@ -3545,6 +3583,18 @@ code {
   font-size: 0.9rem;
 }
 
+.mission-row-active-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .mission-row-meta {
   color: var(--muted);
   font-size: 0.76rem;
@@ -3562,6 +3612,20 @@ code {
   color: var(--muted);
   font-size: 0.72rem;
   white-space: nowrap;
+}
+
+.mission-row-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mission-row-select input {
+  margin: 0;
 }
 
 .mission-row-eye {

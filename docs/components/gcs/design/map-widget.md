@@ -1,11 +1,13 @@
 # Map Widget
 
 This document defines the durable design contract for the reusable mission map
-widget used on `/ai` and later available to other GCS surfaces.
+widget used on `/ai` and later available to other GCS surfaces. ADR 0021 makes
+the flat Mission row the durable operator-facing object; any revision/draft API
+shape described below is compatibility-only unless stated otherwise.
 
 ## Purpose
 
-The widget gives operators spatial review of mission revisions and safe direct
+The widget gives operators spatial review of Missions and safe direct
 manipulation of non-executing missions without collapsing approval and
 execution into one action.
 
@@ -28,14 +30,13 @@ Implications:
 
 ### Mission Overlay Payload
 
-The widget consumes mission overlays from the backend mission-execution
-surface.
+The widget consumes mission overlays from the backend Mission surface.
 
 The durable payload concepts are:
 
-- `operation_id`
-- `revision_id`
-- `draft_id`
+- `mission_id`
+- Mission lifecycle status (`awaiting_approval`, `approved`, `rejected`,
+  `executing`, ...)
 - `status`
 - `goal`
 - `waypoint_count`
@@ -43,6 +44,9 @@ The durable payload concepts are:
 - route-line and waypoint features
 
 The backend overlay builder remains the source of truth for exact field shape.
+The current `/ai` widget is still bridged by temporary compat fields such as
+`revision_id` and `draft_id`; new UI work should not make those fields more
+central.
 
 ### Coordinate System
 
@@ -56,17 +60,22 @@ Design rule:
 - any future WGS84 basemap mode must be a distinct widget mode with explicit
   CRS metadata
 
-### Mission Revision List
+### Mission List
 
-Revision rows are grouped client-side by `operation_id`.
+Durable target: one row = one Mission, with the independent **Visible**,
+**Selected**, and **Active** states from ADR 0021.
 
 Design rules:
 
-- one top-level row per operation
-- default visible revision is the operation's active revision, falling back to
-  the newest revision
-- earlier revisions live under a collapsed earlier-revisions affordance
-- executing revisions remain force-visible
+- clicking a row makes that Mission Active and Visible
+- hiding the Active Mission clears Active
+- executing missions remain force-visible
+- AI clone-and-edit produces a second row rather than mutating the source row
+
+Transitional note:
+
+- the current widget still groups rows through a one-Mission-per-operation
+  compatibility projection because the direct sidebar rewrite is Slice 4
 
 ### Approval, Rejection, And Execution
 
@@ -78,7 +87,7 @@ Design rules:
 - execution is a separate explicit action with controller-version staleness
   checks
 - rejection is a separate explicit action
-- after any of these actions, the widget refreshes revision and overlay state
+- after any of these actions, the widget refreshes mission and overlay state
 
 ### Telemetry Source
 
@@ -125,13 +134,13 @@ Design rules:
 
 ## Mission List Rules
 
-Each operation row carries:
+Each Mission row carries:
 
 - visibility control
 - status indication
 - vehicle/profile identity
 - mission name or equivalent label
-- provenance/origin indicator
+- origin indicator
 - action affordances appropriate to the revision state
 
 Behavior rules:
@@ -139,13 +148,16 @@ Behavior rules:
 - visible overlays are capped softly to avoid clutter
 - focus applies fit-to-bounds and dims non-focused visible missions
 - numbered waypoint badges remain visible because color alone is insufficient
+- the sidebar header exposes a settings affordance that deep-links to
+  `Settings → Mission Lifecycle` (`/settings?tab=mission-lifecycle`) in a new
+  browser tab, per [ADR 0021 §6](../../../cross-cutting/decisions/0021-mission-lifecycle.md)
 
 ## Map Rendering Rules
 
-- proposed revisions render dashed and visually weaker
-- approved revisions render solid and fully emphasized
-- executing revisions render as locked
-- superseded or completed revisions render dimmed
+- awaiting-approval missions render dashed or visually weaker
+- approved missions render solid and fully emphasized
+- executing missions render as locked
+- rejected or completed missions render dimmed
 - fit-to-bounds uses the focused mission when one exists, else the visible-set
   union
 
@@ -176,12 +188,12 @@ Design rules:
 
 ### Core Rules
 
-- editing is available only for non-executing revisions
-- gesture handlers short-circuit on locked revisions
-- client edits operate against backend-backed revision state with optimistic
+- editing is available only for non-executing missions
+- gesture handlers short-circuit on locked missions
+- client edits operate against backend-backed mission state with optimistic
   concurrency checks
-- starting edits on a locked but non-executing revision may fork a new
-  client-authored revision
+- manual edits mutate the active Mission in place
+- AI edits default to clone-and-edit, producing a new Mission row
 
 ### Gestures And Keyboard
 
@@ -197,26 +209,13 @@ The widget supports:
 The exact input affordances may evolve, but they must continue to respect the
 locking and concurrency rules above.
 
-### Provenance State Machine
-
-Per-waypoint provenance stays explicit:
-
-- `ai`
-- `user`
-- `ai+edited`
-
-Design rule:
-
-- once a waypoint is `ai+edited`, later AI regeneration must treat it as
-  operator-modified and require explicit confirmation before replacement
-
 ### Hard Lock During Execution
 
-While a revision is executing:
+While a mission is executing:
 
 - edit, reject, and approve affordances are disabled
 - drag/insert/delete gestures are blocked before state changes
-- the revision remains visibly locked in both the list and map rendering
+- the mission remains visibly locked in both the list and map rendering
 
 ## Vehicle Profile Boundary
 

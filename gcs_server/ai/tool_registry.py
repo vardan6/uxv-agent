@@ -1369,16 +1369,16 @@ CANCEL_MODES = ("clear", "hold", "disarm")
 
 def _resolve_execution_mode(runtime: Any) -> str:
     if runtime is None:
-        return EXECUTION_MODE_AUTONOMOUS
+        return EXECUTION_MODE_STRICT
     config = getattr(runtime, "config", None)
     ai_settings = getattr(config, "ai_settings", None) if config is not None else None
     if not isinstance(ai_settings, dict):
-        return EXECUTION_MODE_AUTONOMOUS
+        return EXECUTION_MODE_STRICT
     lifecycle = ai_settings.get("mission_lifecycle")
     if not isinstance(lifecycle, dict):
-        return EXECUTION_MODE_AUTONOMOUS
+        return EXECUTION_MODE_STRICT
     mode = str(lifecycle.get("execution_mode") or "").strip().lower()
-    return mode if mode in VALID_EXECUTION_MODES else EXECUTION_MODE_AUTONOMOUS
+    return mode if mode in VALID_EXECUTION_MODES else EXECUTION_MODE_STRICT
 
 
 def _tool_allowed_in_mode(name: str, mode: str) -> bool:

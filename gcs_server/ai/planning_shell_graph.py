@@ -250,48 +250,41 @@ def _merge_response_metadata(*items: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _build_active_mission_context(mission_execution: Any, session_id: str) -> dict[str, Any]:
-    """Return a compact provenance summary for the active revision of the current session.
+def _build_active_mission_context(mission_repository: Any, session_id: str) -> dict[str, Any]:
+    """Return a compact summary of the latest Mission for this chat session.
 
-    Used by the planner to detect operator-edited waypoints before proposing a new mission.
-    Returns an empty dict when no active revision exists or the service is unavailable.
+    Per ADR 0021 §2 a Mission is the only durable artifact; the planner uses
+    this summary to decide whether to clone-and-edit or create-from-scratch.
+    Per-waypoint provenance is no longer tracked on flat Missions, so the
+    `provenance_*` / `has_operator_edits` keys are absent.
     """
-    if mission_execution is None or not session_id:
+    if mission_repository is None or not session_id:
         return {}
     try:
-        revision = mission_execution.get_current_revision(session_id=session_id)
+        missions = mission_repository.list(origin_chat_id=session_id, limit=1)
     except Exception:
         return {}
-    if not revision:
+    if not missions:
         return {}
 
-    provenance: dict[str, str] = revision.get("provenance") or {}
-    mission = revision.get("mission") or {}
-
-    ai_count = sum(1 for v in provenance.values() if v == "ai")
-    edited_count = sum(1 for v in provenance.values() if v == "ai+edited")
-    user_count = sum(1 for v in provenance.values() if v == "user")
-    total_tracked = ai_count + edited_count + user_count
+    mission = missions[0]
+    mission_json = mission.mission_json if isinstance(mission.mission_json, dict) else {}
 
     waypoint_count = 0
-    for artifact in (mission.get("route_artifacts") or []):
+    for artifact in (mission_json.get("route_artifacts") or []):
         if isinstance(artifact, dict):
             waypoint_count += int(artifact.get("waypoint_count") or len(artifact.get("waypoints") or []))
-    if not waypoint_count and isinstance(mission.get("waypoints"), list):
-        waypoint_count = len(mission["waypoints"])
+    if not waypoint_count and isinstance(mission_json.get("waypoints"), list):
+        waypoint_count = len(mission_json["waypoints"])
 
     return {
-        "has_active_revision": True,
-        "revision_id": str(revision.get("id") or ""),
-        "revision_status": str(revision.get("status") or revision.get("operation_status") or ""),
-        "operation_id": str(revision.get("operation_id") or ""),
-        "goal": str(mission.get("goal") or ""),
+        "has_active_mission": True,
+        "mission_id": int(mission.id),
+        "name": str(mission.name or ""),
+        "origin": str(mission.origin or ""),
+        "client_version": int(mission.client_version or 0),
+        "goal": str(mission_json.get("goal") or ""),
         "waypoint_count": waypoint_count,
-        "provenance_ai": ai_count,
-        "provenance_ai_edited": edited_count,
-        "provenance_user": user_count,
-        "has_operator_edits": edited_count > 0,
-        "is_operator_authored": total_tracked > 0 and edited_count == 0 and ai_count == 0,
     }
 
 
@@ -382,65 +375,15 @@ def _is_explicit_replace_confirmation(answer: str) -> bool:
 
 
 def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShellGraphRuntime) -> dict[str, Any]:
-    draft = state.get("draft") or {}
-    mission = state.get("active_mission_context") or {}
-    parent_operation_id = str(state.get("parent_operation_id") or "").strip()
-    current_operation_id = str(mission.get("operation_id") or "").strip()
-    if not draft or not parent_operation_id or parent_operation_id != current_operation_id:
-        return {}
-    if not mission.get("has_operator_edits"):
-        return {}
-    answer = str((state.get("clarification_response") or {}).get("answer") or "")
-    if _is_explicit_replace_confirmation(answer):
-        return {}
+    """Per-waypoint provenance is not tracked on flat Missions (ADR 0021 §2).
 
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    if mission_execution is None:
-        return {}
-    current_revision = mission_execution.get_current_revision(session_id=str(state.get("session_id") or ""))
-    if not current_revision:
-        return {}
-
-    provenance = current_revision.get("provenance") if isinstance(current_revision.get("provenance"), dict) else {}
-    current_waypoints = _collect_waypoints(current_revision.get("mission") or {})
-    edited_waypoints = [
-        {
-            "id": str(point.get("id") or f"mission-wp-{index}"),
-            "label": str(point.get("label") or f"Waypoint {index}"),
-            "index": index,
-        }
-        for index, point in enumerate(current_waypoints, start=1)
-        if provenance.get(str(point.get("id") or f"mission-wp-{index}")) == "ai+edited"
-    ]
-    if not edited_waypoints:
-        return {}
-
-    proposed_waypoints = _collect_waypoints(draft)
-    if not proposed_waypoints:
-        return {}
-
-    summary = (
-        f"The active mission revision has {len(edited_waypoints)} operator-edited waypoint(s). "
-        "Creating a new AI proposal linked to this mission would supersede those edits."
-    )
-    edited_labels = ", ".join(item["label"] for item in edited_waypoints[:3])
-    if len(edited_waypoints) > 3:
-        edited_labels = f"{edited_labels}, and {len(edited_waypoints) - 3} more"
-    question = (
-        "Reply with 'replace' if you want the AI to supersede those edited waypoints, "
-        "or describe how the mission should preserve or extend them instead."
-    )
-    return {
-        "type": "provenance_conflict",
-        "intent_summary": summary,
-        "questions": [question],
-        "summary": summary,
-        "edited_waypoints": edited_waypoints,
-        "edited_waypoint_labels": edited_labels,
-        "current_revision_id": str(current_revision.get("id") or ""),
-        "current_waypoint_count": len(current_waypoints),
-        "proposed_waypoint_count": len(proposed_waypoints),
-    }
+    Operator-edit collisions are avoided structurally instead: AI-driven
+    changes default to `clone_and_edit_mission` (a new Mission row), so a new
+    AI proposal never overwrites operator edits unless the operator explicitly
+    invokes `edit_mission_in_place`. Returning {} disables the legacy guard.
+    """
+    _ = state, rt, _is_explicit_replace_confirmation, _collect_waypoints
+    return {}
 
 
 # ── Planner loop helpers (Phase 5) ────────────────────────────────────────────
@@ -472,35 +415,22 @@ def _planner_prompt_builder(
     if rover.get("position"):
         lines.append(f"Rover position: {json.dumps(rover['position'])}")
     mission = ctx.get("mission") or {}
-    if mission.get("has_active_revision"):
-        edited = int(mission.get("provenance_ai_edited") or 0)
-        user = int(mission.get("provenance_user") or 0)
+    if mission.get("has_active_mission"):
         total = int(mission.get("waypoint_count") or 0)
         goal = str(mission.get("goal") or "")
-        status = str(mission.get("revision_status") or "")
-        parts = [f"There is an active mission revision (status: {status}"]
+        mission_id = mission.get("mission_id")
+        name = str(mission.get("name") or "")
+        parts = [f"There is an active mission (#{mission_id}"]
+        if name:
+            parts.append(f', "{name}"')
         if goal:
             parts.append(f', goal: "{goal}"')
         parts.append(f", {total} waypoint(s)).")
-        if edited > 0:
-            parts.append(
-                f" {edited} waypoint(s) carry 'ai+edited' provenance — the operator manually "
-                "repositioned them after the AI proposed the route. "
-                "Your new proposal will supersede those edits. "
-                "If the operator's request is to refine or extend the existing mission rather than replace it, "
-                "ask a clarification question before proposing."
-            )
-        elif user > 0:
-            parts.append(
-                f" {user} waypoint(s) are fully operator-authored (provenance: user). "
-                "Your proposal will create a new revision; the operator's waypoints will not be carried forward automatically."
-            )
-        op_id = str(mission.get("operation_id") or "")
-        if op_id:
-            parts.append(
-                f" Use parent_operation_id=\"{op_id}\" in propose_mission_draft if your proposal "
-                "refines or extends this mission."
-            )
+        parts.append(
+            " New AI proposals default to creating a separate mission via clone_and_edit_mission "
+            "so operator-authored content is preserved; only invoke edit_mission_in_place if the "
+            "operator asked for an in-place change."
+        )
         lines.append("".join(parts))
     return "\n".join(lines)
 
@@ -771,8 +701,8 @@ async def retrieve_current_context(state: PlanningShellGraphState, config: Runna
     )
     retrieval_citations = build_retrieval_citations(retrieved_sources, loaded_data_refs)
 
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    active_mission_context = _build_active_mission_context(mission_execution, str(state.get("session_id") or ""))
+    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
+    active_mission_context = _build_active_mission_context(mission_repository, str(state.get("session_id") or ""))
 
     return {
         "context_metadata": compact_meta,
@@ -849,10 +779,12 @@ def validate_draft(state: PlanningShellGraphState, config: RunnableConfig) -> di
 
 
 def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Persist the draft with mission_execution as canonical storage.
+    """Persist the draft as a flat Mission row in MissionRepository (ADR 0021 §2).
 
-    Planning-shell writes are mission-revision-first: this node allocates a
-    stable draft_id and persists only through mission_execution.
+    Allocates a new Mission with `origin = "ai_chat"` and `origin_chat_id` set
+    to the planning session. The Mission `id` is exposed back to downstream
+    nodes as `mission_id` (and as `draft_id = f"mission-{id}"` for legacy
+    callers that still key off draft_id).
     """
     rt = _runtime(config)
     draft = state.get("draft") or {}
@@ -865,72 +797,63 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="empty_draft_or_intent")],
         }
 
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    draft_id = str(state.get("draft_id") or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
+    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
     draft_status = str(state.get("approval_status") or "awaiting_approval")
-    validation = state.get("validation") or {}
-    mission_operation_id = ""
-    mission_revision_id = ""
-    mission_errors: list[dict[str, Any]] = []
-    if mission_execution is None:
+    if mission_repository is None:
         return {
             "draft_id": "",
             "approval_status": "validation_failed",
             "errors": [{
                 "node": "store_draft",
-                "code": "mission_execution_unavailable",
+                "code": "mission_repository_unavailable",
                 "severity": "error",
-                "message": "mission execution service unavailable",
+                "message": "mission repository unavailable",
                 "recoverable": False,
             }],
-            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_unavailable")],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_repository_unavailable")],
         }
 
+    name = (str(draft.get("goal") or "").strip()
+            or str(intent.get("summary") or "").strip()
+            or "Untitled mission")
+
     try:
-        revision = mission_execution.create_proposal(
-            session_id=state.get("session_id", ""),
-            source_message_id=state.get("source_message_id", ""),
-            draft_id=draft_id,
-            intent=intent,
-            target_resolution=state.get("target_resolution") or {},
-            draft_payload=draft,
-            validation=validation,
-            draft_status=draft_status,
-            review_context={
-                "goal": draft.get("goal", ""),
-                "risks": draft.get("risks") or [],
-                "approval_scope": "planning_artifact_only",
-            },
-            parent_operation_id=state.get("parent_operation_id", ""),
+        mission = mission_repository.create(
+            name=name,
+            origin="ai_chat",
+            origin_chat_id=str(state.get("session_id") or "") or None,
+            approval_status=draft_status,
+            mission_json=dict(draft),
         )
-        mission_operation_id = str(revision.get("operation_id") or "")
-        mission_revision_id = str(revision.get("id") or "")
     except Exception as exc:
         return {
             "draft_id": "",
             "approval_status": "validation_failed",
             "errors": [{
                 "node": "store_draft",
-                "code": "mission_execution_store_error",
+                "code": "mission_repository_store_error",
                 "severity": "error",
                 "message": str(exc),
                 "recoverable": False,
             }],
-            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_store_exception")],
+            "node_trace": [_node_entry("store_draft", ok=False, reason="mission_repository_store_exception")],
         }
+
+    draft_id = f"mission-{mission.id}"
 
     return {
         "draft_id": draft_id,
-        "mission_operation_id": mission_operation_id,
-        "mission_revision_id": mission_revision_id,
+        "mission_id": mission.id,
+        "mission_client_version": int(mission.client_version or 0),
+        "mission_operation_id": "",
+        "mission_revision_id": "",
         "approval_status": draft_status,
-        "errors": mission_errors,
+        "errors": [],
         "node_trace": [_node_entry(
             "store_draft", ok=True,
             draft_id=draft_id,
+            mission_id=mission.id,
             status=draft_status,
-            mission_operation_id=mission_operation_id or None,
-            mission_revision_id=mission_revision_id or None,
         )],
     }
 
@@ -941,7 +864,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
     session_id = state.get("session_id", "")
     intent = state.get("intent") or {}
     draft_id = state.get("draft_id", "")
-    mission_revision_id = str(state.get("mission_revision_id") or "")
+    mission_id = int(state.get("mission_id") or 0)
     approval_status = state.get("approval_status", "")
     validation = state.get("validation") or {}
     errors = state.get("errors") or []
@@ -965,21 +888,22 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
             "Use the General Chat session for status questions, replay analysis, or other queries."
         )
     elif draft_id:
-        parts.append(f"Mission draft created (ID: {draft_id}).")
-        if mission_revision_id:
-            parts.append(f"Mission revision ID: {mission_revision_id}.")
+        if mission_id:
+            parts.append(f"Mission #{mission_id} created.")
+        else:
+            parts.append(f"Mission draft created (ID: {draft_id}).")
         parts.append(f"Status: {approval_status}.")
         for blocker in validation.get("blockers") or []:
             parts.append(f"Blocker: {blocker}")
         for warning in validation.get("warnings") or []:
             parts.append(f"Warning: {warning}")
         if approval_status == "awaiting_approval":
-            if mission_revision_id:
+            if mission_id:
                 parts.append(
-                    "Use POST /api/ai/mission-revisions/{revision_id}/approve to approve this mission revision."
+                    f"Approve via the operator UI (mission #{mission_id})."
                 )
             else:
-                parts.append("Mission revision link missing; retry planning to create a revision-backed draft.")
+                parts.append("Mission row missing; retry planning to create a Mission-backed draft.")
         elif approval_status == "approved":
             note = state.get("approval_note", "")
             parts.append("Mission draft approved as a planning artifact.")
@@ -1014,7 +938,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
         "run_mode": "planning_shell",
         "intent": intent,
         "draft_id": draft_id,
-        "mission_revision_id": mission_revision_id,
+        "mission_id": mission_id,
         "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
         "mission_export": state.get("mission_export") or {},
@@ -1292,8 +1216,7 @@ def request_planning_shell_approval(state: PlanningShellGraphState, config: Runn
     approval_payload = {
         "type": "planning_shell_draft_approval",
         "draft_id": draft_id,
-        "mission_operation_id": state.get("mission_operation_id", ""),
-        "mission_revision_id": state.get("mission_revision_id", ""),
+        "mission_id": int(state.get("mission_id") or 0),
         "goal": draft.get("goal", ""),
         "risks": draft.get("risks") or [],
         "route_summary": _route_summary_for_approval(draft),
@@ -1322,80 +1245,109 @@ def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> d
     """Record operator approval on the stored draft."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
-    revision_id = str(state.get("mission_revision_id") or "").strip()
-    note = state.get("approval_note", "")
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    mission_id = int(state.get("mission_id") or 0)
+    client_version = int(state.get("mission_client_version") or 0)
+    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
+
     mission_errors: list[dict[str, Any]] = []
-    approved: dict[str, Any] | None = None
-    if mission_execution is not None and revision_id:
-        try:
-            approved = mission_execution.approve_revision(revision_id, note=note)
-        except Exception as exc:
-            mission_errors.append({
-                "node": "record_approval",
-                "code": "mission_execution_approval_error",
-                "severity": "warning",
-                "message": str(exc),
-                "recoverable": True,
-            })
-    if approved is None:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "revision_approval_missing",
-            "severity": "warning",
-            "message": "linked mission revision could not be approved",
-            "recoverable": True,
-        })
     mission_export: dict[str, Any] = {}
     export_error = ""
-    if approved and _route_summary_for_approval(approved.get("mission") or approved.get("draft") or {}).get("waypoint_count"):
+
+    if mission_repository is None or mission_id <= 0:
+        mission_errors.append({
+            "node": "record_approval",
+            "code": "mission_link_missing",
+            "severity": "warning",
+            "message": "linked Mission row could not be approved (no mission_id)",
+            "recoverable": True,
+        })
+        return {
+            "approval_status": "approved",
+            "mission_export": {},
+            "errors": mission_errors,
+            "node_trace": [_node_entry("record_approval", ok=False, draft_id=draft_id)],
+        }
+
+    mission = mission_repository.get(mission_id)
+    if mission is None:
+        mission_errors.append({
+            "node": "record_approval",
+            "code": "mission_not_found",
+            "severity": "warning",
+            "message": f"mission #{mission_id} not found",
+            "recoverable": True,
+        })
+        return {
+            "approval_status": "approved",
+            "mission_export": {},
+            "errors": mission_errors,
+            "node_trace": [_node_entry("record_approval", ok=False, draft_id=draft_id, mission_id=mission_id)],
+        }
+
+    mission_json = mission.mission_json if isinstance(mission.mission_json, dict) else {}
+    route_summary = _route_summary_for_approval(mission_json)
+    if route_summary.get("waypoint_count"):
         try:
+            export_draft = {
+                "id": f"mission-{mission.id}",
+                "status": "approved",
+                "mission": mission_json,
+            }
             result = MissionExportService().export(
-                approved,
+                export_draft,
                 home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
             )
             if result.get("ok"):
-                export_synced = None
-                if mission_execution is not None and revision_id:
-                    try:
-                        export_synced = mission_execution.mark_revision_exported_by_revision_id(
-                            revision_id,
-                            export_result=result,
-                        )
-                    except Exception as exc:
-                        mission_errors.append({
-                            "node": "record_approval",
-                            "code": "mission_execution_export_sync_error",
-                            "severity": "warning",
-                            "message": str(exc),
-                            "recoverable": True,
-                        })
-                mission_export = (export_synced or {}).get("mission", {}).get("mission_export") or {
+                mission_export = {
                     "file_path": result.get("file_path", ""),
                     "waypoint_count": result.get("waypoint_count", 0),
                     "vehicle_type": result.get("vehicle_type", 0),
+                    "exported_at": time.time(),
                 }
             else:
                 export_error = str(result.get("error") or "mission export failed")
         except Exception as exc:
             export_error = str(exc)
-    errors = mission_errors
+
+    updated_mission_json = dict(mission_json)
+    if mission_export:
+        updated_mission_json["mission_export"] = mission_export
+    try:
+        updated = mission_repository.update(
+            mission.id,
+            expected_client_version=mission.client_version,
+            mission_json=updated_mission_json,
+            approval_status="approved",
+        )
+        client_version = int(updated.client_version or 0)
+    except Exception as exc:
+        mission_errors.append({
+            "node": "record_approval",
+            "code": "mission_approval_sync_error",
+            "severity": "warning",
+            "message": str(exc),
+            "recoverable": True,
+        })
+
     if export_error:
-        errors.append({
+        mission_errors.append({
             "node": "record_approval",
             "code": "mission_export_failed",
             "severity": "warning",
             "message": export_error,
             "recoverable": True,
         })
+
     return {
         "approval_status": "approved",
         "mission_export": mission_export,
-        "errors": errors,
+        "mission_client_version": client_version,
+        "errors": mission_errors,
         "node_trace": [_node_entry(
             "record_approval",
             ok=not export_error,
             draft_id=draft_id,
+            mission_id=mission_id,
             mission_export=mission_export,
             export_error=export_error or None,
         )],
@@ -1403,37 +1355,57 @@ def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> d
 
 
 def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Record operator rejection on the stored draft."""
+    """Mark the draft rejected on the linked Mission row."""
     rt = _runtime(config)
-    draft_id = state.get("draft_id", "")
-    revision_id = str(state.get("mission_revision_id") or "").strip()
-    note = state.get("approval_note", "")
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    mission_errors: list[dict[str, Any]] = []
-    rejected = None
-    if mission_execution is not None and revision_id:
-        try:
-            rejected = mission_execution.reject_revision(revision_id, note=note)
-        except Exception as exc:
-            mission_errors.append({
-                "node": "record_rejection",
-                "code": "mission_execution_rejection_error",
-                "severity": "warning",
-                "message": str(exc),
-                "recoverable": True,
-            })
-    if rejected is None:
-        mission_errors.append({
+    mission_id = int(state.get("mission_id") or 0)
+    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
+    client_version = int(state.get("mission_client_version") or 0)
+    errors: list[dict[str, Any]] = []
+
+    if mission_repository is None or mission_id <= 0:
+        errors.append({
             "node": "record_rejection",
-            "code": "revision_rejection_missing",
+            "code": "mission_link_missing",
             "severity": "warning",
-            "message": "linked mission revision could not be rejected",
+            "message": "linked Mission row could not be rejected (no mission_id)",
             "recoverable": True,
         })
+    else:
+        mission = mission_repository.get(mission_id)
+        if mission is None:
+            errors.append({
+                "node": "record_rejection",
+                "code": "mission_not_found",
+                "severity": "warning",
+                "message": f"mission #{mission_id} not found",
+                "recoverable": True,
+            })
+        else:
+            try:
+                updated = mission_repository.update(
+                    mission.id,
+                    expected_client_version=mission.client_version,
+                    approval_status="rejected",
+                )
+                client_version = int(updated.client_version or 0)
+            except Exception as exc:
+                errors.append({
+                    "node": "record_rejection",
+                    "code": "mission_rejection_sync_error",
+                    "severity": "warning",
+                    "message": str(exc),
+                    "recoverable": True,
+                })
     return {
         "approval_status": "rejected",
-        "errors": mission_errors,
-        "node_trace": [_node_entry("record_rejection", ok=True, draft_id=draft_id)],
+        "mission_client_version": client_version,
+        "errors": errors,
+        "node_trace": [_node_entry(
+            "record_rejection",
+            ok=not errors,
+            draft_id=state.get("draft_id", ""),
+            mission_id=mission_id,
+        )],
     }
 
 

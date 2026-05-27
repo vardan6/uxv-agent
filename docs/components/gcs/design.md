@@ -4,7 +4,7 @@ Status date: 2026-05-20.
 
 **How** the GCS is built — runtime model, browser workflow, MQTT integration, AI chat model, settings, file layout, and current limitations. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and operator-visible behavior; this doc wins on implementation specifics.
 
-Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. Replay still uses its separate `static/replay.js` surface, and real external controller handoff plus video transport hardening remain the next slices.
+Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and ADR 0021's flat Mission backend cutover with a temporary revision-shaped compatibility surface for the existing widget. Replay still uses its separate `static/replay.js` surface, and real external controller handoff plus video transport hardening remain the next slices.
 
 ## Table of Contents
 
@@ -52,10 +52,9 @@ It is responsible for:
 - session-level source controls and bounded lazy retrieval surfaces for replay reports, AI chat history, safe settings/config, and sensor metadata
 - `/ai` intent-test path for non-executing structured rover-task parsing
 - `/ai` planning-shell path for non-executing mission-draft planning with approval gates (reached via `/plan <prompt>`)
-- route-planning drafts and QGC `.plan` export for approved route-bearing drafts
-- backend-owned mission revision storage, current mission-state APIs, overlay APIs, and controller mission-state APIs
-- durable mission execution transition with controller-version checks and execution-attempt persistence
-- stale execute recovery that refocuses the active revision and can auto-create a rebased revision on controller-version mismatch
+- route-planning drafts and QGC `.plan` export for approved route-bearing missions
+- backend-owned flat Mission storage (`MissionRepository`), current mission-state APIs, overlay APIs, controller mission-state APIs, and a temporary revision-shaped compatibility API for the current widget
+- durable mission execution transition with controller-version checks
 - persistent AI sessions and messages
 - streaming chat responses, retry, archive/restore, purge, session search, and per-session provider override
 - compact live current-context injection for AI Chat
@@ -68,8 +67,8 @@ It is responsible for:
 Current execution-boundary status:
 
 - the universal agent remains the product center
-- mission drafts remain the planning artifact for now
-- the backend mission execution boundary now exists and owns canonical mission revisions, overlays, controller snapshot state, and durable execution attempts
+- planning-shell drafts still exist as an internal chat/planner concept, but the only durable operator-facing artifact is the flat Mission row
+- the backend mission boundary now owns canonical Missions, overlays, controller snapshot state, and approval-state persistence; the current widget bridge projects those Missions back into revision-shaped rows temporarily
 - the current adapter is still internal to the monolith; real external controller/MAVLink handoff remains the next implementation slice
 
 ## Runtime Model
@@ -144,14 +143,14 @@ Key frontend modules under `static/map/`:
 |---|---|
 | `MapWidget.js` | Root widget; Leaflet init, layer orchestration, keyboard shortcuts |
 | `layers/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
-| `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
-| `ui/MissionListPanel.js` | Mission list grouped by operation; status badges; Approve draft / Execute mission buttons |
+| `layers/MissionOverlayLayer.js` | Renders mission route overlays |
+| `ui/MissionListPanel.js` | Mission list UI; currently fed by a revision-shaped compatibility payload, to be replaced by the flat Mission sidebar contract from ADR 0021 |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
 | `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
 | `ui/HintToasts.js` | Gesture hint toasts |
 | `ui/KeyboardHelpOverlay.js` | Keyboard shortcut reference overlay |
 | `ui/ElevationProfilePanel.js` | Mission elevation profile panel for the selected overlay |
-| `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
+| `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS against the temporary mission-compat routes |
 | `state/` | Frontend mission state management |
 
 The widget uses `L.CRS.Simple` with local scene metres for all overlay coordinates. Export-side projection (local → WGS84) is handled by `MissionExportService` on the backend. Lat/lon is never used inside the widget itself.
@@ -163,6 +162,8 @@ For AI context, intent parsing, and planning-shell wiring, see [design.md](./des
 Current status of follow-on map work:
 
 - the mission elevation profile panel is implemented on `/ai`
+- the backend now persists Mission `approval_status`; approval/rejection survive refresh
+- the current `/ai` map widget still depends on a temporary revision/draft compatibility API layered over the flat Mission backend; Slice 4 is the direct-Mission UI rewrite
 - the replay page still renders through `static/replay.js`, not through `MapWidget`
 - geofence display and validation are still gated on a real backend source
 - the main dashboard still does not have a dedicated live map panel
