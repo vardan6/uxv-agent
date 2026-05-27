@@ -382,6 +382,8 @@ def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShell
     AI proposal never overwrites operator edits unless the operator explicitly
     invokes `edit_mission_in_place`. Returning {} disables the legacy guard.
     """
+    # TODO(ADR-0022 follow-up): remove this node and its caller once the
+    # approval-status branch is fully retired from the planner graph.
     _ = state, rt, _is_explicit_replace_confirmation, _collect_waypoints
     return {}
 

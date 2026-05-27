@@ -107,6 +107,12 @@ export class MapWidget {
     this._editBannerText = null;
     this._selectionPanelWrap = null;
     this._mounted = false;
+    // Mission state machine (ADR-0021 flat-mission model):
+    //   _missions             — full list of mission rows from the server (source of truth).
+    //   _missionCache         — per-mission overlay payloads keyed by id (waypoints/bounds).
+    //   _visibleMissionOrder  — eye-icon toggled subset, in operator-controlled draw order.
+    //   _selectedMissionIds   — sidebar multi-selection (drives bulk actions, not rendering).
+    //   _activeMissionId      — single mission currently being edited / armed (at most one).
     this._missions = [];
     this._missionCache = new Map();
     this._visibleMissionOrder = [];

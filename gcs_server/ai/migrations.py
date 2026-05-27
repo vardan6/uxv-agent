@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
@@ -21,6 +24,17 @@ _LEGACY_AI_MISSION_TABLES = (
 
 def _migration_010_adr_0021_flat_missions(conn: sqlite3.Connection) -> None:
     for table in _LEGACY_AI_MISSION_TABLES:
+        try:
+            row_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        except sqlite3.OperationalError:
+            row_count = None
+        if row_count and row_count[0]:
+            logger.warning(
+                "ADR-0021 migration: dropping legacy table %s with %d row(s); "
+                "data is not migrated to the new flat missions schema",
+                table,
+                row_count[0],
+            )
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.execute(
         """

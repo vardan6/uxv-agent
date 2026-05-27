@@ -151,6 +151,9 @@ DEFAULT_ROVER_AVAILABILITY_POLICY = {
 }
 
 
+# ── Mission repository / execution helpers ───────────────────────────────────
+
+
 def _mission_repository(request: Request):
     runtime = _runtime(request)
     repository = getattr(runtime, "mission_repository", None)
@@ -175,10 +178,15 @@ def _parse_mission_id(raw: Any, *, field_name: str) -> int:
 
 
 def _default_manual_mission_name(runtime: AppRuntime) -> str:
+    # Live read: ai_settings is mutable at runtime via /api/settings, so
+    # caching at startup would serve stale defaults after operator changes.
     ai_settings = getattr(getattr(runtime, "config", None), "ai_settings", {})
     normalized = _normalize_ai_settings(ai_settings if isinstance(ai_settings, dict) else {})
     lifecycle = normalized.get("mission_lifecycle", {})
     return str(lifecycle.get("default_manual_mission_name", "Untitled mission") or "").strip() or "Untitled mission"
+
+
+# ── Mission payload coercion ─────────────────────────────────────────────────
 
 
 def _coerce_waypoint_payload(value: Any, *, index: int) -> dict[str, Any]:
