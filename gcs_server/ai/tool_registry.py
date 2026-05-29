@@ -12,8 +12,11 @@ try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.intent_service import IntentService as _IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService
     from gcs_server.ai.mission_export_service import MissionExportService
+    from gcs_server.ai.mission_repository import (
+        MissionNotFound,
+        MissionVersionConflict,
+    )
     from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
     from gcs_server.ai.road_graph_service import RoadGraphService
@@ -24,8 +27,11 @@ except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.data_access import build_data_access_manifest
     from ai.intent_service import IntentService as _IntentService
-    from ai.mission_draft_service import MissionDraftService
     from ai.mission_export_service import MissionExportService
+    from ai.mission_repository import (
+        MissionNotFound,
+        MissionVersionConflict,
+    )
     from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from ai.provider_registry import resolve_provider as _resolve_provider
     from ai.road_graph_service import RoadGraphService
@@ -150,7 +156,6 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "get_current_mission_state",
     "plan_route_around_group",
     "plan_route_between",
-    "export_mission",
 })
 
 _OPTIONAL_TOOL_NAMES_BY_SOURCE = {
@@ -214,9 +219,12 @@ class ToolRegistry:
             raise RuntimeError("LangChain core tools are not installed. Install gcs_server/requirements-gcs.txt.") from exc
 
         invocation_context = self._invocation_context(runtime, context_snapshot, timezone_name, permissions)
+        execution_mode = _resolve_execution_mode(runtime)
         tools = []
         for definition in self.definitions():
             if not self._is_allowed(definition, invocation_context.permissions):
+                continue
+            if not _tool_allowed_in_mode(definition.name, execution_mode):
                 continue
             tools.append(
                 StructuredTool.from_function(
@@ -244,6 +252,13 @@ class ToolRegistry:
             return {"ok": False, "error": f"tool permission '{definition.permission}' is not enabled"}
         if definition.permission not in invocation_context.permissions:
             return {"ok": False, "error": f"tool permission '{definition.permission}' is not allowed"}
+        execution_mode = _resolve_execution_mode(runtime)
+        if not _tool_allowed_in_mode(definition.name, execution_mode):
+            return {
+                "ok": False,
+                "error": f"tool '{definition.name}' is not bound in execution_mode='{execution_mode}' (ADR 0021 § 1)",
+                "execution_mode": execution_mode,
+            }
         try:
             result = definition.handler(invocation_context, **(args if isinstance(args, dict) else {}))
         except Exception as exc:
@@ -360,22 +375,15 @@ class ToolRegistry:
             ),
             tool(
                 "plan_route_around_group",
-                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. Does not upload to the flight controller; pair with export_mission after approval.",
+                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft.",
                 PLANNING,
                 self._plan_route_around_group,
             ),
             tool(
                 "plan_route_between",
-                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. Does not upload; pair with export_mission after approval.",
+                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints.",
                 PLANNING,
                 self._plan_route_between,
-            ),
-            tool(
-                "export_mission",
-                "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. Returns file_path, waypoint_count, and the plan structure.",
-                PLANNING,
-                self._export_mission,
-                side_effects=frozenset({"writes_file"}),
             ),
             # ── Planner loop tools (Phase 5) ──────────────────────────────────
             tool(
@@ -421,6 +429,42 @@ class ToolRegistry:
                 PLANNING,
                 self._propose_mission_draft,
                 is_terminal=True,
+            ),
+            tool(
+                "create_mission",
+                "Create a new Mission row from the current planning state (ADR 0021). Use this for any AI-driven creation of a brand-new mission. Pass 'mission_json' with the full mission payload (goal, steps, waypoints, constraints, etc.) and an optional 'name' (defaults to 'Untitled mission'). The new Mission is stored with origin='ai_chat' and origin_chat_id bound to the current chat session. Returns the persisted Mission.",
+                PLANNING,
+                self._create_mission,
+            ),
+            tool(
+                "clone_and_edit_mission",
+                "DEFAULT AI tool for changing an existing Mission (ADR 0021): clones source_id into a new Mission row and applies the given edits, leaving the original untouched for side-by-side comparison. Pass 'source_id' (integer Mission #index) and 'edits' (partial mission_json shallow-merged onto the source; pass full replacement lists for fields like 'steps' or 'waypoints'). Optional 'name' overrides the cloned name. Returns the new Mission.",
+                PLANNING,
+                self._clone_and_edit_mission,
+            ),
+            tool(
+                "edit_mission_in_place",
+                "Mutate an existing Mission in place (ADR 0021) — only when the operator explicitly says 'edit in place'. For all other AI edits use clone_and_edit_mission. Pass 'mission_id' (integer #index), 'edits' (partial mission_json shallow-merged), and 'expected_client_version' from the current Mission for optimistic-concurrency (ADR 0020). Returns the updated Mission with the bumped client_version. Conflicts return an error with the current client_version.",
+                PLANNING,
+                self._edit_mission_in_place,
+            ),
+            tool(
+                "execute_mission",
+                "Hand a Mission to the controller for execution (ADR 0021 § 1, Autonomous mode). Pass 'mission_id' (integer #index) and 'expected_controller_version' from the current controller_state for optimistic-concurrency (ADR 0020). The tool is only bound when Mission Lifecycle execution_mode = 'autonomous'; in Strict it is unbound and in Confirm the model must call arm_execution instead. Returns the install result and the post-install controller_state.",
+                PLANNING,
+                self._execute_mission,
+            ),
+            tool(
+                "arm_execution",
+                "Arm a Mission for execution after operator confirm (ADR 0021 § 1, Confirm mode). Pass 'mission_id' (integer #index) and 'expected_controller_version' from the current controller_state for optimistic-concurrency (ADR 0020). Only bound when Mission Lifecycle execution_mode = 'confirm'; in Strict it is unbound and in Autonomous the model calls execute_mission directly. The Confirm UX expects the operator to have already approved; this tool installs the mission and reports status='armed'.",
+                PLANNING,
+                self._arm_execution,
+            ),
+            tool(
+                "cancel_execution",
+                "Abort the currently-installed Mission on the controller (ADR 0021 § 1). Always bound regardless of execution_mode. Optional 'mode' selects the abort path: 'clear' (default — overwrite with empty mission, universal), 'hold' (MAVLink: switch to HOLD/LOITER — not yet implemented), 'disarm' (MAVLink: send disarm — not yet implemented, air-disarm risk). Optional 'expected_controller_version' for optimistic-concurrency. Returns the post-cancel controller_state.",
+                PLANNING,
+                self._cancel_execution,
             ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
@@ -972,39 +1016,6 @@ class ToolRegistry:
             result["route_hash"] = _route_hash(result.get("waypoints", []))
         return result
 
-    def _export_mission(
-        self,
-        context: ToolInvocationContext,
-        draft_id: str,
-    ) -> dict[str, Any]:
-        if not str(draft_id or "").strip():
-            return {"ok": False, "error": "draft_id is required"}
-        store = getattr(context.runtime, "ai_store", None)
-        if store is None:
-            return {"ok": False, "error": "AI store is not available"}
-        draft_service = MissionDraftService(store.db_path)
-        draft = draft_service.get_draft(str(draft_id).strip())
-        if draft is None:
-            return {"ok": False, "error": f"draft '{draft_id}' not found"}
-        profile = get_active_profile()
-        rover = self._rover_snapshot(context)
-        pos = rover.get("position") or {}
-        gps = rover.get("gps") or {}
-        home: dict[str, float] | None = None
-        if gps.get("lat") and gps.get("lon"):
-            home = {
-                "latitude": float(gps["lat"]),
-                "longitude": float(gps["lon"]),
-                "altitude": float(gps.get("alt") or 0.0),
-            }
-        result = self._exporter.export(draft, profile=profile, home_position=home)
-        if result.get("ok"):
-            updated = draft_service.mark_exported(str(draft_id).strip(), export_result=result)
-            if updated is not None:
-                result["draft_status"] = updated.get("status", "")
-                result["mission_export"] = (updated.get("draft") or {}).get("mission_export") or {}
-        return result
-
     # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
 
     def _parse_rover_intent(
@@ -1145,6 +1156,250 @@ class ToolRegistry:
         if route_artifacts and isinstance(route_artifacts, list):
             normalized["route_artifacts"] = list(route_artifacts)
         return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated", "parent_operation_id": parent_op}
+
+    def _create_mission(
+        self,
+        context: ToolInvocationContext,
+        mission_json: dict | None = None,
+        name: str = "",
+        origin_chat_id: str = "",
+    ) -> dict[str, Any]:
+        repo = _mission_repository_from(context)
+        if repo is None:
+            return {"ok": False, "error": "mission_repository is not available in this runtime"}
+        chat_id = (origin_chat_id or context.session_id or "").strip() or None
+        mission = repo.create(
+            name=(name or "").strip() or "Untitled mission",
+            origin="ai_chat",
+            mission_json=mission_json if isinstance(mission_json, dict) else {},
+            origin_chat_id=chat_id,
+        )
+        return {"ok": True, "mission": mission.to_dict()}
+
+    def _clone_and_edit_mission(
+        self,
+        context: ToolInvocationContext,
+        source_id: int,
+        edits: dict | None = None,
+        name: str = "",
+        origin_chat_id: str = "",
+    ) -> dict[str, Any]:
+        repo = _mission_repository_from(context)
+        if repo is None:
+            return {"ok": False, "error": "mission_repository is not available in this runtime"}
+        try:
+            source = repo.get(int(source_id))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"source_id must be an integer, got {source_id!r}"}
+        if source is None:
+            return {"ok": False, "error": f"mission {source_id} not found"}
+        merged = _merge_mission_edits(source.mission_json, edits)
+        chat_id = (origin_chat_id or context.session_id or "").strip() or None
+        new_name = (name or "").strip() or source.name
+        mission = repo.create(
+            name=new_name,
+            origin="ai_chat",
+            mission_json=merged,
+            origin_chat_id=chat_id,
+        )
+        return {"ok": True, "mission": mission.to_dict(), "cloned_from_id": source.id}
+
+    def _edit_mission_in_place(
+        self,
+        context: ToolInvocationContext,
+        mission_id: int,
+        edits: dict | None = None,
+        expected_client_version: int = 0,
+        name: str = "",
+    ) -> dict[str, Any]:
+        repo = _mission_repository_from(context)
+        if repo is None:
+            return {"ok": False, "error": "mission_repository is not available in this runtime"}
+        try:
+            mid = int(mission_id)
+            expected = int(expected_client_version)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "mission_id and expected_client_version must be integers"}
+        current = repo.get(mid)
+        if current is None:
+            return {"ok": False, "error": f"mission {mid} not found"}
+        merged = _merge_mission_edits(current.mission_json, edits)
+        update_kwargs: dict[str, Any] = {"mission_json": merged}
+        new_name = (name or "").strip()
+        if new_name:
+            update_kwargs["name"] = new_name
+        try:
+            mission = repo.update(mid, expected_client_version=expected, **update_kwargs)
+        except MissionVersionConflict as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "conflict": True,
+                "expected_client_version": exc.expected,
+                "current_client_version": exc.actual,
+            }
+        except MissionNotFound as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "mission": mission.to_dict()}
+
+    def _execute_mission(
+        self,
+        context: ToolInvocationContext,
+        mission_id: int,
+        expected_controller_version: int = 0,
+    ) -> dict[str, Any]:
+        mode = _resolve_execution_mode(context.runtime)
+        if not _tool_allowed_in_mode("execute_mission", mode):
+            return {
+                "ok": False,
+                "error": f"execute_mission is not bound in execution_mode='{mode}' (ADR 0021 § 1)",
+                "execution_mode": mode,
+            }
+        repo = _mission_repository_from(context)
+        if repo is None:
+            return {"ok": False, "error": "mission_repository is not available in this runtime"}
+        service = _mission_execution_service_from(context)
+        if service is None:
+            return {"ok": False, "error": "mission_execution_service is not available in this runtime"}
+        try:
+            mid = int(mission_id)
+            expected = int(expected_controller_version)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "mission_id and expected_controller_version must be integers"}
+        mission = repo.get(mid)
+        if mission is None:
+            return {"ok": False, "error": f"mission {mid} not found"}
+        result = service.execute_mission_by_id(
+            mission_id=mid,
+            mission_json=mission.mission_json,
+            expected_controller_version=expected,
+        )
+        result.setdefault("mission", mission.to_dict())
+        result.setdefault("execution_mode", mode)
+        return result
+
+    def _arm_execution(
+        self,
+        context: ToolInvocationContext,
+        mission_id: int,
+        expected_controller_version: int = 0,
+    ) -> dict[str, Any]:
+        mode = _resolve_execution_mode(context.runtime)
+        if not _tool_allowed_in_mode("arm_execution", mode):
+            return {
+                "ok": False,
+                "error": f"arm_execution is not bound in execution_mode='{mode}' (ADR 0021 § 1)",
+                "execution_mode": mode,
+            }
+        repo = _mission_repository_from(context)
+        if repo is None:
+            return {"ok": False, "error": "mission_repository is not available in this runtime"}
+        service = _mission_execution_service_from(context)
+        if service is None:
+            return {"ok": False, "error": "mission_execution_service is not available in this runtime"}
+        try:
+            mid = int(mission_id)
+            expected = int(expected_controller_version)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "mission_id and expected_controller_version must be integers"}
+        mission = repo.get(mid)
+        if mission is None:
+            return {"ok": False, "error": f"mission {mid} not found"}
+        result = service.arm_execution_by_id(
+            mission_id=mid,
+            mission_json=mission.mission_json,
+            expected_controller_version=expected,
+        )
+        result.setdefault("mission", mission.to_dict())
+        result.setdefault("execution_mode", mode)
+        return result
+
+    def _cancel_execution(
+        self,
+        context: ToolInvocationContext,
+        mode: str = "clear",
+        expected_controller_version: int | None = None,
+    ) -> dict[str, Any]:
+        service = _mission_execution_service_from(context)
+        if service is None:
+            return {"ok": False, "error": "mission_execution_service is not available in this runtime"}
+        normalized = str(mode or "clear").strip().lower()
+        if normalized not in CANCEL_MODES:
+            return {
+                "ok": False,
+                "error": f"cancel mode must be one of {CANCEL_MODES}; got {mode!r}",
+            }
+        expected: int | None
+        if expected_controller_version is None:
+            expected = None
+        else:
+            try:
+                expected = int(expected_controller_version)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "expected_controller_version must be an integer when provided"}
+        result = service.cancel_execution_by_id(
+            mode=normalized,
+            expected_controller_version=expected,
+        )
+        result.setdefault("execution_mode", _resolve_execution_mode(context.runtime))
+        return result
+
+
+def _mission_repository_from(context: ToolInvocationContext) -> Any | None:
+    runtime = context.runtime
+    return getattr(runtime, "mission_repository", None) if runtime is not None else None
+
+
+def _mission_execution_service_from(context: ToolInvocationContext) -> Any | None:
+    runtime = context.runtime
+    return getattr(runtime, "mission_execution_service", None) if runtime is not None else None
+
+
+# ADR 0021 § 1 — execution-mode gating for AI-bound execute/arm tools.
+EXECUTION_MODE_STRICT = "strict"
+EXECUTION_MODE_CONFIRM = "confirm"
+EXECUTION_MODE_AUTONOMOUS = "autonomous"
+VALID_EXECUTION_MODES = (EXECUTION_MODE_STRICT, EXECUTION_MODE_CONFIRM, EXECUTION_MODE_AUTONOMOUS)
+# ADR 0021 § 1: `execute_mission` → Autonomous only; `arm_execution` → Confirm only;
+# `cancel_execution` is always bound.
+MODE_GATED_TOOLS = {"execute_mission", "arm_execution"}
+# Mirrors controller_mission_adapter.CANCEL_MODES; defined locally to avoid an import cycle.
+CANCEL_MODES = ("clear", "hold", "disarm")
+
+
+def _resolve_execution_mode(runtime: Any) -> str:
+    if runtime is None:
+        return EXECUTION_MODE_STRICT
+    config = getattr(runtime, "config", None)
+    ai_settings = getattr(config, "ai_settings", None) if config is not None else None
+    if not isinstance(ai_settings, dict):
+        return EXECUTION_MODE_STRICT
+    lifecycle = ai_settings.get("mission_lifecycle")
+    if not isinstance(lifecycle, dict):
+        return EXECUTION_MODE_STRICT
+    mode = str(lifecycle.get("execution_mode") or "").strip().lower()
+    return mode if mode in VALID_EXECUTION_MODES else EXECUTION_MODE_STRICT
+
+
+def _tool_allowed_in_mode(name: str, mode: str) -> bool:
+    if name not in MODE_GATED_TOOLS:
+        return True
+    if name == "execute_mission":
+        return mode == EXECUTION_MODE_AUTONOMOUS
+    if name == "arm_execution":
+        return mode == EXECUTION_MODE_CONFIRM
+    return True
+
+
+def _merge_mission_edits(
+    base: dict[str, Any] | None,
+    edits: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Shallow-merge `edits` onto `base`. Edits replace top-level keys wholesale."""
+    merged: dict[str, Any] = dict(base) if isinstance(base, dict) else {}
+    if isinstance(edits, dict):
+        merged.update(edits)
+    return merged
 
 
 def _route_hash(waypoints: list[dict[str, Any]]) -> str:
@@ -1575,20 +1830,13 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": ["group_id"],
         "upstream_from_tools": ["get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"],
         "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string", "known_groups": "string[]"},
-        "next_tools": ["export_mission (after approval)"],
+        "next_tools": [],
     },
     "plan_route_between": {
         "inputs": {"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
         "required_inputs": ["goal_target"],
         "upstream_from_tools": ["get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"],
         "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string"},
-        "next_tools": ["export_mission (after approval)"],
-    },
-    "export_mission": {
-        "inputs": {"draft_id": "string — ID of an approved mission draft"},
-        "required_inputs": ["draft_id"],
-        "upstream_from_tools": ["plan_route_around_group or plan_route_between (to populate draft waypoints)", "approval interrupt (draft must be approved before calling)"],
-        "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},
         "next_tools": [],
     },
     "parse_rover_intent": {
@@ -1663,6 +1911,51 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": ["intent"],
         "upstream_from_tools": ["parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"],
         "returns": {"ok": "boolean", "draft": "mission_draft", "repairs": "string[]", "source": "planner_submitted|llm_generated"},
+        "next_tools": ["create_mission"],
+    },
+    "create_mission": {
+        "inputs": {
+            "mission_json": "object — full mission payload (goal, steps, waypoints, constraints, ...)",
+            "name": "string — display name; defaults to 'Untitled mission'",
+            "origin_chat_id": "string — overrides the current session as origin chat (optional)",
+        },
+        "required_inputs": [],
+        "upstream_from_tools": ["propose_mission_draft", "plan_route_around_group", "plan_route_between"],
+        "returns": {"ok": "boolean", "mission": "object{id,name,origin,origin_chat_id,created_at,created_by_user_id,client_version,mission_json}"},
+        "next_tools": [],
+    },
+    "clone_and_edit_mission": {
+        "inputs": {
+            "source_id": "integer — Mission #index to clone from",
+            "edits": "object — partial mission_json shallow-merged onto the source",
+            "name": "string — override the cloned name (optional)",
+            "origin_chat_id": "string — overrides the current session as origin chat (optional)",
+        },
+        "required_inputs": ["source_id"],
+        "upstream_from_tools": ["chat reference resolution (ADR 0021 §5)"],
+        "returns": {"ok": "boolean", "mission": "object", "cloned_from_id": "integer"},
+        "next_tools": [],
+    },
+    "edit_mission_in_place": {
+        "inputs": {
+            "mission_id": "integer — Mission #index to mutate",
+            "edits": "object — partial mission_json shallow-merged onto the current value",
+            "expected_client_version": "integer — current client_version for optimistic-concurrency (ADR 0020)",
+            "name": "string — rename in the same edit (optional)",
+        },
+        "required_inputs": ["mission_id", "expected_client_version"],
+        "upstream_from_tools": ["chat reference resolution (ADR 0021 §5)"],
+        "returns": {"ok": "boolean", "mission": "object", "conflict": "boolean?", "current_client_version": "integer?"},
+        "next_tools": [],
+    },
+    "execute_mission": {
+        "inputs": {
+            "mission_id": "integer — Mission #index to execute",
+            "expected_controller_version": "integer — current controller_version for optimistic-concurrency (ADR 0020)",
+        },
+        "required_inputs": ["mission_id", "expected_controller_version"],
+        "upstream_from_tools": ["chat reference resolution (ADR 0021 §5)", "create_mission", "clone_and_edit_mission"],
+        "returns": {"ok": "boolean", "status": "string", "controller_state": "object", "mission": "object", "execution_mode": "string"},
         "next_tools": [],
     },
 }

@@ -62,12 +62,11 @@ class PlanningShellGraphState(TypedDict, total=False):
     parent_operation_id: str     # non-empty when planner links proposal to an existing operation
     mission_operation_id: str
     mission_revision_id: str
+    mission_id: int                # ADR 0021 flat-Mission row id (0 when not yet persisted)
+    mission_client_version: int    # ADR 0020 optimistic-concurrency token for the active Mission
     validation: dict
     draft_usage_metadata: dict
     draft_response_metadata: dict
-    approval_status: str           # awaiting_approval | approved | rejected | validation_failed | needs_clarification
-    approval_note: str
-    operator_decision: str         # Phase 2: approve | reject | pending_rest
 
     # ── Planner loop — Phase 5 ────────────────────────────────────────────────
     planner_agent_stop_reason: str  # stop reason from AgentLoopRuntime run

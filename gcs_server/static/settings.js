@@ -51,6 +51,16 @@ const settingsEls = {
   aiSettingsStatus: document.getElementById('ai-settings-status'),
   saveAiSettings: document.getElementById('save-ai-settings'),
   testAiVoice: document.getElementById('test-ai-voice'),
+  missionExecutionMode: document.getElementById('mission-execution-mode'),
+  missionConfirmTimeout: document.getElementById('mission-confirm-timeout'),
+  missionConfirmTimeoutValue: document.getElementById('mission-confirm-timeout-value'),
+  missionConfirmTimeoutRow: document.getElementById('mission-confirm-timeout-row'),
+  missionAutoOverlay: document.getElementById('mission-auto-overlay'),
+  missionStealFocus: document.getElementById('mission-steal-focus'),
+  missionDefaultName: document.getElementById('mission-default-name'),
+  missionLifecyclePill: document.getElementById('mission-lifecycle-pill'),
+  missionLifecycleStatus: document.getElementById('mission-lifecycle-status'),
+  saveMissionLifecycle: document.getElementById('save-mission-lifecycle'),
   llmProviderForm: document.getElementById('llm-provider-form'),
   llmProviderId: document.getElementById('llm-provider-id'),
   llmFormModePill: document.getElementById('llm-form-mode-pill'),
@@ -252,6 +262,10 @@ function setAiSettingsStatus(text) {
   if (settingsEls.aiSettingsStatus) settingsEls.aiSettingsStatus.textContent = text;
 }
 
+function setMissionLifecycleStatus(text) {
+  if (settingsEls.missionLifecycleStatus) settingsEls.missionLifecycleStatus.textContent = text;
+}
+
 function setLlmStatus(text) {
   if (settingsEls.llmProviderStatus) settingsEls.llmProviderStatus.textContent = text;
 }
@@ -368,7 +382,7 @@ function syncThemeControls() {
 function readSelectedTab() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  return ['connectivity', 'video', 'appearance', 'ai-settings', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
+  return ['connectivity', 'video', 'appearance', 'ai-settings', 'mission-lifecycle', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
 }
 
 function renderTabs(tab) {
@@ -473,6 +487,7 @@ function fillAiSettings(settings = {}) {
   settingsEls.aiTtsRate.value = String(clampNumber(tts.rate, 1, 0.5, 2));
   settingsEls.aiTtsPitch.value = String(clampNumber(tts.pitch, 1, 0, 2));
   populateAiVoiceOptions(String(tts.voice_name || ''));
+  fillMissionLifecycle(settings.mission_lifecycle || {});
   if (settingsEls.aiSettingsPill) {
     settingsEls.aiSettingsPill.textContent = settingsEls.aiTtsEnabled.checked
       ? `Voice: ${settingsEls.aiTtsEngine.value === 'kokoro_service' ? 'Kokoro' : 'Browser'}`
@@ -481,8 +496,54 @@ function fillAiSettings(settings = {}) {
   }
 }
 
-function readAiSettings() {
+function fillMissionLifecycle(lifecycle = {}) {
+  if (!settingsEls.missionExecutionMode) return;
+  const mode = ['strict', 'confirm', 'autonomous'].includes(lifecycle.execution_mode)
+    ? lifecycle.execution_mode
+    : 'autonomous';
+  settingsEls.missionExecutionMode.value = mode;
+  const timeout = clampNumber(lifecycle.confirm_timeout_s, 10, 3, 60);
+  settingsEls.missionConfirmTimeout.value = String(timeout);
+  if (settingsEls.missionConfirmTimeoutValue) {
+    settingsEls.missionConfirmTimeoutValue.textContent = `${timeout} s`;
+  }
+  settingsEls.missionAutoOverlay.checked = lifecycle.auto_overlay_new_missions !== false;
+  settingsEls.missionStealFocus.checked = lifecycle.steal_map_focus_on_active_chat_mission !== false;
+  settingsEls.missionDefaultName.value = String(lifecycle.default_manual_mission_name || 'Untitled mission');
+  updateMissionLifecyclePill(mode);
+  updateConfirmTimeoutVisibility(mode);
+  setMissionLifecycleStatus('Mission lifecycle settings loaded.');
+}
+
+function readMissionLifecycle() {
+  if (!settingsEls.missionExecutionMode) return undefined;
+  const mode = ['strict', 'confirm', 'autonomous'].includes(settingsEls.missionExecutionMode.value)
+    ? settingsEls.missionExecutionMode.value
+    : 'autonomous';
   return {
+    execution_mode: mode,
+    confirm_timeout_s: Math.round(clampNumber(settingsEls.missionConfirmTimeout.value, 10, 3, 60)),
+    auto_overlay_new_missions: settingsEls.missionAutoOverlay.checked,
+    steal_map_focus_on_active_chat_mission: settingsEls.missionStealFocus.checked,
+    default_manual_mission_name:
+      settingsEls.missionDefaultName.value.trim() || 'Untitled mission',
+  };
+}
+
+function updateMissionLifecyclePill(mode) {
+  if (!settingsEls.missionLifecyclePill) return;
+  const tone = mode === 'strict' ? 'ok' : mode === 'confirm' ? 'warn' : 'danger';
+  settingsEls.missionLifecyclePill.textContent = `Mode: ${mode}`;
+  settingsEls.missionLifecyclePill.className = `pill ${tone}`;
+}
+
+function updateConfirmTimeoutVisibility(mode) {
+  if (!settingsEls.missionConfirmTimeoutRow) return;
+  settingsEls.missionConfirmTimeoutRow.hidden = mode !== 'confirm';
+}
+
+function readAiSettings() {
+  const payload = {
     tts: {
       enabled: settingsEls.aiTtsEnabled.checked,
       engine: settingsEls.aiTtsEngine.value,
@@ -497,6 +558,20 @@ function readAiSettings() {
       pitch: clampNumber(settingsEls.aiTtsPitch.value, 1, 0, 2),
     },
   };
+  const lifecycle = readMissionLifecycle();
+  if (lifecycle) payload.mission_lifecycle = lifecycle;
+  return payload;
+}
+
+async function saveMissionLifecycle() {
+  setMissionLifecycleStatus('Saving mission lifecycle settings.');
+  const result = await readJson('/api/ai-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ai_settings: readAiSettings() }),
+  });
+  fillAiSettings(result.ai_settings || {});
+  setMissionLifecycleStatus('Mission lifecycle settings saved.');
 }
 
 async function loadAiSettings() {
@@ -1512,6 +1587,23 @@ function bindAiSettings() {
   });
 }
 
+function bindMissionLifecycle() {
+  if (!settingsEls.missionExecutionMode) return;
+  settingsEls.saveMissionLifecycle.addEventListener('click', () => {
+    saveMissionLifecycle().catch((error) => setMissionLifecycleStatus(error.message));
+  });
+  settingsEls.missionExecutionMode.addEventListener('change', () => {
+    const mode = settingsEls.missionExecutionMode.value;
+    updateMissionLifecyclePill(mode);
+    updateConfirmTimeoutVisibility(mode);
+  });
+  settingsEls.missionConfirmTimeout.addEventListener('input', () => {
+    if (settingsEls.missionConfirmTimeoutValue) {
+      settingsEls.missionConfirmTimeoutValue.textContent = `${settingsEls.missionConfirmTimeout.value} s`;
+    }
+  });
+}
+
 function bindLlmSettings() {
   if (!settingsEls.llmProviderForm) return;
   settingsEls.llmAuthMode.addEventListener('change', updateProviderAuthFields);
@@ -1572,6 +1664,7 @@ function initSettings() {
   bindTabs();
   bindAppearance();
   bindAiSettings();
+  bindMissionLifecycle();
   bindLlmSettings();
 
   settingsEls.mqttForm.addEventListener('submit', (event) => {

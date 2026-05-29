@@ -1,4 +1,4 @@
-// Wrappers for the four Phase 1D mutation endpoints plus GET single revision.
+// Wrappers for flat Mission mutation endpoints plus GET single mission.
 // All indices passed to the API are 1-based (server convention).
 
 async function _safeFetch(url, opts) {
@@ -14,26 +14,25 @@ async function _safeFetch(url, opts) {
   }
 }
 
-export async function getRevision(revisionId) {
-  const raw = await _safeFetch(`/api/ai/mission-revisions/${encodeURIComponent(revisionId)}`);
+export async function getMission(missionId) {
+  const raw = await _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}`);
   if (!raw.ok) return raw;
-  // Normalize: endpoint may return { revision: {...} } or the revision dict directly.
-  const revision = (raw.revision && raw.revision.id) ? raw.revision : raw;
-  return { ok: true, ...revision };
+  const mission = (raw.mission && raw.mission.id) ? raw.mission : raw;
+  return { ok: true, ...mission };
 }
 
-export async function createClientRevision({ operation_id, waypoints, label = '', from_revision_id = '' }) {
-  return _safeFetch('/api/ai/mission-revisions', {
+export async function createMission({ operation_id, waypoints, label = '', from_mission_id = '', session_id = '' }) {
+  return _safeFetch('/api/ai/missions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operation_id, waypoints, label, from_revision_id }),
+    body: JSON.stringify({ operation_id, waypoints, label, from_mission_id, session_id }),
   });
 }
 
 // waypointIndex is 1-based.
-export async function updateWaypoint(revisionId, waypointIndex, { point, expected_version }) {
+export async function updateMissionWaypoint(missionId, waypointIndex, { point, expected_version }) {
   return _safeFetch(
-    `/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/waypoints/${waypointIndex}`,
+    `/api/ai/missions/${encodeURIComponent(missionId)}/waypoints/${waypointIndex}`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -43,9 +42,9 @@ export async function updateWaypoint(revisionId, waypointIndex, { point, expecte
 }
 
 // after_index: -1 = append, 0 = prepend, N = after the N-th waypoint (1-based).
-export async function insertWaypoint(revisionId, { point, expected_version, after_index }) {
+export async function insertMissionWaypoint(missionId, { point, expected_version, after_index }) {
   return _safeFetch(
-    `/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/waypoints`,
+    `/api/ai/missions/${encodeURIComponent(missionId)}/waypoints`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -54,10 +53,30 @@ export async function insertWaypoint(revisionId, { point, expected_version, afte
   );
 }
 
+export async function deleteMission(missionId) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function restoreMission(missionId) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}/restore`, {
+    method: 'POST',
+  });
+}
+
+export async function updateMissionColor(missionId, color) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}/color`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ color }),
+  });
+}
+
 // waypointIndex is 1-based.
-export async function deleteWaypoint(revisionId, waypointIndex, expected_version) {
+export async function deleteMissionWaypoint(missionId, waypointIndex, expected_version) {
   return _safeFetch(
-    `/api/ai/mission-revisions/${encodeURIComponent(revisionId)}/waypoints/${waypointIndex}`,
+    `/api/ai/missions/${encodeURIComponent(missionId)}/waypoints/${waypointIndex}`,
     {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },

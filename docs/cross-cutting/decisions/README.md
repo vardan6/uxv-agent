@@ -25,3 +25,4 @@ Architecture Decision Records. Numbering is monotonic and never reused. Supersed
 | [0019](./0019-per-waypoint-provenance-state-machine.md) | Per-Waypoint Provenance State Machine |
 | [0020](./0020-optimistic-mission-revision-concurrency.md) | Optimistic Mission Revision Concurrency |
 | [0021](./0021-mission-lifecycle.md) | Mission Lifecycle: Configurable Execution Modes, Flat Mission Model, And Chat-Driven Operations |
+| [0022](./0022-drop-operator-approval-gate.md) | Drop The Per-Mission Operator Approval Gate; Modes Do The Gating |

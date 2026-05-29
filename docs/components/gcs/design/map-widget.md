@@ -1,26 +1,26 @@
 # Map Widget
 
 This document defines the durable design contract for the reusable mission map
-widget used on `/ai` and later available to other GCS surfaces.
+widget used on `/ai` and later available to other GCS surfaces. ADR 0021 makes
+the flat Mission row the durable operator-facing object; any revision/draft API
+shape described below is compatibility-only unless stated otherwise.
 
 ## Purpose
 
-The widget gives operators spatial review of mission revisions and safe direct
-manipulation of non-executing missions without collapsing approval and
-execution into one action.
+The widget gives operators spatial review of Missions and safe direct
+manipulation of non-executing missions.
 
 ## Safety Invariants
 
-These rules are non-negotiable:
+These rules are non-negotiable (originally [ADR 0012](../../../cross-cutting/decisions/0012-map-widget-safety-invariants.md);
+invariant 1 retired by [ADR 0022](../../../cross-cutting/decisions/0022-drop-operator-approval-gate.md)):
 
-1. approval is not execution
-2. the client never mutates an executing mission
-3. the client never silently overwrites authoritative mission state
-4. the widget never invents backend contracts that do not exist
+1. the client never mutates an executing mission
+2. the client never silently overwrites authoritative mission state
+3. the widget never invents backend contracts that do not exist
 
 Implications:
 
-- approval, rejection, and execution remain separate user actions
 - all geometry mutation goes through backend round-trips
 - missing backend features are hidden or disabled explicitly
 
@@ -28,21 +28,23 @@ Implications:
 
 ### Mission Overlay Payload
 
-The widget consumes mission overlays from the backend mission-execution
-surface.
+The widget consumes mission overlays from the backend Mission surface.
 
 The durable payload concepts are:
 
-- `operation_id`
-- `revision_id`
-- `draft_id`
-- `status`
+- `mission_id`
+- `status` — runtime state only (`approved` as the steady-state default,
+  `executing` / `armed` when the controller has the mission; legacy
+  approval-flavored values may still appear on missions touched by the AI
+  planning graph until ADR 0022 follow-up removal lands)
 - `goal`
 - `waypoint_count`
 - overlay `bounds`
 - route-line and waypoint features
 
 The backend overlay builder remains the source of truth for exact field shape.
+There is no separate revision resource; all frontend code keys off
+`mission_id`.
 
 ### Coordinate System
 
@@ -56,29 +58,31 @@ Design rule:
 - any future WGS84 basemap mode must be a distinct widget mode with explicit
   CRS metadata
 
-### Mission Revision List
+### Mission List
 
-Revision rows are grouped client-side by `operation_id`.
+Durable target: one row = one Mission, with the independent **Visible**,
+**Selected**, and **Active** states from ADR 0021.
 
 Design rules:
 
-- one top-level row per operation
-- default visible revision is the operation's active revision, falling back to
-  the newest revision
-- earlier revisions live under a collapsed earlier-revisions affordance
-- executing revisions remain force-visible
+- clicking a row makes that Mission Active and Visible
+- hiding the Active Mission clears Active
+- executing missions remain force-visible
+- AI clone-and-edit produces a second row rather than mutating the source row
 
-### Approval, Rejection, And Execution
+### Execution
 
 The widget uses existing backend transitions rather than inventing new ones.
 
 Design rules:
 
-- approval writes mission approval/export state but does not execute the rover
-- execution is a separate explicit action with controller-version staleness
-  checks
-- rejection is a separate explicit action
-- after any of these actions, the widget refreshes revision and overlay state
+- per [ADR 0022](../../../cross-cutting/decisions/0022-drop-operator-approval-gate.md),
+  Missions carry no operator-facing approval state; every row is immediately
+  playable
+- execution is an explicit action (operator `▶` button in Strict, banner
+  click in Confirm, AI tool call in Autonomous) with controller-version
+  staleness checks
+- after execution, the widget refreshes mission and overlay state
 
 ### Telemetry Source
 
@@ -125,29 +129,88 @@ Design rules:
 
 ## Mission List Rules
 
-Each operation row carries:
+Each Mission row carries:
 
 - visibility control
 - status indication
 - vehicle/profile identity
 - mission name or equivalent label
-- provenance/origin indicator
+- origin indicator
 - action affordances appropriate to the revision state
 
 Behavior rules:
 
-- visible overlays are capped softly to avoid clutter
-- focus applies fit-to-bounds and dims non-focused visible missions
+- visibility is per-row and uncapped (per ADR 0021 § 4, Visible is 0..N); the
+  widget does not silently hide missions to "avoid clutter"
+- focus dims non-focused visible missions
+- fit-to-bounds runs only on the widget's first non-empty load; subsequent
+  visibility toggles, selection changes, focus changes, and in-place edits
+  must not pan or zoom the map. Re-fit is an explicit user action only.
 - numbered waypoint badges remain visible because color alone is insufficient
+- the sidebar header exposes a settings affordance that deep-links to
+  `Settings → Mission Lifecycle` (`/settings?tab=mission-lifecycle`) in a new
+  browser tab, per [ADR 0021 §6](../../../cross-cutting/decisions/0021-mission-lifecycle.md)
+
+## Selection State
+
+Selection is a shared concern between the sidebar and the map. To avoid
+threading callbacks through every layer, selection lives in a pure store
+mirroring the `editState.js` pattern.
+
+Design rules:
+
+- A `selectionState` module holds `{ activeMissionId, selectedMissionIds: Set,
+  anchorMissionId }`. DOM- and Leaflet-free. Subscribable.
+- Both the sidebar and the map read and write through the store; neither
+  component owns the truth.
+- The `anchorMissionId` records the last plain-clicked row for shift-range
+  semantics. It updates on plain click only; shift- and cmd-clicks do not move
+  the anchor.
+- Activating a mission keeps that mission in the selection (active is always
+  ∈ selection). Single-click sets the selection to `{ id }`.
+- The store is intentionally minimal — it does not persist across reloads.
+
+Modifier-key handling is defined once in the row-click handler and reused by
+the map's polyline/waypoint click handler; it is not redefined per surface.
+
+## Map View Controls
+
+The widget owns a small Leaflet control mounted top-right of the map. The
+control hosts an icon row that is data-driven so individual buttons can be
+added, reordered, or removed without restructuring the control.
+
+Current buttons:
+
+- **Fit to scene** — returns the viewport to scene bounds from the existing
+  scene metadata path.
+- **Fit to selection** — fits to the bounding box of
+  `selectionState.selectedMissionIds`; falls back to the active mission when
+  the selection size is ≤ 1. Bound to `f` while focus is inside the widget.
+- **Style switcher** — opens a popover offering terrain, scene image, and
+  plain grid. The choice persists in `localStorage` under a single key.
+
+The widget applies hard clamping at construction:
+
+- `setMaxBounds(sceneBounds)` so panning cannot leave the scene.
+- `minZoom = fitZoom`, where `fitZoom` is the zoom level at which scene
+  bounds fill the viewport. The "Fit to scene" button is the return
+  affordance.
+
+Auto-fit-on-activate is intentionally not implemented; the user invokes fit
+explicitly. This avoids jarring view changes mid-edit.
 
 ## Map Rendering Rules
 
-- proposed revisions render dashed and visually weaker
-- approved revisions render solid and fully emphasized
-- executing revisions render as locked
-- superseded or completed revisions render dimmed
-- fit-to-bounds uses the focused mission when one exists, else the visible-set
-  union
+- non-executing missions render solid
+- executing missions render as locked
+- completed or otherwise-superseded missions render dimmed
+- selected missions render at full opacity; unselected (but visible) missions
+  render dimmed (≈0.6); the active mission carries an additional 1–2 px
+  stroke bump over its selected styling. Selection and active are two
+  channels collapsed into the existing colour + stroke system without new
+  glyphs or halos
+- fit-to-bounds (initial-load only, per Mission List Rules) uses the focused
+  mission when one exists, else the visible-set union
 
 ## Accessibility And Keyboard Ownership
 
@@ -176,12 +239,16 @@ Design rules:
 
 ### Core Rules
 
-- editing is available only for non-executing revisions
-- gesture handlers short-circuit on locked revisions
-- client edits operate against backend-backed revision state with optimistic
+- editing is available only for non-executing missions
+- gesture handlers short-circuit on locked missions
+- client edits operate against backend-backed mission state with optimistic
   concurrency checks
-- starting edits on a locked but non-executing revision may fork a new
-  client-authored revision
+- manual edits mutate the active Mission in place
+- AI edits default to clone-and-edit, producing a new Mission row
+- only `executing` missions are locked; all other statuses are directly
+  editable without a fork prompt. The fork flow (with confirm dialog and
+  source-hiding from `_visibleMissionOrder`) is still triggered when
+  `LOCKED_STATUSES` fires, but that set currently contains only `executing`.
 
 ### Gestures And Keyboard
 
@@ -197,26 +264,73 @@ The widget supports:
 The exact input affordances may evolve, but they must continue to respect the
 locking and concurrency rules above.
 
-### Provenance State Machine
-
-Per-waypoint provenance stays explicit:
-
-- `ai`
-- `user`
-- `ai+edited`
-
-Design rule:
-
-- once a waypoint is `ai+edited`, later AI regeneration must treat it as
-  operator-modified and require explicit confirmation before replacement
-
 ### Hard Lock During Execution
 
-While a revision is executing:
+While a mission is executing (or armed):
 
-- edit, reject, and approve affordances are disabled
+- edit affordances are disabled
 - drag/insert/delete gestures are blocked before state changes
-- the revision remains visibly locked in both the list and map rendering
+- mission-level delete is rejected by the backend with HTTP 409 when the
+  controller has the mission in `executing` or `armed` state; the widget must
+  not present delete as available on such a row
+- the mission remains visibly locked in both the list and map rendering
+
+### Delete And Undo
+
+- Deletes are **soft**: the backend sets `deleted_at` on the row instead of
+  removing it. `MissionRepository.list` filters out soft-deleted rows; `get`
+  hides them by default. `#index` is never reused, per ADR 0021 § 2.
+- `POST /api/ai/missions/{id}/restore` flips `deleted_at` back to `NULL`.
+- The widget surfaces undo via a toast with an "Undo" button after each
+  successful delete; the operator is not interrupted by a confirm dialog.
+- Hard purge of soft-deleted rows is deferred — there is no automatic
+  reaper yet.
+
+## Mission Colour
+
+Each mission has an identity colour stored in the `missions.color` column
+(migration 013) and exposed in every API row response. The colour follows the
+mission across browsers, sessions, and export/import.
+
+Design rules:
+
+- Color is assigned at creation time:
+  `_MISSION_COLOR_PALETTE[mission_id % len(palette)]` in
+  `gcs_server/ai/mission_repository.py`. The palette is a curated 24-colour
+  set biased away from terrain-blending greens; only a small number of greener
+  options remain, and those skew toward brighter teal/lime tones so routes stay
+  readable over the default map.
+- Existing rows with an empty `color` column receive the same deterministic
+  fallback when read.
+- User overrides are persisted via `PATCH /api/ai/missions/{id}/color`. The
+  picker sends this call on commit.
+- `↺ Reset` persists the mission's deterministic palette default back through
+  the same `PATCH` path; it is not a client-only preview clear.
+- `missionColorOverrides` (the prior `localStorage` fallback) is removed. `assignPaletteColor` is removed.
+- The sidebar row consumes the mission colour beyond the 4 px chip: the title
+  plus vehicle/origin identity icons use the same colour token so a committed
+  change is visible in the mission item itself.
+- State-channel indicators (edit-mode stripe, selection dimming, active stroke bump) never reuse the identity colour and are not stored alongside it.
+
+## Mission List Sort, Import, and Export
+
+These are sidebar surfaces, but their implementation lives next to the
+widget:
+
+- Sort options are defined in a single config array consumed by the dropdown
+  and by the underlying comparator factory. Adding, renaming, or reordering
+  options is a one-line change.
+- Sort choice persists in `localStorage` under a single key. The default is
+  Updated date (newest first).
+- Import/export speak JSON only this cycle. Single-object and array inputs
+  are both accepted on import; output mode (active / selection / all visible)
+  drives the shape.
+- Export strips `id`, `status`, `client_version`, timestamps, and audit
+  fields before emit. Import strips any incoming `id` and timestamps, sets
+  `status = planning` (or the lowest writable status), and uses
+  all-or-nothing validation on batches.
+- Import/export entry points share one overflow `⋯` menu in the sidebar
+  header; menu items live in a config array.
 
 ## Vehicle Profile Boundary
 

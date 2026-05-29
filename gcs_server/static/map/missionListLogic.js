@@ -1,38 +1,11 @@
-const SET2 = [
-  '#66c2a5',
-  '#fc8d62',
-  '#8da0cb',
-  '#e78ac3',
-  '#a6d854',
-  '#ffd92f',
-  '#e5c494',
-  '#b3b3b3',
-];
-
-export function groupRevisionsByOperation(rows = []) {
-  const groups = new Map();
-  for (const row of rows) {
-    const operationId = String(row.operation_id || row.id || '');
-    if (!operationId) continue;
-    let group = groups.get(operationId);
-    if (!group) {
-      group = {
-        operationId,
-        operationStatus: String(row.operation_status || ''),
-        activeRevisionId: String(row.active_revision_id || ''),
-        revisions: [],
-        defaultRevisionId: '',
-      };
-      groups.set(operationId, group);
-    }
-    group.revisions.push(row);
-  }
-
-  for (const group of groups.values()) {
-    const newestRevisionId = String(group.revisions[0]?.id || '');
-    group.defaultRevisionId = group.activeRevisionId || newestRevisionId;
-  }
-  return groups;
+export function normalizeMissionRows(rows = []) {
+  return rows
+    .filter((row) => row && row.id !== undefined && row.id !== null)
+    .map((row) => ({
+      ...row,
+      id: String(row.id),
+      status: String(row.status || row.approval_status || 'unknown'),
+    }));
 }
 
 export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
@@ -49,10 +22,3 @@ export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
   return ordered;
 }
 
-export function assignPaletteColor(visibleIds) {
-  const palette = new Map();
-  Array.from(visibleIds || []).forEach((revisionId, index) => {
-    palette.set(revisionId, SET2[index % SET2.length]);
-  });
-  return palette;
-}

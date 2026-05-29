@@ -3,6 +3,12 @@
 Date: 2026-05-26
 Status: Accepted
 
+> **Note (2026-05-28):** [ADR 0022](./0022-drop-operator-approval-gate.md)
+> retires the per-Mission operator approval gate. Execution gating now lives
+> entirely in the mode (Strict / Confirm / Autonomous) plus the
+> executing-mission edit lock; there is no separate per-Mission approval
+> step. ADR 0021's mode framing is unchanged.
+
 ## Context
 
 ADR 0002 made "AI cannot cause rover motion" a *structural* invariant. ADR 0012 made "approval is not execution" a non-negotiable map-widget invariant. Together they hard-coded a single safety stance for every build, every operator, every environment.
@@ -28,7 +34,7 @@ Mode lives in **Settings → Mission Lifecycle**. Defaults: sim build → Autono
 ### 2. Mission is a flat, first-class entity
 
 - **One sidebar row = one Mission.** No parent/child, no draft/revision surfaced in the UI.
-- **Fields:** `#index` (stable integer handle, never reused), `name` (editable, defaults to AI-derived summary or `"Untitled mission"`), `origin` (`manual` | `ai_chat`, mutable), `origin_chat_id` (FK or null), `created_at`, `created_by_user_id`. Internal `client_version` per ADR 0020 still tracks edit concurrency.
+- **Fields:** `#index` (stable integer handle, never reused), `name` (editable, defaults to AI-derived summary or `"Untitled mission"`), `origin` (`manual` | `ai_chat`, mutable), `origin_chat_id` (FK or null), `created_at`, `created_by_user_id`, `color` (hex string, assigned at creation, user-overridable via `PATCH /api/ai/missions/{id}/color`). Internal `client_version` per ADR 0020 still tracks edit concurrency.
 - **Manual and AI-chat creation produce structurally identical Missions.** CRUD applies equally to both.
 - **Persistence scope:** per-user global store. The sidebar shows all of a user's Missions across chats. `origin_chat_id` is captured for future filter UI but not surfaced now.
 

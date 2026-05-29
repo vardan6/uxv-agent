@@ -29,6 +29,13 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
+        "mission_lifecycle": {
+            "execution_mode": "autonomous",
+            "confirm_timeout_s": 10,
+            "auto_overlay_new_missions": True,
+            "steal_map_focus_on_active_chat_mission": True,
+            "default_manual_mission_name": "Untitled mission",
+        },
     },
     "llm_providers": [
         {

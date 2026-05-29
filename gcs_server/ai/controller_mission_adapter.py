@@ -103,6 +103,21 @@ class ControllerMissionAdapter(Protocol):
     ) -> ControllerMissionInstallResult:
         ...
 
+    def cancel_mission(
+        self,
+        *,
+        mode: str = "clear",
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        ...
+
+
+# ADR 0021 § 1 — abort options exposed by adapters that implement cancel_mission.
+# `clear`   — universal: overwrite the controller mission with zero items.
+# `hold`    — MAVLink-only: switch flight mode to HOLD/LOITER (not yet implemented).
+# `disarm`  — MAVLink-only: send disarm command (not yet implemented; air-disarm risk).
+CANCEL_MODES = ("clear", "hold", "disarm")
+
 
 class ControllerMissionAdapterError(RuntimeError):
     pass
@@ -293,6 +308,17 @@ class PymavlinkMissionClient:
         if ack_type != self._mavutil.mavlink.MAV_MISSION_ACCEPTED:
             raise ControllerMissionAdapterError(f"mission upload rejected with MAV_MISSION type={ack_type}")
 
+    def clear_mission_items(self) -> None:
+        self._connection.mav.mission_clear_all_send(
+            self._connection.target_system,
+            self._connection.target_component,
+            0,
+        )
+        ack_msg = self._recv(["MISSION_ACK"])
+        ack_type = int(getattr(ack_msg, "type", self._mavutil.mavlink.MAV_MISSION_ACCEPTED))
+        if ack_type != self._mavutil.mavlink.MAV_MISSION_ACCEPTED:
+            raise ControllerMissionAdapterError(f"mission clear rejected with MAV_MISSION type={ack_type}")
+
 
 class MavlinkControllerMissionAdapter:
     adapter_name = "mavlink_controller"
@@ -422,6 +448,65 @@ class MavlinkControllerMissionAdapter:
                 status="executing",
                 controller_state=state,
                 raw_result={"verified": True},
+            )
+        finally:
+            self._close_client(client)
+
+    def cancel_mission(
+        self,
+        *,
+        mode: str = "clear",
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        normalized = str(mode or "clear").strip().lower()
+        if normalized != "clear":
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="cancel_mode_not_implemented",
+                controller_state=self.get_controller_state(),
+                error=f"cancel mode '{normalized}' is not implemented for {self.adapter_name}",
+                raw_result={"requested_mode": normalized, "implemented_modes": ["clear"]},
+            )
+        client = self._open_client()
+        try:
+            previous_items = client.download_mission_items()
+            observed_version = _controller_version_for_items(previous_items)
+            if expected_controller_version is not None and observed_version != int(expected_controller_version):
+                return ControllerMissionInstallResult(
+                    ok=False,
+                    status="stale_controller_version",
+                    controller_state=self._state_for_items(previous_items),
+                    error="expected controller mission version does not match the live controller state",
+                    raw_result={
+                        "expected_controller_version": int(expected_controller_version),
+                        "observed_controller_version": observed_version,
+                    },
+                )
+            try:
+                client.clear_mission_items()
+                downloaded_after = client.download_mission_items()
+            except Exception as exc:
+                rollback_result = self._rollback_previous(client, previous_items)
+                return ControllerMissionInstallResult(
+                    ok=False,
+                    status=rollback_result["status"],
+                    controller_state=rollback_result["state"],
+                    error=str(exc),
+                    raw_result={"stage": "clear", "rollback": rollback_result["status"]},
+                )
+            if downloaded_after:
+                return ControllerMissionInstallResult(
+                    ok=False,
+                    status="cutover_failed",
+                    controller_state=self._state_for_items(downloaded_after),
+                    error="controller still reports mission items after clear",
+                    raw_result={"stage": "verify"},
+                )
+            return ControllerMissionInstallResult(
+                ok=True,
+                status="cancelled",
+                controller_state=self._state_for_items([]),
+                raw_result={"verified": True, "mode": normalized},
             )
         finally:
             self._close_client(client)
@@ -586,6 +671,62 @@ class JsonFileControllerMissionAdapter:
             controller_state=rollback_state,
             error="controller mission read-back verification failed",
             raw_result={"verified": False},
+        )
+
+    def cancel_mission(
+        self,
+        *,
+        mode: str = "clear",
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        normalized = str(mode or "clear").strip().lower()
+        if normalized not in ("clear",):
+            current_state = self.get_controller_state()
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="cancel_mode_not_implemented",
+                controller_state=current_state,
+                error=f"cancel mode '{normalized}' is not implemented for {self.adapter_name}",
+                raw_result={"requested_mode": normalized, "implemented_modes": ["clear"]},
+            )
+        current_record = self._load_record()
+        current_state = self._state_from_record(current_record)
+        if expected_controller_version is not None and current_state.controller_version != int(expected_controller_version):
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="stale_controller_version",
+                controller_state=current_state,
+                error="expected controller mission version does not match the live controller state",
+                raw_result={
+                    "expected_controller_version": int(expected_controller_version),
+                    "observed_controller_version": current_state.controller_version,
+                },
+            )
+        next_record = {
+            "controller_version": int(current_state.controller_version or 0) + 1,
+            "status": "cancelled",
+            "verified_snapshot": {},
+            "updated_at": time.time(),
+            "operation_id": "",
+            "revision_id": "",
+            "draft_id": "",
+        }
+        try:
+            self._write_record(next_record)
+            verified_state = self.get_controller_state()
+        except Exception as exc:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="cutover_failed",
+                controller_state=current_state,
+                error=str(exc),
+                raw_result={"stage": "cancel"},
+            )
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="cancelled",
+            controller_state=verified_state,
+            raw_result={"verified": True, "mode": normalized},
         )
 
     def _load_record(self) -> dict[str, Any]:

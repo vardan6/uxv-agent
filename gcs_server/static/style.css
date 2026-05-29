@@ -3218,143 +3218,18 @@ code {
   color: var(--text);
 }
 
-/* Planning-shell approval card */
-.ai-approval-card {
-  margin: 12px 0 4px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-}
-
-.ai-approval-title {
-  margin-bottom: 10px;
-  color: var(--accent);
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.ai-approval-row {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 6px;
-  align-items: baseline;
-  margin-bottom: 6px;
-  font-size: 0.82rem;
-}
-
-.ai-approval-label {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.ai-approval-value {
-  color: var(--text);
-  word-break: break-word;
-}
-
-.ai-approval-risks {
-  margin: 0;
-  padding: 0 0 0 1.1em;
-  list-style: disc;
-  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
-  font-size: 0.82rem;
-}
-
-.ai-approval-note-row {
-  margin: 10px 0 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.ai-approval-note-label {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.ai-approval-note-input {
-  padding: 5px 8px;
-  font-size: 0.82rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text);
-  outline: none;
-}
-
-.ai-approval-note-input:focus {
-  border-color: var(--accent);
-}
-
-.ai-approval-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.ai-approval-btn {
-  padding: 5px 14px;
-  font-size: 0.82rem;
-  font-weight: 600;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.ai-approval-approve {
-  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-}
-
-.ai-approval-approve:hover {
-  background: color-mix(in srgb, var(--accent) 25%, var(--bg));
-}
-
-.ai-approval-reject {
-  background: color-mix(in srgb, var(--danger, #d97706) 10%, var(--bg));
-  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
-  border-color: color-mix(in srgb, var(--danger, #d97706) 30%, var(--line));
-}
-
-.ai-approval-reject:hover {
-  background: color-mix(in srgb, var(--danger, #d97706) 20%, var(--bg));
-}
-
-/* Clarification card variant */
-.ai-clarification-card {
-  border-color: color-mix(in srgb, var(--warn, #d97706) 40%, var(--line));
-  background: color-mix(in srgb, var(--warn, #d97706) 4%, var(--bg));
-}
-
-.ai-clarification-card .ai-approval-title {
-  color: color-mix(in srgb, var(--warn, #d97706) 90%, var(--text));
-}
-
-.ai-clarification-questions {
-  color: var(--text);
-}
-
-.ai-clarification-input {
-  resize: vertical;
-  min-height: 2.5rem;
-}
-
 /* ── Map widget ──────────────────────────────────────────────────── */
 
 .ai-map-area {
   display: block;
-  height: 440px;
   margin-top: 12px;
-  border-radius: 14px;
-  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
   padding: 0;
+  background: transparent;
 }
 
 .ai-map-area-list-placeholder {
@@ -3370,26 +3245,183 @@ code {
 }
 
 .map-widget-shell {
+  --map-sidebar-w: 340px;
+  --map-shell-h: 540px;
+  --map-card-radius: 14px;
+  --map-card-shadow: var(--shadow);
+  --map-card-shadow-hover: var(--shadow);
   display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 0;
+  grid-template-columns: minmax(240px, var(--map-sidebar-w)) 10px minmax(0, 1fr);
+  grid-template-rows: minmax(320px, var(--map-shell-h)) 10px;
+  grid-template-areas:
+    "sidebar splitter mapwrap"
+    "footer  footer   footer";
+  gap: 4px;
   flex: 1;
   min-height: 0;
+}
+
+.map-widget-shell.is-resizing,
+.map-widget-shell.is-height-resizing {
+  user-select: none;
+}
+
+.map-widget-list { grid-area: sidebar; }
+.map-widget-wrap { grid-area: mapwrap; }
+
+.map-widget-layout-resizer {
+  grid-area: splitter;
+  align-self: stretch;
+  width: 10px;
+  min-width: 10px;
+  min-height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 5px,
+      color-mix(in srgb, var(--line) 76%, transparent) 5px,
+      color-mix(in srgb, var(--line) 76%, transparent) 7px,
+      transparent 7px
+    );
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.map-widget-height-resizer {
+  grid-area: footer;
+  width: 100%;
+  height: 10px;
+  min-height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 6px,
+      transparent 6px
+    );
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.map-widget-layout-resizer:hover,
+.map-widget-layout-resizer:focus-visible,
+.map-widget-shell.is-resizing .map-widget-layout-resizer {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 4px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 4px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 8px,
+      transparent 8px
+    );
+}
+
+.map-widget-height-resizer:hover,
+.map-widget-height-resizer:focus-visible,
+.map-widget-shell.is-height-resizing .map-widget-height-resizer {
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 7px,
+      transparent 7px
+    );
+}
+
+@media (max-width: 1100px) {
+  .map-widget-layout-resizer,
+  .map-widget-height-resizer { display: none; }
+  .map-widget-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 1fr);
+    grid-template-areas:
+      "sidebar"
+      "mapwrap";
+  }
 }
 
 .map-widget-list {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
-  background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
-  border-right: 1px solid var(--line);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--map-card-radius);
+  background: var(--panel-strong);
+  box-shadow: var(--map-card-shadow);
 }
 
 .mission-list-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(16px, 1.7vw, 24px);
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+.mission-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.mission-list-header-title {
+  margin: 8px 0 0;
+  color: var(--text);
+  font-size: clamp(1.45rem, 2vw, 1.9rem);
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.mission-list-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.mission-list-settings-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--button-secondary-gradient);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-base) 30%, transparent);
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.mission-list-settings-link:hover,
+.mission-list-settings-link:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
 }
 
 .mission-list-empty {
@@ -3402,6 +3434,7 @@ code {
   padding: 20px 16px;
   border: 1px dashed var(--line);
   border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 52%, transparent);
   color: var(--muted);
   text-align: center;
   font-size: 0.85rem;
@@ -3461,57 +3494,89 @@ code {
 .mission-list-row {
   position: relative;
   display: grid;
-  grid-template-columns: 4px 1fr auto;
-  min-height: 58px;
-  border: 1px solid var(--line);
+  grid-template-columns: 4px auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  min-height: 74px;
+  --mission-accent: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 12px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  background: var(--button-secondary-gradient);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
 }
 
 .mission-row-status {
   grid-column: 1;
-  background: #b8c1c5;
+  grid-row: 1 / -1;
+  background: #b8c1c5; /* fallback; overridden via inline style with mission color */
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: filter 0.12s;
 }
 
-.mission-list-row.is-proposed .mission-row-status {
-  background: #8da0cb;
+.mission-row-status:hover {
+  filter: brightness(1.15);
 }
 
-.mission-list-row.is-approved .mission-row-status {
-  background: #2ea043;
-}
-
-.mission-list-row.is-executing .mission-row-status {
-  background: #c72e0f;
-}
-
-.mission-list-row.is-completed .mission-row-status,
-.mission-list-row.is-superseded .mission-row-status {
-  background: #8b949e;
+.mission-row-status:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .mission-row-focus {
-  grid-column: 2;
+  grid-column: 3;
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 9px 10px 3px;
   border: 0;
   background: transparent;
   text-align: left;
   cursor: pointer;
 }
 
-.mission-list-row.is-focused {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel));
+/* Selected = filled background tint (multi-selection). */
+.mission-list-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-base));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
-.mission-list-row.is-earlier {
-  margin-left: 12px;
+/* Active = the focused mission whose polyline is bright on the map.
+   Stronger accent border + slight inner glow, regardless of selection. */
+.mission-list-row.is-focused {
+  border-color: var(--accent);
+  border-width: 2px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+              0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+
+/* Selected + active stacks: keep both signals. */
+.mission-list-row.is-selected.is-focused {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-base));
+}
+
+/* Editing = amber left-edge stripe (D2 edit-mode indicator).
+   Inset shadow paints over the 4px mission-color stripe; channel is
+   intentionally separate from selection / active / mission-color. */
+.mission-list-row.is-editing {
+  box-shadow: inset 4px 0 0 0 var(--warn),
+              0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+.mission-list-row.is-editing.is-focused {
+  box-shadow: inset 4px 0 0 0 var(--warn),
+              0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+              0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+
+.mission-list-row:hover,
+.mission-list-row:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  box-shadow: var(--map-card-shadow-hover);
+  transform: translateY(-1px);
 }
 
 .mission-row-color-dot {
@@ -3525,6 +3590,7 @@ code {
 .mission-row-vehicle,
 .mission-row-origin {
   font-size: 0.95rem;
+  color: var(--mission-accent);
 }
 
 .mission-row-main {
@@ -3541,37 +3607,79 @@ code {
 }
 
 .mission-row-title {
-  font-weight: 600;
-  font-size: 0.9rem;
+  font-weight: 700;
+  font-size: 1.02rem;
+  line-height: 1.2;
+  color: var(--mission-accent);
 }
 
 .mission-row-meta {
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
 }
 
 .mission-row-actions {
   grid-column: 3;
+  grid-row: 2;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px 10px 6px;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 10px 8px;
+  overflow: hidden;
 }
 
 .mission-row-visibility-text {
-  color: var(--muted);
-  font-size: 0.72rem;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mission-row-select {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px 0 6px;
+  cursor: pointer;
+}
+
+.mission-row-select input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.mission-row-select-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 
 .mission-row-eye {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  min-width: 34px;
-  min-height: 34px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .map-widget-error-banner {
@@ -3609,11 +3717,17 @@ code {
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--map-card-radius);
+  background: var(--panel-strong);
+  box-shadow: var(--map-card-shadow);
 }
 
 .map-widget-map {
   width: 100%;
   height: 100%;
+  border-radius: inherit;
 }
 
 .map-widget-empty {
@@ -3623,7 +3737,7 @@ code {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   text-align: center;
   color: var(--muted);
   font-size: 0.9rem;
@@ -3662,40 +3776,168 @@ code {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+/* Floating top-right view controls (fit/style) */
+.map-view-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+.map-view-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.map-view-tool-btn:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.map-view-style-select {
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+/* Per-mission colour popover */
+.mission-color-picker {
+  position: absolute;
+  z-index: 700;
+  width: 200px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mission-color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.mission-color-swatch {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.12s;
+}
+
+.mission-color-swatch:hover,
+.mission-color-swatch:focus-visible {
+  transform: scale(1.1);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.mission-color-swatch.is-current {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--panel);
+}
+
+.mission-color-picker-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.mission-color-picker-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mission-color-picker-custom input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mission-color-reset {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.mission-color-reset:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.map-widget-map.is-plain-grid {
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
+    var(--panel-strong);
+}
+
 /* Mission row action buttons */
 .mission-row-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
   min-width: 28px;
+  height: 28px;
   min-height: 28px;
-  padding: 0 6px;
+  padding: 0;
   border-radius: 6px;
   border: 1px solid var(--line);
   background: transparent;
-  font-size: 0.78rem;
+  font-size: 14px;
+  line-height: 1;
   font-weight: 600;
   cursor: pointer;
   color: inherit;
   transition: background 0.12s, border-color 0.12s;
-}
-
-.mission-row-action-btn.is-approve {
-  color: #2ea043;
-  border-color: color-mix(in srgb, #2ea043 40%, transparent);
-}
-
-.mission-row-action-btn.is-approve:hover {
-  background: color-mix(in srgb, #2ea043 14%, transparent);
-}
-
-.mission-row-action-btn.is-reject {
-  color: #c72e0f;
-  border-color: color-mix(in srgb, #c72e0f 40%, transparent);
-}
-
-.mission-row-action-btn.is-reject:hover {
-  background: color-mix(in srgb, #c72e0f 14%, transparent);
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .mission-row-action-btn.is-execute {
@@ -3705,6 +3947,124 @@ code {
 
 .mission-row-action-btn.is-execute:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.mission-row-action-btn.is-delete {
+  color: #c72e0f;
+  border-color: color-mix(in srgb, #c72e0f 40%, transparent);
+  opacity: 0.85;
+}
+
+.mission-row-action-btn.is-delete:hover {
+  background: color-mix(in srgb, #c72e0f 14%, transparent);
+  opacity: 1;
+}
+
+.mission-list-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--button-secondary-gradient);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-base) 30%, transparent);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.mission-list-new-btn:hover,
+.mission-list-new-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
+}
+
+.mission-list-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--button-secondary-gradient);
+  font-size: 1.05rem;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+.mission-list-overflow-btn:hover,
+.mission-list-overflow-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
+}
+
+.mission-list-overflow-menu {
+  position: absolute;
+  z-index: 580;
+  width: 260px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+  font-size: 0.85rem;
+  color: inherit;
+}
+.mission-overflow-group + .mission-overflow-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.mission-overflow-group-label {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.mission-overflow-sort-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+}
+.mission-overflow-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.mission-overflow-sort-row input { margin: 0; }
+.mission-overflow-io-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mission-overflow-action {
+  flex: 1 1 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--button-secondary-gradient);
+  font-size: 0.8rem;
+  color: inherit;
+  cursor: pointer;
+}
+.mission-overflow-action:hover,
+.mission-overflow-action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
 }
 
 .mission-row-lock {
@@ -4333,8 +4693,12 @@ code {
   }
 
   .ai-chat-shell {
+    grid-template-rows: auto minmax(420px, var(--ai-shell-height));
+    grid-template-areas:
+      "sidebar"
+      "chat";
     gap: 16px;
-    grid-template-rows: auto;
+    align-items: stretch;
   }
 
   .dashboard-grid {
@@ -4426,7 +4790,7 @@ code {
 
   .ai-sidebar,
   .ai-chat-panel {
-    min-height: auto;
+    min-height: 0;
   }
 
   .ai-layout-resizer,
@@ -4436,6 +4800,10 @@ code {
 
   .ai-session-list {
     max-height: 320px;
+  }
+
+  .ai-chat-panel {
+    height: min(var(--ai-shell-height), 78vh);
   }
 }
 
@@ -4700,6 +5068,17 @@ code {
   background: color-mix(in srgb, var(--muted) 12%, transparent);
 }
 
+.mission-row-edit-icon {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
+}
+
 /* Selection panel (floating waypoint inspector) */
 .map-selection-panel-wrap {
   position: absolute;
@@ -4923,6 +5302,29 @@ code {
 
 .map-hint-toast[hidden] { display: none; }
 
+.map-hint-toast.has-action {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.map-hint-toast-action {
+  background: transparent;
+  border: 1px solid var(--accent, currentColor);
+  border-radius: 6px;
+  color: var(--accent, currentColor);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 10px;
+}
+
+.map-hint-toast-action:hover {
+  background: color-mix(in srgb, var(--accent, currentColor) 18%, transparent);
+}
+
 /* ── Elevation Profile Panel ─────────────────────────────────────── */
 .map-elevation-panel {
   background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
@@ -5117,3 +5519,75 @@ code {
 }
 
 .map-bulk-clear:hover { color: var(--text); }
+
+/* ── Mission bulk action bar (sidebar, selection ≥ 2) ─────────────────────── */
+.mission-bulk-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
+  backdrop-filter: blur(4px);
+  border-top: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
+.mission-bulk-bar[hidden] { display: none; }
+
+.mission-bulk-count {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.mission-bulk-sep {
+  color: var(--line);
+  user-select: none;
+}
+
+.mission-bulk-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.mission-bulk-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.mission-bulk-btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.mission-bulk-btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.mission-bulk-clear {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0 2px;
+  line-height: 1;
+  margin-left: auto;
+}
+
+.mission-bulk-clear:hover { color: var(--text); }

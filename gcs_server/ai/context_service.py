@@ -436,21 +436,67 @@ class AIContextService:
         )
 
     def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
-        mission_execution = getattr(self._runtime, "mission_execution_service", None)
-        if mission_execution is not None:
-            try:
-                return mission_execution.get_current_mission_state(session_id=session_id)
-            except Exception as exc:
-                return {
-                    "active": False,
-                    "status": "mission_state_unavailable",
-                    "summary": f"Mission state is temporarily unavailable: {exc}",
-                }
-        return {
+        """Latest Mission for this chat session (ADR 0021 §2 flat model).
+
+        Returns the most recently created Mission with `origin_chat_id == session_id`,
+        plus a derived summary. Controller state is folded in when available so
+        callers (planner context, sidebar) can see if the active controller
+        version reflects this mission.
+        """
+        repository = getattr(self._runtime, "mission_repository", None)
+        empty = {
             "active": False,
             "status": "no_active_mission",
-            "summary": "No backend-owned mission proposal is stored yet.",
+            "summary": "No mission exists for this chat session yet.",
         }
+        clean_session_id = str(session_id or "").strip()
+        if repository is None or not clean_session_id:
+            return empty
+        try:
+            missions = repository.list(origin_chat_id=clean_session_id, limit=1)
+        except Exception as exc:
+            return {
+                "active": False,
+                "status": "mission_state_unavailable",
+                "summary": f"Mission state is temporarily unavailable: {exc}",
+            }
+        if not missions:
+            return empty
+        return _mission_to_state(missions[0], self._controller_state_or_empty())
+
+    def get_current_mission_overlay(self, *, session_id: str = "") -> dict[str, Any]:
+        """Map-overlay payload for the latest Mission in this chat session."""
+        from .mission_overlay import build_mission_overlay, empty_mission_overlay
+
+        repository = getattr(self._runtime, "mission_repository", None)
+        clean_session_id = str(session_id or "").strip()
+        if repository is None or not clean_session_id:
+            return empty_mission_overlay()
+        try:
+            missions = repository.list(origin_chat_id=clean_session_id, limit=1)
+        except Exception as exc:
+            overlay = empty_mission_overlay()
+            overlay["summary"] = f"Mission overlay unavailable: {exc}"
+            return overlay
+        if not missions:
+            return empty_mission_overlay()
+        mission = missions[0]
+        overlay = build_mission_overlay(mission.id, mission.mission_json)
+        waypoint_count = int(overlay.get("waypoint_count") or 0)
+        plural = "" if waypoint_count == 1 else "s"
+        overlay["summary"] = (
+            f"Mission overlay for mission #{mission.id} with {waypoint_count} waypoint{plural}."
+        )
+        return overlay
+
+    def _controller_state_or_empty(self) -> dict[str, Any]:
+        mission_execution = getattr(self._runtime, "mission_execution_service", None)
+        if mission_execution is None:
+            return {}
+        try:
+            return mission_execution.get_controller_state()
+        except Exception:
+            return {}
 
     def get_recent_ai_chat_history(
         self,
@@ -534,6 +580,50 @@ def _pick(source: dict[str, Any], keys: list[str]) -> dict[str, Any]:
 
 def _safe_mapping(source: Any) -> dict[str, Any]:
     return dict(source) if isinstance(source, dict) else {}
+
+
+def _mission_to_state(mission: Any, controller_state: dict[str, Any]) -> dict[str, Any]:
+    from .mission_overlay import collect_waypoints
+
+    mission_json = mission.mission_json if isinstance(mission.mission_json, dict) else {}
+    waypoints = collect_waypoints(mission_json)
+    goal = str(mission_json.get("goal") or "").strip()
+    waypoint_count = len(waypoints)
+    name = str(mission.name or "").strip()
+
+    summary_parts = [f"Mission #{mission.id}"]
+    if name:
+        summary_parts.append(f"\"{name}\"")
+    if goal:
+        summary_parts.append(f"— {goal}")
+    summary = " ".join(summary_parts) + "."
+    if waypoint_count:
+        plural = "" if waypoint_count == 1 else "s"
+        summary = f"{summary} {waypoint_count} waypoint{plural}."
+
+    controller_status = str(controller_state.get("status") or "")
+    controller_version = int(controller_state.get("controller_version") or 0)
+    if controller_status:
+        summary = f"{summary} Controller status: {controller_status}."
+    if controller_version:
+        summary = f"{summary} Controller mission version: {controller_version}."
+
+    return {
+        "active": True,
+        "summary": summary,
+        "mission_id": mission.id,
+        "session_id": str(mission.origin_chat_id or ""),
+        "name": name,
+        "origin": str(mission.origin or ""),
+        "client_version": int(mission.client_version or 0),
+        "goal": goal,
+        "mission": mission_json,
+        "waypoint_count": waypoint_count,
+        "created_at": float(mission.created_at or 0.0),
+        "controller_state": controller_state,
+        "controller_status": controller_status,
+        "controller_version": controller_version,
+    }
 
 
 def _resolve_chat_provider(

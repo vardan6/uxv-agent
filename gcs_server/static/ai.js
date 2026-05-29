@@ -283,8 +283,6 @@ function liveStateFor(sessionId) {
       pendingUserMessageId: '',
       pendingAssistantMessageId: '',
       abortController: null,
-      // Phase 2: planning-shell interrupt/resume state
-      pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
       planningShellThreadId: '',
       scrollTop: 0,
       pinnedToBottom: true,
@@ -1480,31 +1478,9 @@ function handlePlanningShellStreamEvent(sessionId, eventData) {
       eventData.retrieved_sources || [],
       eventData.retrieval_citations || [],
     );
-  } else if (eventData.type === 'mission_draft_created') {
-    setAiStatus(`Draft created (${eventData.draft_id || '?'}). Awaiting approval.`);
-  } else if (eventData.type === 'mission_draft_decision') {
-    const status = eventData.approval_status || '';
-    setAiStatus(`Draft ${status}.`, status === 'approved' ? 'ok' : 'warn');
-  } else if (eventData.type === 'graph_interrupt') {
-    live.pendingInterrupt = {
-      threadId: eventData.thread_id || live.planningShellThreadId || '',
-      approvalPayload: eventData.interrupt_value || {},
-    };
-    // Remove the spinner pending message — graph is paused, not running
-    live.messages = live.messages.filter((m) => m.id !== live.pendingAssistantMessageId);
-    live.pendingAssistantMessageId = '';
-    const interruptType = (eventData.interrupt_value || {}).type || '';
-    setAiStatus(
-      interruptType === 'clarification_request'
-        ? 'Clarification needed before planning can continue.'
-        : 'Mission draft awaiting your approval.',
-      'warn',
-    );
-    if (aiState.activeSession?.id === sessionId) renderMessages();
   } else if (eventData.type === 'graph_run_error') {
     throw new Error(String(eventData.error || 'Planning shell error'));
   } else if (eventData.type === 'graph_run_end') {
-    live.pendingInterrupt = null;
     setAiStatus('Planning shell complete.', 'ok');
   }
   if (aiState.activeSession?.id === sessionId) renderMessages();
@@ -1524,116 +1500,6 @@ async function sendPlanningShellRequest(sessionId, content, abortController) {
     throw new Error(detail || `${response.status}`);
   }
   await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
-}
-
-async function resumePlanningShellApproval(sessionId, threadId, decision, note) {
-  const live = liveStateFor(sessionId);
-  live.pendingInterrupt = null;
-  live.sending = true;
-  const abortController = new AbortController();
-  live.abortController = abortController;
-  renderMessages();
-  setAiStatus(`Submitting ${decision}...`);
-  try {
-    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/planning-shell/thread/${encodeURIComponent(threadId)}/resume`;
-    const response = await fetch(url, withAiTimezone({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, note: note || '' }),
-      signal: abortController.signal,
-    }));
-    if (!response.ok) {
-      let detail = await response.text();
-      try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
-      throw new Error(detail || `${response.status}`);
-    }
-    await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
-    await refreshSessionLive(sessionId);
-    await loadSessions();
-    setAiStatus('Ready.', 'ok');
-  } catch (error) {
-    const isAbort = error?.name === 'AbortError';
-    setAiStatus(isAbort ? 'Interrupted.' : (error.message || 'Approval failed.'), isAbort ? 'warn' : 'danger');
-  } finally {
-    clearSessionLiveState(sessionId);
-    renderMessages();
-  }
-}
-
-function renderPlanningShellApprovalCard(sessionId, interrupt) {
-  const payload = interrupt.approvalPayload || {};
-  if (payload.type === 'clarification_request') {
-    return renderClarificationCard(sessionId, interrupt);
-  }
-  const threadId = interrupt.threadId || '';
-  const safeThreadId = escapeHtml(threadId);
-  const goal = escapeHtml(String(payload.goal || payload.summary || ''));
-  const draftId = escapeHtml(String(payload.draft_id || ''));
-  const revisionId = escapeHtml(String(payload.mission_revision_id || ''));
-  const risks = Array.isArray(payload.risks) ? payload.risks : [];
-  const routeSummary = payload.route_summary && typeof payload.route_summary === 'object' ? payload.route_summary : {};
-  const waypointCount = Number(routeSummary.waypoint_count || 0);
-  const distanceM = Number(routeSummary.total_distance_m || 0);
-  const routeLabel = waypointCount > 0
-    ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}${distanceM > 0 ? ` · ${distanceM.toFixed(1)} m` : ''}`
-    : '';
-  const riskItems = risks.length
-    ? `<ul class="ai-approval-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
-    : '';
-  return `
-    <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
-      <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
-      ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
-      ${revisionId ? `<div class="ai-approval-row"><span class="ai-approval-label">Revision ID</span><span class="ai-approval-value">${revisionId}</span></div>` : ''}
-      ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
-      ${routeLabel ? `<div class="ai-approval-row"><span class="ai-approval-label">Route</span><span class="ai-approval-value">${escapeHtml(routeLabel)}</span></div>` : ''}
-      ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
-      <div class="ai-approval-note-row">
-        <label class="ai-approval-note-label" for="ai-approval-note-input">Note (optional)</label>
-        <input type="text" id="ai-approval-note-input" class="ai-approval-note-input" placeholder="Reason for approval or rejection…" />
-      </div>
-      <div class="ai-approval-actions">
-        <button class="ai-approval-btn ai-approval-approve" type="button"
-          data-approval-action="approve"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Approve</button>
-        <button class="ai-approval-btn ai-approval-reject" type="button"
-          data-approval-action="reject"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Reject</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderClarificationCard(sessionId, interrupt) {
-  const payload = interrupt.approvalPayload || {};
-  const threadId = interrupt.threadId || '';
-  const safeThreadId = escapeHtml(threadId);
-  const questions = Array.isArray(payload.questions) ? payload.questions : [];
-  const intentSummary = escapeHtml(String(payload.intent_summary || ''));
-  const questionItems = questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('');
-  return `
-    <div class="ai-approval-card ai-clarification-card" role="region" aria-label="Clarification needed">
-      <div class="ai-approval-title">Clarification Needed</div>
-      ${intentSummary ? `<div class="ai-approval-row"><span class="ai-approval-label">Request</span><span class="ai-approval-value">${intentSummary}</span></div>` : ''}
-      ${questionItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Missing</span><ul class="ai-approval-risks ai-clarification-questions">${questionItems}</ul></div>` : ''}
-      <div class="ai-approval-note-row">
-        <label class="ai-approval-note-label" for="ai-clarification-input">Your answer</label>
-        <textarea id="ai-clarification-input" class="ai-approval-note-input ai-clarification-input" rows="2" placeholder="Provide the missing information…"></textarea>
-      </div>
-      <div class="ai-approval-actions">
-        <button class="ai-approval-btn ai-approval-approve" type="button"
-          data-clarification-action="continue"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Continue</button>
-        <button class="ai-approval-btn ai-approval-reject" type="button"
-          data-clarification-action="cancel"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Cancel</button>
-      </div>
-    </div>
-  `;
 }
 
 function formatAiTime(value) {
@@ -2257,9 +2123,6 @@ function renderMessages(options = {}) {
     aiEls.messageList.innerHTML = `<div class="ai-empty-state">${viewingArchived ? 'Archived chat has no messages.' : 'Start a new conversation.'}</div>`;
     return;
   }
-  const pendingInterrupt = activeLive?.pendingInterrupt || null;
-  const sessionIdForApproval = aiState.activeSession?.id || '';
-
   aiEls.messageList.innerHTML = messages.map((message) => {
     const isPendingAssistant = message.role === 'assistant'
       && message.id === pendingAssistantId
@@ -2335,7 +2198,7 @@ function renderMessages(options = {}) {
         : ''}
     </article>
   `;
-  }).join('') + (pendingInterrupt ? renderPlanningShellApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
+  }).join('');
   postRenderMessages();
   if (shouldStickToBottom) {
     aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
@@ -3151,13 +3014,9 @@ async function sendMessage(event) {
         sessionId,
       );
     }
-    // Refresh from server and update live state (works even if user switched away).
-    // Skip refresh if the planning shell is suspended at interrupt.
-    if (!liveStateFor(sessionId).pendingInterrupt) {
-      await refreshSessionLive(sessionId);
-      await loadSessions();
-    }
-    if (aiState.activeSession?.id === sessionId && !liveStateFor(sessionId).pendingInterrupt) {
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    if (aiState.activeSession?.id === sessionId) {
       setAiStatus('Ready.', 'ok');
     }
   } catch (error) {
@@ -3217,12 +3076,9 @@ async function resendMessage(messageId) {
         sessionId,
       );
     }
-    // Planning-shell sessions can pause at interrupt() waiting for operator input.
-    if (!liveStateFor(sessionId).pendingInterrupt) {
-      await refreshSessionLive(sessionId);
-      await loadSessions();
-      if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
-    }
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const messageText = isAbort ? 'Response interrupted.' : error.message;
@@ -3627,36 +3483,6 @@ function bindAi() {
   }, true);
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
-    // Planning-shell clarification card buttons
-    const clarificationBtn = event.target.closest('[data-clarification-action]');
-    if (clarificationBtn) {
-      const action = clarificationBtn.dataset.clarificationAction;
-      const threadId = clarificationBtn.dataset.threadId || '';
-      const sid = clarificationBtn.dataset.sessionId || '';
-      const answerInput = document.getElementById('ai-clarification-input');
-      const answer = answerInput ? answerInput.value.trim() : '';
-      if (sid && threadId) {
-        resumePlanningShellApproval(sid, threadId, action, answer)
-          .catch((err) => setAiStatus(err.message || 'Clarification failed.', 'danger'));
-      }
-      return;
-    }
-
-    // Planning-shell approval card buttons
-    const approvalBtn = event.target.closest('[data-approval-action]');
-    if (approvalBtn) {
-      const decision = approvalBtn.dataset.approvalAction;
-      const threadId = approvalBtn.dataset.threadId || '';
-      const sid = approvalBtn.dataset.sessionId || '';
-      const noteInput = document.getElementById('ai-approval-note-input');
-      const note = noteInput ? noteInput.value.trim() : '';
-      if (sid && threadId && (decision === 'approve' || decision === 'reject')) {
-        resumePlanningShellApproval(sid, threadId, decision, note)
-          .catch((err) => setAiStatus(err.message || 'Approval failed.', 'danger'));
-      }
-      return;
-    }
-
     const action = event.target.closest('[data-message-action]');
     if (!action) return;
     if (action.dataset.messageAction === 'toggle-speech') {
