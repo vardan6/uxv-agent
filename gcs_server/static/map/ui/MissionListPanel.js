@@ -102,7 +102,10 @@ function renderRow(missionRow, ctx) {
   const profileId = String(missionRow?.mission?.vehicle_profile_id || activeProfileId || 'rover_default');
   const profileIcon = vehicleIcon(profileId, profilesById, activeProfileId);
   return `
-    <div class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}">
+    <div
+      class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}"
+      data-row-mission-id="${missionId}"
+    >
       <span class="mission-row-status" aria-hidden="true" style="background:${color}"></span>
       <label class="mission-row-select" title="${isSelected ? 'Deselect mission' : 'Select mission'}">
         <input
@@ -146,7 +149,7 @@ function renderRow(missionRow, ctx) {
 export class MissionListPanel {
   constructor(container, opts = {}) {
     this._container = container;
-    this._onActivateRequested = opts.onActivateRequested || (() => {});
+    this._onRowClicked = opts.onRowClicked || (() => {});
     this._onVisibilityToggled = opts.onVisibilityToggled || (() => {});
     this._onSelectionToggled = opts.onSelectionToggled || (() => {});
     this._onExecuteRequested = opts.onExecuteRequested || (() => {});
@@ -212,10 +215,25 @@ export class MissionListPanel {
   }
 
   _bind() {
-    this._container.querySelectorAll('[data-activate-mission-id]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        this._onActivateRequested(button.dataset.activateMissionId || '', { shiftKey: !!event.shiftKey });
+    // Full-row click → onRowClicked. The activate button still exists as the
+    // keyboard tab-stop; its synthetic click bubbles through the row handler.
+    // Truly-internal controls (checkbox, eye, execute, edit, delete, label)
+    // stopPropagation below so the row handler does not fire for them.
+    this._container.querySelectorAll('[data-row-mission-id]').forEach((row) => {
+      row.addEventListener('click', (event) => {
+        if (event.shiftKey) event.preventDefault(); // suppress text selection
+        this._onRowClicked(row.dataset.rowMissionId || '', {
+          shiftKey: !!event.shiftKey,
+          metaKey: !!event.metaKey,
+          ctrlKey: !!event.ctrlKey,
+        });
       });
+    });
+    // The .mission-row-select label wraps the checkbox; clicking the label text
+    // re-fires a click on the input. Without stopPropagation here, the label
+    // click also bubbles to the row and double-fires selection logic.
+    this._container.querySelectorAll('.mission-row-select').forEach((label) => {
+      label.addEventListener('click', (event) => event.stopPropagation());
     });
     this._container.querySelectorAll('[data-toggle-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {

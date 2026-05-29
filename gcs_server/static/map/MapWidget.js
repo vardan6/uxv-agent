@@ -118,6 +118,8 @@ export class MapWidget {
     this._visibleMissionOrder = [];
     this._selectedMissionIds = new Set();
     this._activeMissionId = '';
+    // Last plain- or cmd-clicked mission id; anchors shift-click ranges.
+    this._selectionAnchorId = '';
     this._activeProfileId = 'rover_default';
     this._profilesById = {};
     this._controllerVersion = null;
@@ -127,6 +129,11 @@ export class MapWidget {
     this._confirmResolve = null;
     this._actionBusy = false;
     this._paletteByMissionId = new Map();
+    // When editing forks a locked mission, hide the source from the map for
+    // the duration of the edit so the operator doesn't see a "ghost" copy
+    // alongside the editable fork. Restored on every edit exit by the
+    // editState subscriber.
+    this._editForkSource = null; // { missionId, index } | null
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -173,7 +180,7 @@ export class MapWidget {
     });
 
     this._listPanel = new MissionListPanel(this._listEl, {
-      onActivateRequested: (missionId, opts) => this._handleMissionActivated(missionId, opts),
+      onRowClicked: (missionId, modifiers) => this._handleRowClicked(missionId, modifiers),
       onVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
       onSelectionToggled: (missionId, opts) => this._toggleMissionSelection(missionId, opts),
       onExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
@@ -413,6 +420,8 @@ export class MapWidget {
     let missionToEdit = rawResult;
 
     if (LOCKED_STATUSES.has(String(rawResult.status || ''))) {
+      const confirmed = window.confirm('This mission is locked. Create an editable copy?');
+      if (!confirmed) return;
       // Fork: create a new proposed successor so the original stays intact.
       const waypoints = collectEditableWaypoints(rawResult.mission || {});
       const forkResult = await createMission({
@@ -426,6 +435,11 @@ export class MapWidget {
         return;
       }
       missionToEdit = forkResult.mission;
+      const sourceIdx = this._visibleMissionOrder.indexOf(missionId);
+      if (sourceIdx >= 0) {
+        this._editForkSource = { missionId, index: sourceIdx };
+        this._visibleMissionOrder.splice(sourceIdx, 1);
+      }
       this._prepareMissionForEditing(missionToEdit.id || missionId);
       this._missionCache.clear();
       await this.refresh();
@@ -637,6 +651,15 @@ export class MapWidget {
       this._editBanner.hidden = true;
       this._mapEl.classList.remove('is-edit-mode', 'is-locked');
       this._updateElevationProfile();
+      if (this._editForkSource) {
+        const { missionId, index } = this._editForkSource;
+        this._editForkSource = null;
+        if (!this._visibleMissionOrder.includes(missionId)) {
+          const insertAt = Math.min(index, this._visibleMissionOrder.length);
+          this._visibleMissionOrder.splice(insertAt, 0, missionId);
+        }
+        this._render();
+      }
       return;
     }
 
@@ -906,12 +929,35 @@ export class MapWidget {
     this._render();
   }
 
-  _handleMissionActivated(missionId, { shiftKey = false } = {}) {
+  _handleRowClicked(missionId, { shiftKey = false, metaKey = false, ctrlKey = false } = {}) {
+    if (!missionId) return;
+    const toggleMode = metaKey || ctrlKey;
     if (shiftKey) {
+      const order = this._missions.map((m) => missionIdOf(m));
+      const anchor = this._selectionAnchorId || this._activeMissionId || missionId;
+      const a = order.indexOf(anchor);
+      const b = order.indexOf(missionId);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        this._selectedMissionIds = new Set(order.slice(lo, hi + 1));
+      } else {
+        this._selectedMissionIds = new Set([missionId]);
+      }
+      this._activeMissionId = missionId;
+      this._render();
+      return;
+    }
+    if (toggleMode) {
       if (this._selectedMissionIds.has(missionId)) this._selectedMissionIds.delete(missionId);
       else this._selectedMissionIds.add(missionId);
+      this._selectionAnchorId = missionId;
+      this.setFocus(missionId, { fit: false });
+      return;
     }
-    this.setFocus(missionId);
+    // Plain click — single-select + activate.
+    this._selectedMissionIds = new Set([missionId]);
+    this._selectionAnchorId = missionId;
+    this.setFocus(missionId, { fit: false });
   }
 
   _toggleMissionSelection(missionId, { checked = false } = {}) {

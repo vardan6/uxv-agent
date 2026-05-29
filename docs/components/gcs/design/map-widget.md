@@ -156,11 +156,70 @@ Behavior rules:
   `Settings → Mission Lifecycle` (`/settings?tab=mission-lifecycle`) in a new
   browser tab, per [ADR 0021 §6](../../../cross-cutting/decisions/0021-mission-lifecycle.md)
 
+## Selection State
+
+Selection is a shared concern between the sidebar and the map. To avoid
+threading callbacks through every layer, selection lives in a pure store
+mirroring the `editState.js` pattern.
+
+Design rules:
+
+- A `selectionState` module holds `{ activeMissionId, selectedMissionIds: Set,
+  anchorMissionId }`. DOM- and Leaflet-free. Subscribable.
+- Both the sidebar and the map read and write through the store; neither
+  component owns the truth.
+- The `anchorMissionId` records the last plain-clicked row for shift-range
+  semantics. It updates on plain click only; shift- and cmd-clicks do not move
+  the anchor.
+- Activating a mission keeps that mission in the selection (active is always
+  ∈ selection). Single-click sets the selection to `{ id }`.
+- The store is intentionally minimal — it does not persist across reloads.
+
+Modifier-key handling is defined once in the row-click handler and reused by
+the map's polyline/waypoint click handler; it is not redefined per surface.
+
+## Map View Controls
+
+The widget owns a small Leaflet control mounted top-right of the map. The
+control hosts an icon row that is data-driven so individual buttons can be
+added, reordered, or removed without restructuring the control.
+
+Current buttons:
+
+- **Fit to scene** — invokes a `fitSceneMapBounds()` analogous to
+  `gcs_server/static/replay.js`'s implementation. Source-of-truth for scene
+  bounds is the existing scene metadata path used by the read-only `_group`
+  renderer.
+- **Fit to selection** — fits to the bounding box of
+  `selectionState.selectedMissionIds`; falls back to the active mission when
+  the selection size is ≤ 1. Bound to `f` while focus is inside the widget.
+- **Style switcher** — opens a popover offering terrain, scene image, and
+  plain grid. The choice persists in `localStorage` under a single key. If
+  the scene-image layer turns out to need non-trivial wiring (separate fetch
+  path or auth surface), the widget ships terrain + grid first and the
+  scene-image option is treated as follow-up; this is a runtime decision, not
+  a pre-commitment.
+
+The widget applies hard clamping at construction:
+
+- `setMaxBounds(sceneBounds)` so panning cannot leave the scene.
+- `minZoom = fitZoom`, where `fitZoom` is the zoom level at which scene
+  bounds fill the viewport. The "Fit to scene" button is the return
+  affordance.
+
+Auto-fit-on-activate is intentionally not implemented; the user invokes fit
+explicitly. This avoids jarring view changes mid-edit.
+
 ## Map Rendering Rules
 
 - non-executing missions render solid
 - executing missions render as locked
 - completed or otherwise-superseded missions render dimmed
+- selected missions render at full opacity; unselected (but visible) missions
+  render dimmed (≈0.6); the active mission carries an additional 1–2 px
+  stroke bump over its selected styling. Selection and active are two
+  channels collapsed into the existing colour + stroke system without new
+  glyphs or halos
 - fit-to-bounds (initial-load only, per Mission List Rules) uses the focused
   mission when one exists, else the visible-set union
 
@@ -197,6 +256,12 @@ Design rules:
   concurrency checks
 - manual edits mutate the active Mission in place
 - AI edits default to clone-and-edit, producing a new Mission row
+- when the operator presses edit on a mission whose status is in the locked
+  set (`approved`, `exported`, `cutover_pending`, `executing`), the widget
+  surfaces an explicit confirmation before forking. On confirm, the original
+  mission is removed from `_visibleMissionOrder` for the duration of the
+  edit so its static markers do not appear underneath the fork's edit
+  overlay; exit edit restores the original to the visible set.
 
 ### Gestures And Keyboard
 
@@ -233,6 +298,47 @@ While a mission is executing (or armed):
   successful delete; the operator is not interrupted by a confirm dialog.
 - Hard purge of soft-deleted rows is deferred — there is no automatic
   reaper yet.
+
+## Mission Colour
+
+Each mission has an identity colour that is durable across reloads.
+
+Design rules:
+
+- The preferred store is a server-side `color` attribute on the Mission, so
+  the choice follows the mission across browsers and sessions and round-trips
+  through export/import. The exact field shape stays the backend overlay
+  builder's call.
+- If the server schema change turns out non-trivial for the current cycle, a
+  per-browser `localStorage` override keyed by `mission_id` is an acceptable
+  fallback for one cycle; the override is then promoted to a server field
+  later. This is a runtime decision, not a pre-commitment.
+- The palette used by `assignPaletteColor` remains the default source. The
+  picker exposes the curated palette as a swatch grid plus a "Custom…"
+  expansion to a hex picker; a reset affordance clears the override.
+- State-channel indicators (edit-mode stripe, selection dimming, active
+  stroke bump) never reuse the identity colour and are not stored alongside
+  it.
+
+## Mission List Sort, Import, and Export
+
+These are sidebar surfaces, but their implementation lives next to the
+widget:
+
+- Sort options are defined in a single config array consumed by the dropdown
+  and by the underlying comparator factory. Adding, renaming, or reordering
+  options is a one-line change.
+- Sort choice persists in `localStorage` under a single key. The default is
+  Updated date (newest first).
+- Import/export speak JSON only this cycle. Single-object and array inputs
+  are both accepted on import; output mode (active / selection / all visible)
+  drives the shape.
+- Export strips `id`, `status`, `client_version`, timestamps, and audit
+  fields before emit. Import strips any incoming `id` and timestamps, sets
+  `status = planning` (or the lowest writable status), and uses
+  all-or-nothing validation on batches.
+- Import/export entry points share one overflow `⋯` menu in the sidebar
+  header; menu items live in a config array.
 
 ## Vehicle Profile Boundary
 
