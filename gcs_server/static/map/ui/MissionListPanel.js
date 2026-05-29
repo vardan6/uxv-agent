@@ -51,7 +51,7 @@ function computeOriginBadge(missionRow) {
   return '🤖';
 }
 
-function renderActionButtons(missionRow, status) {
+function renderActionButtons(missionRow, status, isEditing) {
   const missionId = String(missionRow.id || '');
   const parts = [];
 
@@ -59,15 +59,26 @@ function renderActionButtons(missionRow, status) {
     return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
   }
   if (EDITABLE.has(status)) {
-    parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-      data-edit-mission-id="${missionId}"
-      title="Edit mission waypoints"
-      aria-label="Edit mission waypoints">
-      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path d="M12 20h9"/>
-        <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-      </svg>
-    </button>`);
+    if (isEditing) {
+      parts.push(`<button class="mission-row-action-btn is-done" type="button"
+        data-done-edit-mission-id="${missionId}"
+        title="Finish editing"
+        aria-label="Finish editing">
+        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 12l5 5L20 7"/>
+        </svg>
+      </button>`);
+    } else {
+      parts.push(`<button class="mission-row-action-btn is-edit" type="button"
+        data-edit-mission-id="${missionId}"
+        title="Edit mission waypoints"
+        aria-label="Edit mission waypoints">
+        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+        </svg>
+      </button>`);
+    }
   }
   if (EXECUTABLE.has(status)) {
     parts.push(`<button class="mission-row-action-btn is-execute" type="button"
@@ -92,21 +103,30 @@ function renderRow(missionRow, ctx) {
     paletteByMissionId,
     profilesById,
     activeProfileId,
+    editingMissionId,
   } = ctx;
   const missionId = String(missionRow.id || '');
   const isVisible = visibleMissionIds.has(missionId);
   const isSelected = selectedMissionIds.has(missionId);
   const isActive = activeMissionId === missionId;
+  const isEditing = editingMissionId === missionId;
   const status = String(missionRow.status || '');
   const color = paletteByMissionId.get(missionId) || '#b8c1c5';
   const profileId = String(missionRow?.mission?.vehicle_profile_id || activeProfileId || 'rover_default');
   const profileIcon = vehicleIcon(profileId, profilesById, activeProfileId);
   return `
     <div
-      class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}"
+      class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}${isEditing ? ' is-editing' : ''}"
       data-row-mission-id="${missionId}"
     >
-      <span class="mission-row-status" aria-hidden="true" style="background:${color}"></span>
+      <button
+        class="mission-row-status"
+        type="button"
+        data-color-chip-mission-id="${missionId}"
+        style="background:${color}"
+        title="Change mission colour"
+        aria-label="Change mission colour"
+      ></button>
       <label class="mission-row-select" title="${isSelected ? 'Deselect mission' : 'Select mission'}">
         <input
           type="checkbox"
@@ -131,7 +151,7 @@ function renderRow(missionRow, ctx) {
         </span>
       </button>
       <span class="mission-row-actions">
-        ${renderActionButtons(missionRow, status)}
+        ${renderActionButtons(missionRow, status, isEditing)}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
           class="mission-row-eye${status === 'executing' ? ' is-locked' : ''}"
@@ -154,8 +174,10 @@ export class MissionListPanel {
     this._onSelectionToggled = opts.onSelectionToggled || (() => {});
     this._onExecuteRequested = opts.onExecuteRequested || (() => {});
     this._onEditRequested = opts.onEditRequested || (() => {});
+    this._onDoneEditRequested = opts.onDoneEditRequested || (() => {});
     this._onCreateRequested = opts.onCreateRequested || (() => {});
     this._onDeleteRequested = opts.onDeleteRequested || (() => {});
+    this._onColorChipClicked = opts.onColorChipClicked || (() => {});
   }
 
   render({
@@ -166,6 +188,7 @@ export class MissionListPanel {
     paletteByMissionId = new Map(),
     profilesById = {},
     activeProfileId = 'rover_default',
+    editingMissionId = '',
   } = {}) {
     const body = missions.length
       ? missions.map((missionRow) => renderRow(missionRow, {
@@ -175,6 +198,7 @@ export class MissionListPanel {
         paletteByMissionId,
         profilesById,
         activeProfileId,
+        editingMissionId,
       })).join('')
       : `<div class="mission-list-empty">
             <p class="mission-list-empty-title">No missions yet</p>
@@ -258,6 +282,19 @@ export class MissionListPanel {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         this._onEditRequested(button.dataset.editMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-done-edit-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onDoneEditRequested(button.dataset.doneEditMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-color-chip-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onColorChipClicked(button.dataset.colorChipMissionId || '', button);
       });
     });
     this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {

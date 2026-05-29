@@ -13,7 +13,14 @@ import { ContextMenu } from './ui/ContextMenu.js';
 import { HintToasts } from './ui/HintToasts.js';
 import { ElevationProfilePanel } from './ui/ElevationProfilePanel.js';
 import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
+import { MapViewToolbar, MAP_STYLES } from './ui/MapViewToolbar.js';
+import { MissionColorPicker } from './ui/MissionColorPicker.js';
+import { missionColorOverrides } from './state/missionColorOverrides.js';
 import { editState } from './state/editState.js';
+import { selectionState } from './state/selectionState.js';
+
+const MAP_STYLE_STORAGE_KEY = 'gcs-map-widget-style';
+const SCENE_MAP_PAD = 0.05; // 5% padding around scene bounds for maxBounds clamp
 
 const LOCKED_STATUSES = new Set(['approved', 'exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
 
@@ -77,11 +84,6 @@ function boundsUnion(boundsList = []) {
   };
 }
 
-function opacityForMission(missionId, focusedMissionId) {
-  if (!focusedMissionId) return 1;
-  return missionId === focusedMissionId ? 1 : 0.25;
-}
-
 function missionIdOf(row) {
   return String(row?.id || row?.mission_id || '').trim();
 }
@@ -111,15 +113,12 @@ export class MapWidget {
     //   _missions             — full list of mission rows from the server (source of truth).
     //   _missionCache         — per-mission overlay payloads keyed by id (waypoints/bounds).
     //   _visibleMissionOrder  — eye-icon toggled subset, in operator-controlled draw order.
-    //   _selectedMissionIds   — sidebar multi-selection (drives bulk actions, not rendering).
-    //   _activeMissionId      — single mission currently being edited / armed (at most one).
+    //   selectionState        — shared pure store; sole source for selected /
+    //                            active / anchor mission ids (was three local
+    //                            fields prior to Slice 3).
     this._missions = [];
     this._missionCache = new Map();
     this._visibleMissionOrder = [];
-    this._selectedMissionIds = new Set();
-    this._activeMissionId = '';
-    // Last plain- or cmd-clicked mission id; anchors shift-click ranges.
-    this._selectionAnchorId = '';
     this._activeProfileId = 'rover_default';
     this._profilesById = {};
     this._controllerVersion = null;
@@ -145,6 +144,13 @@ export class MapWidget {
     this._terrainLayer = null;
     this._bulkActionBar = null;
     this._didInitialFit = false;
+    this._sceneBounds = null;
+    this._viewToolbar = null;
+    this._mapStyle = 'terrain';
+    try { this._mapStyle = localStorage.getItem(MAP_STYLE_STORAGE_KEY) || 'terrain'; } catch (_) {}
+    if (!MAP_STYLES.some((s) => s.id === this._mapStyle)) this._mapStyle = 'terrain';
+    this._colorPicker = null;
+    this._colorPreview = null; // { missionId, color } | null — live hover preview override
   }
 
   mount() {
@@ -185,9 +191,12 @@ export class MapWidget {
       onSelectionToggled: (missionId, opts) => this._toggleMissionSelection(missionId, opts),
       onExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
       onEditRequested: (missionId) => this._onEditRequested(missionId),
+      onDoneEditRequested: () => this._exitEditMode(),
       onCreateRequested: () => this._handleCreateMission(),
       onDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
+      onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
     });
+    this._colorPicker = new MissionColorPicker(this._mapWrapEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -202,12 +211,22 @@ export class MapWidget {
     });
 
     fetchSceneMap().then((sceneMap) => {
-      if (sceneMap) {
+      if (sceneMap?.bounds) {
+        this._sceneBounds = sceneMap.bounds;
+        this._applySceneBoundsClamp();
         this._terrainLayer = new TerrainCanvasLayer(sceneMap);
         this._terrainLayer.addTo(this._map);
+        this._applyMapStyle();
       }
       this._sampleHeight = makeSampler(sceneMap);
       this._updateElevationProfile();
+    });
+
+    this._viewToolbar = new MapViewToolbar(this._mapWrapEl, {
+      initialStyle: this._mapStyle,
+      onFitScene: () => this._fitScene(),
+      onFitSelection: () => this._fitSelection(),
+      onStyleChange: (styleId) => this._setMapStyle(styleId),
     });
 
     this._editStateSubscriber = (snapshot) => this._onEditStateChange(snapshot);
@@ -242,6 +261,10 @@ export class MapWidget {
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
     this._terrainLayer = null;
+    this._viewToolbar?.destroy();
+    this._viewToolbar = null;
+    this._colorPicker?.close();
+    this._colorPicker = null;
     this._missionCache.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
@@ -272,8 +295,7 @@ export class MapWidget {
       this._missionCache.clear();
       this._missions = [];
       this._visibleMissionOrder = [];
-      this._selectedMissionIds.clear();
-      this._activeMissionId = '';
+      selectionState.clearSelection();
     }
     this.refresh();
   }
@@ -449,6 +471,12 @@ export class MapWidget {
     editState.beginEdit(missionToEdit);
     this.setFocus(missionToEdit.id || missionId, { fit: false });
     this._render(); // drop edited mission from renderMany
+  }
+
+  _exitEditMode() {
+    editState.clearEdit();
+    this._missionCache.clear();
+    this.refresh();
   }
 
   async _handleDragEnd(idx, newPoint, preDragLatLng, marker) {
@@ -658,8 +686,8 @@ export class MapWidget {
           const insertAt = Math.min(index, this._visibleMissionOrder.length);
           this._visibleMissionOrder.splice(insertAt, 0, missionId);
         }
-        this._render();
       }
+      this._render();
       return;
     }
 
@@ -732,9 +760,10 @@ export class MapWidget {
       return;
     }
 
+    if (key === 'f' || key === 'F') { e.preventDefault(); this._fitSelection(); return; }
+
     if (!editState.missionId) return;
 
-    if (key === 'f' || key === 'F') { e.preventDefault(); this.setFocus(editState.missionId); return; }
     if (key === '[') { e.preventDefault(); editState.stepSelection(-1); return; }
     if (key === ']') { e.preventDefault(); editState.stepSelection(1); return; }
 
@@ -786,12 +815,7 @@ export class MapWidget {
   _syncVisibilityState(missions, { preferredMissionId = '' } = {}) {
     const knownMissionIds = new Set(missions.map((mission) => missionIdOf(mission)));
     this._visibleMissionOrder = this._visibleMissionOrder.filter((missionId) => knownMissionIds.has(missionId));
-    this._selectedMissionIds = new Set(
-      [...this._selectedMissionIds].filter((missionId) => knownMissionIds.has(missionId)),
-    );
-    if (this._activeMissionId && !knownMissionIds.has(this._activeMissionId)) {
-      this._activeMissionId = '';
-    }
+    selectionState.prune(knownMissionIds);
 
     const executingIds = this._executingMissionIds();
     if (!this._visibleMissionOrder.length) {
@@ -806,8 +830,9 @@ export class MapWidget {
     if (preferredMissionId && knownMissionIds.has(preferredMissionId)) {
       this._pinMissionInView(preferredMissionId);
     }
-    if (!this._activeMissionId) {
-      this._activeMissionId = this._visibleMissionOrder[0] || '';
+    if (!selectionState.activeMissionId) {
+      const fallback = this._visibleMissionOrder[0] || '';
+      if (fallback) selectionState.setActive(fallback);
     }
   }
 
@@ -834,37 +859,62 @@ export class MapWidget {
     const editedMissionId = editState.missionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
     const paletteByMissionId = assignPaletteColor(this._missions.map((m) => missionIdOf(m)));
+    missionColorOverrides.applyTo(paletteByMissionId);
+    if (this._colorPreview && paletteByMissionId.has(this._colorPreview.missionId)) {
+      paletteByMissionId.set(this._colorPreview.missionId, this._colorPreview.color);
+    }
     this._paletteByMissionId = paletteByMissionId;
+
+    const selectedMissionIds = selectionState.selectedMissionIds;
+    const activeMissionId = selectionState.activeMissionId;
 
     this._listPanel.render({
       missions: this._missions,
       visibleMissionIds,
-      selectedMissionIds: this._selectedMissionIds,
-      activeMissionId: this._activeMissionId,
+      selectedMissionIds,
+      activeMissionId,
       paletteByMissionId,
       profilesById: this._profilesById,
       activeProfileId: this._activeProfileId,
+      editingMissionId: editedMissionId || '',
     });
 
     // Exclude the actively-edited mission from the read-only overlay so only
     // the editable layer shows it.
+    const hasSelection = selectedMissionIds.size > 0;
     const overlays = this._visibleMissionOrder
       .filter((missionId) => missionId !== editedMissionId)
       .map((missionId) => {
         const payload = this._missionCache.get(missionId);
         if (!payload?.available) return null;
+        const isActive = missionId === activeMissionId;
+        const isSelected = selectedMissionIds.has(missionId);
+        // Visual channels (design § Map Rendering Rules):
+        //   selected   → full opacity
+        //   unselected → dimmed 0.6
+        //   active     → stroke bump (additive to selected/unselected opacity)
+        // When the selection is empty fall back to the prior behavior so the
+        // map doesn't suddenly grey-out everything on first paint.
+        const opacity = hasSelection ? (isSelected ? 1.0 : 0.6) : 1.0;
+        const weight = isActive ? 4 : 2.5;
         return {
-          missionId: missionId,
+          missionId,
           payload,
           color: paletteByMissionId.get(missionId),
-          opacity: opacityForMission(missionId, this._activeMissionId),
+          opacity,
+          weight,
+          onClick: (event) => this._handleRowClicked(missionId, {
+            shiftKey: !!event?.shiftKey,
+            metaKey: !!event?.metaKey,
+            ctrlKey: !!event?.ctrlKey,
+          }),
         };
       })
       .filter(Boolean);
 
     this._overlayLayer.renderMany(overlays);
     if (fit) {
-      const focusedPayload = this._activeMissionId ? this._missionCache.get(this._activeMissionId) : null;
+      const focusedPayload = activeMissionId ? this._missionCache.get(activeMissionId) : null;
       const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
       this._fitBounds(focusedPayload?.bounds || unionBounds);
     }
@@ -882,16 +932,111 @@ export class MapWidget {
       return;
     }
     // Otherwise: show focused mission
-    const payload = this._activeMissionId ? this._missionCache.get(this._activeMissionId) : null;
+    const activeMissionId = selectionState.activeMissionId;
+    const payload = activeMissionId ? this._missionCache.get(activeMissionId) : null;
     if (!payload?.available) { this._elevationPanel.clear(); return; }
     const wps = (payload.features || [])
       .filter((f) => f.type === 'waypoint')
       .sort((a, b) => a.index - b.index)
       .map((f) => ({ ...f.point, index: f.index }));
     if (!wps.length) { this._elevationPanel.clear(); return; }
-    const color = this._paletteByMissionId.get(this._activeMissionId) || '#4a90d9';
+    const color = this._paletteByMissionId.get(activeMissionId) || '#4a90d9';
     const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
     this._elevationPanel.update(wps, this._sampleHeight, { color, vehicleKind });
+  }
+
+  _openColorPicker(missionId, anchorEl) {
+    if (!missionId || !this._colorPicker) return;
+    const currentColor = this._paletteByMissionId.get(missionId) || '#66c2a5';
+    const defaultPalette = assignPaletteColor(this._missions.map((m) => missionIdOf(m)));
+    const defaultColor = defaultPalette.get(missionId) || '#66c2a5';
+    this._colorPicker.open(anchorEl, {
+      currentColor,
+      defaultColor,
+      onPick: (color) => {
+        this._colorPreview = null;
+        missionColorOverrides.set(missionId, color);
+        this._render();
+      },
+      onReset: () => {
+        this._colorPreview = null;
+        missionColorOverrides.clear(missionId);
+        this._render();
+      },
+      onPreview: (color) => {
+        this._colorPreview = color ? { missionId, color } : null;
+        this._render();
+      },
+    });
+  }
+
+  _applySceneBoundsClamp() {
+    if (!this._map || !this._sceneBounds) return;
+    const b = this._sceneBounds;
+    const padX = (b.max_x - b.min_x) * SCENE_MAP_PAD;
+    const padY = (b.max_y - b.min_y) * SCENE_MAP_PAD;
+    const sw = [b.min_y - padY, b.min_x - padX];
+    const ne = [b.max_y + padY, b.max_x + padX];
+    this._map.setMaxBounds([sw, ne]);
+    // Clamp min-zoom to whatever fits the full scene; anything looser shows void.
+    const fitZoom = this._map.getBoundsZoom([sw, ne], false);
+    if (Number.isFinite(fitZoom)) this._map.setMinZoom(fitZoom);
+  }
+
+  _setMapStyle(styleId) {
+    if (!MAP_STYLES.some((s) => s.id === styleId)) return;
+    this._mapStyle = styleId;
+    try { localStorage.setItem(MAP_STYLE_STORAGE_KEY, styleId); } catch (_) {}
+    this._applyMapStyle();
+  }
+
+  _applyMapStyle() {
+    if (!this._terrainLayer) return;
+    switch (this._mapStyle) {
+      case 'plain-grid':
+        this._terrainLayer.setOpacity(0);
+        this._mapEl.classList.add('is-plain-grid');
+        break;
+      case 'scene-image':
+        this._terrainLayer.setOpacity(1.0);
+        this._mapEl.classList.remove('is-plain-grid');
+        break;
+      case 'terrain':
+      default:
+        this._terrainLayer.setOpacity(0.92);
+        this._mapEl.classList.remove('is-plain-grid');
+        break;
+    }
+  }
+
+  _fitScene() {
+    if (this._sceneBounds) {
+      this._fitBounds(this._sceneBounds);
+      return;
+    }
+    const unionBounds = boundsUnion(
+      this._visibleMissionOrder
+        .map((id) => this._missionCache.get(id)?.bounds)
+        .filter(Boolean),
+    );
+    if (unionBounds) this._fitBounds(unionBounds);
+  }
+
+  _fitSelection() {
+    const selectedIds = selectionState.selectedMissionIds;
+    const sourceIds = selectedIds.size
+      ? Array.from(selectedIds)
+      : (selectionState.activeMissionId ? [selectionState.activeMissionId] : []);
+    const bounds = boundsUnion(
+      sourceIds
+        .map((id) => this._missionCache.get(id)?.bounds)
+        .filter(Boolean),
+    );
+    if (bounds) {
+      this._fitBounds(bounds);
+      return;
+    }
+    this._fitScene();
   }
 
   _fitBounds(bounds) {
@@ -910,8 +1055,8 @@ export class MapWidget {
     if (this._visibleMissionOrder.includes(missionId)) {
       if (executingIds.includes(missionId)) return;
       this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== missionId);
-      if (this._activeMissionId === missionId) {
-        this._activeMissionId = '';
+      if (selectionState.activeMissionId === missionId) {
+        selectionState.setActive('');
       }
       this._render();
       return;
@@ -925,51 +1070,45 @@ export class MapWidget {
       if (payload.ok) this._missionCache.set(missionId, payload);
       else this._showError(payload.error || 'Overlay fetch failed');
     }
-    if (!this._activeMissionId) this._activeMissionId = missionId;
+    if (!selectionState.activeMissionId) selectionState.setActive(missionId);
     this._render();
   }
 
+  // Single handler for clicks on a mission — fires from sidebar rows AND from
+  // the read-only map overlay (polyline / waypoint circle). Modifier semantics
+  // are defined here once and shared by both surfaces (design § Selection
+  // Store).
   _handleRowClicked(missionId, { shiftKey = false, metaKey = false, ctrlKey = false } = {}) {
     if (!missionId) return;
-    const toggleMode = metaKey || ctrlKey;
     if (shiftKey) {
       const order = this._missions.map((m) => missionIdOf(m));
-      const anchor = this._selectionAnchorId || this._activeMissionId || missionId;
+      const anchor = selectionState.anchorMissionId || selectionState.activeMissionId || missionId;
       const a = order.indexOf(anchor);
       const b = order.indexOf(missionId);
-      if (a >= 0 && b >= 0) {
-        const [lo, hi] = a < b ? [a, b] : [b, a];
-        this._selectedMissionIds = new Set(order.slice(lo, hi + 1));
-      } else {
-        this._selectedMissionIds = new Set([missionId]);
-      }
-      this._activeMissionId = missionId;
+      const range = (a >= 0 && b >= 0)
+        ? order.slice(Math.min(a, b), Math.max(a, b) + 1)
+        : [missionId];
+      selectionState.selectRange(range, missionId);
       this._render();
       return;
     }
-    if (toggleMode) {
-      if (this._selectedMissionIds.has(missionId)) this._selectedMissionIds.delete(missionId);
-      else this._selectedMissionIds.add(missionId);
-      this._selectionAnchorId = missionId;
+    if (metaKey || ctrlKey) {
+      selectionState.toggle(missionId);
       this.setFocus(missionId, { fit: false });
       return;
     }
-    // Plain click — single-select + activate.
-    this._selectedMissionIds = new Set([missionId]);
-    this._selectionAnchorId = missionId;
+    selectionState.selectSingle(missionId);
     this.setFocus(missionId, { fit: false });
   }
 
   _toggleMissionSelection(missionId, { checked = false } = {}) {
-    if (!missionId) return;
-    if (checked) this._selectedMissionIds.add(missionId);
-    else this._selectedMissionIds.delete(missionId);
+    selectionState.setSelectedFlag(missionId, checked);
     this._render();
   }
 
   async setFocus(missionId, { fit = true } = {}) {
     const nextMissionId = String(missionId || '').trim();
-    this._activeMissionId = nextMissionId;
+    selectionState.setActive(nextMissionId);
     if (nextMissionId && !this._visibleMissionOrder.includes(nextMissionId)) {
       this._visibleMissionOrder.push(nextMissionId);
       this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
@@ -989,7 +1128,7 @@ export class MapWidget {
       this._visibleMissionOrder.push(nextMissionId);
       this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
     }
-    this._activeMissionId = nextMissionId;
+    selectionState.setActive(nextMissionId);
   }
 
   _prepareMissionForEditing(missionId) {
@@ -1087,13 +1226,9 @@ export class MapWidget {
     const exitEditBtn = document.createElement('button');
     exitEditBtn.type = 'button';
     exitEditBtn.className = 'map-edit-exit-btn';
-    exitEditBtn.textContent = '✕ Exit edit';
-    exitEditBtn.setAttribute('aria-label', 'Exit edit mode');
-    exitEditBtn.addEventListener('click', () => {
-      editState.clearEdit();
-      this._missionCache.clear();
-      this.refresh();
-    });
+    exitEditBtn.textContent = 'Done';
+    exitEditBtn.setAttribute('aria-label', 'Finish editing');
+    exitEditBtn.addEventListener('click', () => this._exitEditMode());
     editBanner.append(editBannerText, exitEditBtn);
     this._editBanner = editBanner;
     this._editBannerText = editBannerText;

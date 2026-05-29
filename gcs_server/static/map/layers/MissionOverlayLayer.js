@@ -56,7 +56,7 @@ export class MissionOverlayLayer {
     this._editGroup = L.layerGroup().addTo(map);
   }
 
-  render(payload, { color = DEFAULT_COLOR, opacity = null } = {}) {
+  render(payload, { color = DEFAULT_COLOR, opacity = null, weight = 2.5, onClick = null } = {}) {
     this._group.clearLayers();
     if (!payload?.available || !Array.isArray(payload.features)) return;
 
@@ -68,21 +68,32 @@ export class MissionOverlayLayer {
     const routeLines = payload.features.filter(f => f.type === 'route_line');
     const waypoints = payload.features.filter(f => f.type === 'waypoint');
 
+    const attachClick = (layer) => {
+      if (!onClick) return;
+      layer.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        onClick(e.originalEvent || {});
+      });
+    };
+
     for (const feature of routeLines) {
       if (!Array.isArray(feature.points) || feature.points.length < 2) continue;
-      L.polyline(feature.points.map(p => [p.y, p.x]), {
+      const polyline = L.polyline(feature.points.map(p => [p.y, p.x]), {
         color,
-        weight: 2.5,
+        weight,
         opacity: lineOpacity,
         dashArray: style.dashed ? '6,6' : undefined,
         pane: 'missionPane',
-      }).addTo(this._group);
+        interactive: !!onClick,
+      });
+      attachClick(polyline);
+      polyline.addTo(this._group);
     }
 
     for (const feature of waypoints) {
       const p = feature.point;
       if (!p) continue;
-      L.circleMarker([p.y, p.x], {
+      const circle = L.circleMarker([p.y, p.x], {
         radius: 7,
         color,
         weight: 2,
@@ -90,7 +101,10 @@ export class MissionOverlayLayer {
         fillColor: color,
         fillOpacity,
         pane: 'missionPane',
-      }).addTo(this._group);
+        interactive: !!onClick,
+      });
+      attachClick(circle);
+      circle.addTo(this._group);
 
       const icon = L.divIcon({
         className: 'map-wp-badge',
@@ -114,7 +128,12 @@ export class MissionOverlayLayer {
     const nestedGroup = L.layerGroup().addTo(this._group);
     const originalGroup = this._group;
     this._group = nestedGroup;
-    this.render(overlay.payload, { color: overlay.color || DEFAULT_COLOR, opacity: overlay.opacity });
+    this.render(overlay.payload, {
+      color: overlay.color || DEFAULT_COLOR,
+      opacity: overlay.opacity,
+      weight: overlay.weight,
+      onClick: overlay.onClick,
+    });
     this._group = originalGroup;
   }
 

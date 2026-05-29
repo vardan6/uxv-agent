@@ -3637,6 +3637,19 @@ code {
   grid-column: 1;
   grid-row: 1 / -1;
   background: #b8c1c5; /* fallback; overridden via inline style with mission color */
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+
+.mission-row-status:hover {
+  filter: brightness(1.15);
+}
+
+.mission-row-status:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .mission-row-focus {
@@ -3671,6 +3684,19 @@ code {
 /* Selected + active stacks: keep both signals. */
 .mission-list-row.is-selected.is-focused {
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-base));
+}
+
+/* Editing = amber left-edge stripe (D2 edit-mode indicator).
+   Inset shadow paints over the 4px mission-color stripe; channel is
+   intentionally separate from selection / active / mission-color. */
+.mission-list-row.is-editing {
+  box-shadow: inset 4px 0 0 0 var(--warn),
+              0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+.mission-list-row.is-editing.is-focused {
+  box-shadow: inset 4px 0 0 0 var(--warn),
+              0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+              0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
 }
 
 .mission-list-row:hover,
@@ -3873,6 +3899,147 @@ code {
 
 .map-empty-cta:hover {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Floating top-right view controls (fit/style) */
+.map-view-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+.map-view-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.map-view-tool-btn:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.map-view-style-select {
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+/* Per-mission colour popover */
+.mission-color-picker {
+  position: absolute;
+  z-index: 700;
+  width: 200px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mission-color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.mission-color-swatch {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.12s;
+}
+
+.mission-color-swatch:hover,
+.mission-color-swatch:focus-visible {
+  transform: scale(1.1);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.mission-color-swatch.is-current {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--panel);
+}
+
+.mission-color-picker-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.mission-color-picker-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mission-color-picker-custom input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mission-color-reset {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.mission-color-reset:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.map-widget-map.is-plain-grid {
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
+    var(--panel-strong);
 }
 
 /* Mission row action buttons */
