@@ -178,6 +178,7 @@ export class MissionListPanel {
     this._onCreateRequested = opts.onCreateRequested || (() => {});
     this._onDeleteRequested = opts.onDeleteRequested || (() => {});
     this._onColorChipClicked = opts.onColorChipClicked || (() => {});
+    this._onOverflowClicked = opts.onOverflowClicked || (() => {});
   }
 
   render({
@@ -223,6 +224,13 @@ export class MissionListPanel {
             title="Create a new empty mission"
             aria-label="Create a new empty mission"
           >+ New</button>
+          <button
+            class="mission-list-overflow-btn"
+            type="button"
+            data-overflow-menu="1"
+            title="Sort & JSON import/export"
+            aria-label="Sort & JSON import/export"
+          >⋯</button>
           <a
             class="mission-list-settings-link"
             href="/settings?tab=mission-lifecycle"
@@ -308,6 +316,13 @@ export class MissionListPanel {
       createBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         this._onCreateRequested();
+      });
+    }
+    const overflowBtn = this._container.querySelector('[data-overflow-menu="1"]');
+    if (overflowBtn) {
+      overflowBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onOverflowClicked(overflowBtn);
       });
     }
   }

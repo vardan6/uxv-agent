@@ -15,7 +15,9 @@ import { ElevationProfilePanel } from './ui/ElevationProfilePanel.js';
 import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
 import { MapViewToolbar, MAP_STYLES } from './ui/MapViewToolbar.js';
 import { MissionColorPicker } from './ui/MissionColorPicker.js';
+import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
 import { missionColorOverrides } from './state/missionColorOverrides.js';
+import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
 import { editState } from './state/editState.js';
 import { selectionState } from './state/selectionState.js';
 
@@ -151,6 +153,7 @@ export class MapWidget {
     if (!MAP_STYLES.some((s) => s.id === this._mapStyle)) this._mapStyle = 'terrain';
     this._colorPicker = null;
     this._colorPreview = null; // { missionId, color } | null — live hover preview override
+    this._overflowMenu = null;
   }
 
   mount() {
@@ -195,8 +198,10 @@ export class MapWidget {
       onCreateRequested: () => this._handleCreateMission(),
       onDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
       onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
+      onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
     });
     this._colorPicker = new MissionColorPicker(this._mapWrapEl);
+    this._overflowMenu = new MissionListOverflowMenu(this._mapWrapEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -265,6 +270,8 @@ export class MapWidget {
     this._viewToolbar = null;
     this._colorPicker?.close();
     this._colorPicker = null;
+    this._overflowMenu?.close();
+    this._overflowMenu = null;
     this._missionCache.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
@@ -868,8 +875,13 @@ export class MapWidget {
     const selectedMissionIds = selectionState.selectedMissionIds;
     const activeMissionId = selectionState.activeMissionId;
 
+    const sortedMissions = sortMissions(this._missions, missionSortPreference.get(), {
+      selectedMissionIds,
+      visibleMissionIds,
+    });
+
     this._listPanel.render({
-      missions: this._missions,
+      missions: sortedMissions,
       visibleMissionIds,
       selectedMissionIds,
       activeMissionId,
@@ -968,6 +980,122 @@ export class MapWidget {
         this._render();
       },
     });
+  }
+
+  _openOverflowMenu(anchorEl) {
+    if (!this._overflowMenu) return;
+    this._overflowMenu.open(anchorEl, {
+      currentSort: missionSortPreference.get(),
+      onSortChange: (id) => {
+        missionSortPreference.set(id);
+        this._render();
+      },
+      onImport: () => this._handleImportMissions(),
+      onExport: (mode) => this._handleExportMissions(mode),
+    });
+  }
+
+  _missionIdsForExport(mode) {
+    if (mode === 'active') {
+      const id = selectionState.activeMissionId;
+      return id ? [id] : [];
+    }
+    if (mode === 'selection') {
+      return Array.from(selectionState.selectedMissionIds);
+    }
+    // visible
+    return [...this._visibleMissionOrder];
+  }
+
+  async _handleExportMissions(mode) {
+    const ids = this._missionIdsForExport(mode);
+    if (!ids.length) {
+      this._showError(`No missions to export (${mode}).`);
+      return;
+    }
+    const fetched = await Promise.all(ids.map((id) => getMission(id)));
+    const records = [];
+    for (const [i, result] of fetched.entries()) {
+      if (!result.ok) {
+        this._showError(`Export aborted: could not load mission ${ids[i]} — ${result.error || 'unknown error'}`);
+        return;
+      }
+      const mission = result.mission || result;
+      const waypoints = collectEditableWaypoints(mission).map(({ id: _id, ...rest }) => rest);
+      records.push({
+        label: mission.goal || mission.label || result.goal || result.label || '',
+        waypoints,
+        vehicle_profile_id: mission.vehicle_profile_id || result.vehicle_profile_id || undefined,
+      });
+    }
+    const payload = records.length === 1 ? records[0] : records;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = `missions-${mode}-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  _handleImportMissions() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const records = Array.isArray(parsed) ? parsed : [parsed];
+        // All-or-nothing validation on the client side first; the API calls
+        // themselves are sequential so a mid-stream network failure can still
+        // leave a partial import, but at least every record was structurally
+        // valid before any POST went out.
+        for (const [i, rec] of records.entries()) {
+          if (!rec || typeof rec !== 'object') throw new Error(`Item ${i}: not an object`);
+          if (!Array.isArray(rec.waypoints)) throw new Error(`Item ${i}: missing waypoints array`);
+          for (const [j, wp] of rec.waypoints.entries()) {
+            if (!wp || typeof wp !== 'object') throw new Error(`Item ${i} waypoint ${j}: not an object`);
+            if (!Number.isFinite(Number(wp.x)) || !Number.isFinite(Number(wp.y))) {
+              throw new Error(`Item ${i} waypoint ${j}: x/y must be numeric`);
+            }
+          }
+        }
+        let imported = 0;
+        for (const rec of records) {
+          const waypoints = rec.waypoints.map((wp) => ({
+            x: Number(wp.x) || 0,
+            y: Number(wp.y) || 0,
+            z: Number(wp.z) || 0,
+            label: wp.label || '',
+            kind: wp.kind || 'waypoint',
+          }));
+          const result = await createMission({
+            waypoints,
+            label: String(rec.label || '').slice(0, 200),
+            session_id: this._sessionId,
+          });
+          if (!result.ok) {
+            this._showError(`Imported ${imported}/${records.length}; failed on next: ${result.error || 'create failed'}`);
+            this._missionCache.clear();
+            await this.refresh();
+            return;
+          }
+          imported += 1;
+        }
+        this._missionCache.clear();
+        await this.refresh();
+        this._hintToasts?.show(`Imported ${imported} mission${imported === 1 ? '' : 's'}.`);
+      } catch (err) {
+        this._showError(`Import failed — ${err.message || err}`);
+      }
+    });
+    input.click();
   }
 
   _applySceneBoundsClamp() {

@@ -4109,6 +4109,89 @@ code {
   outline: none;
 }
 
+.mission-list-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--button-secondary-gradient);
+  font-size: 1.05rem;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+.mission-list-overflow-btn:hover,
+.mission-list-overflow-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
+}
+
+.mission-list-overflow-menu {
+  position: absolute;
+  z-index: 580;
+  width: 260px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+  font-size: 0.85rem;
+  color: inherit;
+}
+.mission-overflow-group + .mission-overflow-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.mission-overflow-group-label {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.mission-overflow-sort-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+}
+.mission-overflow-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.mission-overflow-sort-row input { margin: 0; }
+.mission-overflow-io-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mission-overflow-action {
+  flex: 1 1 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--button-secondary-gradient);
+  font-size: 0.8rem;
+  color: inherit;
+  cursor: pointer;
+}
+.mission-overflow-action:hover,
+.mission-overflow-action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--button-active-gradient);
+  outline: none;
+}
+
 .mission-row-lock {
   font-size: 0.9rem;
   opacity: 0.7;
