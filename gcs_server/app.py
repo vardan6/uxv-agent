@@ -2227,8 +2227,10 @@ async def get_current_mission_overlay(request: Request, session_id: str = "") ->
 async def list_missions(request: Request, session_id: str = "", limit: int = 50) -> JSONResponse:
     repository = _mission_repository(request)
     clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return JSONResponse({"ok": True, "missions": []})
     missions = repository.list(
-        origin_chat_id=clean_session_id or None,
+        origin_chat_id=clean_session_id,
         limit=max(1, min(int(limit or 50), 200)),
     )
     controller_state = _mission_execution(request).get_controller_state()
@@ -2489,8 +2491,8 @@ async def run_planning_shell_session_stream(session_id: str, request: Request) -
 
     Response: NDJSON stream of graph lifecycle and tool events:
         graph_run_start, graph_node_result, agent_tool_start, agent_tool_result,
-        mission_draft_created, mission_draft_validation, mission_draft_approval_required,
-        graph_run_end, graph_run_error
+        mission_draft_created, mission_draft_validation, graph_run_end,
+        graph_run_error
     """
     runtime = _runtime(request)
     try:
@@ -2532,14 +2534,14 @@ async def run_planning_shell_session_stream(session_id: str, request: Request) -
 async def resume_planning_shell_session(
     session_id: str, thread_id: str, request: Request
 ) -> StreamingResponse:
-    """Resume a planning-shell graph suspended at an interrupt() approval gate.
+    """Resume a planning-shell graph suspended at the clarification interrupt.
 
     Request body:
-        decision  (str, required)   — "approve", "reject", "continue", or "cancel"
-        note      (str, optional)   — operator note attached to the approval/rejection/clarification
+        decision  (str, required)   — "continue" or "cancel"
+        note      (str, optional)   — operator clarification answer
 
     Response: NDJSON stream continuing from the interrupted node:
-        graph_resume_start, graph_node_result, mission_draft_decision, graph_run_end
+        graph_resume_start, graph_node_result, graph_run_end
     """
     try:
         payload = await request.json()
@@ -2549,8 +2551,8 @@ async def resume_planning_shell_session(
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
 
     decision = str(payload.get("decision", "")).strip().lower()
-    if decision not in ("approve", "reject", "continue", "cancel"):
-        raise HTTPException(status_code=400, detail="decision must be 'approve', 'reject', 'continue', or 'cancel'")
+    if decision not in ("continue", "cancel"):
+        raise HTTPException(status_code=400, detail="decision must be 'continue' or 'cancel'")
     note = str(payload.get("note", "") or "")
 
     session = _runtime(request).ai_store.get_session(session_id, include_messages=False)

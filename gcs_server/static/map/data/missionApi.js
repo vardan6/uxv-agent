@@ -1,5 +1,5 @@
-// session_id="" or omitted → no session filter (returns ALL missions globally).
-// Always pass a real sessionId when known so results are scoped to the session.
+// session_id="" or omitted → server returns an empty list (no global fallback).
+// Always pass a real sessionId so results are scoped to the session.
 
 export async function getCurrentOverlay(sessionId) {
   const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';

@@ -12,11 +12,13 @@ Node order:
     [prepare_clarification]     only when planner requests clarification
     validate_draft
     store_draft
-    request_planning_shell_approval  interrupt() durable HITL
-    record_approval | record_rejection
     finalize_response
 
 Error path: capture_request -> finalize_error (fatal input errors only).
+
+Per-Mission approval (ADR 0022): the planning graph no longer gates drafts on
+operator approval. Strict/Confirm/Autonomous execution modes carry the safety
+story; the draft is persisted and the run finalizes.
 
 Constraints:
 - No command staging, no MQTT publishing, no controller lock writes.
@@ -50,7 +52,6 @@ try:
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.graph_state import PlanningShellGraphState
-    from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai.mission_repository import validate_mission_json
     from gcs_server.ai.provider_registry import resolve_provider
     from gcs_server.ai.retrieval import (
@@ -66,7 +67,6 @@ except ModuleNotFoundError:
     from ai.data_access import build_data_access_manifest
     from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.graph_state import PlanningShellGraphState
-    from ai.mission_export_service import MissionExportService
     from ai.mission_repository import validate_mission_json
     from ai.provider_registry import resolve_provider
     from ai.retrieval import (
@@ -144,73 +144,6 @@ def _provider_snapshot(provider: dict[str, Any] | None) -> dict[str, Any]:
         "model_id": str(source.get("model_id") or "").strip(),
         "context_window": source.get("context_window"),
     }
-
-
-def _route_summary_for_approval(draft: dict[str, Any]) -> dict[str, Any]:
-    waypoint_count = 0
-    total_distance_m = 0.0
-    artifact_count = 0
-    route_hashes: list[str] = []
-
-    if isinstance(draft.get("waypoints"), list):
-        waypoint_count += len(draft["waypoints"])
-        return {
-            "artifact_count": 0,
-            "waypoint_count": waypoint_count,
-            "total_distance_m": 0.0,
-            "route_hashes": route_hashes,
-        }
-
-    for artifact in draft.get("route_artifacts") or []:
-        if not isinstance(artifact, dict):
-            continue
-        artifact_count += 1
-        artifact_waypoints = artifact.get("waypoints")
-        if isinstance(artifact_waypoints, list):
-            waypoint_count += len(artifact_waypoints)
-        else:
-            waypoint_count += int(artifact.get("waypoint_count") or 0)
-        total_distance_m += float(artifact.get("total_distance_m") or 0.0)
-        route_hash = str(artifact.get("route_hash") or "").strip()
-        if route_hash:
-            route_hashes.append(route_hash)
-    if waypoint_count:
-        return {
-            "artifact_count": artifact_count,
-            "waypoint_count": waypoint_count,
-            "total_distance_m": round(total_distance_m, 1),
-            "route_hashes": route_hashes,
-        }
-
-    for step in draft.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        if isinstance(step.get("waypoints"), list):
-            waypoint_count += len(step["waypoints"])
-        summary = step.get("route_summary")
-        if isinstance(summary, dict):
-            total_distance_m += float(summary.get("total_distance_m") or 0.0)
-
-    return {
-        "artifact_count": artifact_count,
-        "waypoint_count": waypoint_count,
-        "total_distance_m": round(total_distance_m, 1),
-        "route_hashes": route_hashes,
-    }
-
-
-def _home_position_from_rover_state(rover_state: dict[str, Any]) -> dict[str, float] | None:
-    gps = rover_state.get("gps") if isinstance(rover_state, dict) else None
-    if not isinstance(gps, dict) or gps.get("lat") is None or gps.get("lon") is None:
-        return None
-    try:
-        return {
-            "latitude": float(gps["lat"]),
-            "longitude": float(gps["lon"]),
-            "altitude": float(gps.get("alt") or 0.0),
-        }
-    except (TypeError, ValueError):
-        return None
 
 
 def _json_line(data: dict) -> str:
@@ -795,16 +728,13 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     if not draft or not intent:
         return {
             "draft_id": "",
-            "approval_status": "validation_failed",
             "node_trace": [_node_entry("store_draft", ok=False, reason="empty_draft_or_intent")],
         }
 
     mission_repository = getattr(rt.app_runtime, "mission_repository", None)
-    draft_status = str(state.get("approval_status") or "awaiting_approval")
     if mission_repository is None:
         return {
             "draft_id": "",
-            "approval_status": "validation_failed",
             "errors": [{
                 "node": "store_draft",
                 "code": "mission_repository_unavailable",
@@ -824,13 +754,11 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             name=name,
             origin="ai_chat",
             origin_chat_id=str(state.get("session_id") or "") or None,
-            approval_status=draft_status,
             mission_json=dict(draft),
         )
     except Exception as exc:
         return {
             "draft_id": "",
-            "approval_status": "validation_failed",
             "errors": [{
                 "node": "store_draft",
                 "code": "mission_repository_store_error",
@@ -849,13 +777,11 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
         "mission_client_version": int(mission.client_version or 0),
         "mission_operation_id": "",
         "mission_revision_id": "",
-        "approval_status": draft_status,
         "errors": [],
         "node_trace": [_node_entry(
             "store_draft", ok=True,
             draft_id=draft_id,
             mission_id=mission.id,
-            status=draft_status,
         )],
     }
 
@@ -867,7 +793,6 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
     intent = state.get("intent") or {}
     draft_id = state.get("draft_id", "")
     mission_id = int(state.get("mission_id") or 0)
-    approval_status = state.get("approval_status", "")
     validation = state.get("validation") or {}
     errors = state.get("errors") or []
     retrieval_request = _normalize_retrieval_request(
@@ -894,35 +819,10 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
             parts.append(f"Mission #{mission_id} created.")
         else:
             parts.append(f"Mission draft created (ID: {draft_id}).")
-        parts.append(f"Status: {approval_status}.")
         for blocker in validation.get("blockers") or []:
             parts.append(f"Blocker: {blocker}")
         for warning in validation.get("warnings") or []:
             parts.append(f"Warning: {warning}")
-        if approval_status == "awaiting_approval":
-            if mission_id:
-                parts.append(
-                    f"Approve via the operator UI (mission #{mission_id})."
-                )
-            else:
-                parts.append("Mission row missing; retry planning to create a Mission-backed draft.")
-        elif approval_status == "approved":
-            note = state.get("approval_note", "")
-            parts.append("Mission draft approved as a planning artifact.")
-            mission_export = state.get("mission_export") or {}
-            if mission_export.get("file_path"):
-                parts.append(f"Mission exported: {mission_export.get('file_path')}.")
-            if note:
-                parts.append(f"Operator note: {note}")
-        elif approval_status == "rejected":
-            note = state.get("approval_note", "")
-            parts.append("Mission draft rejected.")
-            if note:
-                parts.append(f"Operator note: {note}")
-        elif approval_status == "validation_failed":
-            parts.append("Validation failed. Refine your request and try again.")
-        elif approval_status == "needs_clarification":
-            parts.append("Additional information is needed before this draft can proceed.")
     clarification_response = state.get("clarification_response") or {}
     if clarification_response.get("cancelled") and not draft_id:
         parts.append("Mission planning cancelled during clarification.")
@@ -941,7 +841,6 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
         "intent": intent,
         "draft_id": draft_id,
         "mission_id": mission_id,
-        "approval_status": approval_status,
         "validation_status": validation.get("status", ""),
         "mission_export": state.get("mission_export") or {},
         "tool_trace": state.get("tool_trace") or [],
@@ -989,7 +888,6 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
         "node_trace": [_node_entry(
             "finalize_response",
             draft_id=draft_id,
-            approval_status=approval_status,
         )],
     }
 
@@ -1202,215 +1100,6 @@ def _route_after_planner_loop(state: PlanningShellGraphState) -> str:
     return "finalize_response"
 
 
-# ── Phase 2 nodes ─────────────────────────────────────────────────────────────
-
-def request_planning_shell_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Pause for operator approval of the planning draft.
-
-    Phase 2: calls interrupt() when a checkpointer is available.
-    Fallback: returns operator_decision='pending_rest' so the REST approve/reject
-    APIs continue working without a running graph thread.
-    """
-    rt = _runtime(config)
-    draft = state.get("draft") or {}
-    draft_id = state.get("draft_id", "")
-
-    approval_payload = {
-        "type": "planning_shell_draft_approval",
-        "draft_id": draft_id,
-        "mission_id": int(state.get("mission_id") or 0),
-        "goal": draft.get("goal", ""),
-        "risks": draft.get("risks") or [],
-        "route_summary": _route_summary_for_approval(draft),
-        "execution_allowed": False,
-        "approval_scope": "planning_artifact_only",
-    }
-
-    if _INTERRUPT_AVAILABLE and rt.checkpointer is not None:
-        decision = lg_interrupt(approval_payload)
-        decision_str = str((decision or {}).get("decision", "approve"))
-        note = str((decision or {}).get("note", ""))
-        return {
-            "operator_decision": decision_str,
-            "approval_note": note,
-            "node_trace": [_node_entry("request_planning_shell_approval", mode="interrupt", decision=decision_str)],
-        }
-
-    # REST fallback — graph finishes normally; approval via separate API calls
-    return {
-        "operator_decision": "pending_rest",
-        "node_trace": [_node_entry("request_planning_shell_approval", mode="rest_fallback")],
-    }
-
-
-def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Record operator approval on the stored draft."""
-    rt = _runtime(config)
-    draft_id = state.get("draft_id", "")
-    mission_id = int(state.get("mission_id") or 0)
-    client_version = int(state.get("mission_client_version") or 0)
-    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
-
-    mission_errors: list[dict[str, Any]] = []
-    mission_export: dict[str, Any] = {}
-    export_error = ""
-
-    if mission_repository is None or mission_id <= 0:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "mission_link_missing",
-            "severity": "warning",
-            "message": "linked Mission row could not be approved (no mission_id)",
-            "recoverable": True,
-        })
-        return {
-            "approval_status": "approved",
-            "mission_export": {},
-            "errors": mission_errors,
-            "node_trace": [_node_entry("record_approval", ok=False, draft_id=draft_id)],
-        }
-
-    mission = mission_repository.get(mission_id)
-    if mission is None:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "mission_not_found",
-            "severity": "warning",
-            "message": f"mission #{mission_id} not found",
-            "recoverable": True,
-        })
-        return {
-            "approval_status": "approved",
-            "mission_export": {},
-            "errors": mission_errors,
-            "node_trace": [_node_entry("record_approval", ok=False, draft_id=draft_id, mission_id=mission_id)],
-        }
-
-    mission_json = mission.mission_json if isinstance(mission.mission_json, dict) else {}
-    route_summary = _route_summary_for_approval(mission_json)
-    if route_summary.get("waypoint_count"):
-        try:
-            export_draft = {
-                "id": f"mission-{mission.id}",
-                "status": "approved",
-                "mission": mission_json,
-            }
-            result = MissionExportService().export(
-                export_draft,
-                home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
-            )
-            if result.get("ok"):
-                mission_export = {
-                    "file_path": result.get("file_path", ""),
-                    "waypoint_count": result.get("waypoint_count", 0),
-                    "vehicle_type": result.get("vehicle_type", 0),
-                    "exported_at": time.time(),
-                }
-            else:
-                export_error = str(result.get("error") or "mission export failed")
-        except Exception as exc:
-            export_error = str(exc)
-
-    updated_mission_json = dict(mission_json)
-    if mission_export:
-        updated_mission_json["mission_export"] = mission_export
-    try:
-        updated = mission_repository.update(
-            mission.id,
-            expected_client_version=mission.client_version,
-            mission_json=updated_mission_json,
-            approval_status="approved",
-        )
-        client_version = int(updated.client_version or 0)
-    except Exception as exc:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "mission_approval_sync_error",
-            "severity": "warning",
-            "message": str(exc),
-            "recoverable": True,
-        })
-
-    if export_error:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "mission_export_failed",
-            "severity": "warning",
-            "message": export_error,
-            "recoverable": True,
-        })
-
-    return {
-        "approval_status": "approved",
-        "mission_export": mission_export,
-        "mission_client_version": client_version,
-        "errors": mission_errors,
-        "node_trace": [_node_entry(
-            "record_approval",
-            ok=not export_error,
-            draft_id=draft_id,
-            mission_id=mission_id,
-            mission_export=mission_export,
-            export_error=export_error or None,
-        )],
-    }
-
-
-def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Mark the draft rejected on the linked Mission row."""
-    rt = _runtime(config)
-    mission_id = int(state.get("mission_id") or 0)
-    mission_repository = getattr(rt.app_runtime, "mission_repository", None)
-    client_version = int(state.get("mission_client_version") or 0)
-    errors: list[dict[str, Any]] = []
-
-    if mission_repository is None or mission_id <= 0:
-        errors.append({
-            "node": "record_rejection",
-            "code": "mission_link_missing",
-            "severity": "warning",
-            "message": "linked Mission row could not be rejected (no mission_id)",
-            "recoverable": True,
-        })
-    else:
-        mission = mission_repository.get(mission_id)
-        if mission is None:
-            errors.append({
-                "node": "record_rejection",
-                "code": "mission_not_found",
-                "severity": "warning",
-                "message": f"mission #{mission_id} not found",
-                "recoverable": True,
-            })
-        else:
-            try:
-                updated = mission_repository.update(
-                    mission.id,
-                    expected_client_version=mission.client_version,
-                    approval_status="rejected",
-                )
-                client_version = int(updated.client_version or 0)
-            except Exception as exc:
-                errors.append({
-                    "node": "record_rejection",
-                    "code": "mission_rejection_sync_error",
-                    "severity": "warning",
-                    "message": str(exc),
-                    "recoverable": True,
-                })
-    return {
-        "approval_status": "rejected",
-        "mission_client_version": client_version,
-        "errors": errors,
-        "node_trace": [_node_entry(
-            "record_rejection",
-            ok=not errors,
-            draft_id=state.get("draft_id", ""),
-            mission_id=mission_id,
-        )],
-    }
-
-
 # ── Phase 3 nodes ─────────────────────────────────────────────────────────────
 
 async def prepare_clarification(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
@@ -1496,30 +1185,14 @@ def _route_after_validate_draft(state: PlanningShellGraphState) -> str:
     return "store_draft"
 
 
-def _route_after_store_draft(state: PlanningShellGraphState) -> str:
-    status = state.get("approval_status", "")
-    if status == "awaiting_approval":
-        return "request_planning_shell_approval"
-    return "finalize_response"
-
-
-def _route_after_approval(state: PlanningShellGraphState) -> str:
-    decision = state.get("operator_decision", "")
-    if decision == "reject":
-        return "record_rejection"
-    if decision == "approve":
-        return "record_approval"
-    # pending_rest or empty — go straight to finalize
-    return "finalize_response"
-
-
 # ── Graph construction ────────────────────────────────────────────────────────
 
 def build_planning_shell_graph(checkpointer: Any = None):
     """Build and compile the planning-shell graph.
 
-    Pass a LangGraph checkpointer to enable interrupt/resume approval.
-    Without a checkpointer the graph falls back to REST-only approval.
+    Pass a LangGraph checkpointer to enable interrupt/resume for the
+    `prepare_clarification` HITL pause. Without a checkpointer the graph
+    skips the interrupt and proceeds straight through.
     """
     graph: StateGraph = StateGraph(PlanningShellGraphState)
 
@@ -1529,9 +1202,6 @@ def build_planning_shell_graph(checkpointer: Any = None):
     graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("validate_draft", validate_draft)
     graph.add_node("store_draft", store_draft)
-    graph.add_node("request_planning_shell_approval", request_planning_shell_approval)
-    graph.add_node("record_approval", record_approval)
-    graph.add_node("record_rejection", record_rejection)
     graph.add_node("finalize_response", finalize_response)
     graph.add_node("finalize_error", finalize_error)
 
@@ -1567,22 +1237,7 @@ def build_planning_shell_graph(checkpointer: Any = None):
             "store_draft": "store_draft",
         },
     )
-    graph.add_conditional_edges(
-        "store_draft",
-        _route_after_store_draft,
-        {"request_planning_shell_approval": "request_planning_shell_approval", "finalize_response": "finalize_response"},
-    )
-    graph.add_conditional_edges(
-        "request_planning_shell_approval",
-        _route_after_approval,
-        {
-            "record_approval": "record_approval",
-            "record_rejection": "record_rejection",
-            "finalize_response": "finalize_response",
-        },
-    )
-    graph.add_edge("record_approval", "finalize_response")
-    graph.add_edge("record_rejection", "finalize_response")
+    graph.add_edge("store_draft", "finalize_response")
     graph.add_edge("finalize_response", END)
     graph.add_edge("finalize_error", END)
 
@@ -1642,7 +1297,6 @@ async def _emit_chunk_events(
             yield _json_line({
                 "type": "mission_draft_created",
                 "draft_id": update["draft_id"],
-                "approval_status": update.get("approval_status", ""),
                 "ts": time.time(),
             })
         if update.get("validation"):
@@ -1657,20 +1311,6 @@ async def _emit_chunk_events(
                 "retrieval_request": update.get("retrieval_request", current_state.get("retrieval_request", {})),
                 "retrieved_sources": update.get("retrieved_sources") or [],
                 "retrieval_citations": update.get("retrieval_citations") or [],
-                "ts": time.time(),
-            })
-        if update.get("approval_status") == "awaiting_approval":
-            draft_id = update.get("draft_id") or current_state.get("draft_id", "")
-            yield _json_line({
-                "type": "mission_draft_approval_required",
-                "draft_id": draft_id,
-                "ts": time.time(),
-            })
-        if update.get("approval_status") in ("approved", "rejected"):
-            yield _json_line({
-                "type": "mission_draft_decision",
-                "draft_id": update.get("draft_id") or current_state.get("draft_id", ""),
-                "approval_status": update["approval_status"],
                 "ts": time.time(),
             })
 
@@ -1691,9 +1331,9 @@ async def stream_planning_shell_graph(
 ) -> AsyncIterator[str]:
     """Async generator that runs the graph and yields NDJSON event lines.
 
-    Phase 2: when the graph hits interrupt() at request_planning_shell_approval,
-    emits graph_interrupt with the thread_id and stops streaming. The client
-    then calls the resume endpoint with the operator decision.
+    When the graph hits interrupt() at prepare_clarification, emits
+    graph_interrupt with the thread_id and stops streaming. The client then
+    calls the resume endpoint with the clarification answer.
     """
     run_id = uuid.uuid4().hex[:12]
     thread_id = f"ai-session:{session_id}:run:{run_id}"
@@ -1771,7 +1411,6 @@ async def stream_planning_shell_graph(
             "thread_id": thread_id,
             "session_id": session_id,
             "draft_id": current_state.get("draft_id", ""),
-            "approval_status": current_state.get("approval_status", ""),
             "ts": time.time(),
         })
 
@@ -1783,10 +1422,10 @@ async def resume_planning_shell_graph(
     decision: str,
     note: str = "",
 ) -> AsyncIterator[str]:
-    """Resume a graph that is suspended at an interrupt() approval gate.
+    """Resume a graph suspended at the prepare_clarification interrupt.
 
-    Requires runtime.checkpointer to be set (Phase 2). Yields NDJSON events
-    for the remaining graph nodes after the approval decision.
+    Requires runtime.checkpointer to be set. Yields NDJSON events for the
+    remaining graph nodes after the clarification answer.
     """
     if not _INTERRUPT_AVAILABLE:
         yield _json_line({
@@ -1859,6 +1498,5 @@ async def resume_planning_shell_graph(
         "run_id": run_id,
         "thread_id": thread_id,
         "draft_id": current_state.get("draft_id", ""),
-        "approval_status": current_state.get("approval_status", ""),
         "ts": time.time(),
     })
