@@ -1,14 +1,3 @@
-const SET2 = [
-  '#66c2a5',
-  '#fc8d62',
-  '#8da0cb',
-  '#e78ac3',
-  '#a6d854',
-  '#ffd92f',
-  '#e5c494',
-  '#b3b3b3',
-];
-
 export function normalizeMissionRows(rows = []) {
   return rows
     .filter((row) => row && row.id !== undefined && row.id !== null)
@@ -33,10 +22,3 @@ export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
   return ordered;
 }
 
-export function assignPaletteColor(visibleIds) {
-  const palette = new Map();
-  Array.from(visibleIds || []).forEach((missionId, index) => {
-    palette.set(missionId, SET2[index % SET2.length]);
-  });
-  return palette;
-}

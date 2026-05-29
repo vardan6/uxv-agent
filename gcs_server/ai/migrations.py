@@ -46,7 +46,6 @@ def _migration_010_adr_0021_flat_missions(conn: sqlite3.Connection) -> None:
           created_at REAL NOT NULL,
           created_by_user_id TEXT NOT NULL DEFAULT '',
           client_version INTEGER NOT NULL DEFAULT 0,
-          approval_status TEXT NOT NULL DEFAULT 'approved',
           mission_json TEXT NOT NULL DEFAULT '{}'
         )
         """
@@ -60,18 +59,8 @@ def _migration_010_adr_0021_flat_missions(conn: sqlite3.Connection) -> None:
 
 
 def _migration_011_add_mission_approval_status(conn: sqlite3.Connection) -> None:
-    columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(missions)").fetchall()
-    }
-    if "approval_status" not in columns:
-        conn.execute(
-            "ALTER TABLE missions ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'"
-        )
-    conn.execute(
-        "UPDATE missions SET approval_status = 'approved' "
-        "WHERE approval_status IS NULL OR TRIM(approval_status) = ''"
-    )
+    # Historical no-op. ADR 0022 removed the per-mission approval gate.
+    return None
 
 
 def _migration_012_add_mission_deleted_at(conn: sqlite3.Connection) -> None:
@@ -88,10 +77,80 @@ def _migration_012_add_mission_deleted_at(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_013_add_mission_color(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(missions)").fetchall()
+    }
+    if "color" not in columns:
+        conn.execute(
+            "ALTER TABLE missions ADD COLUMN color TEXT NOT NULL DEFAULT ''"
+        )
+
+
+def _migration_014_drop_mission_approval_status(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(missions)").fetchall()
+    }
+    if "approval_status" not in columns:
+        return
+
+    conn.execute("ALTER TABLE missions RENAME TO missions_old")
+    conn.execute(
+        """
+        CREATE TABLE missions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          origin TEXT NOT NULL CHECK(origin IN ('manual', 'ai_chat')),
+          origin_chat_id TEXT,
+          created_at REAL NOT NULL,
+          created_by_user_id TEXT NOT NULL DEFAULT '',
+          client_version INTEGER NOT NULL DEFAULT 0,
+          mission_json TEXT NOT NULL DEFAULT '{}',
+          deleted_at REAL,
+          color TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO missions (
+          id, name, origin, origin_chat_id, created_at,
+          created_by_user_id, client_version, mission_json, deleted_at, color
+        )
+        SELECT
+          id,
+          name,
+          origin,
+          origin_chat_id,
+          created_at,
+          created_by_user_id,
+          client_version,
+          mission_json,
+          deleted_at,
+          color
+        FROM missions_old
+        """
+    )
+    conn.execute("DROP TABLE missions_old")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_created_at ON missions(created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_origin_chat ON missions(origin_chat_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_deleted_at ON missions(deleted_at)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (10, "adr_0021_flat_missions", _migration_010_adr_0021_flat_missions),
     (11, "add_mission_approval_status", _migration_011_add_mission_approval_status),
     (12, "add_mission_deleted_at", _migration_012_add_mission_deleted_at),
+    (13, "add_mission_color", _migration_013_add_mission_color),
+    (14, "drop_mission_approval_status", _migration_014_drop_mission_approval_status),
 )
 
 

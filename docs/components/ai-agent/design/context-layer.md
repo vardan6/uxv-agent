@@ -24,185 +24,38 @@ Retry intentionally rebuilds context from the latest rover/runtime/settings/map 
 
 ## Current Context Sources
 
-### Runtime And State Store Meaning
+The current context layer does not create a second runtime or state database.
+It reads from the assembled `AppRuntime`, `LocalStateBackend`, and a small set
+of existing read-only stores already owned by the GCS.
 
-The current context layer does not create a second runtime or a second state database.
+Durable source groups:
 
-`AppRuntime` is the assembled live GCS process object. It holds:
-- loaded `AppConfig`
-- `LocalStateBackend`
-- MQTT runtime
-- control service
-- replay store
-- AI session store
-- LLM secret store
-- WebSocket manager
+- **Rover/runtime state** from MQTT-fed telemetry and local runtime state:
+  freshness, pose, heading, speed, battery/power, camera freshness, broker
+  state, active controller summary, video mode, simulator backend identity,
+  and current replay session.
+- **Settings** from loaded config: broker host/port, topic names, control-rate
+  policy, key bindings, video ingest/delivery mode, host/port, map/site
+  defaults, backend identity, and related exact-value settings questions.
+- **LLM/provider state** from `llm_providers`, `model_routing`, and secret-store
+  availability: routing rules, resolved active provider, provider metadata,
+  safe secret-presence booleans, and latest provider-check summaries.
+- **Scene facts** from `config/terrain_scene.v1.json`: terrain bounds, terrain
+  size, road/object counts, object kinds, spawn point, and deterministic object
+  queries such as "in front of rover", "near rover", and "by kind".
+- **Mission state** from the backend mission surface: current mission rows,
+  overlay-backed summaries, and execution-relevant mission status when present.
+- **Recent history** from replay storage: active replay-session summary and
+  bounded recent telemetry samples.
 
-`LocalStateBackend` is the in-memory current-state store for the running GCS process. It holds facts that change while the GCS is running:
-- latest telemetry snapshot
-- broker connection state and freshness timestamps
-- active browser controller and last input timestamp
-- video mode state and latest video-frame metadata
+Secret handling is strict: raw API keys, stored-secret values, and environment
+variable contents never enter context; only safe booleans such as
+`secret_ref_configured` or `has_stored_secret` may appear.
 
-The AI current context reads from these existing objects. It does not create a new control path and does not publish commands.
-
-### Rover Current State
-
-Source:
-- latest telemetry received by the GCS from MQTT
-
-Store:
-- `LocalStateBackend`
-
-Included facts:
-- telemetry freshness
-- last telemetry timestamp and age
-- backend identity
-- local position
-- GPS position
-- heading
-- speed
-- battery/power data
-- camera mode
-- camera freshness
-
-### Runtime Current State
-
-Source:
-- GCS runtime state and loaded configuration
-
-Store:
-- `LocalStateBackend`
-- loaded `AppConfig`
-- active `ReplayStore`
-
-Included facts:
-- MQTT broker state
-- active controller summary
-- video modes
-- simulation backend identity
-- configured map/site data
-- current replay session ID
-
-### Settings Current Context
-
-Source:
-- loaded `AppConfig`
-- `config/common.local.json` when present
-- `config/common.example.json` fallback values
-
-Included facts:
-- settings file path
-- MQTT broker host and port
-- MQTT topic prefix
-- MQTT control, telemetry, camera, and GCS presence topics
-- MQTT control rate and telemetry policy values
-- configured key bindings for control actions
-- configured video ingest/delivery modes
-- GCS host/port and freshness settings
-- simulator backend identity and available backend names
-- map/site defaults
-- AI text-to-speech settings
-
-This source is intended for exact settings questions such as:
-- broker host or port
-- configured MQTT topics
-- key used for a control action
-- video ingest/delivery mode
-- simulator backend
-- AI voice/TTS settings
-
-These are examples, not a fixed whitelist. Any setting included in the context can be answered using the same mechanism.
-
-### LLM Current Context
-
-Source:
-- `llm_providers` in the loaded GCS config
-- `model_routing` in the loaded GCS config
-- stored-secret availability from the GCS LLM secret store
-
-Included facts:
-- active AI session ID and provider override state
-- purpose-based model routing
-- General Chat routing rule
-- active chat provider resolved for the current request
-- active chat provider source: session override, General Chat route, first enabled provider, or none
-- provider IDs and display names
-- provider type
-- model ID
-- base URL
-- enabled/disabled state
-- capabilities
-- authentication mode summary
-- whether a secret reference is configured
-- whether a stored secret exists for stored-secret providers
-- latest provider check status fields
-
-Secret handling:
-- raw API keys are not included
-- stored secret values are not included
-- environment variable values are not included
-- the context may include safe booleans such as `uses_secret`, `secret_ref_configured`, and `has_stored_secret`
-
-This is what "redacted settings" means in this project: sensitive values are withheld, not merely shortened.
-
-Session-specific behavior:
-- AI send and retry endpoints pass the active `session_id` into `AIContextService`
-- if the session has a provider override, that provider is reported as the active chat provider
-- otherwise the active provider is resolved from General Chat routing, then the first enabled provider fallback
-- assistant message metadata still stores the provider/model actually used for each response
-
-### Scene Map And Object Facts
-
-Source:
-- `config/terrain_scene.v1.json`
-
-Included facts:
-- backend
-- terrain bounds
-- terrain size
-- source path
-- road count
-- object count
-- object kinds
-- spawn point
-- site name
-
-Deterministic object queries:
-- objects in front of the rover within a max distance and field of view
-- objects near the rover within a radius
-- objects by kind
-
-Scene payload grid size:
-- AI context currently loads the scene map with `grid_size=32`.
-- `grid_size` controls the sampled heightmap resolution included in the scene payload. It does not change object centers, object sizes, terrain bounds, roads, or spawn coordinates, which come from the source scene manifest.
-- The low grid size is intentional for compact context and tool payloads. If future spatial queries use terrain height/collision detail rather than object centers and 2D distances, those queries should request a higher or native-resolution terrain representation explicitly.
-
-### Mission Current State
-
-Planned facts:
-- active mission ID
-- goal
-- status
-- plan summary
-- approval state
-- execution state
-- monitoring notes
-
-### Recent History
-
-Source:
-- replay SQLite database
-
-Current surfaces:
-- active replay session summary
-- recent telemetry samples
-
-Future additions:
-- recent controls
-- recent runtime events
-- compact active replay narrative
-- later RAG-backed document/project knowledge and optional web-grounded retrieval
+For scene payload size, the default `grid_size=32` remains intentional: object
+positions, bounds, roads, and spawn coordinates come from the source manifest,
+while higher-resolution terrain sampling should be requested explicitly by tools
+that need it.
 
 ## Chat-Time Flow
 
@@ -227,101 +80,17 @@ The context block is intentionally compact. It is meant to keep high-signal live
 
 ## Query Behavior
 
-The current context has two kinds of data.
+The context has two classes of data:
 
-Always included:
-- compact rover state
-- compact runtime state
-- compact settings context
-- compact LLM/provider context
-- compact mission state
-- compact scene-map summary
+- **Always included**: compact rover, runtime, settings, provider, mission,
+  and scene summaries.
+- **Query-triggered**: larger deterministic details such as object-near-rover
+  queries, replay-session summaries, recent telemetry samples, or other
+  bounded expansions the user explicitly asks for.
 
-Query-triggered details:
-- larger or more specific data added only when the user asks for it
-- examples include objects in front of the rover, objects near the rover, objects by kind, current replay summary, and recent telemetry samples
-- future examples include objects to the left/right, objects inside a sector, route-intersecting objects, dynamic detected objects, and mission validation details
-- in agent mode, spatial query-triggered details are not preloaded into the prompt; the read-only agent tools fetch them on demand
-
-This keeps normal questions small while still allowing richer answers for spatial and recent-history questions.
-
-Examples:
-
-```text
-What is the rover state?
-```
-
-Uses:
-- current rover state
-- runtime context
-- mission placeholder
-- scene summary
-
-```text
-Where is the rover?
-```
-
-Uses:
-- local position
-- GPS
-- heading
-- freshness
-
-```text
-What objects are in front of the rover within 100 meters and 20 degrees?
-```
-
-Uses:
-- current rover pose
-- structured scene-map objects
-- deterministic distance and bearing calculation
-
-Does not use:
-- vector RAG
-- MQTT control
-
-```text
-What is the current mission?
-```
-
-Uses:
-- mission current-state provider
-
-Current answer should indicate:
-- no active mission storage/workflow exists yet
-
-```text
-What is the broker port?
-```
-
-Uses:
-- settings current context
-- `settings.mqtt.broker_port`
-
-```text
-What key moves forward?
-```
-
-Uses:
-- settings current context
-- `settings.key_bindings.forward`
-
-```text
-What model is configured for General Chat?
-```
-
-Uses:
-- LLM current context
-- `llm.general_chat_route`
-- matching provider entry in `llm.providers`
-
-```text
-What happened recently?
-```
-
-Uses:
-- active replay session summary
-- recent telemetry samples
+In agent mode, these larger spatial/history details are fetched on demand
+through tools rather than preloaded into every prompt. This keeps routine
+questions small without losing exactness.
 
 ## Important Architecture Decision
 
@@ -351,18 +120,5 @@ It may:
 - report stale telemetry or missing camera data
 - say that no active mission state exists
 - provide context for future read-only tools and mission drafting
-
-## Forward-Looking Plan
-
-RAG integration plan:
-- keep exact live state in this context layer
-- add RAG collections for project docs, rover docs, operator notes, reports, mission memory, and semantic object definitions
-- merge current-context metadata and RAG citation metadata on assistant messages
-- extend the existing `/ai` source controls to future RAG/web-grounded surfaces only after those providers exist
-
-Mission workflow plan:
-- use current context for initial mission drafting
-- store mission drafts and approval state separately from chat text
-- keep execution behind explicit operator approval and controller/safety checks
 
 Related: [Spatial Tools](./spatial-tools.md) · [Graph Spec](./graph-spec.md) · [Replay Access](./replay-access.md) · [Requirements](../requirements.md).

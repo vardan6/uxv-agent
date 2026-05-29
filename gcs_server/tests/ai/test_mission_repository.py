@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from ai.mission_repository import (
@@ -7,6 +9,7 @@ from ai.mission_repository import (
     MissionNotFound,
     MissionRepository,
     MissionVersionConflict,
+    default_mission_color,
     validate_mission_json,
 )
 
@@ -35,7 +38,8 @@ def test_create_assigns_monotonic_ids_and_zero_version(tmp_path) -> None:
     assert second.id == first.id + 1
     assert first.client_version == 0
     assert second.origin_chat_id == "chat-1"
-    assert first.approval_status == "approved"
+    assert first.color == default_mission_color(first.id)
+    assert second.color == default_mission_color(second.id)
 
 
 def test_create_rejects_invalid_origin(tmp_path) -> None:
@@ -43,13 +47,6 @@ def test_create_rejects_invalid_origin(tmp_path) -> None:
 
     with pytest.raises(ValueError):
         repo.create(name="bad", origin="bogus")
-
-
-def test_create_rejects_invalid_approval_status(tmp_path) -> None:
-    repo = _repo(tmp_path)
-
-    with pytest.raises(ValueError):
-        repo.create(name="bad", origin="manual", approval_status="not-a-status")
 
 
 def test_get_returns_none_for_missing(tmp_path) -> None:
@@ -77,6 +74,22 @@ def test_update_bumps_client_version_and_persists_fields(tmp_path) -> None:
     assert reloaded is not None
     assert reloaded.name == "renamed"
     assert reloaded.client_version == 1
+
+
+def test_update_persists_color_override(tmp_path) -> None:
+    repo = _repo(tmp_path)
+    created = repo.create(name="orig", origin="manual")
+
+    updated = repo.update(
+        created.id,
+        expected_client_version=created.client_version,
+        color="#112233",
+    )
+
+    assert updated.color == "#112233"
+    reloaded = repo.get(created.id)
+    assert reloaded is not None
+    assert reloaded.color == "#112233"
 
 
 def test_update_raises_on_version_conflict(tmp_path) -> None:
@@ -166,3 +179,29 @@ def test_validate_mission_json_accepts_step_waypoints() -> None:
         {"steps": [{"waypoints": [{"x": 1, "y": 2}]}]}
     )
     assert result["status"] == "ok"
+
+
+def test_schema_drops_approval_status_column(tmp_path) -> None:
+    db_path = tmp_path / "ai.sqlite3"
+    _repo(tmp_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(missions)").fetchall()
+        }
+
+    assert "approval_status" not in columns
+
+
+def test_get_falls_back_to_default_color_when_column_is_blank(tmp_path) -> None:
+    repo = _repo(tmp_path)
+    mission = repo.create(name="m", origin="manual")
+
+    with sqlite3.connect(tmp_path / "ai.sqlite3") as conn:
+        conn.execute("UPDATE missions SET color = '' WHERE id = ?", (mission.id,))
+        conn.commit()
+
+    reloaded = repo.get(mission.id)
+    assert reloaded is not None
+    assert reloaded.color == default_mission_color(mission.id)

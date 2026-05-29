@@ -1,11 +1,11 @@
 import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState } from './data/missionApi.js';
-import { getMission, createMission, updateMissionWaypoint, insertMissionWaypoint, deleteMissionWaypoint, deleteMission, restoreMission } from './data/missionMutationApi.js';
+import { getMission, createMission, updateMissionWaypoint, insertMissionWaypoint, deleteMissionWaypoint, deleteMission, restoreMission, updateMissionColor } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
 import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
-import { normalizeMissionRows, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
+import { normalizeMissionRows, enforceVisibilityCap } from './missionListLogic.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
 import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
@@ -16,15 +16,16 @@ import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
 import { MapViewToolbar, MAP_STYLES } from './ui/MapViewToolbar.js';
 import { MissionColorPicker } from './ui/MissionColorPicker.js';
 import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
-import { missionColorOverrides } from './state/missionColorOverrides.js';
+import { MissionBulkActionBar } from './ui/MissionBulkActionBar.js';
 import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
 import { editState } from './state/editState.js';
 import { selectionState } from './state/selectionState.js';
+import { defaultMissionColor } from './state/missionColorOverrides.js';
 
 const MAP_STYLE_STORAGE_KEY = 'gcs-map-widget-style';
 const SCENE_MAP_PAD = 0.05; // 5% padding around scene bounds for maxBounds clamp
 
-const LOCKED_STATUSES = new Set(['approved', 'exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
+const LOCKED_STATUSES = new Set(['executing']);
 
 function collectEditableWaypoints(mission = {}) {
   if (Array.isArray(mission.waypoints) && mission.waypoints.length) {
@@ -154,6 +155,7 @@ export class MapWidget {
     this._colorPicker = null;
     this._colorPreview = null; // { missionId, color } | null — live hover preview override
     this._overflowMenu = null;
+    this._missionBulkBar = null;
   }
 
   mount() {
@@ -202,6 +204,12 @@ export class MapWidget {
     });
     this._colorPicker = new MissionColorPicker(this._mapWrapEl);
     this._overflowMenu = new MissionListOverflowMenu(this._mapWrapEl);
+    this._missionBulkBar = new MissionBulkActionBar(this._listEl, {
+      onDelete: () => this._handleDeleteSelectedMissions(),
+      onHide: () => this._hideSelectedMissions(),
+      onShow: () => this._showSelectedMissions(),
+      onClearSelection: () => selectionState.clearSelection(),
+    });
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -417,6 +425,56 @@ export class MapWidget {
     }
     this._missionCache.clear();
     await this.refresh();
+  }
+
+  async _handleDeleteSelectedMissions() {
+    if (this._actionBusy) return;
+    const ids = [...selectionState.selectedMissionIds];
+    if (ids.length < 2) return;
+    this._actionBusy = true;
+    for (const missionId of ids) {
+      const result = await deleteMission(missionId);
+      if (!result.ok) {
+        this._actionBusy = false;
+        this._showError(result.error || 'Bulk delete failed');
+        this._missionCache.clear();
+        await this.refresh();
+        return;
+      }
+    }
+    this._actionBusy = false;
+    this._missionCache.clear();
+    selectionState.clearSelection();
+    await this.refresh();
+    this._hintToasts?.show(`Deleted ${ids.length} missions.`);
+  }
+
+  _hideSelectedMissions() {
+    const ids = [...selectionState.selectedMissionIds];
+    const executingIds = this._executingMissionIds();
+    for (const id of ids) {
+      if (!executingIds.includes(id)) {
+        this._visibleMissionOrder = this._visibleMissionOrder.filter((v) => v !== id);
+      }
+    }
+    this._render();
+  }
+
+  async _showSelectedMissions() {
+    const ids = [...selectionState.selectedMissionIds];
+    const executingIds = this._executingMissionIds();
+    for (const id of ids) {
+      if (!this._visibleMissionOrder.includes(id)) {
+        this._visibleMissionOrder.push(id);
+      }
+    }
+    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
+    const toLoad = ids.filter((id) => !this._missionCache.has(id));
+    await Promise.all(toLoad.map(async (id) => {
+      const payload = await getMissionOverlay(id);
+      if (payload.ok) this._missionCache.set(id, payload);
+    }));
+    this._render();
   }
 
   async _handleExecuteRequest(missionId) {
@@ -865,8 +923,9 @@ export class MapWidget {
   _render({ fit = false } = {}) {
     const editedMissionId = editState.missionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
-    const paletteByMissionId = assignPaletteColor(this._missions.map((m) => missionIdOf(m)));
-    missionColorOverrides.applyTo(paletteByMissionId);
+    const paletteByMissionId = new Map(
+      this._missions.map((m) => [missionIdOf(m), m.color || '#66c2a5'])
+    );
     if (this._colorPreview && paletteByMissionId.has(this._colorPreview.missionId)) {
       paletteByMissionId.set(this._colorPreview.missionId, this._colorPreview.color);
     }
@@ -890,6 +949,7 @@ export class MapWidget {
       activeProfileId: this._activeProfileId,
       editingMissionId: editedMissionId || '',
     });
+    this._missionBulkBar?.update(selectedMissionIds.size);
 
     // Exclude the actively-edited mission from the read-only overlay so only
     // the editable layer shows it.
@@ -959,20 +1019,28 @@ export class MapWidget {
 
   _openColorPicker(missionId, anchorEl) {
     if (!missionId || !this._colorPicker) return;
-    const currentColor = this._paletteByMissionId.get(missionId) || '#66c2a5';
-    const defaultPalette = assignPaletteColor(this._missions.map((m) => missionIdOf(m)));
-    const defaultColor = defaultPalette.get(missionId) || '#66c2a5';
+    const mission = this._missions.find((m) => missionIdOf(m) === missionId);
+    const defaultColor = defaultMissionColor(missionId);
+    const currentColor = mission?.color || defaultColor;
     this._colorPicker.open(anchorEl, {
       currentColor,
       defaultColor,
-      onPick: (color) => {
+      onPick: async (color) => {
         this._colorPreview = null;
-        missionColorOverrides.set(missionId, color);
+        const result = await updateMissionColor(missionId, color);
+        if (result.ok && result.mission) {
+          const idx = this._missions.findIndex((m) => missionIdOf(m) === missionId);
+          if (idx >= 0) this._missions[idx] = { ...this._missions[idx], color: result.mission.color };
+        }
         this._render();
       },
-      onReset: () => {
+      onReset: async () => {
         this._colorPreview = null;
-        missionColorOverrides.clear(missionId);
+        const result = await updateMissionColor(missionId, defaultColor);
+        if (result.ok && result.mission) {
+          const idx = this._missions.findIndex((m) => missionIdOf(m) === missionId);
+          if (idx >= 0) this._missions[idx] = { ...this._missions[idx], color: result.mission.color };
+        }
         this._render();
       },
       onPreview: (color) => {
@@ -1320,6 +1388,7 @@ export class MapWidget {
 
     const listEl = document.createElement('div');
     listEl.className = 'map-widget-list';
+    listEl.style.position = 'relative';
     this._listEl = listEl;
 
     const mapWrap = document.createElement('div');

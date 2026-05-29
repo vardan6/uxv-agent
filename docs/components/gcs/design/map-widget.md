@@ -70,11 +70,6 @@ Design rules:
 - executing missions remain force-visible
 - AI clone-and-edit produces a second row rather than mutating the source row
 
-Transitional note:
-
-- the current widget still groups rows through a one-Mission-per-operation
-  compatibility projection because the direct sidebar rewrite is Slice 4
-
 ### Execution
 
 The widget uses existing backend transitions rather than inventing new ones.
@@ -186,19 +181,13 @@ added, reordered, or removed without restructuring the control.
 
 Current buttons:
 
-- **Fit to scene** — invokes a `fitSceneMapBounds()` analogous to
-  `gcs_server/static/replay.js`'s implementation. Source-of-truth for scene
-  bounds is the existing scene metadata path used by the read-only `_group`
-  renderer.
+- **Fit to scene** — returns the viewport to scene bounds from the existing
+  scene metadata path.
 - **Fit to selection** — fits to the bounding box of
   `selectionState.selectedMissionIds`; falls back to the active mission when
   the selection size is ≤ 1. Bound to `f` while focus is inside the widget.
 - **Style switcher** — opens a popover offering terrain, scene image, and
-  plain grid. The choice persists in `localStorage` under a single key. If
-  the scene-image layer turns out to need non-trivial wiring (separate fetch
-  path or auth surface), the widget ships terrain + grid first and the
-  scene-image option is treated as follow-up; this is a runtime decision, not
-  a pre-commitment.
+  plain grid. The choice persists in `localStorage` under a single key.
 
 The widget applies hard clamping at construction:
 
@@ -256,12 +245,10 @@ Design rules:
   concurrency checks
 - manual edits mutate the active Mission in place
 - AI edits default to clone-and-edit, producing a new Mission row
-- when the operator presses edit on a mission whose status is in the locked
-  set (`approved`, `exported`, `cutover_pending`, `executing`), the widget
-  surfaces an explicit confirmation before forking. On confirm, the original
-  mission is removed from `_visibleMissionOrder` for the duration of the
-  edit so its static markers do not appear underneath the fork's edit
-  overlay; exit edit restores the original to the visible set.
+- only `executing` missions are locked; all other statuses are directly
+  editable without a fork prompt. The fork flow (with confirm dialog and
+  source-hiding from `_visibleMissionOrder`) is still triggered when
+  `LOCKED_STATUSES` fires, but that set currently contains only `executing`.
 
 ### Gestures And Keyboard
 
@@ -301,24 +288,29 @@ While a mission is executing (or armed):
 
 ## Mission Colour
 
-Each mission has an identity colour that is durable across reloads.
+Each mission has an identity colour stored in the `missions.color` column
+(migration 013) and exposed in every API row response. The colour follows the
+mission across browsers, sessions, and export/import.
 
 Design rules:
 
-- The preferred store is a server-side `color` attribute on the Mission, so
-  the choice follows the mission across browsers and sessions and round-trips
-  through export/import. The exact field shape stays the backend overlay
-  builder's call.
-- If the server schema change turns out non-trivial for the current cycle, a
-  per-browser `localStorage` override keyed by `mission_id` is an acceptable
-  fallback for one cycle; the override is then promoted to a server field
-  later. This is a runtime decision, not a pre-commitment.
-- The palette used by `assignPaletteColor` remains the default source. The
-  picker exposes the curated palette as a swatch grid plus a "Custom…"
-  expansion to a hex picker; a reset affordance clears the override.
-- State-channel indicators (edit-mode stripe, selection dimming, active
-  stroke bump) never reuse the identity colour and are not stored alongside
-  it.
+- Color is assigned at creation time:
+  `_MISSION_COLOR_PALETTE[mission_id % len(palette)]` in
+  `gcs_server/ai/mission_repository.py`. The palette is a curated 24-colour
+  set biased away from terrain-blending greens; only a small number of greener
+  options remain, and those skew toward brighter teal/lime tones so routes stay
+  readable over the default map.
+- Existing rows with an empty `color` column receive the same deterministic
+  fallback when read.
+- User overrides are persisted via `PATCH /api/ai/missions/{id}/color`. The
+  picker sends this call on commit.
+- `↺ Reset` persists the mission's deterministic palette default back through
+  the same `PATCH` path; it is not a client-only preview clear.
+- `missionColorOverrides` (the prior `localStorage` fallback) is removed. `assignPaletteColor` is removed.
+- The sidebar row consumes the mission colour beyond the 4 px chip: the title
+  plus vehicle/origin identity icons use the same colour token so a committed
+  change is visible in the mission item itself.
+- State-channel indicators (edit-mode stripe, selection dimming, active stroke bump) never reuse the identity colour and are not stored alongside it.
 
 ## Mission List Sort, Import, and Export
 

@@ -271,6 +271,7 @@ def _mission_to_api_row(mission: Any, controller_state: dict[str, Any] | None = 
         "origin_chat_id": str(mission.origin_chat_id or ""),
         "name": str(mission.name or ""),
         "goal": str(materialized_mission.get("goal") or mission.name or ""),
+        "color": str(mission.color or ""),
         "mission": materialized_mission,
         "provenance": provenance,
     }
@@ -2283,7 +2284,6 @@ async def create_mission(request: Request) -> JSONResponse:
         origin="manual",
         origin_chat_id=origin_chat_id,
         mission_json=mission_json,
-        approval_status="approved",
     )
     return JSONResponse({"ok": True, "mission": _mission_to_api_row(new_mission)})
 
@@ -2422,6 +2422,28 @@ async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=409, detail="cannot delete an active mission (executing or armed)")
     repository.delete(parsed_id)
     return JSONResponse({"ok": True, "deleted_mission_id": parsed_id})
+
+
+@app.patch("/api/ai/missions/{mission_id}/color")
+async def update_mission_color(mission_id: str, request: Request) -> JSONResponse:
+    repository = _mission_repository(request)
+    parsed_id = _parse_mission_id(mission_id, field_name="mission_id")
+    mission = repository.get(parsed_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    color = str(payload.get("color") or "").strip()
+    if not color:
+        raise HTTPException(status_code=400, detail="color is required")
+    updated = repository.update(
+        parsed_id,
+        expected_client_version=mission.client_version,
+        color=color,
+    )
+    return JSONResponse({"ok": True, "mission": _mission_to_api_row(updated)})
 
 
 @app.post("/api/ai/missions/{mission_id}/restore")

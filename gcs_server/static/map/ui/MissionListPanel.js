@@ -1,7 +1,7 @@
 import { vehicleIcon } from '../vehicleProfiles.js';
 
 const EXECUTABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
-const EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
+const EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending', 'completed', 'superseded', 'rejected', 'validation_failed']);
 
 const STATUS_CLASS = {
   executing: 'is-executing',
@@ -33,12 +33,16 @@ function statusLabel(status) {
 
 function formatDate(ts) {
   if (!ts) return '';
-  return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(ts * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-function missionTitle(missionRow) {
-  const goal = String(missionRow?.mission?.goal || missionRow?.goal || '').trim();
-  return goal || `Mission #${String(missionRow?.id || '').trim() || '?'}`;
+function missionTitle(missionRow, untitledIdx) {
+  const rawGoal = String(missionRow?.mission?.goal || '').trim();
+  if (!rawGoal) {
+    const base = String(missionRow?.goal || '').trim() || 'Untitled mission';
+    return untitledIdx ? `${base} ${untitledIdx}` : base;
+  }
+  return rawGoal;
 }
 
 function computeOriginBadge(missionRow) {
@@ -104,6 +108,7 @@ function renderRow(missionRow, ctx) {
     profilesById,
     activeProfileId,
     editingMissionId,
+    untitledIndexByMissionId = new Map(),
   } = ctx;
   const missionId = String(missionRow.id || '');
   const isVisible = visibleMissionIds.has(missionId);
@@ -118,6 +123,7 @@ function renderRow(missionRow, ctx) {
     <div
       class="mission-list-row ${STATUS_CLASS[status] || ''}${isActive ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}${isEditing ? ' is-editing' : ''}"
       data-row-mission-id="${missionId}"
+      style="--mission-accent:${color}"
     >
       <button
         class="mission-row-status"
@@ -146,7 +152,7 @@ function renderRow(missionRow, ctx) {
         <span class="mission-row-vehicle" aria-hidden="true">${profileIcon}</span>
         <span class="mission-row-origin" title="Mission origin">${computeOriginBadge(missionRow)}</span>
         <span class="mission-row-main">
-          <span class="mission-row-title">${missionTitle(missionRow)}</span>
+          <span class="mission-row-title">${missionTitle(missionRow, untitledIndexByMissionId.get(missionId))}</span>
           <span class="mission-row-meta">${[statusLabel(status), `#${missionId}`, missionRow.created_at ? formatDate(missionRow.created_at) : ''].filter(Boolean).join(' · ')}</span>
         </span>
       </button>
@@ -191,6 +197,13 @@ export class MissionListPanel {
     activeProfileId = 'rover_default',
     editingMissionId = '',
   } = {}) {
+    let untitledCounter = 0;
+    const untitledIndexByMissionId = new Map();
+    for (const row of missions) {
+      if (!String(row?.mission?.goal || '').trim()) {
+        untitledIndexByMissionId.set(String(row.id || ''), ++untitledCounter);
+      }
+    }
     const body = missions.length
       ? missions.map((missionRow) => renderRow(missionRow, {
         visibleMissionIds,
@@ -200,6 +213,7 @@ export class MissionListPanel {
         profilesById,
         activeProfileId,
         editingMissionId,
+        untitledIndexByMissionId,
       })).join('')
       : `<div class="mission-list-empty">
             <p class="mission-list-empty-title">No missions yet</p>

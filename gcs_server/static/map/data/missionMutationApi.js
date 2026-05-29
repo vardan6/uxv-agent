@@ -65,6 +65,14 @@ export async function restoreMission(missionId) {
   });
 }
 
+export async function updateMissionColor(missionId, color) {
+  return _safeFetch(`/api/ai/missions/${encodeURIComponent(missionId)}/color`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ color }),
+  });
+}
+
 // waypointIndex is 1-based.
 export async function deleteMissionWaypoint(missionId, waypointIndex, expected_version) {
   return _safeFetch(

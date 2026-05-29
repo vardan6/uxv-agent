@@ -3218,134 +3218,6 @@ code {
   color: var(--text);
 }
 
-/* Planning-shell approval card */
-.ai-approval-card {
-  margin: 12px 0 4px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-}
-
-.ai-approval-title {
-  margin-bottom: 10px;
-  color: var(--accent);
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.ai-approval-row {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 6px;
-  align-items: baseline;
-  margin-bottom: 6px;
-  font-size: 0.82rem;
-}
-
-.ai-approval-label {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.ai-approval-value {
-  color: var(--text);
-  word-break: break-word;
-}
-
-.ai-approval-risks {
-  margin: 0;
-  padding: 0 0 0 1.1em;
-  list-style: disc;
-  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
-  font-size: 0.82rem;
-}
-
-.ai-approval-note-row {
-  margin: 10px 0 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.ai-approval-note-label {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.ai-approval-note-input {
-  padding: 5px 8px;
-  font-size: 0.82rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text);
-  outline: none;
-}
-
-.ai-approval-note-input:focus {
-  border-color: var(--accent);
-}
-
-.ai-approval-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.ai-approval-btn {
-  padding: 5px 14px;
-  font-size: 0.82rem;
-  font-weight: 600;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.ai-approval-approve {
-  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-}
-
-.ai-approval-approve:hover {
-  background: color-mix(in srgb, var(--accent) 25%, var(--bg));
-}
-
-.ai-approval-reject {
-  background: color-mix(in srgb, var(--danger, #d97706) 10%, var(--bg));
-  color: color-mix(in srgb, var(--danger, #d97706) 90%, var(--text));
-  border-color: color-mix(in srgb, var(--danger, #d97706) 30%, var(--line));
-}
-
-.ai-approval-reject:hover {
-  background: color-mix(in srgb, var(--danger, #d97706) 20%, var(--bg));
-}
-
-/* Clarification card variant */
-.ai-clarification-card {
-  border-color: color-mix(in srgb, var(--warn, #d97706) 40%, var(--line));
-  background: color-mix(in srgb, var(--warn, #d97706) 4%, var(--bg));
-}
-
-.ai-clarification-card .ai-approval-title {
-  color: color-mix(in srgb, var(--warn, #d97706) 90%, var(--text));
-}
-
-.ai-clarification-questions {
-  color: var(--text);
-}
-
-.ai-clarification-input {
-  resize: vertical;
-  min-height: 2.5rem;
-}
-
 /* ── Map widget ──────────────────────────────────────────────────── */
 
 .ai-map-area {
@@ -3625,6 +3497,7 @@ code {
   grid-template-columns: 4px auto minmax(0, 1fr);
   grid-template-rows: auto auto;
   min-height: 74px;
+  --mission-accent: var(--accent);
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 12px;
   overflow: hidden;
@@ -3717,6 +3590,7 @@ code {
 .mission-row-vehicle,
 .mission-row-origin {
   font-size: 0.95rem;
+  color: var(--mission-accent);
 }
 
 .mission-row-main {
@@ -3736,6 +3610,7 @@ code {
   font-weight: 700;
   font-size: 1.02rem;
   line-height: 1.2;
+  color: var(--mission-accent);
 }
 
 .mission-row-meta {
@@ -5644,3 +5519,75 @@ code {
 }
 
 .map-bulk-clear:hover { color: var(--text); }
+
+/* ── Mission bulk action bar (sidebar, selection ≥ 2) ─────────────────────── */
+.mission-bulk-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
+  backdrop-filter: blur(4px);
+  border-top: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
+.mission-bulk-bar[hidden] { display: none; }
+
+.mission-bulk-count {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.mission-bulk-sep {
+  color: var(--line);
+  user-select: none;
+}
+
+.mission-bulk-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.mission-bulk-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.mission-bulk-btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.mission-bulk-btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.mission-bulk-clear {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0 2px;
+  line-height: 1;
+  margin-left: auto;
+}
+
+.mission-bulk-clear:hover { color: var(--text); }

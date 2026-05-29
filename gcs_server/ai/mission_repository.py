@@ -12,14 +12,19 @@ from .migrations import apply_ai_store_migrations
 
 
 VALID_ORIGINS = ("manual", "ai_chat")
-VALID_APPROVAL_STATUSES = (
-    "approved",
-    "awaiting_approval",
-    "rejected",
-    "validation_failed",
-    "needs_clarification",
+
+_MISSION_COLOR_PALETTE = (
+    '#d16b5b', '#6f86c7', '#c27aa6', '#d0b24a',
+    '#8e98a3', '#3f6f9f', '#b85c5c', '#7b68b2',
+    '#4fa3a5', '#d08a6b', '#b96aa0', '#4f6a8a',
+    '#8f4f7e', '#c79b5f', '#6e5f9c', '#a56f6f',
+    '#667789', '#2f8f83', '#8fbf5a', '#0f9d58',
+    '#3aaed8', '#f08c4a', '#a06cd5', '#c06078',
 )
 
+
+def default_mission_color(mission_id: int) -> str:
+    return _MISSION_COLOR_PALETTE[int(mission_id) % len(_MISSION_COLOR_PALETTE)]
 
 @dataclass(frozen=True)
 class Mission:
@@ -32,8 +37,8 @@ class Mission:
     created_at: float
     created_by_user_id: str
     client_version: int  # ADR 0020 optimistic concurrency
-    approval_status: str
     mission_json: dict[str, Any]
+    color: str  # hex color string, assigned at creation and user-overridable
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,8 +49,8 @@ class Mission:
             "created_at": self.created_at,
             "created_by_user_id": self.created_by_user_id,
             "client_version": self.client_version,
-            "approval_status": self.approval_status,
             "mission_json": self.mission_json,
+            "color": self.color,
         }
 
 
@@ -88,11 +93,9 @@ class MissionRepository:
         mission_json: dict[str, Any] | None = None,
         origin_chat_id: str | None = None,
         created_by_user_id: str = "",
-        approval_status: str = "approved",
     ) -> Mission:
         if origin not in VALID_ORIGINS:
             raise ValueError(f"origin must be one of {VALID_ORIGINS}, got {origin!r}")
-        approval_status = _normalize_approval_status(approval_status)
         created_at = time.time()
         payload = json.dumps(mission_json or {}, separators=(",", ":"))
         with self._connect() as conn:
@@ -100,8 +103,8 @@ class MissionRepository:
                 """
                 INSERT INTO missions (
                   name, origin, origin_chat_id, created_at,
-                  created_by_user_id, client_version, approval_status, mission_json
-                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                  created_by_user_id, client_version, mission_json
+                ) VALUES (?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     name,
@@ -109,11 +112,12 @@ class MissionRepository:
                     origin_chat_id,
                     created_at,
                     created_by_user_id,
-                    approval_status,
                     payload,
                 ),
             )
             mission_id = int(cursor.lastrowid)
+            color = default_mission_color(mission_id)
+            conn.execute("UPDATE missions SET color = ? WHERE id = ?", (color, mission_id))
             conn.commit()
         return Mission(
             id=mission_id,
@@ -123,8 +127,8 @@ class MissionRepository:
             created_at=created_at,
             created_by_user_id=created_by_user_id,
             client_version=0,
-            approval_status=approval_status,
             mission_json=mission_json or {},
+            color=color,
         )
 
     def get(self, mission_id: int, *, include_deleted: bool = False) -> Mission | None:
@@ -167,7 +171,7 @@ class MissionRepository:
         mission_json: dict[str, Any] | None = None,
         origin: str | None = None,
         origin_chat_id: str | None = None,
-        approval_status: str | None = None,
+        color: str | None = None,
     ) -> Mission:
         """Optimistic-concurrency update. Bumps client_version on success.
 
@@ -175,8 +179,6 @@ class MissionRepository:
         """
         if origin is not None and origin not in VALID_ORIGINS:
             raise ValueError(f"origin must be one of {VALID_ORIGINS}, got {origin!r}")
-        if approval_status is not None:
-            approval_status = _normalize_approval_status(approval_status)
         sets: list[str] = ["client_version = client_version + 1"]
         params: list[Any] = []
         if name is not None:
@@ -191,9 +193,9 @@ class MissionRepository:
         if origin_chat_id is not None:
             sets.append("origin_chat_id = ?")
             params.append(origin_chat_id)
-        if approval_status is not None:
-            sets.append("approval_status = ?")
-            params.append(approval_status)
+        if color is not None:
+            sets.append("color = ?")
+            params.append(str(color))
         params.extend([mission_id, expected_client_version])
         with self._connect() as conn:
             cursor = conn.execute(
@@ -334,6 +336,9 @@ def _row_to_mission(row: sqlite3.Row) -> Mission:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+    raw_color = str(row["color"] or "").strip()
+    if not raw_color:
+        raw_color = default_mission_color(int(row["id"]))
     return Mission(
         id=int(row["id"]),
         name=str(row["name"]),
@@ -342,15 +347,6 @@ def _row_to_mission(row: sqlite3.Row) -> Mission:
         created_at=float(row["created_at"]),
         created_by_user_id=str(row["created_by_user_id"]),
         client_version=int(row["client_version"]),
-        approval_status=_normalize_approval_status(row["approval_status"]),
         mission_json=payload,
+        color=raw_color,
     )
-
-
-def _normalize_approval_status(value: Any) -> str:
-    status = str(value or "").strip().lower()
-    if status not in VALID_APPROVAL_STATUSES:
-        raise ValueError(
-            f"approval_status must be one of {VALID_APPROVAL_STATUSES}, got {value!r}"
-        )
-    return status
