@@ -1,7 +1,7 @@
 # 0011. Mission Coordinate Frame Split: Local Metres Internally, WGS84 Only At Export
 
 Date: 2026-05-26
-Status: Accepted
+Status: Superseded by [ADR 0022](./0022-gps-master-coordinate-frame.md)
 
 ## Context
 
