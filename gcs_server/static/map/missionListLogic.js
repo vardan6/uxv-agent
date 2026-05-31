@@ -9,30 +9,35 @@ const SET2 = [
   '#b3b3b3',
 ];
 
-export function groupRevisionsByOperation(rows = []) {
-  const groups = new Map();
-  for (const row of rows) {
-    const operationId = String(row.operation_id || row.id || '');
-    if (!operationId) continue;
-    let group = groups.get(operationId);
-    if (!group) {
-      group = {
-        operationId,
-        operationStatus: String(row.operation_status || ''),
-        activeRevisionId: String(row.active_revision_id || ''),
-        revisions: [],
-        defaultRevisionId: '',
-      };
-      groups.set(operationId, group);
-    }
-    group.revisions.push(row);
-  }
+// Shape flat `missions` rows (GET /api/ai/missions) into display-ready
+// descriptors: one row = one Mission (ADR 0021 §2). Pure; no fetching.
+// `origin` here is provenance (manual|ai_chat), distinct from ADR 0022's
+// coordinate-datum Origin.
+const ORIGIN_BADGE = { manual: '👤', ai_chat: '🤖' };
 
-  for (const group of groups.values()) {
-    const newestRevisionId = String(group.revisions[0]?.id || '');
-    group.defaultRevisionId = group.activeRevisionId || newestRevisionId;
-  }
-  return groups;
+export function mapMissionsForList(missions = []) {
+  return (Array.isArray(missions) ? missions : []).map((m) => {
+    const id = String(m.id || '');
+    const index = Number.isFinite(m.mission_index) ? Number(m.mission_index) : null;
+    const name = String(m.name || '').trim();
+    const origin = String(m.origin || 'manual');
+    return {
+      id,
+      missionIndex: index,
+      name: name || (index != null ? `Mission ${index}` : 'Untitled mission'),
+      origin,
+      originBadge: ORIGIN_BADGE[origin] || '🤖',
+      originChatId: String(m.origin_chat_id || ''),
+      clientVersion: Number(m.client_version || 0),
+      createdAt: Number(m.created_at || 0),
+      updatedAt: Number(m.updated_at || 0),
+      // Active-revision resolution from the list endpoint (ADR 0021 §2): the
+      // overlay/execute target and the status that gates edit/execute/locked
+      // affordances. Empty when the Mission has no bridged active revision yet.
+      activeRevisionId: String(m.active_revision_id || ''),
+      activeRevisionStatus: String(m.active_revision_status || ''),
+    };
+  });
 }
 
 export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {

@@ -94,7 +94,7 @@ Design rule:
 These remain gated on real backend sources:
 
 - mission revision push events
-- geofence display and validation
+- geofence *display on load* (authoring + enforcement shipped via the BasemapPanel `🛡 Fence` draw mode and the executor; rendering an existing mission's stored fence polygon is still TODO)
 - standalone export affordances
 - home-point editing
 
@@ -233,8 +233,7 @@ These stay outside the core widget contract until real backend/platform support
 exists:
 
 - replay-page migration details
-- geofence display and validation
-- WGS84 basemap mode
+- geofence display on load (authoring + enforcement shipped; see Deferred Sources)
 - edit-during-execution
 - richer per-waypoint property schema editing
 - floating/second-monitor window behavior beyond re-parenting support

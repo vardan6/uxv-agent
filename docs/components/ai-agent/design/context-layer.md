@@ -258,16 +258,6 @@ Uses:
 - scene summary
 
 ```text
-Where is the rover?
-```
-
-Uses:
-- local position
-- GPS
-- heading
-- freshness
-
-```text
 What objects are in front of the rover within 100 meters and 20 degrees?
 ```
 
@@ -297,14 +287,6 @@ What is the broker port?
 Uses:
 - settings current context
 - `settings.mqtt.broker_port`
-
-```text
-What key moves forward?
-```
-
-Uses:
-- settings current context
-- `settings.key_bindings.forward`
 
 ```text
 What model is configured for General Chat?

@@ -6,8 +6,11 @@ from pathlib import Path
 
 try:
     from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
+    from gcs_server.ai.coordinate_frame import Origin
     from gcs_server.ai.mission_draft_service import MissionDraftService
     from gcs_server.ai.mission_execution_service import MissionExecutionService
+    from gcs_server.ai.mission_execution_session import MissionExecutionSessions
+    from gcs_server.ai.mission_store import MissionStore
     from gcs_server.ai.secret_store import SecretStore
     from gcs_server.ai.session_store import AISessionStore
     from gcs_server.config import AppConfig, ROOT_DIR
@@ -20,8 +23,11 @@ try:
     from gcs_server.ws import WebSocketManager
 except ModuleNotFoundError:
     from ai.controller_mission_adapter_factory import build_controller_mission_adapter
+    from ai.coordinate_frame import Origin
     from ai.mission_draft_service import MissionDraftService
     from ai.mission_execution_service import MissionExecutionService
+    from ai.mission_execution_session import MissionExecutionSessions
+    from ai.mission_store import MissionStore
     from ai.secret_store import SecretStore
     from ai.session_store import AISessionStore
     from config import AppConfig, ROOT_DIR
@@ -65,8 +71,10 @@ class AppRuntime:
     ai_store: AISessionStore
     mission_draft_service: MissionDraftService
     mission_execution_service: MissionExecutionService
+    mission_store: MissionStore
     secret_store: SecretStore
     ai_executor: ThreadPoolExecutor
+    mission_execution_sessions: MissionExecutionSessions
 
     async def reconfigure_mqtt(self, mqtt_config: dict[str, object]) -> None:
         self.config.raw["mqtt"] = dict(mqtt_config)
@@ -91,13 +99,23 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     )
     ai_store = AISessionStore(db_path=ai_sessions_db_path)
     mission_draft_service = MissionDraftService(db_path=ai_sessions_db_path)
+    mission_store = MissionStore(db_path=ai_sessions_db_path)
     controller_mission_adapter = build_controller_mission_adapter(
         config.logging,
         path_resolver=_resolve_replay_db_path,
     )
+    def _resolve_mission_origin(operation_id: str) -> Origin | None:
+        """ADR 0022 per-Mission datum: map an internal operation to its flat
+        Mission's coordinate Origin (None falls back to the scene georeference)."""
+        mission = mission_store.get_by_operation_id(operation_id)
+        if mission is None:
+            return None
+        return mission_store.get_origin_datum(str(mission.get("id") or ""))
+
     mission_execution_service = MissionExecutionService(
         db_path=ai_sessions_db_path,
         controller_adapter=controller_mission_adapter,
+        origin_resolver=_resolve_mission_origin,
     )
     replay_analytics = ReplayAnalyticsService(replay_store)
     secret_store = SecretStore(
@@ -143,6 +161,8 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         ai_store=ai_store,
         mission_draft_service=mission_draft_service,
         mission_execution_service=mission_execution_service,
+        mission_store=mission_store,
         secret_store=secret_store,
         ai_executor=ai_executor,
+        mission_execution_sessions=MissionExecutionSessions(),
     )

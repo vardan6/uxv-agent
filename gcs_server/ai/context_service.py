@@ -10,10 +10,12 @@ from typing import Any
 
 try:
     from gcs_server.scene_map import get_scene_map_payload
+    from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from gcs_server.ai.session_store import normalize_source_controls
     from gcs_server.ai.spatial_query_service import SpatialQueryService
 except ModuleNotFoundError:
     from scene_map import get_scene_map_payload
+    from ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from ai.session_store import normalize_source_controls
     from ai.spatial_query_service import SpatialQueryService
 
@@ -203,6 +205,10 @@ class AIContextService:
             "gcs": _pick(config.gcs, ["host", "port", "state_backend", "controller_lock_backend", "telemetry_stale_ms"]),
             "simulation": _pick(config.simulation, ["backend", "backend_version", "available_backends"]),
             "map": _pick(config.map, ["site_name", "default_center_lat", "default_center_lon", "default_zoom"]),
+            "mission_lifecycle": normalize_mission_lifecycle_settings(
+                config.mission_lifecycle,
+                build_default=resolve_build_default_mode(config),
+            ),
             "ai_settings": {
                 "tts": _pick(
                     (config.ai_settings.get("tts") or {}) if isinstance(config.ai_settings, dict) else {},

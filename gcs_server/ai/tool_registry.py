@@ -13,7 +13,10 @@ try:
     from gcs_server.ai.data_access import build_data_access_manifest
     from gcs_server.ai.intent_service import IntentService as _IntentService
     from gcs_server.ai.mission_draft_service import MissionDraftService
+    from gcs_server.ai.mission_execution_session import build_mission_executor
     from gcs_server.ai.mission_export_service import MissionExportService
+    from gcs_server.ai import mission_patterns
+    from gcs_server.ai.mission_tree import MissionTreeError, parse_tree
     from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
     from gcs_server.ai.road_graph_service import RoadGraphService
@@ -25,7 +28,10 @@ except ModuleNotFoundError:
     from ai.data_access import build_data_access_manifest
     from ai.intent_service import IntentService as _IntentService
     from ai.mission_draft_service import MissionDraftService
+    from ai.mission_execution_session import build_mission_executor
     from ai.mission_export_service import MissionExportService
+    from ai import mission_patterns
+    from ai.mission_tree import MissionTreeError, parse_tree
     from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from ai.provider_registry import resolve_provider as _resolve_provider
     from ai.road_graph_service import RoadGraphService
@@ -40,7 +46,11 @@ PLANNING = "planning"
 COMMAND_STAGING = "command_staging"
 EXECUTION = "execution"
 DEFAULT_PERMISSIONS = frozenset({READ_ONLY, ANALYSIS, PLANNING})
-DISABLED_PERMISSIONS = frozenset({COMMAND_STAGING, EXECUTION})
+# COMMAND_STAGING stays hard-disabled (no staged-command surface yet). EXECUTION
+# is now reachable (ADR 0021 §1 / ADR 0023 Phase 3): the actual gate is the
+# per-mode tool binding in agent_loop — Strict binds no arm/execute, Confirm
+# binds arm_execution, Autonomous binds execute_mission; cancel/abort always.
+DISABLED_PERMISSIONS = frozenset({COMMAND_STAGING})
 
 _PLANNER_DRAFT_SYSTEM_PROMPT = (
     "You are a mission planning assistant for a remote rover GCS.\n"
@@ -103,6 +113,21 @@ def normalize_mission_draft_payload(raw: dict[str, Any]) -> tuple[dict[str, Any]
         clean_steps.append(step)
     out["steps"] = clean_steps
 
+    # ADR 0023: a draft may author a behavior-tree structure (sequence/fallback/
+    # loop/recovery/condition/ask_operator around nav_leaf runs) instead of, or
+    # alongside, a flat waypoint list. Validate it through the canonical parser so
+    # only a structurally-sound tree reaches storage; an invalid tree is dropped
+    # (the flat waypoint path still applies) rather than failing the whole draft.
+    if "tree" in out:
+        raw_tree = out["tree"]
+        if isinstance(raw_tree, dict) and raw_tree.get("tree") is not None:
+            raw_tree = raw_tree["tree"]
+        try:
+            out["tree"] = parse_tree(raw_tree).to_dict()
+        except MissionTreeError as exc:
+            del out["tree"]
+            repairs.append(f"dropped invalid 'tree' field: {exc}")
+
     for field in _EXECUTION_FIELDS:
         if field in out:
             del out[field]
@@ -134,6 +159,7 @@ class ToolInvocationContext:
     permissions: frozenset[str]
     source_controls: dict[str, bool]
     session_id: str
+    user_id: str
 
 
 _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
@@ -150,6 +176,8 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "get_current_mission_state",
     "plan_route_around_group",
     "plan_route_between",
+    "generate_pattern_subtree",
+    "set_mission_geofence",
     "export_mission",
 })
 
@@ -342,7 +370,7 @@ class ToolRegistry:
             ),
             tool(
                 "get_settings_section",
-                "Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.",
+                "Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `mission_lifecycle`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.",
                 READ_ONLY,
                 self._get_settings_section,
             ),
@@ -369,6 +397,18 @@ class ToolRegistry:
                 "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. Does not upload; pair with export_mission after approval.",
                 PLANNING,
                 self._plan_route_between,
+            ),
+            tool(
+                "generate_pattern_subtree",
+                "Use when the operator asks the vehicle to follow a path repeatedly or to systematically cover an area, instead of hand-listing waypoints. 'corridor' densifies an ordered polyline into evenly-spaced waypoints (optionally back-and-forth for multiple passes); 'survey' fills a rectangle with a lawnmower (boustrophedon) sweep. Pass 'pattern' ('corridor'|'survey') and 'params' in local scene metres (x=east, y=north, z=up). corridor params: path (list of {x,y}, >=2), spacing_m, altitude_m, optional passes. survey params: width_m, height_m, line_spacing_m, altitude_m, optional origin_xy ({x,y}) and heading_deg. Returns a navigation subtree as 'tree' (a nav_leaf, or a sequence of nav_leaf passes) plus waypoint_count — set it as the draft's 'tree' (or splice it into a larger tree) in propose_mission_draft. Does not upload; pair with export_mission after approval.",
+                PLANNING,
+                self._generate_pattern_subtree,
+            ),
+            tool(
+                "set_mission_geofence",
+                "Use when the operator wants to fence a mission to a safe area — 'keep it inside this boundary', 'add a geofence', or 'clear the fence'. Sets an inclusion geofence on an existing flat Mission (by mission_id): waypoints must stay inside the polygon, and the flight controller enforces it authoritatively while the executor also refuses any breaching mission before driving. Pass 'mission_id' and 'polygon' as a list of at least three {lat, lon} WGS84 vertices (the stored truth); optional 'rally_points' (list of {lat, lon, alt}) are safe-return points, and optional 'min_alt'/'max_alt' bound altitude in metres. Pass clear=true to remove the fence. Appends a new (approval-required) revision; does not upload by itself — the fence uploads to the FC when the mission is armed/executed.",
+                PLANNING,
+                self._set_mission_geofence,
             ),
             tool(
                 "export_mission",
@@ -417,10 +457,46 @@ class ToolRegistry:
             ),
             tool(
                 "propose_mission_draft",
-                "Submit the final mission draft. Terminal planning action — call after parse_rover_intent and optional route-planning tools. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. The draft always has execution_allowed=false and required_operator_approval=true.",
+                "Submit the final mission draft. Terminal planning action — call after parse_rover_intent and optional route-planning tools. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
                 PLANNING,
                 self._propose_mission_draft,
                 is_terminal=True,
+            ),
+            tool(
+                "resolve_mission_reference",
+                "Resolve an operator's reference to an existing Mission into a concrete mission id before editing it. Pass the operator's exact phrasing as 'reference' — an index ('#26', 'mission 26'), a name ('the orchard sweep'), or a pronoun ('it', 'this mission'). Resolution order is index → exact name → fuzzy name → pronoun (most-recent Mission of the current chat). Returns status 'resolved' with the mission (use mission.id as source_mission_id), 'ambiguous' with candidates to disambiguate with the operator, or 'not_found'. Call this before propose_mission_draft with clone_and_edit/edit_in_place when the operator refers to a mission you do not already have an id for.",
+                READ_ONLY,
+                self._resolve_mission_reference,
+            ),
+            # ── Execution tools (ADR 0021 §1 / ADR 0023 Phase 3) ──────────────
+            # Bound per execution mode by agent_loop: Strict binds neither
+            # arm_execution nor execute_mission; Confirm binds arm_execution;
+            # Autonomous binds execute_mission; cancel_execution/abort always bind.
+            tool(
+                "arm_execution",
+                "Confirm-mode only: arm and start running an approved Mission's behavior tree on the rover. Pass the flat Mission id as 'mission_id'. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. The run proceeds on the server; poll progress is reported via execution status, and 'abort'/'cancel_execution' stop it.",
+                EXECUTION,
+                self._arm_execution,
+                side_effects=frozenset({"drives_rover"}),
+            ),
+            tool(
+                "execute_mission",
+                "Autonomous-mode only: run an approved Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
+                EXECUTION,
+                self._execute_mission,
+                side_effects=frozenset({"drives_rover"}),
+            ),
+            tool(
+                "cancel_execution",
+                "Stop the mission currently executing for this session. Cooperatively aborts the running behavior tree between node steps. Always available regardless of execution mode. Returns the execution status snapshot.",
+                EXECUTION,
+                self._abort_execution,
+            ),
+            tool(
+                "abort",
+                "Immediately abort the mission currently executing for this session. Cooperatively stops the running behavior tree at the next node-step boundary. Always available regardless of execution mode. Use this as the emergency-stop for AI-driven execution.",
+                EXECUTION,
+                self._abort_execution,
             ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
@@ -441,6 +517,7 @@ class ToolRegistry:
             permissions=frozenset(allowed),
             source_controls=_snapshot_source_controls(context_snapshot),
             session_id=_snapshot_session_id(context_snapshot),
+            user_id=_snapshot_user_id(context_snapshot),
         )
 
     def _callable_for(self, definition: ToolDefinition, invocation_context: ToolInvocationContext) -> Callable[..., Any]:
@@ -972,6 +1049,111 @@ class ToolRegistry:
             result["route_hash"] = _route_hash(result.get("waypoints", []))
         return result
 
+    def _generate_pattern_subtree(
+        self,
+        context: ToolInvocationContext,
+        pattern: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        kind = str(pattern or "").strip().lower()
+        if kind not in ("corridor", "survey"):
+            return {"ok": False, "error": "pattern must be 'corridor' or 'survey'"}
+        if not isinstance(params, dict):
+            return {"ok": False, "error": "params must be an object"}
+
+        def _num(key: str, default: float | None = None) -> float:
+            raw = params.get(key, default)
+            if raw is None:
+                raise ValueError(f"'{key}' is required")
+            return float(raw)
+
+        def _xy(value: Any) -> tuple[float, float]:
+            if isinstance(value, dict):
+                return float(value.get("x") or 0.0), float(value.get("y") or 0.0)
+            if isinstance(value, (list, tuple)) and len(value) >= 2:
+                return float(value[0]), float(value[1])
+            raise ValueError("point must be {x, y} or [x, y]")
+
+        try:
+            if kind == "corridor":
+                raw_path = params.get("path")
+                if not isinstance(raw_path, list) or len(raw_path) < 2:
+                    return {"ok": False, "error": "corridor 'path' must be a list of at least two {x, y} points"}
+                node = mission_patterns.corridor_pattern(
+                    path=[_xy(p) for p in raw_path],
+                    spacing_m=_num("spacing_m"),
+                    altitude_m=_num("altitude_m"),
+                    passes=int(params.get("passes", 1)),
+                )
+            else:
+                origin_xy = _xy(params["origin_xy"]) if params.get("origin_xy") is not None else (0.0, 0.0)
+                node = mission_patterns.survey_pattern(
+                    width_m=_num("width_m"),
+                    height_m=_num("height_m"),
+                    line_spacing_m=_num("line_spacing_m"),
+                    altitude_m=_num("altitude_m"),
+                    origin_xy=origin_xy,
+                    heading_deg=float(params.get("heading_deg", 0.0)),
+                )
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "error": f"invalid {kind} params: {exc}"}
+
+        tree = node.to_dict()
+        leaves = node.children or [node]
+        waypoint_count = sum(len(leaf.waypoints) for leaf in leaves)
+        return {
+            "ok": True,
+            "pattern": kind,
+            "tree": tree,
+            "waypoint_count": waypoint_count,
+        }
+
+    def _set_mission_geofence(
+        self,
+        context: ToolInvocationContext,
+        mission_id: str,
+        polygon: list[dict[str, Any]] | None = None,
+        rally_points: list[dict[str, Any]] | None = None,
+        min_alt: float | None = None,
+        max_alt: float | None = None,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Author or clear a Mission's inclusion geofence (ADR 0023 Phase 5).
+
+        Resolves the flat Mission to its active operation, then appends a fenced
+        revision via the execution service. The fence is WGS84 (the stored truth);
+        ``polygon`` is a list of ``{lat, lon}`` vertices.
+        """
+        clean_id = str(mission_id or "").strip()
+        if not clean_id:
+            return {"ok": False, "error": "mission_id is required"}
+        store = getattr(context.runtime, "mission_store", None)
+        service = getattr(context.runtime, "mission_execution_service", None)
+        if store is None or service is None:
+            return {"ok": False, "error": "mission services are not available"}
+        mission = store.get_mission(clean_id)
+        if mission is None:
+            return {"ok": False, "error": f"mission '{clean_id}' not found"}
+        operation_id = str(mission.get("active_operation_id") or "").strip()
+        if not operation_id:
+            return {"ok": False, "error": f"mission '{clean_id}' has no active operation to fence"}
+
+        geofence: dict[str, Any] | None = None
+        if not clear:
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                return {"ok": False, "error": "polygon must be a list of at least three {lat, lon} vertices (or pass clear=true)"}
+            geofence = {"polygon": polygon, "rally_points": rally_points or []}
+            if min_alt is not None:
+                geofence["min_alt"] = min_alt
+            if max_alt is not None:
+                geofence["max_alt"] = max_alt
+
+        return service.set_operation_geofence(
+            session_id=context.session_id,
+            operation_id=operation_id,
+            geofence=geofence,
+        )
+
     def _export_mission(
         self,
         context: ToolInvocationContext,
@@ -1095,10 +1277,18 @@ class ToolRegistry:
         draft: dict | None = None,
         route_artifacts: list | None = None,
         parent_operation_id: str = "",
+        mission_edit_mode: str = "create",
+        source_mission_id: str = "",
     ) -> dict[str, Any]:
         # Pure artifact submitter mode: planner provides the draft directly.
         # Preferred when route-planning tools were called so waypoints are preserved.
         parent_op = str(parent_operation_id or "").strip()
+        # ADR 0021 §3 flat-Mission lifecycle selector. The store layer maps the
+        # mode onto operation reuse; "clone_and_edit" is the default for AI edits.
+        edit_mode = str(mission_edit_mode or "create").strip() or "create"
+        if edit_mode not in ("create", "clone_and_edit", "edit_in_place"):
+            edit_mode = "create"
+        source_mission = str(source_mission_id or "").strip()
         if draft and isinstance(draft, dict):
             normalized, repairs = normalize_mission_draft_payload(draft)
             if route_artifacts and isinstance(route_artifacts, list):
@@ -1109,6 +1299,8 @@ class ToolRegistry:
                 "repairs": repairs,
                 "source": "planner_submitted",
                 "parent_operation_id": parent_op,
+                "mission_edit_mode": edit_mode,
+                "source_mission_id": source_mission,
             }
 
         # LLM generation mode: second model generates draft from intent summary.
@@ -1144,7 +1336,144 @@ class ToolRegistry:
         normalized, repairs = normalize_mission_draft_payload(raw_draft)
         if route_artifacts and isinstance(route_artifacts, list):
             normalized["route_artifacts"] = list(route_artifacts)
-        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated", "parent_operation_id": parent_op}
+        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated", "parent_operation_id": parent_op, "mission_edit_mode": edit_mode, "source_mission_id": source_mission}
+
+    def _resolve_mission_reference(
+        self,
+        context: ToolInvocationContext,
+        reference: str,
+    ) -> dict[str, Any]:
+        """ADR 0021 §5 chat reference resolution exposed to the planner."""
+        if not str(reference or "").strip():
+            return {"ok": False, "error": "reference is required"}
+        store = getattr(context.runtime, "mission_store", None)
+        if store is None:
+            return {"ok": False, "error": "mission store is not available"}
+        result = store.resolve_reference(
+            user_id=context.user_id,
+            reference=reference,
+            current_chat_id=context.session_id,
+        )
+        return {
+            "ok": True,
+            "reference": str(reference),
+            "status": result.get("status"),
+            "reason": result.get("reason"),
+            "mission": _compact_mission_reference(result.get("mission")),
+            "candidates": [_compact_mission_reference(m) for m in (result.get("candidates") or [])],
+        }
+
+    # ── Execution tool handlers (ADR 0021 §1 / ADR 0023 Phase 3) ───────────────
+
+    def _load_mission_content(
+        self, context: ToolInvocationContext, mission_id: str
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Resolve a flat Mission id to its latest revision content payload.
+
+        Returns ``(content, error)``; on success ``error`` is empty. The content
+        is the stored mission payload (legacy flat ``{waypoints:[...]}`` or a
+        behavior tree) that :func:`build_mission_executor` parses into a tree.
+        """
+        clean_id = str(mission_id or "").strip()
+        if not clean_id:
+            return None, "mission_id is required"
+        store = getattr(context.runtime, "mission_store", None)
+        service = getattr(context.runtime, "mission_execution_service", None)
+        if store is None or service is None:
+            return None, "mission services are not available"
+        mission = store.get_mission(clean_id)
+        if mission is None:
+            return None, f"mission '{clean_id}' not found"
+        operation_id = str(mission.get("active_operation_id") or "").strip()
+        if not operation_id:
+            return None, f"mission '{clean_id}' has no active operation to execute"
+        revisions = service.list_revisions(operation_id=operation_id, limit=1)
+        if not revisions:
+            return None, f"mission '{clean_id}' has no stored revision to execute"
+        content = revisions[0].get("mission")
+        if not isinstance(content, dict):
+            return None, f"mission '{clean_id}' revision has no executable content"
+        return content, ""
+
+    def _prepare_execution(
+        self, context: ToolInvocationContext, mission_id: str
+    ) -> dict[str, Any]:
+        """Shared arm/execute path: load content, build the mode-resolved executor,
+        and register it on the runtime's per-session execution holder."""
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        content, error = self._load_mission_content(context, mission_id)
+        if error:
+            return {"ok": False, "error": error}
+        try:
+            executor, root = build_mission_executor(context.runtime, content)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            sessions.prepare(
+                context.session_id,
+                executor=executor,
+                root=root,
+                mission_id=str(mission_id or "").strip(),
+                mode=executor.mode,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "executor": executor}
+
+    def _arm_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        prepared = self._prepare_execution(context, mission_id)
+        if not prepared.get("ok"):
+            return prepared
+        sessions = context.runtime.mission_execution_sessions
+        # Confirm mode (ADR 0021 §1): arm and open a bounded confirm window, then
+        # return — the run starts only when the operator confirms via the banner
+        # ([Play]) inside the window. Chat does not block on the handshake.
+        timeout_s = _resolve_confirm_timeout_s(context.runtime)
+        return sessions.arm_confirm(context.session_id, timeout_s)
+
+    def _execute_mission(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        prepared = self._prepare_execution(context, mission_id)
+        if not prepared.get("ok"):
+            return prepared
+        return context.runtime.mission_execution_sessions.start(context.session_id)
+
+    def _abort_execution(self, context: ToolInvocationContext) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.request_abort(context.session_id)
+
+
+def _resolve_confirm_timeout_s(runtime: Any) -> int:
+    """Confirm-banner timeout from the persisted mission_lifecycle setting,
+    clamped to [3, 60] s (ADR 0021 §6); falls back to the default when unset."""
+    try:
+        from gcs_server.ai.execution_mode import normalize_confirm_timeout
+    except ModuleNotFoundError:
+        from ai.execution_mode import normalize_confirm_timeout
+    section: Any = None
+    try:
+        section = runtime.config.mission_lifecycle
+    except Exception:
+        section = None
+    value = section.get("confirm_timeout_s") if isinstance(section, dict) else None
+    return normalize_confirm_timeout(value)
+
+
+def _compact_mission_reference(mission: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Bounded Mission view for chat-reference tool results (ADR 0021 §5)."""
+    if not isinstance(mission, dict):
+        return None
+    return {
+        "id": str(mission.get("id") or ""),
+        "mission_index": mission.get("mission_index"),
+        "name": str(mission.get("name") or ""),
+        "origin": str(mission.get("origin") or ""),
+        "origin_chat_id": str(mission.get("origin_chat_id") or ""),
+        "active_revision_status": str(mission.get("active_revision_status") or ""),
+    }
 
 
 def _route_hash(waypoints: list[dict[str, Any]]) -> str:
@@ -1212,6 +1541,10 @@ def _snapshot_source_controls(context_snapshot: dict[str, Any] | None) -> dict[s
 
 
 def _snapshot_session_id(context_snapshot: dict[str, Any] | None) -> str:
+    if isinstance(context_snapshot, dict):
+        meta = context_snapshot.get("meta")
+        if isinstance(meta, dict) and str(meta.get("session_id") or "").strip():
+            return str(meta["session_id"]).strip()
     snapshot = _snapshot_context(context_snapshot)
     llm = snapshot.get("llm")
     if not isinstance(llm, dict):
@@ -1220,6 +1553,15 @@ def _snapshot_session_id(context_snapshot: dict[str, Any] | None) -> str:
     if not isinstance(session, dict):
         return ""
     return str(session.get("id") or "").strip()
+
+
+def _snapshot_user_id(context_snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(context_snapshot, dict):
+        return ""
+    meta = context_snapshot.get("meta")
+    if not isinstance(meta, dict):
+        return ""
+    return str(meta.get("user_id") or "").strip()
 
 
 def _has_pose_and_heading(rover: dict[str, Any]) -> bool:

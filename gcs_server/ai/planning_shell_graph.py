@@ -93,6 +93,7 @@ _PLANNER_TOOL_NAMES = frozenset({
     "get_scene_summary",
     "plan_route_around_group",
     "plan_route_between",
+    "resolve_mission_reference",
     "propose_mission_draft",
 })
 
@@ -114,10 +115,21 @@ _PLANNER_SYSTEM_PROMPT = (
     "- If the context reports an active revision with 'ai+edited' waypoints and the operator's request "
     "is ambiguous about whether to replace or extend the mission, call request_clarification before "
     "calling propose_mission_draft. Never silently discard operator-edited waypoints.\n"
-    "- When your proposal refines or extends the current mission (operator confirmed, or intent is "
-    "clearly a refinement), pass the active mission's operation_id as parent_operation_id to "
-    "propose_mission_draft so the new revision appears under the same operation group. "
-    "When the operator asks for a wholly new mission unrelated to the current one, omit parent_operation_id.\n"
+    "- Choosing mission_edit_mode on propose_mission_draft: for a wholly new mission, use 'create'. "
+    "When you are changing the operator's current/active mission (refine, extend, regenerate), use "
+    "'clone_and_edit' and pass that mission's id as source_mission_id — this keeps the original mission "
+    "untouched and adds a new one so the operator can compare. Use 'edit_in_place' ONLY when the operator "
+    "explicitly said to edit the existing mission in place; default to clone_and_edit otherwise.\n"
+    "- Resolving which mission the operator means: when they refer to an existing mission by number "
+    "('#26'), name ('the orchard sweep'), or pronoun ('it', 'this mission') and you do not already "
+    "have its id, call resolve_mission_reference with their exact phrasing first. If it returns "
+    "'ambiguous', ask the operator to pick from the candidates; if 'not_found', ask them to clarify. "
+    "Use the resolved mission.id as source_mission_id on propose_mission_draft.\n"
+    "- Mission structure: a plain point-to-point or area-sweep run is a flat waypoint "
+    "list (the default). Only when the operator asks for branching, retries on failure, "
+    "repetition, or an operator check mid-mission, author the draft's 'tree' as a behavior "
+    "tree (sequence/fallback/loop/recovery wrapping nav_leaf waypoint runs, plus condition "
+    "and ask_operator nodes). Do not wrap a simple linear mission in a tree.\n"
 )
 
 
@@ -250,7 +262,9 @@ def _merge_response_metadata(*items: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _build_active_mission_context(mission_execution: Any, session_id: str) -> dict[str, Any]:
+def _build_active_mission_context(
+    mission_execution: Any, session_id: str, *, mission_store: Any = None
+) -> dict[str, Any]:
     """Return a compact provenance summary for the active revision of the current session.
 
     Used by the planner to detect operator-edited waypoints before proposing a new mission.
@@ -280,11 +294,21 @@ def _build_active_mission_context(mission_execution: Any, session_id: str) -> di
     if not waypoint_count and isinstance(mission.get("waypoints"), list):
         waypoint_count = len(mission["waypoints"])
 
+    operation_id = str(revision.get("operation_id") or "")
+    mission_id = ""
+    if mission_store is not None and operation_id:
+        try:
+            bridged = mission_store.get_by_operation_id(operation_id)
+            mission_id = str((bridged or {}).get("id") or "")
+        except Exception:
+            mission_id = ""
+
     return {
         "has_active_revision": True,
         "revision_id": str(revision.get("id") or ""),
         "revision_status": str(revision.get("status") or revision.get("operation_status") or ""),
-        "operation_id": str(revision.get("operation_id") or ""),
+        "operation_id": operation_id,
+        "mission_id": mission_id,
         "goal": str(mission.get("goal") or ""),
         "waypoint_count": waypoint_count,
         "provenance_ai": ai_count,
@@ -384,9 +408,14 @@ def _is_explicit_replace_confirmation(answer: str) -> bool:
 def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShellGraphRuntime) -> dict[str, Any]:
     draft = state.get("draft") or {}
     mission = state.get("active_mission_context") or {}
-    parent_operation_id = str(state.get("parent_operation_id") or "").strip()
-    current_operation_id = str(mission.get("operation_id") or "").strip()
-    if not draft or not parent_operation_id or parent_operation_id != current_operation_id:
+    # The gate only applies to edit_in_place against the active mission — that is
+    # the only path that mutates operator-edited waypoints. clone_and_edit
+    # preserves the original row, so it never needs the confirmation (ADR 0021 §3).
+    edit_mode = str(state.get("mission_edit_mode") or "").strip()
+    source_mission_id = str(state.get("source_mission_id") or "").strip()
+    active_mission_id = str(mission.get("mission_id") or "").strip()
+    targets_active = bool(active_mission_id) and source_mission_id == active_mission_id
+    if not draft or edit_mode != "edit_in_place" or not targets_active:
         return {}
     if not mission.get("has_operator_edits"):
         return {}
@@ -495,11 +524,13 @@ def _planner_prompt_builder(
                 f" {user} waypoint(s) are fully operator-authored (provenance: user). "
                 "Your proposal will create a new revision; the operator's waypoints will not be carried forward automatically."
             )
-        op_id = str(mission.get("operation_id") or "")
-        if op_id:
+        active_mission_id = str(mission.get("mission_id") or "")
+        if active_mission_id:
             parts.append(
-                f" Use parent_operation_id=\"{op_id}\" in propose_mission_draft if your proposal "
-                "refines or extends this mission."
+                f" This is mission id \"{active_mission_id}\". If your proposal refines or extends it, "
+                f"call propose_mission_draft with mission_edit_mode=\"clone_and_edit\" and "
+                f"source_mission_id=\"{active_mission_id}\" (use \"edit_in_place\" only if the operator "
+                "explicitly asked to edit it in place)."
             )
         lines.append("".join(parts))
     return "\n".join(lines)
@@ -547,6 +578,10 @@ def _build_planner_context_snapshot(state: PlanningShellGraphState) -> dict:
             },
             "context_text": (state.get("context_metadata") or {}).get("context_text", ""),
             "source_controls": source_controls,
+            # ADR 0021 §5: resolve_mission_reference needs the per-user store
+            # scope and the current chat (origin_chat_id) for pronoun resolution.
+            "user_id": str(state.get("user_id") or ""),
+            "session_id": str(state.get("session_id") or ""),
         }
     }
     clar = state.get("clarification_response") or {}
@@ -772,7 +807,10 @@ async def retrieve_current_context(state: PlanningShellGraphState, config: Runna
     retrieval_citations = build_retrieval_citations(retrieved_sources, loaded_data_refs)
 
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    active_mission_context = _build_active_mission_context(mission_execution, str(state.get("session_id") or ""))
+    mission_store = getattr(rt.app_runtime, "mission_store", None)
+    active_mission_context = _build_active_mission_context(
+        mission_execution, str(state.get("session_id") or ""), mission_store=mission_store
+    )
 
     return {
         "context_metadata": compact_meta,
@@ -857,12 +895,36 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
         }
 
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
+    mission_store = getattr(rt.app_runtime, "mission_store", None)
     draft_id = str(state.get("draft_id") or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
     draft_status = str(state.get("approval_status") or "awaiting_approval")
     validation = state.get("validation") or {}
     mission_operation_id = ""
     mission_revision_id = ""
+    mission_id = ""
     mission_errors: list[dict[str, Any]] = []
+
+    # ADR 0021 §3 — flat-Mission lifecycle. Resolve the operator-facing edit mode
+    # into the internal operation-reuse signal before storing the revision:
+    #   edit_in_place  → reuse the source Mission's operation (append revision,
+    #                    bump client_version) — only on explicit operator request.
+    #   clone_and_edit → new operation + new Mission row seeded from source edits
+    #                    (default for AI edits; both rows preserved for compare).
+    #   create         → new operation + new Mission (fresh mission).
+    # AI-driven changes are non-destructive by default, so unless the operator
+    # explicitly asked to edit in place we never reuse the source operation.
+    mission_edit_mode = str(state.get("mission_edit_mode") or "").strip()
+    source_mission_id = str(state.get("source_mission_id") or "").strip()
+    parent_operation_id = str(state.get("parent_operation_id") or "").strip()
+    if mission_edit_mode == "edit_in_place" and source_mission_id and mission_store is not None:
+        source = mission_store.get_mission(source_mission_id)
+        source_op = str((source or {}).get("active_operation_id") or "").strip()
+        parent_operation_id = source_op or parent_operation_id
+    elif mission_edit_mode in ("create", "clone_and_edit"):
+        # Non-destructive: force a new operation/Mission row even if the planner
+        # also echoed a parent_operation_id.
+        parent_operation_id = ""
+
     if mission_execution is None:
         return {
             "draft_id": "",
@@ -892,7 +954,7 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
                 "risks": draft.get("risks") or [],
                 "approval_scope": "planning_artifact_only",
             },
-            parent_operation_id=state.get("parent_operation_id", ""),
+            parent_operation_id=parent_operation_id,
         )
         mission_operation_id = str(revision.get("operation_id") or "")
         mission_revision_id = str(revision.get("id") or "")
@@ -910,8 +972,43 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_store_exception")],
         }
 
+    # ADR 0021 §2/§3 — bridge the stored operation to a flat Mission row so AI
+    # output appears in the per-user Mission sidebar. The operation/revision are
+    # the Mission's internal payload; the flat row is the operator-facing entity.
+    #   • appended revision (operation already bridged) → bump client_version.
+    #   • new operation → create Mission(origin=ai_chat) and bridge it.
+    mission_bridge_error = ""
+    if mission_store is not None and mission_operation_id:
+        try:
+            existing = mission_store.get_by_operation_id(mission_operation_id)
+            if existing is not None:
+                mission_id = str(existing.get("id") or "")
+                mission_store.bump_client_version(mission_id)
+            else:
+                created = mission_store.create_mission(
+                    user_id=str(state.get("user_id") or ""),
+                    name=str(draft.get("goal") or "").strip(),
+                    origin="ai_chat",
+                    origin_chat_id=str(state.get("session_id") or ""),
+                )
+                mission_id = str(created.get("id") or "")
+                if mission_id:
+                    mission_store.set_active_operation(
+                        mission_id, operation_id=mission_operation_id
+                    )
+        except Exception as exc:
+            mission_bridge_error = str(exc)
+            mission_errors.append({
+                "node": "store_draft",
+                "code": "mission_bridge_error",
+                "severity": "warning",
+                "message": mission_bridge_error,
+                "recoverable": True,
+            })
+
     return {
         "draft_id": draft_id,
+        "mission_id": mission_id,
         "mission_operation_id": mission_operation_id,
         "mission_revision_id": mission_revision_id,
         "approval_status": draft_status,
@@ -920,8 +1017,11 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             "store_draft", ok=True,
             draft_id=draft_id,
             status=draft_status,
+            mission_id=mission_id or None,
             mission_operation_id=mission_operation_id or None,
             mission_revision_id=mission_revision_id or None,
+            mission_edit_mode=mission_edit_mode or None,
+            mission_bridge_error=mission_bridge_error or None,
         )],
     }
 
@@ -1176,6 +1276,12 @@ def planner_loop_node(state: PlanningShellGraphState, config: RunnableConfig) ->
     parent_operation_id = str(
         _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "parent_operation_id") or ""
     ).strip()
+    mission_edit_mode = str(
+        _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "mission_edit_mode") or ""
+    ).strip()
+    source_mission_id = str(
+        _extract_planner_tool_result(result.tool_calls, "propose_mission_draft", "source_mission_id") or ""
+    ).strip()
 
     # Collect route artifacts from any route-planning tool calls so they survive draft storage.
     route_artifacts: list[dict[str, Any]] = []
@@ -1237,6 +1343,10 @@ def planner_loop_node(state: PlanningShellGraphState, config: RunnableConfig) ->
         node_update["draft_response_metadata"] = result.response_metadata
     if parent_operation_id:
         node_update["parent_operation_id"] = parent_operation_id
+    if mission_edit_mode:
+        node_update["mission_edit_mode"] = mission_edit_mode
+    if source_mission_id:
+        node_update["source_mission_id"] = source_mission_id
 
     # Clarification handoff: extract questions from the request_clarification tool result
     # and set clarification_request in state so _route_after_planner_loop routes to

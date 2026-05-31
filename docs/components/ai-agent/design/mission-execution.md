@@ -86,6 +86,19 @@ Required adapter semantics:
 - compare controller mission version before cutover
 - install mission payload
 - verify installed mission by read-back
+- clear the controller-owned mission (Read → empty Write → read-back verify), resetting to an idle version-0 state
+- probe link health (heartbeat reachable + mission readable) without mutating controller state
 - surface failure details for audit and rollback logic
 
-The default local adapter is implementation detail; contract behavior is stable regardless of transport.
+Transports: a local JSON-file stand-in (default), plus real external links over
+pymavlink and MAVSDK (`MissionRaw`). External links take a connection URL +
+heartbeat/request timeouts; the version compared before cutover is a CRC over the
+normalized mission items. The default local adapter is implementation detail;
+contract behavior is stable regardless of transport.
+
+Navigation-leaf command subset (export): a `.plan` waypoint may carry optional
+per-leaf fields that emit additional MAVLink items — `speed_mps` → `DO_CHANGE_SPEED`,
+`roi:{lat,lon[,alt]}` → `DO_SET_ROI` (both inserted ahead of the nav leaf), and
+`loiter_time_s` → the nav leaf becomes `NAV_LOITER_TIME` instead of `NAV_WAYPOINT`.
+`DO_JUMP` is intentionally not emitted — loop structure belongs to the behavior tree
+(ADR 0023). `doJumpId` is a single 1-based running sequence across all emitted items.

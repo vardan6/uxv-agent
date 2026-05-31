@@ -36,6 +36,7 @@ try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from gcs_server.ai.data_access import build_data_access_manifest
+    from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
     from gcs_server.ai.intent_service import IntentService
@@ -59,6 +60,7 @@ except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from ai.data_access import build_data_access_manifest
+    from ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import PlanningShellGraphRuntime
     from ai.intent_service import IntentService
@@ -735,7 +737,7 @@ def _selected_sections(payload: dict[str, Any]) -> list[str]:
     raw_sections = payload.get("sections", [])
     if not isinstance(raw_sections, list):
         raise HTTPException(status_code=400, detail="sections must be a list")
-    allowed = {"mqtt", "simulation", "video", "appearance", "ai_settings", "llm_providers", "model_routing"}
+    allowed = {"mqtt", "simulation", "video", "appearance", "mission_lifecycle", "ai_settings", "llm_providers", "model_routing"}
     sections = []
     for raw_section in raw_sections:
         section = str(raw_section)
@@ -756,6 +758,11 @@ def _settings_export_payload(config, sections: list[str]) -> dict[str, Any]:
         out["video"] = dict(config.video)
     if "appearance" in sections:
         out["appearance"] = dict(config.raw.get("appearance", {})) if isinstance(config.raw.get("appearance"), dict) else {}
+    if "mission_lifecycle" in sections:
+        out["mission_lifecycle"] = normalize_mission_lifecycle_settings(
+            config.mission_lifecycle,
+            build_default=resolve_build_default_mode(config),
+        )
     if "ai_settings" in sections:
         out["ai_settings"] = _normalize_ai_settings(config.raw.get("ai_settings", {}))
     if "llm_providers" in sections:
@@ -792,6 +799,14 @@ def _apply_settings_sections(config, payload: dict[str, Any], sections: list[str
         if isinstance(appearance, dict):
             config.raw["appearance"] = dict(appearance)
             applied.append("appearance")
+    if "mission_lifecycle" in sections:
+        mission_lifecycle = _extract_section_payload(payload, "mission_lifecycle")
+        if isinstance(mission_lifecycle, dict):
+            config.raw["mission_lifecycle"] = normalize_mission_lifecycle_settings(
+                mission_lifecycle,
+                build_default=resolve_build_default_mode(config),
+            )
+            applied.append("mission_lifecycle")
     if "ai_settings" in sections:
         ai_settings = _extract_section_payload(payload, "ai_settings")
         if isinstance(ai_settings, dict):
@@ -1651,6 +1666,158 @@ async def list_ai_sessions(
     return {"sessions": [_public_ai_session(runtime, session) for session in sessions]}
 
 
+@app.get("/api/ai/missions")
+async def list_missions(
+    request: Request,
+    user_id: str = "",
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Flat Mission list for the sidebar (ADR 0021 §2): one row = one Mission.
+
+    Single-user today, so `user_id` defaults to "" and matches MissionStore's
+    per-user filtering; multi-user auth would source it from the request.
+    """
+    runtime = _runtime(request)
+    missions = runtime.mission_store.list_missions(user_id=user_id, limit=limit)
+    return {"missions": missions}
+
+
+@app.post("/api/ai/missions/draw-pattern")
+async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
+    """Operator-drawn pattern → new Mission (Phase 4 authoring UX).
+
+    The map's basemap draw mode POSTs the sketched WGS84 vertices plus pattern
+    params; the execution service converts them to the local frame, runs the
+    corridor/survey generator, and persists the nav subtree as a new proposal.
+    We then bridge that operation to a flat manual Mission so it appears in the
+    sidebar (mirroring the planner's store_draft bridge).
+    """
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    result = mission_execution.create_drawn_pattern_mission(
+        session_id=str(payload.get("session_id", "") or ""),
+        pattern=str(payload.get("pattern", "") or ""),
+        points=payload.get("points") if isinstance(payload.get("points"), list) else [],
+        params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
+        name=str(payload.get("name", "") or ""),
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+
+    operation_id = str(result.get("operation_id") or "")
+    mission_store = getattr(runtime, "mission_store", None)
+    mission_id = ""
+    if mission_store is not None and operation_id:
+        try:
+            existing = mission_store.get_by_operation_id(operation_id)
+            if existing is not None:
+                mission_id = str(existing.get("id") or "")
+                mission_store.bump_client_version(mission_id)
+            else:
+                revision = result.get("revision") or {}
+                created = mission_store.create_mission(
+                    user_id=str(payload.get("user_id", "") or ""),
+                    name=str((revision.get("mission") or {}).get("goal") or "")
+                    or str(payload.get("name", "") or "")
+                    or "Drawn pattern",
+                    origin="manual",
+                )
+                mission_id = str(created.get("id") or "")
+                if mission_id:
+                    mission_store.set_active_operation(mission_id, operation_id=operation_id)
+                    # Pin the Mission's ADR 0022 datum to the origin the draw path
+                    # anchored on (first drawn vertex), so the row's coordinate
+                    # frame matches the stored waypoints instead of scene fallback.
+                    datum = result.get("origin_datum")
+                    if isinstance(datum, dict):
+                        try:
+                            from ai.coordinate_frame import Origin
+                        except ImportError:
+                            from gcs_server.ai.coordinate_frame import Origin
+                        mission_store.set_origin_datum(
+                            mission_id, datum=Origin.from_dict(datum)
+                        )
+        except Exception as exc:
+            result["mission_bridge_error"] = str(exc)
+
+    result["mission_id"] = mission_id
+    return JSONResponse(result)
+
+
+@app.post("/api/ai/missions/{mission_id}/geofence")
+async def set_mission_geofence(mission_id: str, request: Request) -> JSONResponse:
+    """Operator-drawn geofence → fenced revision on an existing Mission (Phase 5).
+
+    The basemap draw mode POSTs the sketched WGS84 polygon (and optional rally
+    points / alt band); the execution service appends a revision carrying the
+    fence inside mission content, which :func:`build_mission_executor` then
+    enforces early and uploads to the FC. POST with ``{"clear": true}`` removes
+    the fence.
+    """
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_store = getattr(runtime, "mission_store", None)
+    if mission_execution is None or mission_store is None:
+        raise HTTPException(status_code=503, detail="mission services unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    mission = mission_store.get_mission(str(mission_id or "").strip())
+    if mission is None:
+        raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    operation_id = str(mission.get("active_operation_id") or "").strip()
+    if not operation_id:
+        return JSONResponse(
+            {"ok": False, "error": f"mission '{mission_id}' has no active operation to fence"},
+            status_code=400,
+        )
+
+    clear = bool(payload.get("clear"))
+    geofence: dict[str, Any] | None = None
+    if not clear:
+        polygon = payload.get("polygon")
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            return JSONResponse(
+                {"ok": False, "error": "polygon must be a list of at least three {lat, lon} vertices (or pass clear=true)"},
+                status_code=400,
+            )
+        geofence = {
+            "polygon": polygon,
+            "rally_points": payload.get("rally_points") if isinstance(payload.get("rally_points"), list) else [],
+        }
+        if payload.get("min_alt") is not None:
+            geofence["min_alt"] = payload.get("min_alt")
+        if payload.get("max_alt") is not None:
+            geofence["max_alt"] = payload.get("max_alt")
+
+    result = mission_execution.set_operation_geofence(
+        session_id=str(payload.get("session_id", "") or ""),
+        operation_id=operation_id,
+        geofence=geofence,
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    try:
+        mission_store.bump_client_version(str(mission_id or "").strip())
+    except Exception as exc:
+        result["mission_bump_error"] = str(exc)
+    result["mission_id"] = str(mission_id or "").strip()
+    return JSONResponse(result)
+
+
 @app.post("/api/ai/sessions")
 async def create_ai_session(request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -2179,6 +2346,25 @@ async def get_mission_revision_overlay(revision_id: str, request: Request) -> JS
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(revision_id=revision_id)})
 
 
+@app.get("/api/ai/missions/{mission_id}/overlay")
+async def get_mission_overlay(mission_id: str, request: Request) -> JSONResponse:
+    """Mission-level overlay (ADR 0021 §2): resolve Mission -> active operation
+    -> active revision, then reuse the per-revision overlay builder. This is the
+    mission-keyed overlay source the sidebar/MapWidget cutover renders from,
+    replacing the per-revision `/api/ai/mission-revisions/{id}/overlay` path.
+    """
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    revision_id = runtime.mission_store.get_active_revision_id(mission_id)
+    if revision_id is None:
+        raise HTTPException(status_code=404, detail="mission not found")
+    if not revision_id:
+        raise HTTPException(status_code=404, detail="mission has no active revision")
+    return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(revision_id=revision_id)})
+
+
 @app.get("/api/ai/mission-overlays/current")
 async def get_current_mission_overlay(request: Request, session_id: str = "") -> JSONResponse:
     runtime = _runtime(request)
@@ -2334,6 +2520,108 @@ async def get_controller_mission_state(request: Request) -> JSONResponse:
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     return JSONResponse({"ok": True, "controller_state": mission_execution.get_controller_state()})
+
+
+@app.get("/api/ai/controller-mission/health")
+async def get_controller_mission_health(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    health = mission_execution.check_controller_health()
+    return JSONResponse({"ok": bool(health.get("ok")), "health": health})
+
+
+@app.post("/api/ai/controller-mission/clear")
+async def clear_controller_mission(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    expected_controller_version_raw = payload.get("expected_controller_version") if isinstance(payload, dict) else None
+    expected_controller_version = None
+    if expected_controller_version_raw is not None:
+        try:
+            expected_controller_version = int(expected_controller_version_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_controller_version must be an integer") from None
+    result = mission_execution.clear_controller_mission(
+        expected_controller_version=expected_controller_version,
+    )
+    runtime.replay_store.log_runtime_event(
+        "mission_controller_clear",
+        {
+            "status": result.get("status", ""),
+            "ok": bool(result.get("ok")),
+            "attempt_id": result.get("attempt_id", ""),
+            "expected_controller_version": expected_controller_version,
+        },
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.get("/api/ai/execution/state")
+async def get_execution_state(request: Request) -> JSONResponse:
+    """Confirm-banner poll (ADR 0021 §1): the in-flight execution for a session,
+    including the confirm-window countdown when one is awaiting confirmation."""
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    session_id = str(request.query_params.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    active = sessions.get(session_id)
+    return JSONResponse({"ok": True, "execution": active.snapshot() if active else None})
+
+
+@app.post("/api/ai/execution/confirm")
+async def confirm_execution(request: Request) -> JSONResponse:
+    """Operator `[Play]` on the confirm banner: start the armed run if still
+    within its confirm window."""
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    session_id = str((payload.get("session_id") if isinstance(payload, dict) else "") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    result = sessions.confirm(session_id)
+    runtime.replay_store.log_runtime_event(
+        "mission_execution_confirm",
+        {"session_id": session_id, "ok": bool(result.get("ok")), "status": result.get("status", "")},
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/execution/cancel")
+async def cancel_execution_endpoint(request: Request) -> JSONResponse:
+    """Operator dismissed the confirm banner: drop the armed/awaiting run."""
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    session_id = str((payload.get("session_id") if isinstance(payload, dict) else "") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    result = sessions.cancel(session_id)
+    runtime.replay_store.log_runtime_event(
+        "mission_execution_cancel",
+        {"session_id": session_id, "ok": bool(result.get("ok")), "status": result.get("status", "")},
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
 @app.post("/api/ai/mission-revisions/{revision_id}/execute")
@@ -2673,6 +2961,43 @@ async def apply_settings_sections(request: Request) -> JSONResponse:
             str(video.get("delivery_mode", "websocket_mjpeg")),
         )
     return JSONResponse({"ok": True, "applied_sections": applied})
+
+
+@app.get("/api/mission-lifecycle")
+async def get_mission_lifecycle(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    config = runtime.config
+    return {
+        "mission_lifecycle": normalize_mission_lifecycle_settings(
+            config.mission_lifecycle,
+            build_default=resolve_build_default_mode(config),
+        ),
+        "build_default_mode": resolve_build_default_mode(config),
+    }
+
+
+@app.post("/api/mission-lifecycle")
+async def save_mission_lifecycle(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    config = runtime.config
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Mission lifecycle payload must be an object")
+    settings_payload = payload.get("mission_lifecycle", payload)
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=400, detail="mission_lifecycle must be an object")
+    config.raw["mission_lifecycle"] = normalize_mission_lifecycle_settings(
+        settings_payload,
+        build_default=resolve_build_default_mode(config),
+    )
+    save_config(config)
+    return JSONResponse(
+        {
+            "ok": True,
+            "mission_lifecycle": config.raw["mission_lifecycle"],
+            "build_default_mode": resolve_build_default_mode(config),
+        }
+    )
 
 
 @app.get("/api/ai-settings")

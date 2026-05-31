@@ -164,7 +164,11 @@ Current status of follow-on map work:
 
 - the mission elevation profile panel is implemented on `/ai`
 - the replay page still renders through `static/replay.js`, not through `MapWidget`
-- geofence display and validation are still gated on a real backend source
+- geofence authoring + validation now have a real backend source: a mission's
+  inclusion fence is stored on mission content (`geofence`), authored via the
+  `set_mission_geofence` AI tool or the BasemapPanel `🛡 Fence` draw mode
+  (`POST /api/ai/missions/{id}/geofence`), enforced early by the executor and
+  uploaded to the FC (ADR 0023 Phase 5)
 - the main dashboard still does not have a dedicated live map panel
 
 ## Settings Model
@@ -200,7 +204,7 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 - current video delivery is still the bootstrap WebSocket path fed from MQTT frames
 - multi-instance GCS behavior is not yet fully hardened
 - replay map rendering still lives in `static/replay.js`; replay has not been migrated onto `MapWidget`
-- geofence display and validation await a real backend source
+- geofence is authored + enforced (ADR 0023 Phase 5); a dedicated basemap *display* of an existing mission's stored fence polygon is not yet rendered on load (only the in-progress sketch is drawn)
 - LLM provider checks are simple endpoint probes, not full chat completions
 - bounded lazy data branches/source controls are implemented for replay, AI memory, settings, and sensor metadata; RAG/document retrieval and web research/search are still not implemented
 - perception tool contract and video-frame understanding are not implemented yet

@@ -9,3 +9,4 @@ langchain-ollama
 langchain-community
 langgraph
 pymavlink
+mavsdk

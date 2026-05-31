@@ -14,6 +14,7 @@ class PlanningShellGraphState(TypedDict, total=False):
 
     # ── Request identity ──────────────────────────────────────────────────────
     session_id: str
+    user_id: str                # per-user Mission store scope (ADR 0021 §2/§5)
     thread_id: str              # Phase 2: stable LangGraph thread ID for checkpoint/resume
     source_message_id: str
     user_prompt: str
@@ -60,6 +61,9 @@ class PlanningShellGraphState(TypedDict, total=False):
     draft: dict
     draft_id: str
     parent_operation_id: str     # non-empty when planner links proposal to an existing operation
+    mission_edit_mode: str       # ADR 0021 §3: create | clone_and_edit | edit_in_place
+    source_mission_id: str       # ADR 0021 §3: flat Mission the edit derives from
+    mission_id: str              # flat Mission (ADR 0021 §2) this proposal bridges to
     mission_operation_id: str
     mission_revision_id: str
     validation: dict

@@ -42,6 +42,7 @@
         <a class="settings-tab" data-settings-tab-link href="?tab=connectivity">Connectivity</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=video">Video</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=appearance">Appearance</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=mission-lifecycle">Mission Lifecycle</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=ai-settings">AI Settings</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=llm-provider">Add LLM Provider</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=json">Config I/O</a>
@@ -200,6 +201,51 @@
               </label>
               <p class="settings-note">Theme mode follows the browser and OS when set to system. Light and dark defaults are stored separately.</p>
               <p id="appearance-status" class="status-banner">Theme preferences are stored in this browser.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-mission-lifecycle" class="settings-pane" data-settings-tab="mission-lifecycle" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Execution</p>
+                  <h2>Mission Lifecycle</h2>
+                </div>
+                <span id="mission-lifecycle-pill" class="pill">Loading</span>
+              </div>
+              <p class="hint">Controls how AI-authored missions move from draft to execution, and how new missions appear on the map. See ADR 0021.</p>
+              <label>
+                <span>Execution mode</span>
+                <select id="mission-execution-mode">
+                  <option value="strict">Strict — every run needs explicit approval</option>
+                  <option value="confirm">Confirm — armed run with a confirm-before-expiry banner</option>
+                  <option value="autonomous">Autonomous — the agent may execute directly</option>
+                </select>
+              </label>
+              <label>
+                <span>Confirm timeout (seconds)</span>
+                <input id="mission-confirm-timeout" type="range" min="3" max="60" step="1" value="10">
+                <span id="mission-confirm-timeout-value" class="settings-note">10 s</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="mission-auto-overlay" type="checkbox" checked>
+                <span>Auto-overlay new missions on the map</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="mission-steal-focus" type="checkbox" checked>
+                <span>Steal map focus when a new mission is created</span>
+              </label>
+              <label>
+                <span>Default mission name template</span>
+                <input id="mission-name-template" type="text" placeholder="Untitled mission">
+              </label>
+              <div class="form-actions form-actions-inline">
+                <button id="save-mission-lifecycle" type="button">Save Mission Lifecycle</button>
+              </div>
+              <p class="settings-note">The Confirm banner timeout applies once Confirm mode and the Phase 3 executor are active. Build default mode: <span id="mission-build-default">-</span>.</p>
+              <p id="mission-lifecycle-status" class="status-banner">Loading mission lifecycle settings.</p>
             </article>
           </div>
         </section>

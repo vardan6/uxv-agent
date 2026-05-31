@@ -1,123 +1,86 @@
-import { vehicleIcon } from '../vehicleProfiles.js';
+// Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
+// edit + execute resolve to the Mission's active revision and are gated by its
+// status. executing → locked (no edit/execute); approved|exported|
+// cutover_pending → executable. approve/reject stay off the flat row (draft
+// plumbing is internal).
+const MISSION_ROW_EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
+const MISSION_ROW_EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
 
-const APPROVABLE = new Set(['proposed', 'awaiting_approval', 'planning']);
-const EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
-const EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
-
-const STATUS_CLASS = {
-  proposed: 'is-proposed',
-  awaiting_approval: 'is-proposed',
-  planning: 'is-proposed',
-  approved: 'is-approved',
-  exported: 'is-approved',
-  cutover_pending: 'is-approved',
-  executing: 'is-executing',
-  completed: 'is-completed',
-  superseded: 'is-superseded',
-  rejected: 'is-superseded',
-  validation_failed: 'is-superseded',
-};
-
-function statusLabel(status) {
-  return String(status || 'unknown').replaceAll('_', ' ');
-}
-
-function missionTitle(revision) {
-  const goal = String(revision?.mission?.goal || revision?.goal || '').trim();
-  return goal || 'Mission revision';
-}
-
-function computeOriginBadge(revision) {
-  const prov = revision.provenance;
-  if (!prov || typeof prov !== 'object') return '🤖';
-  const values = Object.values(prov);
-  if (!values.length) return '🤖';
-  if (values.every(v => v === 'user')) return '👤';
-  if (values.some(v => v === 'ai+edited')) return '✏️';
-  return '🤖';
-}
-
-function renderActionButtons(revision, status, { isActiveRevision = false } = {}) {
-  const revisionId = String(revision.id || '');
-  const draftId = String(revision.draft_id || '');
-  const parts = [];
-
+function missionRowActionButtons(missionRow) {
+  const activeRevisionId = String(missionRow.activeRevisionId || '');
+  const status = String(missionRow.activeRevisionStatus || '');
+  if (!activeRevisionId) return '';
   if (status === 'executing') {
     return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
   }
-  if (EDITABLE.has(status)) {
+  const parts = [];
+  if (MISSION_ROW_EDITABLE.has(status)) {
     parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-      data-edit-revision-id="${revisionId}"
+      data-edit-mission-id="${String(missionRow.id || '')}"
       title="Edit waypoints"
       aria-label="Edit waypoints">✏</button>`);
   }
-  if (APPROVABLE.has(status) && draftId) {
-    parts.push(`<button class="mission-row-action-btn is-approve" type="button"
-      data-approve-draft-id="${draftId}"
-      title="Approve draft (does not execute)"
-      aria-label="Approve draft (does not execute)">✓</button>`);
-    parts.push(`<button class="mission-row-action-btn is-reject" type="button"
-      data-reject-draft-id="${draftId}"
-      title="Reject draft"
-      aria-label="Reject draft">✕</button>`);
-  }
-  if (EXECUTABLE.has(status) && isActiveRevision) {
+  if (MISSION_ROW_EXECUTABLE.has(status)) {
     parts.push(`<button class="mission-row-action-btn is-execute" type="button"
-      data-execute-revision-id="${revisionId}"
+      data-execute-mission-id="${String(missionRow.id || '')}"
       title="Execute on rover (uploads and starts mission)"
       aria-label="Execute on rover">▶</button>`);
-  } else if (EXECUTABLE.has(status)) {
-    parts.push(`<span class="mission-row-stale" title="A newer active revision exists for this mission. Execute that revision instead.">stale</span>`);
   }
   return parts.join('');
 }
 
-function renderRow(revision, ctx) {
+// Pure markup for one flat-Mission row (ADR 0021 §2: one row = one Mission).
+// Consumes a descriptor from mapMissionsForList(). Focus/visibility are keyed
+// on the Mission id; the revision/operation history is internal detail behind
+// an optional expander. Kept pure so it is node-testable without a DOM.
+export function missionRowMarkup(missionRow, ctx = {}) {
   const {
-    visibleRevisionIds,
-    focusedRevisionId,
-    paletteByRevisionId,
-    profilesById,
-    activeProfileId,
-    activeRevisionId,
-    isEarlier,
+    visibleMissionIds = new Set(),
+    focusedMissionId = '',
+    selectedMissionIds = new Set(),
+    paletteByMissionId = new Map(),
   } = ctx;
-  const revisionId = String(revision.id || '');
-  const isVisible = visibleRevisionIds.has(revisionId);
-  const isFocused = focusedRevisionId === revisionId;
-  const isActiveRevision = revisionId === String(activeRevisionId || '');
-  const status = String(revision.status || '');
-  const color = paletteByRevisionId.get(revisionId) || 'transparent';
-  const profileId = String(revision?.mission?.vehicle_profile_id || activeProfileId || 'rover_default');
-  const profileIcon = vehicleIcon(profileId, profilesById, activeProfileId);
+  const id = String(missionRow.id || '');
+  const isVisible = visibleMissionIds.has(id);
+  const isFocused = focusedMissionId === id;
+  const isSelected = selectedMissionIds.has(id);
+  const color = paletteByMissionId.get(id) || 'transparent';
+  const indexLabel = missionRow.missionIndex != null ? `#${missionRow.missionIndex}` : '';
   return `
-    <div class="mission-list-row ${STATUS_CLASS[status] || ''}${isFocused ? ' is-focused' : ''}${isEarlier ? ' is-earlier' : ''}">
+    <div class="mission-list-row${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}" data-mission-id="${id}">
       <span class="mission-row-status" aria-hidden="true"></span>
+      <label class="mission-row-select" title="Select for batch operations (shift-click for range)">
+        <input
+          type="checkbox"
+          class="mission-row-select-box"
+          data-select-mission-id="${id}"
+          ${isSelected ? 'checked' : ''}
+          aria-label="Select mission ${missionRow.name}"
+        />
+      </label>
       <button
         class="mission-row-focus"
         type="button"
-        data-focus-revision-id="${revisionId}"
+        data-focus-mission-id="${id}"
         aria-pressed="${isFocused ? 'true' : 'false'}"
         title="Focus mission"
       >
         <span class="mission-row-color-dot" style="--mission-color:${color}"></span>
-        <span class="mission-row-vehicle" aria-hidden="true">${profileIcon}</span>
         <span class="mission-row-main">
-          <span class="mission-row-title">${missionTitle(revision)}</span>
-          <span class="mission-row-meta">${statusLabel(status)} · rev ${String(revisionId).slice(-6)}</span>
+          <span class="mission-row-title">${missionRow.name}</span>
+          <span class="mission-row-meta">${indexLabel}</span>
         </span>
-        <span class="mission-row-origin" title="Mission origin">${computeOriginBadge(revision)}</span>
+        <span class="mission-row-origin" title="Mission origin">${missionRow.originBadge}</span>
       </button>
       <span class="mission-row-actions">
-        ${renderActionButtons(revision, status, { isActiveRevision })}
+        ${missionRowActionButtons(missionRow)}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
-          class="mission-row-eye${status === 'executing' ? ' is-locked' : ''}"
+          class="mission-row-eye"
           type="button"
-          data-toggle-revision-id="${revisionId}"
+          data-toggle-mission-id="${id}"
           aria-label="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
           title="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
-          ${status === 'executing' ? 'disabled aria-disabled="true"' : ''}
         >${isVisible ? '👁' : '🚫'}</button>
       </span>
     </div>
@@ -127,70 +90,47 @@ function renderRow(revision, ctx) {
 export class MissionListPanel {
   constructor(container, opts = {}) {
     this._container = container;
-    this._onFocusRequested = opts.onFocusRequested || (() => {});
-    this._onVisibilityToggled = opts.onVisibilityToggled || (() => {});
-    this._onExpandToggled = opts.onExpandToggled || (() => {});
-    this._onApproveRequested = opts.onApproveRequested || (() => {});
-    this._onRejectRequested = opts.onRejectRequested || (() => {});
-    this._onExecuteRequested = opts.onExecuteRequested || (() => {});
-    this._onEditRequested = opts.onEditRequested || (() => {});
+    // Flat-Mission callbacks (ADR 0021 §2: one row = one Mission). Edit/execute
+    // resolve to the Mission's active revision inside MapWidget.
+    this._onMissionFocusRequested = opts.onMissionFocusRequested || (() => {});
+    this._onMissionVisibilityToggled = opts.onMissionVisibilityToggled || (() => {});
+    this._onMissionEditRequested = opts.onMissionEditRequested || (() => {});
+    this._onMissionExecuteRequested = opts.onMissionExecuteRequested || (() => {});
+    // Selected state (ADR 0021 §4): batch-operation target set, driven by the
+    // per-row checkbox (shift-click extends a range). Distinct from Visible/Active.
+    this._onMissionSelectionToggled = opts.onMissionSelectionToggled || (() => {});
+    this._onSelectedShowRequested = opts.onSelectedShowRequested || (() => {});
+    this._onSelectedHideRequested = opts.onSelectedHideRequested || (() => {});
+    this._onSelectionCleared = opts.onSelectionCleared || (() => {});
   }
 
-  render({
-    groups = [],
-    expandedOperationIds = new Set(),
-    visibleRevisionIds = new Set(),
-    focusedRevisionId = '',
-    paletteByRevisionId = new Map(),
-    profilesById = {},
-    activeProfileId = 'rover_default',
+  renderMissions({
+    missions = [],
+    focusedMissionId = '',
+    visibleMissionIds = new Set(),
+    selectedMissionIds = new Set(),
+    paletteByMissionId = new Map(),
   } = {}) {
-    const body = groups.length
-      ? groups.map((group) => {
-        const defaultRevisionId = String(group.defaultRevisionId || '');
-        const activeRevisionId = String(group.activeRevisionId || defaultRevisionId);
-        const defaultRevision = group.revisions.find((revision) => String(revision.id || '') === defaultRevisionId)
-          || group.revisions[0];
-        const earlierRevisions = group.revisions.filter((revision) => revision !== defaultRevision);
-        const expanded = expandedOperationIds.has(group.operationId);
-        const earlierMarkup = expanded
-          ? earlierRevisions.map((revision) => renderRow(revision, {
-            visibleRevisionIds,
-            focusedRevisionId,
-            paletteByRevisionId,
-            profilesById,
-            activeProfileId,
-            activeRevisionId,
-            isEarlier: true,
-          })).join('')
-          : '';
-        const expander = earlierRevisions.length
-          ? `
-            <button
-              class="mission-group-expander"
-              type="button"
-              data-toggle-operation-id="${group.operationId}"
-              aria-expanded="${expanded ? 'true' : 'false'}"
-              title="${expanded ? 'Collapse earlier revisions' : 'Expand earlier revisions'}"
-            >${expanded ? '▾' : '▸'} ${earlierRevisions.length} earlier</button>
-          `
-          : '';
-        return `
-          <section class="mission-group" data-operation-id="${group.operationId}">
-            ${renderRow(defaultRevision, {
-              visibleRevisionIds,
-              focusedRevisionId,
-              paletteByRevisionId,
-              profilesById,
-              activeProfileId,
-              activeRevisionId,
-              isEarlier: false,
-            })}
-            ${expander}
-            <div class="mission-group-earlier"${expanded ? '' : ' hidden'}>${earlierMarkup}</div>
-          </section>
-        `;
-      }).join('')
+    const batchBar = selectedMissionIds.size
+      ? `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
+            <span class="mission-batch-count">${selectedMissionIds.size} selected</span>
+            <button class="mission-batch-btn" type="button" data-batch-action="show">Show</button>
+            <button class="mission-batch-btn" type="button" data-batch-action="hide">Hide</button>
+            <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear">Clear</button>
+          </div>`
+      : '';
+    const header = `<div class="mission-list-header">
+            <span class="mission-list-heading">Missions</span>
+            <a class="mission-list-settings" href="/settings?tab=mission-lifecycle"
+              title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
+          </div>`;
+    const body = missions.length
+      ? batchBar + missions.map((missionRow) => missionRowMarkup(missionRow, {
+        visibleMissionIds,
+        focusedMissionId,
+        selectedMissionIds,
+        paletteByMissionId,
+      })).join('')
       : `<div class="mission-list-empty">
             <p class="mission-list-empty-title">No missions yet</p>
             <p class="mission-list-empty-hint">Ask the agent in the chat above to plan a mission.</p>
@@ -199,49 +139,53 @@ export class MissionListPanel {
               ↑ Go to chat
             </button>
           </div>`;
-
-    this._container.innerHTML = `<div class="mission-list-panel">${body}</div>`;
-    this._bind();
+    this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
+    this._bindMissions();
   }
 
-  _bind() {
-    this._container.querySelectorAll('[data-focus-revision-id]').forEach((button) => {
-      button.addEventListener('click', () => this._onFocusRequested(button.dataset.focusRevisionId || ''));
+  _bindMissions() {
+    this._container.querySelectorAll('[data-focus-mission-id]').forEach((button) => {
+      button.addEventListener('click', () => this._onMissionFocusRequested(button.dataset.focusMissionId || ''));
     });
-    this._container.querySelectorAll('[data-toggle-revision-id]').forEach((button) => {
+    this._container.querySelectorAll('[data-toggle-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this._onVisibilityToggled(button.dataset.toggleRevisionId || '');
+        this._onMissionVisibilityToggled(button.dataset.toggleMissionId || '');
       });
     });
-    this._container.querySelectorAll('[data-toggle-operation-id]').forEach((button) => {
-      button.addEventListener('click', () => {
-        this._onExpandToggled(button.dataset.toggleOperationId || '');
-      });
-    });
-    this._container.querySelectorAll('[data-approve-draft-id]').forEach((button) => {
+    this._container.querySelectorAll('[data-edit-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        this._onApproveRequested(button.dataset.approveDraftId || '');
+        this._onMissionEditRequested(button.dataset.editMissionId || '');
       });
     });
-    this._container.querySelectorAll('[data-reject-draft-id]').forEach((button) => {
+    this._container.querySelectorAll('[data-execute-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        this._onRejectRequested(button.dataset.rejectDraftId || '');
+        this._onMissionExecuteRequested(button.dataset.executeMissionId || '');
       });
     });
-    this._container.querySelectorAll('[data-execute-revision-id]').forEach((button) => {
-      button.addEventListener('click', (event) => {
+    // Selection checkboxes: click carries shiftKey for range extension. Bind on
+    // click (not change) so the modifier key is available; preventDefault keeps
+    // the checkbox visual in sync with the authoritative Selected set on re-render.
+    this._container.querySelectorAll('[data-select-mission-id]').forEach((box) => {
+      box.addEventListener('click', (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        this._onExecuteRequested(button.dataset.executeRevisionId || '');
+        this._onMissionSelectionToggled(box.dataset.selectMissionId || '', { shift: event.shiftKey });
       });
     });
-    this._container.querySelectorAll('[data-edit-revision-id]').forEach((button) => {
+    this._container.querySelectorAll('[data-batch-action]').forEach((button) => {
       button.addEventListener('click', (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        this._onEditRequested(button.dataset.editRevisionId || '');
+        const action = button.dataset.batchAction;
+        if (action === 'show') this._onSelectedShowRequested();
+        else if (action === 'hide') this._onSelectedHideRequested();
+        else if (action === 'clear') this._onSelectionCleared();
       });
     });
   }

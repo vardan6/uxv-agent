@@ -1,0 +1,85 @@
+"""Bridge the behavior-tree executor's ``leaf_driver`` seam to the controller
+adapter (ADR 0023 decision 3, Phase 3).
+
+The executor (:mod:`ai.mission_executor`) is relocatable and never imports GCS
+internals; it calls an injected ``leaf_driver(waypoints) -> bool`` for each
+``nav_leaf``. In the server phase that seam is satisfied here: a navigable
+segment of WGS84 waypoints is compiled to a QGC ``.plan`` via
+:class:`MissionExportService` and installed on the flight controller through a
+:class:`ControllerMissionAdapter`. Returns ``True`` only when the adapter
+reports a verified install.
+
+Keeping this glue in its own module — not in the executor — preserves the
+executor's relocatability: a companion-computer build supplies a different
+``leaf_driver`` that drives the FC directly.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+try:
+    from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
+    from gcs_server.ai.mission_executor import LeafDriver
+    from gcs_server.ai.mission_export_service import MissionExportService
+    from gcs_server.ai.vehicle_profile import VehicleProfile
+except ModuleNotFoundError:
+    from ai.controller_mission_adapter import ControllerMissionAdapter
+    from ai.mission_executor import LeafDriver
+    from ai.mission_export_service import MissionExportService
+    from ai.vehicle_profile import VehicleProfile
+
+
+def make_controller_leaf_driver(
+    adapter: ControllerMissionAdapter,
+    *,
+    export_service: Optional[MissionExportService] = None,
+    profile: Optional[VehicleProfile] = None,
+    home_position: Optional[dict[str, float]] = None,
+    geofence: Optional[dict[str, Any]] = None,
+) -> LeafDriver:
+    """Build a ``leaf_driver`` that installs each segment on the controller.
+
+    ``export_service`` defaults to a fresh :class:`MissionExportService`;
+    ``profile`` defaults to the active vehicle profile (resolved per call so a
+    profile change takes effect without rebuilding the driver). Each segment is
+    installed as an independent mission; ``expected_controller_version`` is left
+    unset because the executor drives segments sequentially and is the sole
+    writer for the duration of a run.
+
+    When ``geofence`` (a :func:`ai.mission_safety.parse_geofence` ``to_dict``
+    shape) is supplied, the inclusion FENCE/RALLY is uploaded to the controller
+    once — lazily, before the first segment is driven — so the FC's
+    authoritative layer is armed before any nav waypoint is installed (ADR 0023
+    Phase 5). A failed fence upload fails closed: the segment is refused.
+    """
+    service = export_service or MissionExportService()
+    # One-shot fence upload guarded across the per-segment calls of a run.
+    fence_state = {"uploaded": False}
+
+    def _ensure_geofence() -> bool:
+        if not geofence or fence_state["uploaded"]:
+            return True
+        result = adapter.upload_geofence(geofence=geofence)
+        if not result.ok:
+            return False
+        fence_state["uploaded"] = True
+        return True
+
+    def _drive(waypoints: list[dict[str, Any]]) -> bool:
+        if not waypoints:
+            # An empty segment is a no-op success: nothing to upload, and the
+            # tree walk already accounted for the (zero) waypoints.
+            return True
+        if not _ensure_geofence():
+            return False
+        plan = service.build_plan(waypoints, profile=profile, home_position=home_position)
+        # The snapshot's controller_version is the post-install version
+        # (observed + 1), matching the cutover path so version-tracking adapters
+        # verify the install rather than rolling it back.
+        observed = int(adapter.get_controller_state().controller_version or 0)
+        snapshot = {"controller_version": observed + 1, "plan": plan}
+        result = adapter.install_mission(pending_snapshot=snapshot)
+        return bool(result.ok)
+
+    return _drive

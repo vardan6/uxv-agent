@@ -37,6 +37,16 @@ const settingsEls = {
   lightThemeSelect: document.getElementById('light-theme-select'),
   darkThemeSelect: document.getElementById('dark-theme-select'),
   appearanceStatus: document.getElementById('appearance-status'),
+  missionExecutionMode: document.getElementById('mission-execution-mode'),
+  missionConfirmTimeout: document.getElementById('mission-confirm-timeout'),
+  missionConfirmTimeoutValue: document.getElementById('mission-confirm-timeout-value'),
+  missionAutoOverlay: document.getElementById('mission-auto-overlay'),
+  missionStealFocus: document.getElementById('mission-steal-focus'),
+  missionNameTemplate: document.getElementById('mission-name-template'),
+  missionBuildDefault: document.getElementById('mission-build-default'),
+  missionLifecyclePill: document.getElementById('mission-lifecycle-pill'),
+  missionLifecycleStatus: document.getElementById('mission-lifecycle-status'),
+  saveMissionLifecycle: document.getElementById('save-mission-lifecycle'),
   aiTtsEnabled: document.getElementById('ai-tts-enabled'),
   aiTtsAutoRead: document.getElementById('ai-tts-auto-read'),
   aiTtsEngine: document.getElementById('ai-tts-engine'),
@@ -250,6 +260,10 @@ function setAppearanceStatus(text) {
 
 function setAiSettingsStatus(text) {
   if (settingsEls.aiSettingsStatus) settingsEls.aiSettingsStatus.textContent = text;
+}
+
+function setMissionLifecycleStatus(text) {
+  if (settingsEls.missionLifecycleStatus) settingsEls.missionLifecycleStatus.textContent = text;
 }
 
 function setLlmStatus(text) {
@@ -1456,6 +1470,7 @@ async function applyPendingJsonSettings() {
   await Promise.all([
     loadConnectivity().catch((error) => setSetupStatus(error.message)),
     loadVideoSettings().catch((error) => setVideoStatus(error.message)),
+    loadMissionLifecycle().catch((error) => setMissionLifecycleStatus(error.message)),
     loadAiSettings().catch((error) => setAiSettingsStatus(error.message)),
     loadLlmSettings().catch((error) => setLlmStatus(error.message)),
   ]);
@@ -1483,6 +1498,76 @@ function bindAppearance() {
         ? `Active dark theme: ${window.GCSCommon.themeLabel(theme.darkTheme)}.`
         : `Dark default saved as ${window.GCSCommon.themeLabel(theme.darkTheme)}.`
     );
+  });
+}
+
+const MISSION_MODE_LABELS = {
+  strict: 'Strict',
+  confirm: 'Confirm',
+  autonomous: 'Autonomous',
+};
+
+function updateMissionConfirmTimeoutLabel() {
+  if (!settingsEls.missionConfirmTimeoutValue || !settingsEls.missionConfirmTimeout) return;
+  settingsEls.missionConfirmTimeoutValue.textContent = `${settingsEls.missionConfirmTimeout.value} s`;
+}
+
+function updateMissionLifecyclePill() {
+  if (!settingsEls.missionLifecyclePill || !settingsEls.missionExecutionMode) return;
+  const mode = settingsEls.missionExecutionMode.value;
+  settingsEls.missionLifecyclePill.textContent = MISSION_MODE_LABELS[mode] || mode;
+  const tone = mode === 'autonomous' ? 'warn' : mode === 'confirm' ? 'ok' : 'pill';
+  settingsEls.missionLifecyclePill.className = `pill ${tone === 'pill' ? '' : tone}`.trim();
+}
+
+function fillMissionLifecycle(settings = {}, buildDefault = '') {
+  settingsEls.missionExecutionMode.value = settings.execution_mode || buildDefault || 'strict';
+  settingsEls.missionConfirmTimeout.value = String(clampNumber(settings.confirm_timeout_s, 10, 3, 60));
+  settingsEls.missionAutoOverlay.checked = settings.auto_overlay_new_missions !== false;
+  settingsEls.missionStealFocus.checked = settings.steal_map_focus !== false;
+  settingsEls.missionNameTemplate.value = settings.default_name_template || 'Untitled mission';
+  if (settingsEls.missionBuildDefault) {
+    settingsEls.missionBuildDefault.textContent = MISSION_MODE_LABELS[buildDefault] || buildDefault || '-';
+  }
+  updateMissionConfirmTimeoutLabel();
+  updateMissionLifecyclePill();
+}
+
+function readMissionLifecycle() {
+  return {
+    execution_mode: settingsEls.missionExecutionMode.value,
+    confirm_timeout_s: clampNumber(settingsEls.missionConfirmTimeout.value, 10, 3, 60),
+    auto_overlay_new_missions: settingsEls.missionAutoOverlay.checked,
+    steal_map_focus: settingsEls.missionStealFocus.checked,
+    default_name_template: settingsEls.missionNameTemplate.value.trim() || 'Untitled mission',
+  };
+}
+
+async function loadMissionLifecycle() {
+  if (!settingsEls.missionExecutionMode) return;
+  setMissionLifecycleStatus('Loading mission lifecycle settings.');
+  const result = await readJson('/api/mission-lifecycle');
+  fillMissionLifecycle(result.mission_lifecycle || {}, result.build_default_mode || '');
+  setMissionLifecycleStatus('Mission lifecycle settings loaded.');
+}
+
+async function saveMissionLifecycle() {
+  setMissionLifecycleStatus('Saving mission lifecycle settings.');
+  const result = await readJson('/api/mission-lifecycle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mission_lifecycle: readMissionLifecycle() }),
+  });
+  fillMissionLifecycle(result.mission_lifecycle || {}, result.build_default_mode || '');
+  setMissionLifecycleStatus('Mission lifecycle settings saved.');
+}
+
+function bindMissionLifecycle() {
+  if (!settingsEls.missionExecutionMode) return;
+  settingsEls.missionConfirmTimeout.addEventListener('input', updateMissionConfirmTimeoutLabel);
+  settingsEls.missionExecutionMode.addEventListener('change', updateMissionLifecyclePill);
+  settingsEls.saveMissionLifecycle.addEventListener('click', () => {
+    saveMissionLifecycle().catch((error) => setMissionLifecycleStatus(error.message));
   });
 }
 
@@ -1571,6 +1656,7 @@ function initSettings() {
   renderTabs(readSelectedTab());
   bindTabs();
   bindAppearance();
+  bindMissionLifecycle();
   bindAiSettings();
   bindLlmSettings();
 
@@ -1660,6 +1746,9 @@ function initSettings() {
   });
   loadVideoSettings().catch((error) => {
     setVideoStatus(error.message);
+  });
+  loadMissionLifecycle().catch((error) => {
+    setMissionLifecycleStatus(error.message);
   });
   loadAiSettings().catch((error) => {
     setAiSettingsStatus(error.message);

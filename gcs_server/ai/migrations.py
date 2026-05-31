@@ -152,12 +152,91 @@ def _migration_005_add_revision_mutation_fields(conn: sqlite3.Connection) -> Non
         )
 
 
+def _migration_006_create_missions(conn: sqlite3.Connection) -> None:
+    # Flat Mission entity (ADR 0021 §2): one row = one Mission. The existing
+    # draft/operation/revision tables become this Mission's internal payload;
+    # `mission_index` is the stable, never-reused per-user handle (allocation
+    # logic lands with MissionStore). `origin` here is provenance
+    # (manual|ai_chat), distinct from ADR 0022's coordinate-datum Origin.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS missions (
+          id TEXT PRIMARY KEY,
+          created_by_user_id TEXT NOT NULL DEFAULT '',
+          mission_index INTEGER NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          origin TEXT NOT NULL DEFAULT 'manual',
+          origin_chat_id TEXT NOT NULL DEFAULT '',
+          client_version INTEGER NOT NULL DEFAULT 0,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_user_index ON missions(created_by_user_id, mission_index)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_user_created ON missions(created_by_user_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_origin_chat ON missions(origin_chat_id, created_at DESC)"
+    )
+
+
+def _migration_007_create_mission_index_counters(conn: sqlite3.Connection) -> None:
+    # Per-user high-water mark for `mission_index`. Allocation reads and bumps
+    # `next_index` here rather than `MAX(mission_index)` over live rows, so a
+    # deleted Mission's handle is never reused (ADR 0021 §2).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mission_index_counters (
+          user_id TEXT PRIMARY KEY,
+          next_index INTEGER NOT NULL
+        )
+        """
+    )
+
+
+def _migration_008_add_mission_active_operation(conn: sqlite3.Connection) -> None:
+    # Bridge the flat Mission to its internal payload (ADR 0021 §2): a Mission
+    # points at one `ai_mission_operations` row, whose `active_revision_id`
+    # resolves to the current revision's `mission_json` content. The
+    # draft/operation/revision tables stay internal; `missions` is the public
+    # one-row-per-Mission handle.
+    if _table_exists(conn, "missions") and not _column_exists(conn, "missions", "active_operation_id"):
+        conn.execute(
+            "ALTER TABLE missions ADD COLUMN active_operation_id TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_missions_active_operation ON missions(active_operation_id)"
+        )
+
+
+def _migration_009_add_mission_origin_datum(conn: sqlite3.Connection) -> None:
+    # ADR 0022 GPS-master coordinate frame: each Mission carries its own
+    # coordinate-datum Origin (the WGS84 point local scene metres are measured
+    # from). Distinct from ADR 0021's provenance `origin` (manual|ai_chat) on the
+    # same table. These columns give per-Mission Origin a real home; read/write
+    # paths that derive metres via `wgs84_to_local` migrate onto them in a later
+    # slice. NULL-equivalent default 0.0 means "datum not yet seeded".
+    for column in ("origin_lat", "origin_lon", "origin_alt"):
+        if _table_exists(conn, "missions") and not _column_exists(conn, "missions", column):
+            conn.execute(
+                f"ALTER TABLE missions ADD COLUMN {column} REAL NOT NULL DEFAULT 0.0"
+            )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
     (3, "create_ai_mission_execution_tables", _migration_003_create_ai_mission_execution_tables),
     (4, "create_ai_mission_controller_tables", _migration_004_create_ai_mission_controller_tables),
     (5, "add_revision_mutation_fields", _migration_005_add_revision_mutation_fields),
+    (6, "create_missions", _migration_006_create_missions),
+    (7, "create_mission_index_counters", _migration_007_create_mission_index_counters),
+    (8, "add_mission_active_operation", _migration_008_add_mission_active_operation),
+    (9, "add_mission_origin_datum", _migration_009_add_mission_origin_datum),
 )
 
 

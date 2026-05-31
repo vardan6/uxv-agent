@@ -56,6 +56,8 @@ AI-driven changes are non-destructive by default; only manual edits and explicit
 
 **Invariant.** The Active Mission must be Visible. Hiding the Active Mission clears Active.
 
+**Sidebar-row affordances.** A flat Mission row surfaces only operator-facing actions: click → Active (focus), eye → Visible, **edit** (per § 3, mutates in place), and **execute** (mode-gated per § 1). Execute/edit resolve to the Mission's active revision; an `executing` Mission locks both. Draft-lifecycle actions (approve / reject) are **not** on the flat row — per "draft/revision plumbing stays internal" (Consequences), they live on the draft-review surface, not the Mission list.
+
 ### 5. Chat reference resolution
 
 Resolution order for chat-driven Mission references:

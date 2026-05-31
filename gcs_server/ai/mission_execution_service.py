@@ -6,14 +6,17 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .controller_mission_adapter import (
     ControllerMissionAdapter,
     ControllerMissionAdapterState,
     JsonFileControllerMissionAdapter,
 )
+from .coordinate_frame import Origin, load_scene_origin, local_to_wgs84, wgs84_to_local
 from .migrations import apply_ai_store_migrations
+from . import mission_patterns
+from .mission_safety import parse_geofence
 
 
 MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
@@ -51,7 +54,82 @@ def _load_json_file(path: str) -> Any:
         return {}
 
 
-def _canonicalize_mission_payload(draft_payload: dict[str, Any]) -> dict[str, Any]:
+def _mission_origin() -> Origin:
+    """Coordinate datum used to convert between stored WGS84 truth and the local
+    metres the simulator/UI render in (ADR 0022). Today every Mission inherits the
+    scene georeference; a zero Origin is the "datum not yet seeded" fallback for
+    real-rover builds with no scene file. Per-Mission datums (``missions.origin_*``)
+    layer on top of this seam in a later slice."""
+    try:
+        return load_scene_origin()
+    except (OSError, ValueError, KeyError):
+        return Origin(lat=0.0, lon=0.0, alt=0.0)
+
+
+def _wgs84_fields(point: dict[str, Any], origin: Origin) -> dict[str, float]:
+    """WGS84 truth for a waypoint: pass through stored ``lat/lon/alt`` when present,
+    otherwise project the local ``x/y/z`` through the Origin (ADR 0022)."""
+    if point.get("lat") is not None and point.get("lon") is not None:
+        return {
+            "lat": float(point["lat"]),
+            "lon": float(point["lon"]),
+            "alt": float(point.get("alt", 0.0) or 0.0),
+        }
+    lat, lon, alt = local_to_wgs84(
+        float(point.get("x") or 0.0),
+        float(point.get("y") or 0.0),
+        float(point.get("z") or 0.0),
+        origin,
+    )
+    return {"lat": lat, "lon": lon, "alt": alt}
+
+
+def _stored_waypoint(point: dict[str, Any], origin: Origin) -> dict[str, Any]:
+    """Persisted waypoint shape: WGS84 is the stored truth; local ``x/y/z`` are
+    re-derived from it so the two frames can never drift (ADR 0022)."""
+    geo = _wgs84_fields(point, origin)
+    x, y, z = wgs84_to_local(geo["lat"], geo["lon"], geo["alt"], origin)
+    out = dict(point)
+    out.update(geo)
+    out["x"], out["y"], out["z"] = x, y, z
+    return out
+
+
+def _store_waypoints_wgs84(payload: dict[str, Any], origin: Origin | None = None) -> dict[str, Any]:
+    """Rewrite every waypoint list in a mission payload to carry WGS84 truth
+    (``waypoints``, ``route_artifacts[].waypoints``, ``steps[].waypoints``)."""
+    origin = origin if origin is not None else _mission_origin()
+
+    def _rewrite_list(value: Any) -> list[dict[str, Any]]:
+        return [
+            _stored_waypoint(wp, origin) for wp in value if isinstance(wp, dict)
+        ] if isinstance(value, list) else []
+
+    if isinstance(payload.get("waypoints"), list):
+        payload["waypoints"] = _rewrite_list(payload["waypoints"])
+    for artifact in payload.get("route_artifacts") or []:
+        if isinstance(artifact, dict) and isinstance(artifact.get("waypoints"), list):
+            artifact["waypoints"] = _rewrite_list(artifact["waypoints"])
+    for step in payload.get("steps") or []:
+        if isinstance(step, dict) and isinstance(step.get("waypoints"), list):
+            step["waypoints"] = _rewrite_list(step["waypoints"])
+
+    # ADR 0023: a behavior-tree payload nests its waypoints inside nav_leaf nodes,
+    # so the truth-flip must recurse the tree the same way it rewrites flat lists.
+    def _rewrite_tree(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "nav_leaf" and isinstance(node.get("waypoints"), list):
+            node["waypoints"] = _rewrite_list(node["waypoints"])
+        for child in node.get("children") or []:
+            _rewrite_tree(child)
+
+    if isinstance(payload.get("tree"), dict):
+        _rewrite_tree(payload["tree"])
+    return payload
+
+
+def _canonicalize_mission_payload(draft_payload: dict[str, Any], origin: Origin) -> dict[str, Any]:
     mission = dict(draft_payload)
     mission["execution_allowed"] = False
     mission["required_operator_approval"] = True
@@ -75,6 +153,11 @@ def _canonicalize_mission_payload(draft_payload: dict[str, Any]) -> dict[str, An
     if route_artifacts:
         mission["route_artifacts"] = route_artifacts
 
+    # ADR 0022: WGS84 is the stored truth. Stamp lat/lon/alt onto every waypoint
+    # (deriving x/y/z back from it) so persisted content is authoritative regardless
+    # of which frame the planner/route tools emitted.
+    _store_waypoints_wgs84(mission, origin)
+
     return mission
 
 
@@ -94,29 +177,44 @@ def _operation_status_from_revision(status: str) -> str:
     return "planning"
 
 
-def _coerce_scene_point(value: Any, *, fallback_id: str = "") -> dict[str, Any] | None:
+def _coerce_scene_point(value: Any, origin: Origin, *, fallback_id: str = "") -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    try:
-        point = {
-            "x": float(value.get("x")),
-            "y": float(value.get("y")),
-            "z": float(value.get("z", 0.0) or 0.0),
-        }
-    except (TypeError, ValueError):
-        return None
+    # ADR 0022: when stored WGS84 truth is present, derive local x/y/z from it so
+    # the rendered frame can never drift from the authoritative coordinate. Fall
+    # back to a literal x/y/z for legacy payloads written before the truth flip.
+    if value.get("lat") is not None and value.get("lon") is not None:
+        try:
+            x, y, z = wgs84_to_local(
+                float(value["lat"]),
+                float(value["lon"]),
+                float(value.get("alt", 0.0) or 0.0),
+                origin,
+            )
+        except (TypeError, ValueError):
+            return None
+        point = {"x": x, "y": y, "z": z}
+    else:
+        try:
+            point = {
+                "x": float(value.get("x")),
+                "y": float(value.get("y")),
+                "z": float(value.get("z", 0.0) or 0.0),
+            }
+        except (TypeError, ValueError):
+            return None
     point["id"] = str(value.get("id") or fallback_id or "")
     point["label"] = str(value.get("label") or "")
     point["kind"] = str(value.get("kind") or "")
     return point
 
 
-def _collect_waypoints(mission: dict[str, Any]) -> list[dict[str, Any]]:
+def _collect_waypoints(mission: dict[str, Any], origin: Origin) -> list[dict[str, Any]]:
     if not isinstance(mission, dict):
         return []
     if isinstance(mission.get("waypoints"), list):
         direct = [
-            _coerce_scene_point(wp, fallback_id=f"wp-{index}")
+            _coerce_scene_point(wp, origin, fallback_id=f"wp-{index}")
             for index, wp in enumerate(mission["waypoints"], start=1)
         ]
         direct_points = [wp for wp in direct if wp is not None]
@@ -133,6 +231,7 @@ def _collect_waypoints(mission: dict[str, Any]) -> list[dict[str, Any]]:
         for waypoint_index, waypoint in enumerate(artifact_waypoints, start=1):
             point = _coerce_scene_point(
                 waypoint,
+                origin,
                 fallback_id=f"route-{artifact_index}-wp-{waypoint_index}",
             )
             if point is not None:
@@ -150,6 +249,7 @@ def _collect_waypoints(mission: dict[str, Any]) -> list[dict[str, Any]]:
         for waypoint_index, waypoint in enumerate(waypoints, start=1):
             point = _coerce_scene_point(
                 waypoint,
+                origin,
                 fallback_id=f"step-{step_index}-wp-{waypoint_index}",
             )
             if point is not None:
@@ -157,7 +257,7 @@ def _collect_waypoints(mission: dict[str, Any]) -> list[dict[str, Any]]:
     return step_waypoints
 
 
-def _route_overlay_features(mission: dict[str, Any]) -> list[dict[str, Any]]:
+def _route_overlay_features(mission: dict[str, Any], origin: Origin) -> list[dict[str, Any]]:
     features: list[dict[str, Any]] = []
     for artifact_index, artifact in enumerate(mission.get("route_artifacts") or [], start=1):
         if not isinstance(artifact, dict):
@@ -166,7 +266,7 @@ def _route_overlay_features(mission: dict[str, Any]) -> list[dict[str, Any]]:
         waypoints = [
             point
             for point in (
-                _coerce_scene_point(wp, fallback_id=f"{artifact_id}-wp-{waypoint_index}")
+                _coerce_scene_point(wp, origin, fallback_id=f"{artifact_id}-wp-{waypoint_index}")
                 for waypoint_index, wp in enumerate(artifact.get("waypoints") or [], start=1)
             )
             if point is not None
@@ -185,11 +285,11 @@ def _route_overlay_features(mission: dict[str, Any]) -> list[dict[str, Any]]:
     return features
 
 
-def _build_mission_overlay_payload(revision: dict[str, Any]) -> dict[str, Any]:
+def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> dict[str, Any]:
     mission = revision.get("mission") if isinstance(revision.get("mission"), dict) else {}
     provenance_map = revision.get("provenance") if isinstance(revision.get("provenance"), dict) else {}
-    waypoints = _collect_waypoints(mission)
-    route_features = _route_overlay_features(mission)
+    waypoints = _collect_waypoints(mission, origin)
+    route_features = _route_overlay_features(mission, origin)
     marker_features = [
         {
             "id": str(point.get("id") or f"mission-wp-{index}"),
@@ -260,8 +360,8 @@ def _controller_snapshot_to_public(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rebased_mission_payload(mission: dict[str, Any]) -> dict[str, Any]:
-    rebased = _canonicalize_mission_payload(dict(mission or {}))
+def _rebased_mission_payload(mission: dict[str, Any], origin: Origin) -> dict[str, Any]:
+    rebased = _canonicalize_mission_payload(dict(mission or {}), origin)
     rebased.pop("mission_export", None)
     return rebased
 
@@ -279,13 +379,40 @@ class MissionExecutionService:
         db_path: str | Path,
         *,
         controller_adapter: ControllerMissionAdapter | None = None,
+        origin_resolver: Callable[[str | None], Origin | None] | None = None,
     ):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
             self._db_path.parent / "controller_mission_adapter.json"
         )
+        # ADR 0022: per-Mission coordinate datum. The resolver maps an internal
+        # operation id to its Mission's Origin (runtime composes
+        # MissionStore.get_by_operation_id → get_origin_datum); a None id or None
+        # result falls back to the scene georeference. Paths that don't yet know
+        # an operation (e.g. a brand-new proposal) pass operation_id=None and
+        # inherit the scene origin.
+        self._origin_resolver = origin_resolver
         self._init_db()
+
+    @property
+    def controller_adapter(self) -> ControllerMissionAdapter:
+        """The configured controller link. Exposed so the behavior-tree executor
+        (ADR 0023) can build a leaf driver against the same adapter the cutover
+        flow uses, rather than spinning up a second connection."""
+        return self._controller_adapter
+
+    def _resolve_origin(self, operation_id: str | None = None) -> Origin:
+        """Coordinate datum for a Mission's WGS84↔local conversions (ADR 0022).
+
+        Consults the injected per-Mission ``origin_resolver`` when an
+        ``operation_id`` is known, otherwise (or when it yields nothing) falls
+        back to the scene georeference via :func:`_mission_origin`."""
+        if operation_id and self._origin_resolver is not None:
+            resolved = self._origin_resolver(str(operation_id).strip())
+            if resolved is not None:
+                return resolved
+        return _mission_origin()
 
     def create_proposal(
         self,
@@ -300,10 +427,18 @@ class MissionExecutionService:
         draft_status: str,
         review_context: dict[str, Any] | None = None,
         parent_operation_id: str = "",
+        origin_override: Origin | None = None,
     ) -> dict[str, Any]:
         now = time.time()
         revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
-        mission = _canonicalize_mission_payload(draft_payload)
+        # ``origin_override`` lets a caller that has already chosen the datum (e.g.
+        # the operator-draw path, which anchors on the drawn geometry) re-stamp
+        # WGS84 truth through the *same* origin it used for wgs84→local, so the
+        # round-trip cannot drift. Otherwise resolve per the operation/scene datum.
+        origin = origin_override or self._resolve_origin(
+            str(parent_operation_id or "").strip() or None
+        )
+        mission = _canonicalize_mission_payload(draft_payload, origin)
         operation_status = _operation_status_from_revision(draft_status)
         policy = {
             "execution_allowed": False,
@@ -327,11 +462,12 @@ class MissionExecutionService:
 
             if parent_op:
                 operation_id = parent_op
+                parent_op_row = conn.execute(
+                    "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
+                    (parent_op,),
+                ).fetchone()
                 parent_revision_id = str(
-                    (conn.execute(
-                        "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
-                        (parent_op,),
-                    ).fetchone() or {}).get("active_revision_id") or ""
+                    (parent_op_row["active_revision_id"] if parent_op_row else "") or ""
                 )
                 conn.execute(
                     """
@@ -404,6 +540,177 @@ class MissionExecutionService:
                 )
             conn.commit()
         return self.get_revision(revision_id) or {}
+
+    def create_drawn_pattern_mission(
+        self,
+        *,
+        session_id: str,
+        pattern: str,
+        points: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
+        name: str = "",
+    ) -> dict[str, Any]:
+        """Build a new Mission from an operator-drawn pattern (Phase 4 authoring).
+
+        The operator sketches geometry on the WGS84 basemap; ``points`` are the
+        drawn ``{lat, lon}`` vertices. We convert them to the local metre frame
+        through the Mission origin (ADR 0022), run the corridor/survey generator
+        (which works in metres), and persist the resulting nav subtree as a new
+        proposal. ``create_proposal`` stamps WGS84 truth back onto every leaf, so
+        the conversion round-trips through one origin and cannot drift.
+
+        Returns ``{"ok": True, "revision": {...}, "operation_id": ...}`` or
+        ``{"ok": False, "error": ...}``; never raises on bad input.
+        """
+        kind = str(pattern or "").strip().lower()
+        if kind not in ("corridor", "survey"):
+            return {"ok": False, "error": "pattern must be 'corridor' or 'survey'"}
+        params = params if isinstance(params, dict) else {}
+        if not isinstance(points, list) or len(points) < 2:
+            return {"ok": False, "error": "at least two drawn points are required"}
+
+        # Anchor the Mission's coordinate datum (ADR 0022) on the drawn geometry
+        # itself — the first vertex — rather than the distant scene-origin
+        # fallback, so the generated local metres sit near the origin. The same
+        # origin is handed to create_proposal so its WGS84 re-stamp round-trips
+        # through one datum (no frame drift), and is returned for the caller to
+        # pin onto the new Mission row via MissionStore.set_origin_datum.
+        first = points[0] if isinstance(points[0], dict) else {}
+        if first.get("lat") is None or first.get("lon") is None:
+            return {"ok": False, "error": "each point must be {lat, lon}"}
+        try:
+            origin = Origin(lat=float(first["lat"]), lon=float(first["lon"]), alt=0.0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid lat/lon in drawn points"}
+        local: list[tuple[float, float]] = []
+        for pt in points:
+            if not isinstance(pt, dict) or pt.get("lat") is None or pt.get("lon") is None:
+                return {"ok": False, "error": "each point must be {lat, lon}"}
+            try:
+                x, y, _z = wgs84_to_local(float(pt["lat"]), float(pt["lon"]), 0.0, origin)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid lat/lon in drawn points"}
+            local.append((x, y))
+
+        def _num(key: str, default: float | None = None) -> float:
+            raw = params.get(key, default)
+            if raw is None:
+                raise ValueError(f"'{key}' is required")
+            return float(raw)
+
+        try:
+            altitude_m = _num("altitude_m", 0.0)
+            if kind == "corridor":
+                node = mission_patterns.corridor_pattern(
+                    path=local,
+                    spacing_m=_num("spacing_m", 5.0),
+                    altitude_m=altitude_m,
+                    passes=int(params.get("passes", 1)),
+                )
+            else:
+                # The operator drags a rectangle; we take the bounding box of the
+                # drawn points as the survey area (axis-aligned in the local frame).
+                xs = [p[0] for p in local]
+                ys = [p[1] for p in local]
+                ox, oy = min(xs), min(ys)
+                width_m = max(xs) - ox
+                height_m = max(ys) - oy
+                node = mission_patterns.survey_pattern(
+                    width_m=width_m,
+                    height_m=height_m,
+                    line_spacing_m=_num("line_spacing_m", 10.0),
+                    altitude_m=altitude_m,
+                    origin_xy=(ox, oy),
+                    heading_deg=float(params.get("heading_deg", 0.0)),
+                )
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "error": f"invalid {kind} params: {exc}"}
+
+        mission_name = str(name or "").strip() or f"{kind.capitalize()} pattern"
+        draft_id = f"draft-draw-{uuid.uuid4().hex[:12]}"
+        draft_payload = {
+            "goal": mission_name,
+            "summary": f"Operator-drawn {kind} pattern",
+            "tree": node.to_dict(),
+            "required_operator_approval": True,
+        }
+        revision = self.create_proposal(
+            session_id=str(session_id or ""),
+            draft_id=draft_id,
+            intent={"source": "operator_draw", "pattern": kind},
+            target_resolution={"mode": "create"},
+            draft_payload=draft_payload,
+            validation={"ok": True},
+            draft_status="awaiting_approval",
+            origin_override=origin,
+        )
+        return {
+            "ok": True,
+            "revision": revision,
+            "operation_id": str(revision.get("operation_id") or ""),
+            "origin_datum": origin.as_dict(),
+        }
+
+    def set_operation_geofence(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        geofence: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Author/clear a Mission's inclusion geofence (ADR 0023 Phase 5, option A).
+
+        The fence rides *inside* mission content under ``geofence`` — the exact
+        dict :func:`ai.mission_execution_session.build_mission_executor` reads to
+        enforce early and upload FENCE/RALLY to the FC. This appends a new
+        revision to ``operation_id`` carrying the current content with the fence
+        merged in (or removed when ``geofence`` is ``None``/empty), so the fence
+        is versioned with the mission. Pass a :func:`ai.mission_safety.parse_geofence`
+        ``to_dict`` shape (WGS84 polygon + optional rally points / alt band).
+
+        A non-empty fence must be *usable* (>= 3 polygon vertices) or this fails
+        closed with an error, so a malformed fence can never weaken enforcement.
+        Returns ``{"ok": True, "revision": {...}, "operation_id": ...}`` or
+        ``{"ok": False, "error": ...}``; never raises on bad input.
+        """
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return {"ok": False, "error": "operation_id is required"}
+
+        revisions = self.list_revisions(operation_id=op_id, limit=1)
+        if not revisions:
+            return {"ok": False, "error": f"operation '{op_id}' has no revision to fence"}
+        current = revisions[0].get("mission")
+        if not isinstance(current, dict):
+            return {"ok": False, "error": f"operation '{op_id}' has no content to fence"}
+
+        payload = dict(current)
+        clearing = not geofence
+        if clearing:
+            payload.pop("geofence", None)
+        else:
+            fence = parse_geofence(geofence)
+            if not fence.is_usable:
+                return {"ok": False, "error": "geofence needs an inclusion polygon of at least three vertices"}
+            payload["geofence"] = fence.to_dict()
+
+        draft_id = f"draft-fence-{uuid.uuid4().hex[:12]}"
+        revision = self.create_proposal(
+            session_id=str(session_id or ""),
+            draft_id=draft_id,
+            intent={"source": "set_geofence", "action": "clear" if clearing else "set"},
+            target_resolution={"mode": "edit_in_place"},
+            draft_payload=payload,
+            validation={"ok": True},
+            draft_status="awaiting_approval",
+            parent_operation_id=op_id,
+        )
+        return {
+            "ok": True,
+            "cleared": clearing,
+            "revision": revision,
+            "operation_id": str(revision.get("operation_id") or op_id),
+        }
 
     def get_revision(self, revision_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -976,6 +1283,74 @@ class MissionExecutionService:
             conn.commit()
         return self._controller_state_from_row(row)
 
+    def check_controller_health(self) -> dict[str, Any]:
+        """Probe the controller link (heartbeat + mission readability)."""
+        try:
+            health = self._controller_adapter.check_health()
+            payload = health.to_dict()
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "adapter": self._controller_adapter.adapter_name,
+                "connected": False,
+                "detail": "controller link probe failed",
+                "error": str(exc),
+            }
+        payload["controller_state"] = self.get_controller_state()
+        return payload
+
+    def clear_controller_mission(self, *, expected_controller_version: int | None = None) -> dict[str, Any]:
+        """Clear the controller-owned mission (Read/Write/Clear), projecting the
+        resulting idle state into the durable controller-state row."""
+        now = time.time()
+        attempt_id = f"mission-clear-{uuid.uuid4().hex[:12]}"
+        try:
+            result = self._controller_adapter.clear_mission(
+                expected_controller_version=expected_controller_version,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "cutover_failed",
+                "error": str(exc),
+                "attempt_id": attempt_id,
+                "controller_state": self.get_controller_state(),
+            }
+
+        final_now = time.time()
+        final_adapter_state = result.controller_state
+        final_snapshot = final_adapter_state.to_snapshot()
+        last_cutover_attempt = {
+            "attempt_id": attempt_id,
+            "requested_at": now,
+            "expected_controller_version": expected_controller_version,
+            "adapter": self._controller_adapter.adapter_name,
+            "action": "clear",
+        }
+        with self._connect() as conn:
+            controller_row = self._ensure_controller_state_row(conn)
+            previous_verified_snapshot = _load_json(controller_row["verified_snapshot_json"])
+            self._project_controller_state(
+                conn,
+                adapter_state=final_adapter_state,
+                verified_snapshot=final_snapshot if result.ok else (final_snapshot or previous_verified_snapshot),
+                previous_verified_snapshot=previous_verified_snapshot,
+                pending_snapshot={},
+                last_cutover_attempt=last_cutover_attempt,
+                last_error="" if result.ok else result.error,
+                last_cutover_at=final_now,
+                verified_at=final_now if result.ok else None,
+            )
+            conn.commit()
+
+        return {
+            "ok": result.ok,
+            "status": result.status,
+            "error": result.error,
+            "attempt_id": attempt_id,
+            "controller_state": self.get_controller_state(),
+        }
+
     def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -1092,7 +1467,9 @@ class MissionExecutionService:
                 "waypoint_count": 0,
                 "bounds": None,
             }
-        overlay = _build_mission_overlay_payload(revision)
+        overlay = _build_mission_overlay_payload(
+            revision, self._resolve_origin(revision.get("operation_id"))
+        )
         overlay["summary"] = (
             f"Mission overlay for {overlay.get('status') or 'planning'} revision with "
             f"{int(overlay.get('waypoint_count') or 0)} waypoint"
@@ -1137,9 +1514,10 @@ class MissionExecutionService:
         revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
         parent_revision_id = str(op_row["active_revision_id"] or "")
 
+        origin = self._resolve_origin(operation_id)
         coerced: list[dict[str, Any]] = []
         for i, wp in enumerate(waypoints or [], start=1):
-            point = _coerce_scene_point(wp, fallback_id=f"client-wp-{i}")
+            point = _coerce_scene_point(wp, origin, fallback_id=f"client-wp-{i}")
             if point is None:
                 return {
                     "ok": False,
@@ -1157,9 +1535,11 @@ class MissionExecutionService:
 
         mission: dict[str, Any] = {
             "goal": str(label or "Client-authored revision"),
-            "waypoints": [{"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
-                           "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"}
-                          for wp in coerced],
+            "waypoints": [_stored_waypoint(
+                {"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
+                 "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"},
+                origin,
+            ) for wp in coerced],
             "execution_allowed": False,
             "required_operator_approval": True,
         }
@@ -1211,7 +1591,10 @@ class MissionExecutionService:
 
         now = time.time()
         rebased_revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
-        rebased_mission = _rebased_mission_payload(revision.get("mission") if isinstance(revision.get("mission"), dict) else {})
+        rebased_mission = _rebased_mission_payload(
+            revision.get("mission") if isinstance(revision.get("mission"), dict) else {},
+            self._resolve_origin(revision.get("operation_id")),
+        )
         review_context = dict(revision.get("review_context") or {})
         review_context["rebase"] = {
             "reason": "stale_controller_version",
@@ -1326,7 +1709,8 @@ class MissionExecutionService:
             return result
         revision = result["revision"]
 
-        waypoints = _collect_waypoints(revision.get("mission") or {})
+        origin = self._resolve_origin(revision.get("operation_id"))
+        waypoints = _collect_waypoints(revision.get("mission") or {}, origin)
         idx = int(waypoint_index) - 1
         if idx < 0 or idx >= len(waypoints):
             return {
@@ -1335,7 +1719,7 @@ class MissionExecutionService:
                 "error": f"waypoint_index {waypoint_index} is out of range (revision has {len(waypoints)} waypoints)",
             }
 
-        new_point = _coerce_scene_point(point, fallback_id=waypoints[idx].get("id") or f"wp-{waypoint_index}")
+        new_point = _coerce_scene_point(point, origin, fallback_id=waypoints[idx].get("id") or f"wp-{waypoint_index}")
         if new_point is None:
             return {"ok": False, "status": "invalid_waypoint", "error": "point must have numeric x, y, z fields"}
 
@@ -1364,8 +1748,9 @@ class MissionExecutionService:
             return result
         revision = result["revision"]
 
-        waypoints = _collect_waypoints(revision.get("mission") or {})
-        new_point = _coerce_scene_point(point, fallback_id=f"client-wp-{uuid.uuid4().hex[:8]}")
+        origin = self._resolve_origin(revision.get("operation_id"))
+        waypoints = _collect_waypoints(revision.get("mission") or {}, origin)
+        new_point = _coerce_scene_point(point, origin, fallback_id=f"client-wp-{uuid.uuid4().hex[:8]}")
         if new_point is None:
             return {"ok": False, "status": "invalid_waypoint", "error": "point must have numeric x, y, z fields"}
 
@@ -1394,7 +1779,9 @@ class MissionExecutionService:
             return result
         revision = result["revision"]
 
-        waypoints = _collect_waypoints(revision.get("mission") or {})
+        waypoints = _collect_waypoints(
+            revision.get("mission") or {}, self._resolve_origin(revision.get("operation_id"))
+        )
         idx = int(waypoint_index) - 1
         if idx < 0 or idx >= len(waypoints):
             return {
@@ -1444,9 +1831,13 @@ class MissionExecutionService:
         provenance: dict[str, str],
     ) -> dict[str, Any]:
         mission = dict(revision.get("mission") or {})
+        origin = self._resolve_origin(revision.get("operation_id"))
         mission["waypoints"] = [
-            {"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
-             "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"}
+            _stored_waypoint(
+                {"id": wp["id"], "x": wp["x"], "y": wp["y"], "z": wp["z"],
+                 "label": wp.get("label") or "", "kind": wp.get("kind") or "waypoint"},
+                origin,
+            )
             for wp in waypoints
         ]
         mission.pop("route_artifacts", None)

@@ -1,2 +1,2 @@
 export { MapWidget } from './MapWidget.js';
-export { groupRevisionsByOperation, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
+export { enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';

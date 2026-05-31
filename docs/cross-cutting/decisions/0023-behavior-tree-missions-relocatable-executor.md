@@ -65,6 +65,18 @@ execute missions and drive the rover."
   whole-mission serialization.
 - The AI agent must be able to author and edit tree structures, not just waypoint
   lists — a larger tool surface than ADR 0021 sketched.
+- **Geofence is defense-in-depth (Phase 5):** the FC is authoritative (uploaded
+  inclusion FENCE + RALLY), and the relocatable executor *also* validates every
+  nav-leaf waypoint against the fence and refuses before driving (fail-closed: a
+  missing/<3-vertex fence makes every waypoint a violation). The fence is stored
+  **inside mission content** under `geofence` (a `mission_safety.parse_geofence`
+  shape) so it versions with the mission and `build_mission_executor` reads it
+  with no extra plumbing; enforcement turns on only when a usable fence is present
+  (fenceless missions unchanged). The leaf driver uploads the fence to the FC once
+  before the first segment. Authored via the `set_mission_geofence` AI tool or the
+  BasemapPanel `🛡 Fence` draw mode (`POST /api/ai/missions/{id}/geofence`).
+  Storing the fence as a dedicated `missions` column instead (decoupled from
+  revision history) is deferred — see `roadmap.md` Deferred (option C).
 
 ## Alternatives Considered
 
