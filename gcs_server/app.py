@@ -1682,6 +1682,54 @@ async def list_missions(
     return {"missions": missions}
 
 
+@app.post("/api/ai/missions")
+async def create_blank_mission(request: Request) -> JSONResponse:
+    """Create a blank manual Mission with an empty revision ready for waypoint placement.
+
+    Used by the map widget "➕ New mission" button. The resulting Mission has
+    no waypoints; the operator places them by clicking on the map in add mode.
+    """
+    runtime = _runtime(request)
+    mission_store = getattr(runtime, "mission_store", None)
+    mission_execution = getattr(runtime, "mission_execution_service", None)
+    if mission_store is None or mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission services unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    name = str(payload.get("name", "") or "New mission").strip() or "New mission"
+    user_id = str(payload.get("user_id", "") or "")
+
+    op_result = mission_execution.create_blank_operation(name=name)
+    if not op_result.get("ok"):
+        return JSONResponse(
+            {"ok": False, "error": op_result.get("error", "failed to create operation")},
+            status_code=500,
+        )
+    operation_id = str(op_result.get("operation_id") or "")
+
+    mission = mission_store.create_mission(user_id=user_id, name=name, origin="manual")
+    mission_id = str(mission.get("id") or "")
+    if not mission_id:
+        return JSONResponse({"ok": False, "error": "failed to create mission"}, status_code=500)
+
+    mission_store.set_active_operation(mission_id, operation_id=operation_id)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "mission_id": mission_id,
+            "operation_id": operation_id,
+            "revision_id": str(op_result.get("revision_id") or ""),
+        },
+        status_code=201,
+    )
+
+
 @app.post("/api/ai/missions/draw-pattern")
 async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
     """Operator-drawn pattern → new Mission (Phase 4 authoring UX).
@@ -1816,6 +1864,48 @@ async def set_mission_geofence(mission_id: str, request: Request) -> JSONRespons
         result["mission_bump_error"] = str(exc)
     result["mission_id"] = str(mission_id or "").strip()
     return JSONResponse(result)
+
+
+@app.delete("/api/ai/missions/{mission_id}")
+async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
+    """Delete a flat Mission by id. Refuses if the Mission is currently executing."""
+    runtime = _runtime(request)
+    mission_store = getattr(runtime, "mission_store", None)
+    if mission_store is None:
+        raise HTTPException(status_code=503, detail="mission store unavailable")
+    mid = str(mission_id or "").strip()
+    mission = mission_store.get_mission(mid)
+    if mission is None:
+        raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    status = str((mission.get("activeRevisionStatus") or mission.get("active_revision_status") or "")).strip()
+    if status == "executing":
+        return JSONResponse({"ok": False, "error": "cannot delete a mission that is currently executing"}, status_code=409)
+    ok = mission_store.delete_mission(mid)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    return JSONResponse({"ok": True, "mission_id": mid})
+
+
+@app.patch("/api/ai/missions/{mission_id}")
+async def rename_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
+    """Rename a flat Mission (PATCH with {name})."""
+    runtime = _runtime(request)
+    mission_store = getattr(runtime, "mission_store", None)
+    if mission_store is None:
+        raise HTTPException(status_code=503, detail="mission store unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    name = str(payload.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name must be a non-empty string"}, status_code=400)
+    updated = mission_store.rename_mission(str(mission_id or "").strip(), name=name)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    return JSONResponse({"ok": True, "mission": updated})
 
 
 @app.post("/api/ai/sessions")

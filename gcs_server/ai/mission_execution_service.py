@@ -1613,6 +1613,39 @@ class MissionExecutionService:
         revision = self.get_revision(revision_id)
         return {"ok": True, "revision": revision}
 
+    def create_blank_operation(self, *, name: str = "") -> dict[str, Any]:
+        """Create a blank operation + empty revision for manual mission authoring.
+
+        Used by the "➕ New mission" button: the operation has no session/source
+        and the revision has zero waypoints, ready for operator click-to-place.
+        """
+        operation_id = f"mission-op-{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_mission_operations (
+                  id, session_id, source_message_id, status, active_revision_id,
+                  policy_json, created_at, updated_at
+                ) VALUES (?, '', '', 'proposed', '', '{}', ?, ?)
+                """,
+                (operation_id, now, now),
+            )
+            conn.commit()
+        result = self.create_client_revision(
+            operation_id=operation_id,
+            waypoints=[],
+            label=name or "New mission",
+        )
+        if not result.get("ok"):
+            return result
+        revision = result.get("revision") or {}
+        return {
+            "ok": True,
+            "operation_id": operation_id,
+            "revision_id": str(revision.get("id") or ""),
+        }
+
     def _create_rebased_revision_from_controller_state(
         self,
         revision: dict[str, Any],

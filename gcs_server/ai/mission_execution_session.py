@@ -71,9 +71,22 @@ def build_mission_executor(
     fence = parse_geofence(fence_dict) if fence_dict else None
     enforce = bool(fence is not None and fence.is_usable)
 
+    # Capture the controller version observed at authorization so the executor's
+    # first segment install is CAS-gated against it (ADR 0020/0021): if a third
+    # party mutates the controller between now and the run starting, the first
+    # install fails rather than silently overwriting. The executor is sole writer
+    # thereafter, so later segments don't re-assert. None when unreadable.
+    expected_version: Optional[int] = None
+    adapter = service.controller_adapter
+    try:
+        expected_version = int(adapter.get_controller_state().controller_version or 0)
+    except Exception:
+        expected_version = None
+
     leaf_driver = make_controller_leaf_driver(
-        service.controller_adapter,
+        adapter,
         geofence=fence_dict if enforce else None,
+        expected_controller_version=expected_version,
     )
 
     executor = MissionExecutor(

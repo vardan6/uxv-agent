@@ -23,7 +23,8 @@ export class SceneObjectsLayer {
   constructor(sceneMap, { pane = 'scenePane' } = {}) {
     this._sceneMap = sceneMap;
     this._paneName = pane;
-    this._group = null;
+    this._roadsGroup = null;
+    this._objectsGroup = null;
   }
 
   addTo(map) {
@@ -36,7 +37,8 @@ export class SceneObjectsLayer {
       paneEl.style.zIndex = 300;
     }
 
-    const group = L.layerGroup();
+    const roadsGroup = L.layerGroup();
+    const objectsGroup = L.layerGroup();
     const scene = this._sceneMap;
 
     for (const road of scene.roads || []) {
@@ -50,7 +52,7 @@ export class SceneObjectsLayer {
           pane: this._paneName,
           interactive: false,
         },
-      ).addTo(group);
+      ).addTo(roadsGroup);
     }
 
     for (const object of scene.objects || []) {
@@ -73,7 +75,7 @@ export class SceneObjectsLayer {
         },
       )
         .bindTooltip(`${object.label} • ${object.model_ref}`, { direction: 'top' })
-        .addTo(group);
+        .addTo(objectsGroup);
     }
 
     if (scene.spawn) {
@@ -86,16 +88,40 @@ export class SceneObjectsLayer {
         pane: this._paneName,
       })
         .bindTooltip('Spawn', { direction: 'top' })
-        .addTo(group);
+        .addTo(objectsGroup);
     }
 
-    group.addTo(map);
-    this._group = group;
+    roadsGroup.addTo(map);
+    objectsGroup.addTo(map);
+    this._roadsGroup = roadsGroup;
+    this._objectsGroup = objectsGroup;
     return this;
   }
 
   remove() {
-    this._group?.remove();
-    this._group = null;
+    this._roadsGroup?.remove();
+    this._objectsGroup?.remove();
+    this._roadsGroup = null;
+    this._objectsGroup = null;
+  }
+
+  setRoadsVisible(visible) {
+    if (!this._roadsGroup) return;
+    const paneEl = this._roadsGroup._map?.getPane('scenePane');
+    if (!paneEl) return;
+    // Toggle via group container opacity — roads and objects share the pane,
+    // so manipulate each group's layers directly via style on their SVG paths.
+    this._roadsGroup.eachLayer((l) => {
+      const el = l.getElement?.();
+      if (el) el.style.display = visible ? '' : 'none';
+    });
+  }
+
+  setObjectsVisible(visible) {
+    if (!this._objectsGroup) return;
+    this._objectsGroup.eachLayer((l) => {
+      const el = l.getElement?.();
+      if (el) el.style.display = visible ? '' : 'none';
+    });
   }
 }

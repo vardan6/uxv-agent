@@ -23,7 +23,7 @@ This ADR replaces the structural framing with a configurable policy, defines the
 
 Mode lives in **Settings → Mission Lifecycle**. Defaults: sim build → Autonomous; real-rover build → Strict. The build-time gate that enforces the real-rover default is an Open Question.
 
-`cancel_execution` and `abort` are always bound regardless of mode. ADR 0020's `expected_controller_version` guards every `arm_execution` and `execute_mission` call.
+`cancel_execution` and `abort` are always bound regardless of mode. ADR 0020's `expected_controller_version` guards AI execution as a **narrow first-install gate** (implementation detail, 2026-06-01): the LLM never supplies the version (it cannot know it), so the executor captures the version observed at authorization and CAS-gates only its *first* controller install against it. The executor is the sole writer for the rest of the run, so subsequent nav-segment installs build on the version it wrote and do not re-assert. This still prevents a third party who mutated the controller between authorization and start from being silently overwritten — the safety property ADR 0020 intends.
 
 ### 2. Mission is a flat, first-class entity
 
@@ -86,7 +86,7 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 - The operator-facing concept is the Mission. Draft / revision plumbing stays internal.
 - Comparison is native: regenerations and AI edits produce new rows by default; old and new stay overlayable.
 - ADR 0019 (per-waypoint provenance) remains in force, orthogonal to Mission-level `origin`.
-- ADR 0020 (optimistic concurrency) is used by the new tool surface — `edit_mission_in_place` bumps `client_version`, execute paths carry `expected_controller_version`.
+- ADR 0020 (optimistic concurrency) is used by the new tool surface — `edit_mission_in_place` bumps `client_version`; execute paths carry `expected_controller_version` (the legacy revision-execute endpoint via its client token, AI execution via the narrow first-install gate described in §1).
 - Single source of truth for the lifecycle replaces content previously spread across ADRs 0002 and 0012 plus several `design.md` sections. Those `design.md` sections will follow as implementation lands; until then, the system runs effectively in Strict mode.
 
 ## Alternatives Considered

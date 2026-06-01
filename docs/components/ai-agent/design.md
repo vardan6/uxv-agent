@@ -11,7 +11,7 @@ Status note (implementation reality):
 - The planning shell wraps the planning flow.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
 - `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
-- Canonical mission storage and approval/execution writes now flow through `mission_execution`, but planning-shell draft compatibility seams still exist around the current wrapper flow and real external controller transport remains the next slice.
+- Canonical mission storage and approval/execution writes now flow through `mission_execution`; planning-shell draft compatibility seams still exist around the current wrapper flow. Real external controller transport has since landed (ADR 0023 Phases 1–3): a `ControllerMissionAdapter` with pymavlink + MAVSDK backends, and a relocatable behavior-tree executor driving nav segments to the FC, gated by the ADR 0021 execution modes. The AI execution tools (`arm_execution`/`execute_mission`/`cancel_execution`/`abort`) are bound per mode. See `roadmap.md` for live status.
 
 This document is **expected to evolve** as implementation lands. File names, phase ordering, and runtime interface shapes can be updated in place through normal review.
 
@@ -195,9 +195,9 @@ The controller update policy is deterministic and decides whether a change can b
 - Canonical mission revisions, current mission state, and overlay APIs are implemented.
 - Durable controller mission snapshot state and execution-attempt persistence are implemented.
 - Optimistic controller-version compare-and-swap checks are implemented.
-- The current execution adapter is local to the monolith and verifies against persisted controller snapshot state.
-- Real external flight-controller / MAVLink upload-readback integration remains the next slice.
-- Automatic rebase/revision flows on stale rejection remain future work.
+- The local execution adapter verifies against persisted controller snapshot state; alongside it, external `ControllerMissionAdapter` backends (pymavlink + MAVSDK) now do real upload-readback verification with controller-version CAS (ADR 0023 Phases 1–2).
+- The behavior-tree executor (`ai/mission_executor.py` + `ai/mission_leaf_driver.py`) flattens nav segments to `.plan` and installs them through the adapter; the first install of a run is CAS-gated against the version observed at authorization (ADR 0020/0021).
+- Stale-rejection rebase: the revision-execute path already creates a rebased revision on version mismatch; an exercised SITL/real-FC smoke loop is the remaining gap (deferred under the no-tests rule until a target exists).
 
 ## AgentLoopRuntime
 

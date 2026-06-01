@@ -67,16 +67,26 @@ execute missions and drive the rover."
   lists — a larger tool surface than ADR 0021 sketched.
 - **Geofence is defense-in-depth (Phase 5):** the FC is authoritative (uploaded
   inclusion FENCE + RALLY), and the relocatable executor *also* validates every
-  nav-leaf waypoint against the fence and refuses before driving (fail-closed: a
-  missing/<3-vertex fence makes every waypoint a violation). The fence is stored
-  **inside mission content** under `geofence` (a `mission_safety.parse_geofence`
-  shape) so it versions with the mission and `build_mission_executor` reads it
-  with no extra plumbing; enforcement turns on only when a usable fence is present
-  (fenceless missions unchanged). The leaf driver uploads the fence to the FC once
-  before the first segment. Authored via the `set_mission_geofence` AI tool or the
-  BasemapPanel `🛡 Fence` draw mode (`POST /api/ai/missions/{id}/geofence`).
-  Storing the fence as a dedicated `missions` column instead (decoupled from
-  revision history) is deferred — see `roadmap.md` Deferred (option C).
+  nav-leaf waypoint against the fence and refuses before driving. The fence is
+  stored **inside mission content** under `geofence` (a
+  `mission_safety.parse_geofence` shape) so it versions with the mission and
+  `build_mission_executor` reads it with no extra plumbing. The leaf driver uploads
+  the fence to the FC once before the first segment. Authored via the
+  `set_mission_geofence` AI tool or the BasemapPanel `🛡 Fence` draw mode
+  (`POST /api/ai/missions/{id}/geofence`). Storing the fence as a dedicated
+  `missions` column instead (decoupled from revision history) is deferred — see
+  `roadmap.md` Deferred (option C).
+  - **Enforcement policy (decided; resolves the earlier ambiguity):** geofence
+    enforcement engages **only when a usable inclusion fence is attached**
+    (`enforce = bool(fence is not None and fence.is_usable)`; usable = ≥3 vertices).
+    A *fenceless* mission is **allowed** and runs unconstrained — fenceless is not
+    treated as "every waypoint violates". When a fence *is* attached it must be
+    usable and is enforced fail-closed (validator refuses an out-of-fence waypoint;
+    a failed FC fence upload refuses the segment). This is correct for the current
+    sim / FC-authoritative stance. A fail-closed *fenceless* posture (refuse a
+    mission that carries no fence) is a real-rover hardening option — make it a
+    mode/build-target policy, not the executor default. See the Geofence follow-up
+    below and the real-rover Open Questions.
 
 ## Alternatives Considered
 
@@ -129,3 +139,10 @@ execution-session path, honoring `mission_lifecycle.execution_mode`.
   `design.md` updates should cross-link.
 - `docs/components/ai-agent/design.md` and `docs/components/gcs/design.md` to gain
   an executor + behavior-tree-mission section as implementation lands.
+- **Geofence currently fails *open* for fenceless missions** (2026-06-01 review).
+  `enforce_geofence` only engages when a mission carries a `geofence`
+  (`ai/mission_execution_session.py`, `ai/mission_executor.py`); a mission with no
+  fence runs unconstrained. Correct for sim and the current FC-authoritative
+  defense-in-depth stance, but a real-rover Strict/Confirm build arguably wants a
+  deployment-time policy that *refuses* a fenceless mission rather than running it
+  open. Revisit alongside the real-rover hardening Open Questions before hardware.

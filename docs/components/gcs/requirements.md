@@ -177,6 +177,10 @@ The map widget must:
 - support a `SelectionPanel` that shows waypoint-level details and provenance for any selected waypoint
 - support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home, detach from AI proposal)
 - display hint toasts for gestures and a keyboard help overlay
+- provide **layer visibility toggles** for the scene-mode layers: terrain heightmap, roads, scene objects, and grid — each independently show/hide-able from a toolbar within the map panel (parity with the replay page layer toolbar)
+- provide **fit-bounds toolbar buttons**: fit to scene (full 3d-env extent), fit to focused mission, fit to visible-mission union — explicit buttons, not only auto-fit on focus change
+- show a **cursor/info bar** at the bottom of the map panel: cursor position in scene metres (and WGS84 when a Mission origin exists), current selection detail — parity with the replay page info bar
+- provide a **view mode selector**: Virtual Terrain (heightmap gradient + objects), CAD/Object View (objects only, flat background), Heightmap (raw elevation colourmap) — affects only the scene-mode render layers, not mission overlays
 
 ### Mission CRUD
 
@@ -184,7 +188,7 @@ The map widget is the primary mission authoring surface on `/ai`. No separate Mi
 
 Operators must be able to:
 
-- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually on the map
+- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually by clicking on the scene-mode map (CRS.Simple, local metres); the basemap Corridor/Survey draw tools are a separate pattern-generation path, not a substitute for this
 - **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
 - **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
 - **Approve a draft** (does not execute) using the "Approve draft" button; semantics: approval locks the revision for the `Execute mission` gate

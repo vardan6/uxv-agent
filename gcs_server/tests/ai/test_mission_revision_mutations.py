@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from ai.controller_mission_adapter import ControllerMissionAdapterState
 from ai.migrations import apply_ai_store_migrations
 from ai.mission_export_service import MissionExportService
@@ -150,8 +152,10 @@ def test_update_waypoint_happy_path() -> None:
     assert result["ok"] is True
     assert result["client_version"] == 1
     wps = result["revision"]["mission"]["waypoints"]
-    assert wps[1]["x"] == 99.0
-    assert wps[1]["y"] == 88.0
+    # Local x/y are re-derived from the stored WGS84 truth (ADR 0022), so the
+    # round-trip introduces sub-metre float drift; compare approximately.
+    assert wps[1]["x"] == pytest.approx(99.0, abs=1e-3)
+    assert wps[1]["y"] == pytest.approx(88.0, abs=1e-3)
 
 
 def test_update_waypoint_provenance_changes_ai_to_ai_edited() -> None:
@@ -248,7 +252,8 @@ def test_insert_waypoint_appends_when_after_index_is_negative() -> None:
     assert result["ok"] is True
     wps = result["revision"]["mission"]["waypoints"]
     assert len(wps) == 3
-    assert wps[-1]["x"] == 7.0
+    # ADR 0022 WGS84 round-trip drift — compare approximately (see above).
+    assert wps[-1]["x"] == pytest.approx(7.0, abs=1e-3)
 
 
 def test_insert_waypoint_gets_user_provenance() -> None:

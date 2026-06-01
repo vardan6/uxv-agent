@@ -42,6 +42,23 @@ export async function listMissions({ userId = '', limit = 200 } = {}) {
   }
 }
 
+// POST /api/ai/missions: create a blank manual Mission with an empty revision.
+// Returns { ok, mission_id, operation_id, revision_id }.
+export async function createMission({ name = 'New mission', userId = '' } = {}) {
+  try {
+    const res = await fetch('/api/ai/missions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, user_id: userId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
 // POST /api/ai/missions/draw-pattern (Phase 4 authoring): persist an operator-
 // drawn corridor/survey pattern as a new manual Mission. `points` are the drawn
 // WGS84 vertices ({lat, lon}); the server converts them to the local frame, runs
@@ -207,6 +224,34 @@ export async function getControllerState() {
     const res = await fetch('/api/ai/controller-mission');
     if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     return { ok: true, ...(await res.json()) };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+// DELETE /api/ai/missions/{id}: remove a flat Mission permanently.
+export async function deleteMission(missionId) {
+  try {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(missionId)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.detail || data.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+// PATCH /api/ai/missions/{id}: rename a flat Mission.
+export async function renameMission(missionId, name) {
+  try {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(missionId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.detail || data.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
   } catch (err) {
     return { ok: false, error: err.message || 'Network error' };
   }

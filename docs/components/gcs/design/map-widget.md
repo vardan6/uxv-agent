@@ -140,6 +140,22 @@ Design rules:
 - the widget supports container re-parenting and resize invalidation
 - map state is driven by the active AI session
 
+### Layout and Sizing
+
+The `.ai-map-area` panel carries `width: 100%` **and** `aspect-ratio: 4/3`. Both
+must be present. `width: 100%` is load-bearing: without it, setting an inline
+`height` via the bottom-drag resizer causes `aspect-ratio` to re-derive the width
+from the new height (e.g. `600px × 4/3 ≈ 800px`), producing a narrower card than
+the chat section above. `width: 100%` pins the horizontal size to the container;
+`aspect-ratio` is then only active on initial load (no inline height yet).
+
+The mission list sidebar is resizable: `.map-widget-shell` uses
+`grid-template-columns: var(--map-list-width, 280px) 8px 1fr`. An 8px
+`.map-list-resizer` splitter button sits between the list and the map canvas,
+wired in `MapWidget._bindListResizer()`. Width is persisted to localStorage under
+`gcs-map-list-width` (range 180–480 px, default 280 px). On ≤980 px screens the
+splitter is hidden and the shell collapses to a single-column stacked layout.
+
 ## Mission List Rules
 
 Each operation row carries:
@@ -164,17 +180,41 @@ Behavior rules:
 - executing revisions render as locked
 - superseded or completed revisions render dimmed
 - fit-to-bounds uses the focused mission when one exists, else the visible-set
-  union
+  union; scene bounds are the final fallback so the 3d-env map stays centered
+  with no missions focused
+- auto-fit fires only when the logical fit-target changes (`_lastFitKey`), **not**
+  on every poll tick — the view must not snap back every 5 seconds while the
+  user is panning
+- `setFocus` always resets `_lastFitKey` so switching mission focus immediately
+  re-fits to that mission's bounds
+- the "No missions yet" empty-state overlay is suppressed when the scene is
+  loaded (`_sceneBounds` known) — terrain + objects IS content; the overlay must
+  not cover it
 
-Known gap (Phase 6 top priority, 2026-06-01): the scene-mode render is **not yet at
-parity with the replay page**. The widget draws the terrain heightmap
-(`TerrainCanvasLayer`) plus mission/vehicle layers, but has **no scene-objects layer**
-— the replay page renders 3d-env objects from the `/api/replay/scene-map` `objects`
-payload (`scene_map.py`), the widget does not. It also only fits-to-bounds off mission
-overlays, so with **no mission focused** the view stays at `setView([0,0],1)` and shows
-nothing. Required fix: add a scene-objects layer (port replay's object render) and
-fit/center to scene bounds on load so the 3d-env map renders standalone. This is the
-real blocker to manual-authoring and AI-overlay testing; see `roadmap.md` Phase 6.
+Scene-mode layers (CRS.Simple, `/api/replay/scene-map` payload):
+
+- `TerrainCanvasLayer` — heightmap gradient canvas, z-index 180; `setVisible(v)`
+  uses `setOpacity(0 / original)` to avoid re-rendering
+- `SceneObjectsLayer` — roads (polylines) and object rectangles (per-kind color)
+  + spawn marker in **separate sub-groups** (`_roadsGroup`/`_objectsGroup`);
+  drawn on `scenePane` (z-index 300, between terrain and missionPane 470). Ported
+  from the replay page; tooltip shows label + model_ref. `setRoadsVisible(v)` and
+  `setObjectsVisible(v)` toggle each sub-group's SVG element `display`
+- `GridLayer` — 50m coordinate grid ported from the replay page; `setVisible(v)`
+  toggles each polyline's element `display`
+- `MissionOverlayLayer` — mission paths and waypoints on `missionPane` (z-index
+  470)
+
+Status (2026-06-01): scene parity with the replay page is implemented and
+syntax-verified. Two bugs were found and fixed during first attempted browser
+test (never browser-verified before this):
+1. `map-widget-empty` (`position:absolute; inset:0; background:80% opaque;
+   z-index:500`) was covering terrain+objects when no missions existed — fixed by
+   suppressing it when `_sceneBounds` is set.
+2. `_fitBounds` was called inside `_render()` (5-second poll cycle), resetting
+   pan/zoom on every tick — fixed with `_lastFitKey` guard.
+**Browser smoke still pending** — start the server, open `/ai`, confirm terrain +
+objects render and view auto-fits to scene bounds with no mission focused.
 
 ## Accessibility And Keyboard Ownership
 
@@ -254,12 +294,59 @@ The widget may render profile identity and use it to drive map hints, but
 vehicle capability fields and per-waypoint property editing remain separate
 concerns.
 
+## Scene Toolbar (Phase 7 — in progress)
+
+The map panel needs a toolbar matching the replay page's controls.
+
+**Layer toggles** — implemented (2026-06-01). Four checkboxes in a
+`.map-layer-toolbar--overlay` pill (top-left, z-index 500) wired into
+`MapWidget._onLayerToggle`. Each toggle is local state, reset on load; applied
+to layers via `setVisible`/`setRoadsVisible`/`setObjectsVisible` after async
+scene load. Mission-overlay layers are never toggled from this bar — they are
+controlled by the mission list's Visible state.
+
+Design rules (still applicable to remaining items):
+
+**Fit-bounds buttons** — three explicit buttons in the toolbar: Fit Scene (fits
+`_sceneBounds`), Fit Mission (fits the focused mission overlay bounds), Fit All
+(fits the visible-mission union). These reset `_lastFitKey = null` so the next
+`_render` re-fires `_fitBounds`. Disabled when the target bounds are unknown.
+
+**View mode selector** — dropdown with three options: Virtual Terrain (default;
+heightmap gradient + objects), CAD/Object View (objects only, solid background),
+Heightmap (raw greyscale elevation). Mode change reconstructs or reconfigures the
+scene layers in place; mission overlays are unaffected. The replay page's
+"GPS/Satellite Debug" mode maps to the existing Basemap toggle (WGS84 OSM panel).
+
+**Cursor/info bar** — fixed bar at the bottom of the map canvas. Left slot: cursor
+scene-metre coordinates (`x: N m, y: N m`), with WGS84 equivalent in parentheses
+when the focused mission has a known origin datum. Right slot: selection detail
+(waypoint index, provenance, altitude) when a waypoint is selected; otherwise
+shows mission/scene summary. Sourced from Leaflet `mousemove` + `editState`.
+
+## Scene-Mode Manual Mission Creation (Phase 7 — planned)
+
+The `➕ New mission` flow (requirements §Mission CRUD) must work in scene-mode
+(CRS.Simple), not only via the basemap draw tools.
+
+Design rules:
+- `➕ New mission` creates a blank Mission via backend, promotes it to Active, and
+  enters `editState.editMode = 'add'` — the existing `map click → insertWaypoint`
+  path already handles placement once `add` mode is active
+- this is distinct from the Basemap Corridor/Survey tools: those generate a whole
+  pattern server-side from drawn WGS84 geometry; scene-mode add is click-to-place
+  individual waypoints in local metres
+- the `➕ New mission` button lives in the `MissionListPanel` header (an empty list
+  already shows a call-to-action area)
+
 ## Deferred Beyond The Current Widget Contract
 
 These stay outside the core widget contract until real backend/platform support
 exists:
 
-- replay-page migration details
 - edit-during-execution
 - richer per-waypoint property schema editing
 - floating/second-monitor window behavior beyond re-parenting support
+- full replay-page migration onto `MapWidget` (telemetry path replay, playback
+  controls, Follow Rover nav mode) — the scene render layers are already ported;
+  the dynamic replay-session path is what remains

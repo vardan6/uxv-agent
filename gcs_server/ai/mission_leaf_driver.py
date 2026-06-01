@@ -37,15 +37,21 @@ def make_controller_leaf_driver(
     profile: Optional[VehicleProfile] = None,
     home_position: Optional[dict[str, float]] = None,
     geofence: Optional[dict[str, Any]] = None,
+    expected_controller_version: Optional[int] = None,
 ) -> LeafDriver:
     """Build a ``leaf_driver`` that installs each segment on the controller.
 
     ``export_service`` defaults to a fresh :class:`MissionExportService`;
     ``profile`` defaults to the active vehicle profile (resolved per call so a
-    profile change takes effect without rebuilding the driver). Each segment is
-    installed as an independent mission; ``expected_controller_version`` is left
-    unset because the executor drives segments sequentially and is the sole
-    writer for the duration of a run.
+    profile change takes effect without rebuilding the driver).
+
+    Controller-version safety (ADR 0020 / ADR 0021): the executor is the sole
+    writer for the duration of a run, so per-segment installs after the first do
+    not re-assert a version. But the *first* install is gated against
+    ``expected_controller_version`` (the version observed when the run was
+    authorized) so a third party that mutated the controller between authorization
+    and start causes the first install to fail the CAS rather than silently
+    overwriting their state. ``None`` skips the gate (legacy behavior).
 
     When ``geofence`` (a :func:`ai.mission_safety.parse_geofence` ``to_dict``
     shape) is supplied, the inclusion FENCE/RALLY is uploaded to the controller
@@ -56,6 +62,8 @@ def make_controller_leaf_driver(
     service = export_service or MissionExportService()
     # One-shot fence upload guarded across the per-segment calls of a run.
     fence_state = {"uploaded": False}
+    # The version gate applies only to the first segment install of a run.
+    install_state = {"first": True}
 
     def _ensure_geofence() -> bool:
         if not geofence or fence_state["uploaded"]:
@@ -79,7 +87,16 @@ def make_controller_leaf_driver(
         # verify the install rather than rolling it back.
         observed = int(adapter.get_controller_state().controller_version or 0)
         snapshot = {"controller_version": observed + 1, "plan": plan}
-        result = adapter.install_mission(pending_snapshot=snapshot)
-        return bool(result.ok)
+        # Gate only the first install against the authorized version (CAS); later
+        # segments build on the version this run wrote, so they pass None.
+        expected = expected_controller_version if install_state["first"] else None
+        result = adapter.install_mission(
+            pending_snapshot=snapshot,
+            expected_controller_version=expected,
+        )
+        if not result.ok:
+            return False
+        install_state["first"] = False
+        return True
 
     return _drive

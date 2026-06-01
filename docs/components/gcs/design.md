@@ -1,10 +1,10 @@
 # GCS — Design
 
-Status date: 2026-05-20.
+Status date: 2026-06-01.
 
 **How** the GCS is built — runtime model, browser workflow, MQTT integration, AI chat model, settings, file layout, and current limitations. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and operator-visible behavior; this doc wins on implementation specifics.
 
-Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. Replay still uses its separate `static/replay.js` surface, and real external controller handoff plus video transport hardening remain the next slices.
+Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. The Mission Planner Modernization work (ADRs [0021](../../cross-cutting/decisions/0021-mission-lifecycle.md)/[0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md)/[0023](../../cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md), Phases 1–6) has since landed on `feat/gps-master-coordinate-frame`: external controller link (pymavlink + MAVSDK adapters with health/read/write/clear), a relocatable behavior-tree executor that uploads nav segments to the FC, GPS-master WGS84 coordinate truth, the flat-Mission lifecycle UI, and a real 2D basemap render mode. Replay still uses its separate `static/replay.js` surface; video transport hardening remains a later slice. For live phase/slice status see `roadmap.md`.
 
 ## Table of Contents
 
@@ -70,7 +70,7 @@ Current execution-boundary status:
 - the universal agent remains the product center
 - mission drafts remain the planning artifact for now
 - the backend mission execution boundary now exists and owns canonical mission revisions, overlays, controller snapshot state, and durable execution attempts
-- the current adapter is still internal to the monolith; real external controller/MAVLink handoff remains the next implementation slice
+- external controller handoff has since landed (ADR 0023 Phases 1–3): a `ControllerMissionAdapter` interface with pymavlink and MAVSDK implementations (health probe, read/write/clear, version CAS), and a relocatable behavior-tree executor that flattens nav segments to `.plan` and installs them through the adapter, gated by the ADR 0021 Strict/Confirm/Autonomous modes
 
 ## Runtime Model
 
@@ -145,7 +145,9 @@ Key frontend modules under `static/map/`:
 | `MapWidget.js` | Root widget; Leaflet init, layer orchestration, keyboard shortcuts |
 | `layers/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
 | `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
-| `ui/MissionListPanel.js` | Mission list grouped by operation; status badges; Approve draft / Execute mission buttons |
+| `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, per-row edit + legacy linear-plan upload (▶), and batch show/hide; row markup escapes AI-/operator-derived names |
+| `layers/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
+| `ui/BasemapPanel.js` | Optional real 2D WGS84 basemap (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; default-off toggle (ADR 0022 Phase 4) |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
 | `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
 | `ui/HintToasts.js` | Gesture hint toasts |
@@ -154,7 +156,7 @@ Key frontend modules under `static/map/`:
 | `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
 | `state/` | Frontend mission state management |
 
-The widget uses `L.CRS.Simple` with local scene metres for all overlay coordinates. Export-side projection (local → WGS84) is handled by `MissionExportService` on the backend. Lat/lon is never used inside the widget itself.
+The widget's primary scene view uses `L.CRS.Simple` with local scene metres for overlay coordinates. Under ADR 0022 (GPS-master) WGS84 is the stored truth: overlay payloads now carry `lat/lon/alt` on every feature point plus the Mission `origin` datum, and the optional `BasemapPanel` plots the focused mission (and geofence) by lat/lon on a real EPSG:3857 basemap. The default `CRS.Simple` scene view still derives local metres from the WGS84 truth via the origin datum.
 
 For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
@@ -210,7 +212,7 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 - perception tool contract and video-frame understanding are not implemented yet
 - command staging and execution approval require a separate future safety design
 - AI chat is read-only and cannot publish rover control commands
-- mission lifecycle now includes a durable backend execution transition, but it still stops before real external flight-controller/MAVLink handoff; that is the next implementation slice
+- mission lifecycle now includes a durable backend execution transition **and** real external flight-controller handoff via the `ControllerMissionAdapter` (pymavlink/MAVSDK) driven by the behavior-tree executor (ADR 0023); the remaining gap is an exercised SITL/real-FC smoke loop (deferred under the no-tests rule until a target exists)
 
 ## Topic-Level Design Files
 

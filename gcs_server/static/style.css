@@ -823,6 +823,96 @@ select:focus-visible {
   accent-color: var(--accent);
 }
 
+.map-layer-toolbar--overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 500;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+.map-ctrl-left {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.map-ctrl-left > * {
+  pointer-events: auto;
+}
+
+.map-ctrl-left .map-layer-toolbar {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+.map-fit-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 66%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+.map-fit-btn {
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: var(--muted);
+  cursor: pointer;
+  min-height: 0;
+}
+
+.map-fit-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.map-fit-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.map-view-mode-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 66%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+.map-view-mode-select {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 1px 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  cursor: pointer;
+  width: 100%;
+}
+
+.map-view-mode-select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .map-overlay-controls {
   position: absolute;
   top: 8px;
@@ -965,6 +1055,36 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.map-info-bar--map {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 490;
+  display: flex;
+  background: color-mix(in srgb, var(--panel-strong) 85%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.map-info-bar--map span {
+  flex: 1;
+  padding: 3px 8px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-info-bar--map span + span {
+  border-left: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
 }
 
 .rover-marker-icon {
@@ -3350,16 +3470,54 @@ code {
 
 .ai-map-area {
   display: block;
-  height: 440px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
   min-height: 320px;
   max-height: 1100px;
   margin-top: 12px;
   border-radius: 14px;
   overflow: hidden;
   padding: 0;
-  /* Drag the bottom edge to grow the whole widget; the mission-list sidebar
-     and map share the inner grid, so they stretch together, bottom-aligned. */
-  resize: vertical;
+}
+
+.ai-map-height-resizer {
+  width: 100%;
+  height: 10px;
+  min-height: 10px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 6px,
+      transparent 6px
+    );
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.ai-map-height-resizer:hover,
+.ai-map-height-resizer:focus-visible,
+.app-shell.is-map-height-resizing .ai-map-height-resizer {
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 7px,
+      transparent 7px
+    );
+}
+
+.app-shell.is-map-height-resizing {
+  user-select: none;
+  cursor: row-resize;
 }
 
 .ai-map-area-list-placeholder {
@@ -3376,10 +3534,50 @@ code {
 
 .map-widget-shell {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: var(--map-list-width, 280px) 8px 1fr;
   gap: 0;
   flex: 1;
   min-height: 0;
+}
+
+.map-widget-shell.is-list-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.map-list-resizer {
+  align-self: stretch;
+  width: 8px;
+  min-width: 8px;
+  min-height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 3px,
+      color-mix(in srgb, var(--line) 76%, transparent) 3px,
+      color-mix(in srgb, var(--line) 76%, transparent) 5px,
+      transparent 5px
+    );
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.map-list-resizer:hover,
+.map-list-resizer:focus-visible,
+.map-widget-shell.is-list-resizing .map-list-resizer {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 2px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 2px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 6px,
+      transparent 6px
+    );
 }
 
 .map-widget-list {
@@ -3410,6 +3608,23 @@ code {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   opacity: 0.7;
+}
+
+.mission-list-new-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 0.85rem;
+  line-height: 1;
+  opacity: 0.65;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.mission-list-new-btn:hover {
+  opacity: 1;
 }
 
 .mission-list-settings {
@@ -3949,12 +4164,17 @@ code {
 
 @media (max-width: 980px) {
   .ai-map-area {
-    height: 620px;
+    aspect-ratio: auto;
+    height: 620px; /* fixed fallback on narrow screens where 4:3 would be too short */
   }
 
   .map-widget-shell {
     grid-template-columns: 1fr;
     grid-template-rows: 220px 1fr;
+  }
+
+  .map-list-resizer {
+    display: none;
   }
 
   .map-widget-list {
@@ -4842,6 +5062,34 @@ code {
 .leaflet-interactive.map-wp-ghost { cursor: cell; }
 
 /* Edit button in action strip */
+.mission-row-action-btn.is-delete {
+  color: var(--muted);
+  border-color: transparent;
+  opacity: 0.5;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.mission-row-action-btn.is-delete:hover {
+  color: #c72e0f;
+  border-color: color-mix(in srgb, #c72e0f 40%, transparent);
+  opacity: 1;
+  background: color-mix(in srgb, #c72e0f 10%, transparent);
+}
+
+.mission-row-title-input {
+  width: 100%;
+  background: var(--bg, #1a1a1a);
+  color: inherit;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  outline: none;
+  min-width: 0;
+}
+
 .mission-row-action-btn.is-edit {
   color: var(--muted);
   border-color: color-mix(in srgb, var(--muted) 35%, transparent);

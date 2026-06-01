@@ -1,4 +1,4 @@
-import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence } from './data/missionApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission } from './data/missionApi.js';
 import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
@@ -6,6 +6,7 @@ import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
 import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
 import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
+import { GridLayer } from './layers/GridLayer.js';
 import { mapMissionsForList, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
@@ -96,6 +97,7 @@ export class MapWidget {
     this._emptyState = null;
     this._mapEl = null;
     this._listEl = null;
+    this._listResizerEl = null;
     this._resizeObserver = null;
     this._shellEl = null;
     this._mapWrapEl = null;
@@ -145,7 +147,11 @@ export class MapWidget {
     this._sampleHeight = () => 0;
     this._terrainLayer = null;
     this._sceneObjectsLayer = null;
+    this._gridLayer = null;
     this._sceneBounds = null;
+    // Tracks the last bounds key used for auto-fit so _render() doesn't reset
+    // the pan/zoom every poll cycle — only refit when the fit target changes.
+    this._lastFitKey = null;
     this._bulkActionBar = null;
     // Confirm-mode async banner (ADR 0021 §1): shows the armed run's confirm
     // window and [Play]; polled alongside the overlay refresh.
@@ -154,6 +160,13 @@ export class MapWidget {
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
     this._basemapPanel = null;
     this._basemapToggleBtn = null;
+    this._layerToolbar = null;
+    this._fitBtns = null;
+    this._viewModeSelect = null;
+    this._infoBar = null;
+    this._infoBarCoords = null;
+    this._infoBarGps = null;
+    this._infoBarSel = null;
   }
 
   mount() {
@@ -187,12 +200,16 @@ export class MapWidget {
         editState.clearSelection();
       }
     });
+    this._map.on('mousemove', (e) => this._onMapMouseMove(e));
 
     this._listPanel = new MissionListPanel(this._listEl, {
       onMissionFocusRequested: (missionId) => this.setFocus(missionId),
       onMissionVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
       onMissionExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
       onMissionEditRequested: (missionId) => this._onEditRequested(missionId),
+      onMissionDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
+      onMissionRenameRequested: (missionId, name) => this._handleRenameMission(missionId, name),
+      onNewMissionRequested: () => this._handleNewMission(),
       onMissionSelectionToggled: (missionId, opts) => this._toggleSelection(missionId, opts),
       onSelectedShowRequested: () => this._showSelectedMissions(),
       onSelectedHideRequested: () => this._hideSelectedMissions(),
@@ -217,7 +234,11 @@ export class MapWidget {
         this._terrainLayer.addTo(this._map);
         this._sceneObjectsLayer = new SceneObjectsLayer(sceneMap);
         this._sceneObjectsLayer.addTo(this._map);
+        this._gridLayer = new GridLayer(sceneMap);
+        this._gridLayer.addTo(this._map);
         this._sceneBounds = sceneMap.bounds || null;
+        this._applyViewMode(this._viewModeSelect?.value || 'virtual_terrain');
+        this._updateFitButtons();
         // Center on the scene so the 3d-env map renders standalone, even with
         // no mission focused. Only do so while nothing is focused/edited, so we
         // don't yank the view away from a mission the user is already looking at.
@@ -249,6 +270,7 @@ export class MapWidget {
     this._mapEl.addEventListener('mousedown', this._marqueeHandler, true);
 
     this._mounted = true;
+    this._bindListResizer();
     window.requestAnimationFrame(() => this.invalidateSize());
     // The map area is user-resizable (CSS `resize: vertical`); re-measure
     // Leaflet whenever the container's box changes so tiles fill the new size.
@@ -258,6 +280,52 @@ export class MapWidget {
     }
     this._startPolling();
     this.refresh().catch((error) => this._showError(error?.message || 'Map refresh failed'));
+  }
+
+  _bindListResizer() {
+    const resizer = this._listResizerEl;
+    const shell = this._shellEl;
+    if (!resizer || !shell) return;
+    const MAP_LIST_WIDTH_KEY = 'gcs-map-list-width';
+    const MAP_LIST_MIN = 180;
+    const MAP_LIST_MAX = 480;
+    const clamp = (v) => Math.max(MAP_LIST_MIN, Math.min(MAP_LIST_MAX, Number(v) || 280));
+    const setWidth = (w, persist = true) => {
+      const next = clamp(w);
+      shell.style.setProperty('--map-list-width', `${next}px`);
+      resizer.setAttribute('aria-valuenow', String(next));
+      if (persist) {
+        try { window.localStorage.setItem(MAP_LIST_WIDTH_KEY, String(next)); } catch (_) {}
+      }
+    };
+    try {
+      const stored = window.localStorage.getItem(MAP_LIST_WIDTH_KEY);
+      if (stored) setWidth(stored, false);
+    } catch (_) {}
+    resizer.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      resizer.setPointerCapture(e.pointerId);
+      shell.classList.add('is-list-resizing');
+    });
+    resizer.addEventListener('pointermove', (e) => {
+      if (!resizer.hasPointerCapture(e.pointerId)) return;
+      const rect = shell.getBoundingClientRect();
+      setWidth(e.clientX - rect.left);
+    });
+    resizer.addEventListener('pointerup', (e) => {
+      if (resizer.hasPointerCapture(e.pointerId)) resizer.releasePointerCapture(e.pointerId);
+      shell.classList.remove('is-list-resizing');
+    });
+    resizer.addEventListener('pointercancel', () => shell.classList.remove('is-list-resizing'));
+    resizer.addEventListener('lostpointercapture', () => shell.classList.remove('is-list-resizing'));
+    resizer.addEventListener('keydown', (e) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const cur = Number(resizer.getAttribute('aria-valuenow')) || 280;
+      if (e.key === 'Home') setWidth(MAP_LIST_MIN);
+      else if (e.key === 'End') setWidth(MAP_LIST_MAX);
+      else setWidth(cur + (e.key === 'ArrowRight' ? 24 : -24));
+    });
   }
 
   destroy() {
@@ -277,6 +345,8 @@ export class MapWidget {
     this._terrainLayer = null;
     this._sceneObjectsLayer?.remove();
     this._sceneObjectsLayer = null;
+    this._gridLayer?.remove();
+    this._gridLayer = null;
     this._overlayCacheByMissionId.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
@@ -436,6 +506,65 @@ export class MapWidget {
     }
     this._overlayCacheByMissionId.clear();
     await this.refresh();
+  }
+
+  // --- New mission ---
+
+  async _handleNewMission() {
+    if (this._actionBusy) return;
+    this._actionBusy = true;
+    const result = await createMission({ name: 'New mission' });
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Could not create mission');
+      return;
+    }
+    const missionId = result.mission_id;
+    // Refresh so _syncVisibilityState auto-promotes the new mission to Active+Visible.
+    this._overlayCacheByMissionId.clear();
+    await this.refresh();
+    // Enter edit mode immediately so the user can click to place waypoints.
+    await this._onEditRequested(missionId);
+    editState.setEditMode('add');
+  }
+
+  // --- Mission CRUD ---
+
+  async _handleDeleteMission(missionId) {
+    if (this._actionBusy) return;
+    const id = String(missionId || '').trim();
+    if (!id) return;
+    this._actionBusy = true;
+    const result = await deleteMission(id);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Could not delete mission');
+      return;
+    }
+    // Clean up local state for the removed Mission.
+    this._overlayCacheByMissionId.delete(id);
+    this._visibleMissionOrder = this._visibleMissionOrder.filter((x) => x !== id);
+    this._selectedMissionIds.delete(id);
+    if (this._focusedMissionId === id) this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    if (this._editingMissionId === id) {
+      editState.clearEdit();
+      this._editingMissionId = '';
+    }
+    await this.refresh();
+  }
+
+  async _handleRenameMission(missionId, name) {
+    const id = String(missionId || '').trim();
+    if (!id || !name) return;
+    const result = await renameMission(id, name);
+    if (!result.ok) {
+      this._showError(result.error || 'Could not rename mission');
+      return;
+    }
+    // Update the in-memory list entry so the sidebar re-renders without a full refresh.
+    const mission = this._missionsById.get(id);
+    if (mission) mission.name = name;
+    this._render();
   }
 
   // --- Edit flow ---
@@ -679,6 +808,7 @@ export class MapWidget {
       this._bulkActionBar?.hide();
       this._editBanner.hidden = true;
       this._mapEl.classList.remove('is-edit-mode', 'is-locked');
+      this._updateInfoBarSelection(null);
       this._updateElevationProfile();
       return;
     }
@@ -701,6 +831,7 @@ export class MapWidget {
       this._selectionPanel.hide();
     }
 
+    this._updateInfoBarSelection(snapshot);
     this._bulkActionBar?.update(snapshot.selectedIndices, snapshot.waypoints, editState.isEditable());
 
     const color = this._paletteByMissionId.get(this._editingMissionId) || '#4a90d9';
@@ -897,12 +1028,90 @@ export class MapWidget {
     this._overlayLayer.renderMany(overlays);
     const focusedPayload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
     const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
-    // Fall back to the scene bounds so the map stays centered on the 3d-env
-    // terrain/objects when no mission is focused or visible.
-    this._fitBounds(focusedPayload?.bounds || unionBounds || this._sceneBounds);
-    this._showEmpty(!overlays.length && !editedMissionId);
+    // Only refit when the logical target changes; skip on every poll tick so the
+    // user can freely pan/zoom without the view snapping back every 5 seconds.
+    // Derive fitTarget and fitKey from the SAME winning source so they can't
+    // diverge: if the focused mission's payload hasn't loaded yet (e.g. it arrives
+    // via the 5s poll rather than the awaited setFocus path), we fall through to
+    // union/scene for BOTH — otherwise fitKey would lock to the mission id while
+    // fitTarget used scene bounds, and the later payload load wouldn't trigger a refit.
+    let fitTarget = null;
+    let fitKey = null;
+    if (focusedPayload?.bounds) {
+      fitTarget = focusedPayload.bounds;
+      fitKey = this._focusedMissionId;
+    } else if (unionBounds) {
+      fitTarget = unionBounds;
+      fitKey = this._visibleMissionOrder.join(',');
+    } else if (this._sceneBounds) {
+      fitTarget = this._sceneBounds;
+      fitKey = 'scene';
+    }
+    if (fitKey && fitKey !== this._lastFitKey) {
+      this._lastFitKey = fitKey;
+      this._fitBounds(fitTarget);
+    }
+    // The empty state covers the whole canvas, so skip it when the scene is
+    // loaded — terrain + objects IS the content even with no missions drawn yet.
+    this._updateFitButtons();
+    this._showEmpty(!overlays.length && !editedMissionId && !this._sceneBounds);
     this._updateElevationProfile();
     if (this._basemapPanel?.visible) this._basemapPanel.render(focusedPayload);
+  }
+
+  _onLayerToggle(key, visible) {
+    switch (key) {
+      case 'terrain': this._terrainLayer?.setVisible(visible); break;
+      case 'roads':   this._sceneObjectsLayer?.setRoadsVisible(visible); break;
+      case 'objects': this._sceneObjectsLayer?.setObjectsVisible(visible); break;
+      case 'grid':    this._gridLayer?.setVisible(visible); break;
+    }
+  }
+
+  _applyViewMode(mode) {
+    const configs = {
+      virtual_terrain: { terrain: true,  roads: true,  objects: true,  grid: true  },
+      cad:             { terrain: false, roads: true,  objects: true,  grid: true  },
+      heightmap:       { terrain: true,  roads: false, objects: false, grid: false },
+    };
+    const cfg = configs[mode] || configs.virtual_terrain;
+    this._terrainLayer?.setVisible(cfg.terrain);
+    this._sceneObjectsLayer?.setRoadsVisible(cfg.roads);
+    this._sceneObjectsLayer?.setObjectsVisible(cfg.objects);
+    this._gridLayer?.setVisible(cfg.grid);
+    if (this._layerToolbar) {
+      for (const cb of this._layerToolbar.querySelectorAll('input[data-layer]')) {
+        cb.checked = !!cfg[cb.dataset.layer];
+      }
+    }
+  }
+
+  _handleFitClick(key) {
+    let bounds = null;
+    if (key === 'scene') {
+      bounds = this._sceneBounds;
+    } else if (key === 'mission') {
+      const payload = this._focusedMissionId
+        ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+        : null;
+      bounds = payload?.bounds || null;
+    } else if (key === 'all') {
+      const allBounds = [...this._overlayCacheByMissionId.values()].map((p) => p?.bounds).filter(Boolean);
+      bounds = boundsUnion([...allBounds, this._sceneBounds]);
+    }
+    if (!bounds) return;
+    this._lastFitKey = null;
+    this._fitBounds(bounds);
+  }
+
+  _updateFitButtons() {
+    if (!this._fitBtns) return;
+    const focusedPayload = this._focusedMissionId
+      ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+      : null;
+    this._fitBtns.scene.disabled = !this._sceneBounds;
+    this._fitBtns.mission.disabled = !focusedPayload?.bounds;
+    this._fitBtns.all.disabled = !this._sceneBounds && !this._overlayCacheByMissionId.size;
   }
 
   // Real 2D WGS84 basemap render mode (Phase 4): show/hide the geographic view
@@ -952,6 +1161,47 @@ export class MapWidget {
       await this.refresh().catch(() => {});
     }
     return result;
+  }
+
+  _focusedOrigin() {
+    if (!this._focusedMissionId) return null;
+    return this._overlayCacheByMissionId.get(this._focusedMissionId)?.origin || null;
+  }
+
+  _onMapMouseMove(e) {
+    if (!this._infoBarCoords) return;
+    const x = e.latlng.lng;
+    const y = e.latlng.lat;
+    const xSign = x >= 0 ? '+' : '';
+    const ySign = y >= 0 ? '+' : '';
+    this._infoBarCoords.textContent = `x ${xSign}${x.toFixed(2)} m  y ${ySign}${y.toFixed(2)} m`;
+    if (this._infoBarGps) {
+      const origin = this._focusedOrigin();
+      if (origin) {
+        const METRES_PER_DEG = 111320.0;
+        const lat = origin.lat + y / METRES_PER_DEG;
+        const lon = origin.lon + x / (METRES_PER_DEG * Math.cos(origin.lat * Math.PI / 180));
+        const latDir = lat >= 0 ? 'N' : 'S';
+        const lonDir = lon >= 0 ? 'E' : 'W';
+        this._infoBarGps.textContent = `${Math.abs(lat).toFixed(6)}°${latDir}  ${Math.abs(lon).toFixed(6)}°${lonDir}`;
+      } else {
+        this._infoBarGps.textContent = '';
+      }
+    }
+  }
+
+  _updateInfoBarSelection(snapshot) {
+    if (!this._infoBarSel) return;
+    if (!snapshot || snapshot.selectedIndices.size !== 1) {
+      this._infoBarSel.textContent = '';
+      return;
+    }
+    const idx = [...snapshot.selectedIndices][0];
+    const wp = snapshot.waypoints[idx];
+    if (!wp) { this._infoBarSel.textContent = ''; return; }
+    const PROV = { ai: 'AI', user: 'user', 'ai+edited': 'AI+edited' };
+    const prov = PROV[wp.provenance] || (wp.provenance || 'AI');
+    this._infoBarSel.textContent = `WP ${idx + 1} · ${prov} · z ${wp.z.toFixed(2)} m`;
   }
 
   _updateElevationProfile() {
@@ -1015,6 +1265,9 @@ export class MapWidget {
   async setFocus(missionId) {
     const id = missionId || '';
     this._focusedMissionId = id;
+    // Force a bounds refit for this focus change even if the key would otherwise
+    // match (e.g. refocusing the same mission after the user panned away).
+    this._lastFitKey = null;
     if (id && !this._visibleMissionOrder.includes(id)) {
       this._visibleMissionOrder.push(id);
       this._visibleMissionOrder = enforceVisibilityCap(
@@ -1031,7 +1284,7 @@ export class MapWidget {
 
   // --- Selected set / batch operations (ADR 0021 §4) ---
 
-  _toggleSelection(missionId, { shift = false } = {}) {
+  async _toggleSelection(missionId, { shift = false } = {}) {
     const id = String(missionId || '');
     if (!id) return;
     const order = this._missions.map((m) => m.id);
@@ -1040,13 +1293,52 @@ export class MapWidget {
       const b = order.indexOf(id);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        for (let i = lo; i <= hi; i += 1) this._selectedMissionIds.add(order[i]);
+        const toFetch = [];
+        for (let i = lo; i <= hi; i += 1) {
+          const rangeId = order[i];
+          this._selectedMissionIds.add(rangeId);
+          if (!this._visibleMissionOrder.includes(rangeId)) {
+            this._visibleMissionOrder.push(rangeId);
+            if (!this._overlayCacheByMissionId.has(rangeId)) toFetch.push(rangeId);
+          }
+        }
+        const alwaysOn = [...this._executingMissionIds(), this._focusedMissionId].filter(Boolean);
+        this._visibleMissionOrder = enforceVisibilityCap(
+          this._visibleMissionOrder, 3, alwaysOn,
+        );
+        if (toFetch.length) {
+          await Promise.all(toFetch.map(async (rid) => {
+            const payload = await getMissionOverlay(rid);
+            if (payload.ok) this._overlayCacheByMissionId.set(rid, payload);
+          }));
+        }
         this._render();
         return;
       }
     }
-    if (this._selectedMissionIds.has(id)) this._selectedMissionIds.delete(id);
-    else this._selectedMissionIds.add(id);
+    const wasSelected = this._selectedMissionIds.has(id);
+    if (wasSelected) {
+      this._selectedMissionIds.delete(id);
+      // Hide from map when deselected, unless it's the focused/active mission.
+      if (id !== this._focusedMissionId) {
+        this._visibleMissionOrder = this._visibleMissionOrder.filter((x) => x !== id);
+      }
+    } else {
+      this._selectedMissionIds.add(id);
+      // Show on map when selected: fetch overlay and make visible.
+      if (!this._visibleMissionOrder.includes(id)) {
+        this._visibleMissionOrder.push(id);
+        const alwaysOn = [...this._executingMissionIds(), this._focusedMissionId].filter(Boolean);
+        this._visibleMissionOrder = enforceVisibilityCap(
+          this._visibleMissionOrder, 3, alwaysOn,
+        );
+        if (!this._overlayCacheByMissionId.has(id)) {
+          const payload = await getMissionOverlay(id);
+          if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
+          else this._showError(payload.error || 'Overlay fetch failed');
+        }
+      }
+    }
     this._selectionAnchorId = id;
     this._render();
   }
@@ -1191,6 +1483,18 @@ export class MapWidget {
     listEl.className = 'map-widget-list';
     this._listEl = listEl;
 
+    const listResizer = document.createElement('button');
+    listResizer.type = 'button';
+    listResizer.className = 'map-list-resizer';
+    listResizer.setAttribute('role', 'separator');
+    listResizer.setAttribute('aria-label', 'Resize mission list');
+    listResizer.setAttribute('aria-orientation', 'vertical');
+    listResizer.setAttribute('aria-valuemin', '180');
+    listResizer.setAttribute('aria-valuemax', '480');
+    listResizer.setAttribute('aria-valuenow', '280');
+    listResizer.title = 'Drag to resize mission list';
+    this._listResizerEl = listResizer;
+
     const mapWrap = document.createElement('div');
     mapWrap.className = 'map-widget-wrap';
     this._mapWrapEl = mapWrap;
@@ -1250,6 +1554,20 @@ export class MapWidget {
     marqueeEl.setAttribute('aria-hidden', 'true');
     this._marqueeEl = marqueeEl;
 
+    // Cursor/info bar: scene-metre coordinates, WGS84 when origin known, selection detail
+    const infoBar = document.createElement('div');
+    infoBar.className = 'map-info-bar--map';
+    infoBar.setAttribute('aria-hidden', 'true');
+    const infoCoords = document.createElement('span');
+    infoCoords.textContent = '—';
+    const infoGps = document.createElement('span');
+    const infoSel = document.createElement('span');
+    infoBar.append(infoCoords, infoGps, infoSel);
+    this._infoBar = infoBar;
+    this._infoBarCoords = infoCoords;
+    this._infoBarGps = infoGps;
+    this._infoBarSel = infoSel;
+
     // Hint toasts (floating transient hints, e.g., "Hold Alt to snap")
     this._hintToasts = new HintToasts(mapWrap);
 
@@ -1288,8 +1606,78 @@ export class MapWidget {
     basemapToggleBtn.addEventListener('click', () => this._toggleBasemap());
     this._basemapToggleBtn = basemapToggleBtn;
 
-    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, basemapToggleBtn);
-    shell.append(listEl, mapWrap);
+    // Top-left overlay column: view mode preset + layer toggles + fit-bounds buttons
+    const ctrlLeft = document.createElement('div');
+    ctrlLeft.className = 'map-ctrl-left';
+
+    const viewModeToolbar = document.createElement('div');
+    viewModeToolbar.className = 'map-view-mode-toolbar';
+    viewModeToolbar.setAttribute('aria-label', 'View mode');
+    const viewModeSelect = document.createElement('select');
+    viewModeSelect.className = 'map-view-mode-select';
+    viewModeSelect.setAttribute('aria-label', 'Scene view mode');
+    for (const [value, label] of [
+      ['virtual_terrain', 'Virtual Terrain'],
+      ['cad',             'CAD / Object View'],
+      ['heightmap',       'Heightmap'],
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      viewModeSelect.append(opt);
+    }
+    viewModeSelect.value = 'virtual_terrain';
+    viewModeSelect.addEventListener('change', () => this._applyViewMode(viewModeSelect.value));
+    this._viewModeSelect = viewModeSelect;
+    viewModeToolbar.append(viewModeSelect);
+
+    const layerToolbar = document.createElement('div');
+    layerToolbar.className = 'map-layer-toolbar';
+    layerToolbar.setAttribute('aria-label', 'Map layers');
+    const layerDefs = [
+      { key: 'terrain',  label: 'Terrain' },
+      { key: 'roads',    label: 'Roads' },
+      { key: 'objects',  label: 'Objects' },
+      { key: 'grid',     label: 'Grid' },
+    ];
+    for (const { key, label } of layerDefs) {
+      const lbl = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.dataset.layer = key;
+      cb.addEventListener('change', () => this._onLayerToggle(key, cb.checked));
+      lbl.append(cb, document.createTextNode(' '), Object.assign(document.createElement('span'), { textContent: label }));
+      layerToolbar.append(lbl);
+    }
+    this._layerToolbar = layerToolbar;
+
+    const fitToolbar = document.createElement('div');
+    fitToolbar.className = 'map-fit-toolbar';
+    fitToolbar.setAttribute('aria-label', 'Fit view');
+    const fitDefs = [
+      { key: 'scene',   label: 'Scene' },
+      { key: 'mission', label: 'Mission' },
+      { key: 'all',     label: 'All' },
+    ];
+    const fitBtns = {};
+    for (const { key, label } of fitDefs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'map-fit-btn';
+      btn.textContent = label;
+      btn.disabled = true;
+      btn.title = `Fit view to ${label.toLowerCase()} bounds`;
+      btn.addEventListener('click', () => this._handleFitClick(key));
+      fitToolbar.append(btn);
+      fitBtns[key] = btn;
+    }
+    this._fitBtns = fitBtns;
+
+    ctrlLeft.append(viewModeToolbar, layerToolbar, fitToolbar);
+
+    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlLeft, basemapToggleBtn, infoBar);
+    shell.append(listEl, listResizer, mapWrap);
 
     // Context menu (absolute-positioned inside container)
     this._contextMenu = new ContextMenu(this._container);

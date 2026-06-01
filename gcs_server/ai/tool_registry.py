@@ -474,7 +474,7 @@ class ToolRegistry:
             # Autonomous binds execute_mission; cancel_execution/abort always bind.
             tool(
                 "arm_execution",
-                "Confirm-mode only: arm and start running an approved Mission's behavior tree on the rover. Pass the flat Mission id as 'mission_id'. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. The run proceeds on the server; poll progress is reported via execution status, and 'abort'/'cancel_execution' stop it.",
+                "Confirm-mode only: arm an approved Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
                 EXECUTION,
                 self._arm_execution,
                 side_effects=frozenset({"drives_rover"}),
@@ -488,9 +488,9 @@ class ToolRegistry:
             ),
             tool(
                 "cancel_execution",
-                "Stop the mission currently executing for this session. Cooperatively aborts the running behavior tree between node steps. Always available regardless of execution mode. Returns the execution status snapshot.",
+                "Stop a pending or running mission for this session. For an armed/awaiting-confirm run (Confirm mode before the operator confirms) this cancels it so a later banner confirm cannot still start it; for a run already executing it cooperatively aborts the behavior tree between node steps. Always available regardless of execution mode. Returns the execution status snapshot.",
                 EXECUTION,
-                self._abort_execution,
+                self._cancel_execution,
             ),
             tool(
                 "abort",
@@ -1518,6 +1518,21 @@ class ToolRegistry:
         if sessions is None:
             return {"ok": False, "error": "execution sessions are not available"}
         return sessions.request_abort(context.session_id)
+
+    def _cancel_execution(self, context: ToolInvocationContext) -> dict[str, Any]:
+        """Cancel a prepared/armed/awaiting-confirm run via ``sessions.cancel()``
+        (so a later banner confirm cannot start it); for a run already on its
+        thread, fall back to a cooperative abort. ``abort`` remains the running
+        emergency stop."""
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        active = sessions.get(context.session_id)
+        if active is None:
+            return {"ok": False, "error": "no execution for this session"}
+        if active.thread and active.thread.is_alive():
+            return sessions.request_abort(context.session_id)
+        return sessions.cancel(context.session_id)
 
 
 def _resolve_confirm_timeout_s(runtime: Any) -> int:

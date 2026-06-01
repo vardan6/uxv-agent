@@ -6,17 +6,38 @@
 const MISSION_ROW_EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
 const MISSION_ROW_EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
 
+// Escape untrusted values before interpolating into the row HTML string. Mission
+// names and origin badges are AI-/operator-derived, so a name like
+// `"><img src=x onerror=...>` would otherwise become executable markup once the
+// assembled string is written via innerHTML. Covers both text and double-quoted
+// attribute contexts. Kept pure so the row markup stays node-testable.
+export function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function missionRowActionButtons(missionRow) {
   const activeRevisionId = String(missionRow.activeRevisionId || '');
   const status = String(missionRow.activeRevisionStatus || '');
-  if (!activeRevisionId) return '';
+  const safeId = escapeHtml(missionRow.id);
+  const safeName = escapeHtml(missionRow.name);
+  if (!activeRevisionId) {
+    return `<button class="mission-row-action-btn is-delete" type="button"
+      data-delete-mission-id="${safeId}"
+      title="Delete mission"
+      aria-label="Delete mission ${safeName}">🗑</button>`;
+  }
   if (status === 'executing') {
     return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
   }
   const parts = [];
   if (MISSION_ROW_EDITABLE.has(status)) {
     parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-      data-edit-mission-id="${String(missionRow.id || '')}"
+      data-edit-mission-id="${safeId}"
       title="Edit waypoints"
       aria-label="Edit waypoints">✏</button>`);
   }
@@ -26,10 +47,14 @@ function missionRowActionButtons(missionRow) {
     // behavior-tree session executor — lifecycle BT runs are AI-tool/banner
     // driven (arm_execution/execute_mission + /api/ai/execution/*).
     parts.push(`<button class="mission-row-action-btn is-execute" type="button"
-      data-execute-mission-id="${String(missionRow.id || '')}"
+      data-execute-mission-id="${safeId}"
       title="Upload linear plan to controller (legacy direct upload — not behavior-tree execution)"
       aria-label="Upload linear plan to controller">▶</button>`);
   }
+  parts.push(`<button class="mission-row-action-btn is-delete" type="button"
+    data-delete-mission-id="${safeId}"
+    title="Delete mission"
+    aria-label="Delete mission ${safeName}">🗑</button>`);
   return parts.join('');
 }
 
@@ -50,31 +75,33 @@ export function missionRowMarkup(missionRow, ctx = {}) {
   const isSelected = selectedMissionIds.has(id);
   const color = paletteByMissionId.get(id) || 'transparent';
   const indexLabel = missionRow.missionIndex != null ? `#${missionRow.missionIndex}` : '';
+  const safeId = escapeHtml(id);
+  const safeName = escapeHtml(missionRow.name);
   return `
-    <div class="mission-list-row${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}" data-mission-id="${id}">
+    <div class="mission-list-row${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}" data-mission-id="${safeId}">
       <span class="mission-row-status" aria-hidden="true"></span>
       <label class="mission-row-select" title="Select for batch operations (shift-click for range)">
         <input
           type="checkbox"
           class="mission-row-select-box"
-          data-select-mission-id="${id}"
+          data-select-mission-id="${safeId}"
           ${isSelected ? 'checked' : ''}
-          aria-label="Select mission ${missionRow.name}"
+          aria-label="Select mission ${safeName}"
         />
       </label>
       <button
         class="mission-row-focus"
         type="button"
-        data-focus-mission-id="${id}"
+        data-focus-mission-id="${safeId}"
         aria-pressed="${isFocused ? 'true' : 'false'}"
         title="Focus mission"
       >
-        <span class="mission-row-color-dot" style="--mission-color:${color}"></span>
+        <span class="mission-row-color-dot" style="--mission-color:${escapeHtml(color)}"></span>
         <span class="mission-row-main">
-          <span class="mission-row-title">${missionRow.name}</span>
-          <span class="mission-row-meta">${indexLabel}</span>
+          <span class="mission-row-title" data-rename-mission-id="${safeId}" data-current-name="${safeName}" title="Double-click to rename">${safeName}</span>
+          <span class="mission-row-meta">${escapeHtml(indexLabel)}</span>
         </span>
-        <span class="mission-row-origin" title="Mission origin">${missionRow.originBadge}</span>
+        <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}</span>
       </button>
       <span class="mission-row-actions">
         ${missionRowActionButtons(missionRow)}
@@ -82,7 +109,7 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         <button
           class="mission-row-eye"
           type="button"
-          data-toggle-mission-id="${id}"
+          data-toggle-mission-id="${safeId}"
           aria-label="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
           title="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
         >${isVisible ? '👁' : '🚫'}</button>
@@ -100,8 +127,11 @@ export class MissionListPanel {
     this._onMissionVisibilityToggled = opts.onMissionVisibilityToggled || (() => {});
     this._onMissionEditRequested = opts.onMissionEditRequested || (() => {});
     this._onMissionExecuteRequested = opts.onMissionExecuteRequested || (() => {});
+    this._onMissionDeleteRequested = opts.onMissionDeleteRequested || (() => {});
+    this._onMissionRenameRequested = opts.onMissionRenameRequested || (() => {});
     // Selected state (ADR 0021 §4): batch-operation target set, driven by the
     // per-row checkbox (shift-click extends a range). Distinct from Visible/Active.
+    this._onNewMissionRequested = opts.onNewMissionRequested || (() => {});
     this._onMissionSelectionToggled = opts.onMissionSelectionToggled || (() => {});
     this._onSelectedShowRequested = opts.onSelectedShowRequested || (() => {});
     this._onSelectedHideRequested = opts.onSelectedHideRequested || (() => {});
@@ -125,6 +155,9 @@ export class MissionListPanel {
       : '';
     const header = `<div class="mission-list-header">
             <span class="mission-list-heading">Missions</span>
+            <button class="mission-list-new-btn" type="button" data-new-mission
+              title="New mission — place waypoints by clicking the map"
+              aria-label="New mission">＋</button>
             <a class="mission-list-settings" href="/settings?tab=mission-lifecycle"
               title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
           </div>`;
@@ -148,6 +181,14 @@ export class MissionListPanel {
   }
 
   _bindMissions() {
+    const newBtn = this._container.querySelector('[data-new-mission]');
+    if (newBtn) {
+      newBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onNewMissionRequested();
+      });
+    }
     this._container.querySelectorAll('[data-focus-mission-id]').forEach((button) => {
       button.addEventListener('click', () => this._onMissionFocusRequested(button.dataset.focusMissionId || ''));
     });
@@ -190,6 +231,43 @@ export class MissionListPanel {
         if (action === 'show') this._onSelectedShowRequested();
         else if (action === 'hide') this._onSelectedHideRequested();
         else if (action === 'clear') this._onSelectionCleared();
+      });
+    });
+    this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionDeleteRequested(button.dataset.deleteMissionId || '');
+      });
+    });
+    // Inline rename: double-click the title span → replace with input, commit on Enter/blur.
+    this._container.querySelectorAll('[data-rename-mission-id]').forEach((span) => {
+      span.addEventListener('dblclick', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const missionId = span.dataset.renameMissionId || '';
+        const currentName = span.dataset.currentName || span.textContent.trim();
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'mission-row-title-input';
+        input.value = currentName;
+        span.replaceWith(input);
+        input.focus();
+        input.select();
+        const commit = () => {
+          const newName = input.value.trim();
+          if (newName && newName !== currentName) {
+            this._onMissionRenameRequested(missionId, newName);
+          } else {
+            // Restore the original span without saving
+            input.replaceWith(span);
+          }
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { e.preventDefault(); input.replaceWith(span); }
+        });
+        input.addEventListener('blur', commit, { once: true });
       });
     });
   }

@@ -320,10 +320,13 @@ function setMessageActivityOpen(messageId, open) {
 
 const AI_LAYOUT_WIDTH_KEY = 'gcs-ai-sidebar-width';
 const AI_LAYOUT_HEIGHT_KEY = 'gcs-ai-chat-shell-height';
+const AI_MAP_HEIGHT_KEY = 'gcs-ai-map-height';
 const AI_SIDEBAR_MIN = 240;
 const AI_SIDEBAR_MAX = 560;
 const AI_SHELL_HEIGHT_MIN = 420;
 const AI_SHELL_HEIGHT_MAX = 1100;
+const AI_MAP_HEIGHT_MIN = 320;
+const AI_MAP_HEIGHT_MAX = 1100;
 const AI_MOBILE_QUERY = '(max-width: 1100px)';
 const AI_ARCHIVED_SESSION_LIMIT = 500;
 const AI_INFLIGHT_MARKER_KEY = 'gcs-ai-inflight-stream';
@@ -336,6 +339,8 @@ const aiEls = {
   showArchived: document.getElementById('ai-show-archived'),
   layoutResizer: document.getElementById('ai-layout-resizer'),
   heightResizer: document.getElementById('ai-height-resizer'),
+  mapArea: document.getElementById('ai-map-area'),
+  mapHeightResizer: document.getElementById('ai-map-height-resizer'),
   sessionSearch: document.getElementById('ai-session-search'),
   sessionList: document.getElementById('ai-session-list'),
   sessionTitle: document.getElementById('ai-session-title'),
@@ -3470,9 +3475,79 @@ function bindHeightResizer() {
   });
 }
 
+function clampMapHeight(value) {
+  return Math.max(AI_MAP_HEIGHT_MIN, Math.min(AI_MAP_HEIGHT_MAX, Number(value) || 600));
+}
+
+function setMapHeight(height, persist = true) {
+  const nextHeight = clampMapHeight(height);
+  if (aiEls.mapArea) aiEls.mapArea.style.height = `${nextHeight}px`;
+  aiEls.mapHeightResizer?.setAttribute('aria-valuenow', String(nextHeight));
+  if (persist) {
+    try { window.localStorage.setItem(AI_MAP_HEIGHT_KEY, String(nextHeight)); } catch (_) {}
+  }
+}
+
+function restoreMapHeight() {
+  try {
+    const stored = window.localStorage.getItem(AI_MAP_HEIGHT_KEY);
+    if (stored) { setMapHeight(stored, false); return; }
+  } catch (_) {}
+  // No stored height — CSS aspect-ratio drives the size; sync aria-valuenow after layout.
+  requestAnimationFrame(() => {
+    if (!aiEls.mapArea || !aiEls.mapHeightResizer) return;
+    const h = Math.round(aiEls.mapArea.getBoundingClientRect().height);
+    if (h > 0) aiEls.mapHeightResizer.setAttribute('aria-valuenow', String(h));
+  });
+}
+
+function updateMapHeightFromPointer(event) {
+  if (!aiEls.mapArea) return;
+  const mapRect = aiEls.mapArea.getBoundingClientRect();
+  setMapHeight(event.clientY - mapRect.top);
+}
+
+function bindMapResizer() {
+  if (!aiEls.mapHeightResizer || !aiEls.mapArea) return;
+  restoreMapHeight();
+  const appShell = document.querySelector('.app-shell');
+  aiEls.mapHeightResizer.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    aiEls.mapHeightResizer.setPointerCapture(event.pointerId);
+    appShell?.classList.add('is-map-height-resizing');
+    updateMapHeightFromPointer(event);
+  });
+  aiEls.mapHeightResizer.addEventListener('pointermove', (event) => {
+    if (!aiEls.mapHeightResizer.hasPointerCapture(event.pointerId)) return;
+    updateMapHeightFromPointer(event);
+  });
+  aiEls.mapHeightResizer.addEventListener('pointerup', (event) => {
+    if (aiEls.mapHeightResizer.hasPointerCapture(event.pointerId)) {
+      aiEls.mapHeightResizer.releasePointerCapture(event.pointerId);
+    }
+    appShell?.classList.remove('is-map-height-resizing');
+  });
+  aiEls.mapHeightResizer.addEventListener('pointercancel', () => {
+    appShell?.classList.remove('is-map-height-resizing');
+  });
+  aiEls.mapHeightResizer.addEventListener('lostpointercapture', () => {
+    appShell?.classList.remove('is-map-height-resizing');
+  });
+  aiEls.mapHeightResizer.addEventListener('keydown', (event) => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const currentHeight = Number(aiEls.mapHeightResizer.getAttribute('aria-valuenow'))
+      || (aiEls.mapArea ? Math.round(aiEls.mapArea.getBoundingClientRect().height) : 600);
+    if (event.key === 'Home') setMapHeight(AI_MAP_HEIGHT_MIN);
+    else if (event.key === 'End') setMapHeight(AI_MAP_HEIGHT_MAX);
+    else setMapHeight(currentHeight + (event.key === 'ArrowDown' ? 32 : -32));
+  });
+}
+
 function bindAi() {
   bindLayoutResizer();
   bindHeightResizer();
+  bindMapResizer();
   aiEls.newSession.addEventListener('click', () => createSession().catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.showActive.addEventListener('click', () => setArchiveFilter(false).catch((error) => setAiStatus(error.message, 'danger')));
   aiEls.showArchived.addEventListener('click', () => setArchiveFilter(true).catch((error) => setAiStatus(error.message, 'danger')));

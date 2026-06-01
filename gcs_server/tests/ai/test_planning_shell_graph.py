@@ -141,7 +141,7 @@ def test_finalize_response_for_draft_does_not_append_generation_failure() -> Non
     assert meta["retrieval_request"]["enabled_sources"] == ["project_docs", "mission_history", "replay_reports"]
 
 
-def test_validate_draft_requests_clarification_for_ai_edited_parent_operation() -> None:
+def test_validate_draft_requests_clarification_for_edit_in_place_with_operator_edits() -> None:
     svc, _ = _make_mission_execution_service()
     proposal = svc.create_proposal(
         session_id="sess-1",
@@ -184,8 +184,15 @@ def test_validate_draft_requests_clarification_for_ai_edited_parent_operation() 
             "required_operator_approval": True,
             "execution_allowed": False,
         },
+        # ADR 0021 §3: the provenance-conflict gate fires only for edit_in_place
+        # against the active mission (clone_and_edit preserves the original row, so
+        # it can never clobber operator edits). Supply the explicit edit_in_place
+        # contract: matching source/active mission id + operator edits present.
+        "mission_edit_mode": "edit_in_place",
+        "source_mission_id": "mission-1",
         "parent_operation_id": proposal["operation_id"],
         "active_mission_context": {
+            "mission_id": "mission-1",
             "operation_id": proposal["operation_id"],
             "has_operator_edits": True,
         },
