@@ -204,7 +204,7 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 - current video delivery is still the bootstrap WebSocket path fed from MQTT frames
 - multi-instance GCS behavior is not yet fully hardened
 - replay map rendering still lives in `static/replay.js`; replay has not been migrated onto `MapWidget`
-- geofence is authored + enforced (ADR 0023 Phase 5); a dedicated basemap *display* of an existing mission's stored fence polygon is not yet rendered on load (only the in-progress sketch is drawn)
+- geofence is authored + enforced (ADR 0023 Phase 5) and a stored inclusion fence now renders on the basemap on load (overlay payload carries `geofence` + per-Mission `origin`; `BasemapPanel` draws the saved polygon/rally points distinct from the in-progress sketch)
 - LLM provider checks are simple endpoint probes, not full chat completions
 - bounded lazy data branches/source controls are implemented for replay, AI memory, settings, and sensor metadata; RAG/document retrieval and web research/search are still not implemented
 - perception tool contract and video-frame understanding are not implemented yet

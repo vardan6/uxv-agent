@@ -1,6 +1,6 @@
 # AI Agent — Design
 
-Status date: 2026-05-20.
+Status date: 2026-06-01.
 
 **How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [design.md](./design.md) wins on diagrams only.
 
@@ -608,6 +608,9 @@ Tool descriptions are production code. The first line states the trigger conditi
 
 ```python
 Waypoint = {
+    # Stored truth — WGS84 (ADR 0022); exporter reads these directly
+    "lat": float, "lon": float, "alt": float,
+    # Scene render — local metres derived from WGS84 + Mission origin datum on overlay load
     "x": float, "y": float, "z": float,
     "yaw_rad": float | None,         # None ⇒ NaN in .plan (vehicle keeps current heading)
     "accept_radius_m": float | None, # None ⇒ exporter falls back to settings default
@@ -666,7 +669,7 @@ Output: QGC `.plan` JSON conforming to the documented format:
 - One `SimpleItem` per waypoint with `command=16` (`MAV_CMD_NAV_WAYPOINT`), `frame=3` (`GLOBAL_RELATIVE_ALT`), `params=[hold_s, accept_radius_m, 0, yaw_rad_or_NaN, lat, lon, alt]`
 - Trailing `command=20` (`NAV_RETURN_TO_LAUNCH`) appended for `route_to_then_around_then_back` outputs
 - Empty `geoFence` and `rallyPoints` blocks (schema-required)
-- Local→geo projection uses the existing `coordinate_system.georeference` declared in the Terrain Scene Manifest. Flat-earth approximation off `origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent. Documented as a placeholder pending real-world georeference + real scene.
+- Coordinates: the exporter reads each waypoint's **stored WGS84 `lat/lon/alt` directly** ([ADR 0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md) — WGS84 is the stored truth, local metres are derived). The legacy local→geo flat-earth projection (off the per-Mission origin datum, falling back to the Terrain Scene Manifest `coordinate_system.georeference`) survives only as a fallback for legacy waypoints lacking stored WGS84; accurate to ~10 m over the scene's ~300 m extent.
 - Output path: `data/missions/<draft_id>.plan`. Recorded on the draft.
 
 Hand-off boundary: the `.plan` file. No upload code in this slice; that lands when the controller-adapter slice ships.

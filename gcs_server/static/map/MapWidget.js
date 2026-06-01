@@ -5,6 +5,7 @@ import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
 import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
+import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
 import { mapMissionsForList, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
@@ -95,6 +96,7 @@ export class MapWidget {
     this._emptyState = null;
     this._mapEl = null;
     this._listEl = null;
+    this._resizeObserver = null;
     this._shellEl = null;
     this._mapWrapEl = null;
     this._listPanel = null;
@@ -142,6 +144,8 @@ export class MapWidget {
     this._elevationPanel = null;
     this._sampleHeight = () => 0;
     this._terrainLayer = null;
+    this._sceneObjectsLayer = null;
+    this._sceneBounds = null;
     this._bulkActionBar = null;
     // Confirm-mode async banner (ADR 0021 §1): shows the armed run's confirm
     // window and [Play]; polled alongside the overlay refresh.
@@ -211,6 +215,15 @@ export class MapWidget {
       if (sceneMap) {
         this._terrainLayer = new TerrainCanvasLayer(sceneMap);
         this._terrainLayer.addTo(this._map);
+        this._sceneObjectsLayer = new SceneObjectsLayer(sceneMap);
+        this._sceneObjectsLayer.addTo(this._map);
+        this._sceneBounds = sceneMap.bounds || null;
+        // Center on the scene so the 3d-env map renders standalone, even with
+        // no mission focused. Only do so while nothing is focused/edited, so we
+        // don't yank the view away from a mission the user is already looking at.
+        if (this._sceneBounds && !this._focusedMissionId && !editState.revisionId) {
+          this._fitBounds(this._sceneBounds);
+        }
       }
       this._sampleHeight = makeSampler(sceneMap);
       this._updateElevationProfile();
@@ -237,6 +250,12 @@ export class MapWidget {
 
     this._mounted = true;
     window.requestAnimationFrame(() => this.invalidateSize());
+    // The map area is user-resizable (CSS `resize: vertical`); re-measure
+    // Leaflet whenever the container's box changes so tiles fill the new size.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._resizeObserver = new ResizeObserver(() => this.invalidateSize());
+      this._resizeObserver.observe(this._container);
+    }
     this._startPolling();
     this.refresh().catch((error) => this._showError(error?.message || 'Map refresh failed'));
   }
@@ -244,6 +263,10 @@ export class MapWidget {
   destroy() {
     this._mounted = false;
     this._stopPolling();
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
     this._confirmBanner?.destroy();
     this._confirmBanner = null;
     this._basemapPanel?.destroy();
@@ -252,6 +275,8 @@ export class MapWidget {
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
     this._terrainLayer = null;
+    this._sceneObjectsLayer?.remove();
+    this._sceneObjectsLayer = null;
     this._overlayCacheByMissionId.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
@@ -273,6 +298,7 @@ export class MapWidget {
 
   invalidateSize() {
     this._map?.invalidateSize(false);
+    this._basemapPanel?.invalidateSize();
   }
 
   setSessionId(sessionId) {
@@ -871,7 +897,9 @@ export class MapWidget {
     this._overlayLayer.renderMany(overlays);
     const focusedPayload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
     const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
-    this._fitBounds(focusedPayload?.bounds || unionBounds);
+    // Fall back to the scene bounds so the map stays centered on the 3d-env
+    // terrain/objects when no mission is focused or visible.
+    this._fitBounds(focusedPayload?.bounds || unionBounds || this._sceneBounds);
     this._showEmpty(!overlays.length && !editedMissionId);
     this._updateElevationProfile();
     if (this._basemapPanel?.visible) this._basemapPanel.render(focusedPayload);
@@ -1275,15 +1303,17 @@ export class MapWidget {
     confirmModal.hidden = true;
     confirmModal.innerHTML = `
       <div class="map-confirm-dialog">
-        <h3 id="map-confirm-title" class="map-confirm-title">Execute mission on rover?</h3>
+        <h3 id="map-confirm-title" class="map-confirm-title">Upload linear plan to controller?</h3>
         <p class="map-confirm-body">
-          This will upload the mission to the rover and start execution.<br>
+          This uploads the active revision's waypoints to the controller as a
+          linear plan and starts it (legacy direct upload — not behavior-tree
+          execution).<br>
           Revision: <code class="map-confirm-revision-id"></code> &nbsp;
           Controller version: <code class="map-confirm-controller-version"></code>
         </p>
         <div class="map-confirm-actions">
           <button class="map-confirm-cancel" type="button">Cancel</button>
-          <button class="map-confirm-ok" type="button">Execute on rover</button>
+          <button class="map-confirm-ok" type="button">Upload plan</button>
         </div>
       </div>
     `;

@@ -3351,10 +3351,15 @@ code {
 .ai-map-area {
   display: block;
   height: 440px;
+  min-height: 320px;
+  max-height: 1100px;
   margin-top: 12px;
   border-radius: 14px;
   overflow: hidden;
   padding: 0;
+  /* Drag the bottom edge to grow the whole widget; the mission-list sidebar
+     and map share the inner grid, so they stretch together, bottom-aligned. */
+  resize: vertical;
 }
 
 .ai-map-area-list-placeholder {

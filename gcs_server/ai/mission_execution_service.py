@@ -57,9 +57,11 @@ def _load_json_file(path: str) -> Any:
 def _mission_origin() -> Origin:
     """Coordinate datum used to convert between stored WGS84 truth and the local
     metres the simulator/UI render in (ADR 0022). Today every Mission inherits the
-    scene georeference; a zero Origin is the "datum not yet seeded" fallback for
-    real-rover builds with no scene file. Per-Mission datums (``missions.origin_*``)
-    layer on top of this seam in a later slice."""
+    scene georeference; a zero Origin (0,0,0) is the fallback for real-rover
+    builds with no scene file and is a fully valid datum — the whole pipeline
+    (export, leaf driver, geofence, basemap) round-trips through it, so missions
+    are testable without ever seeding a real GPS home. Per-Mission datums
+    (``missions.origin_*``) layer on top of this seam."""
     try:
         return load_scene_origin()
     except (OSError, ValueError, KeyError):
@@ -185,24 +187,26 @@ def _coerce_scene_point(value: Any, origin: Origin, *, fallback_id: str = "") ->
     # back to a literal x/y/z for legacy payloads written before the truth flip.
     if value.get("lat") is not None and value.get("lon") is not None:
         try:
-            x, y, z = wgs84_to_local(
-                float(value["lat"]),
-                float(value["lon"]),
-                float(value.get("alt", 0.0) or 0.0),
-                origin,
-            )
+            lat = float(value["lat"])
+            lon = float(value["lon"])
+            alt = float(value.get("alt", 0.0) or 0.0)
+            x, y, z = wgs84_to_local(lat, lon, alt, origin)
         except (TypeError, ValueError):
             return None
         point = {"x": x, "y": y, "z": z}
     else:
         try:
-            point = {
-                "x": float(value.get("x")),
-                "y": float(value.get("y")),
-                "z": float(value.get("z", 0.0) or 0.0),
-            }
+            x = float(value.get("x"))
+            y = float(value.get("y"))
+            z = float(value.get("z", 0.0) or 0.0)
+            point = {"x": x, "y": y, "z": z}
+            lat, lon, alt = local_to_wgs84(x, y, z, origin)
         except (TypeError, ValueError):
             return None
+    # Carry WGS84 truth so the basemap (ADR 0022) can plot by lat/lon directly.
+    point["lat"] = lat
+    point["lon"] = lon
+    point["alt"] = alt
     point["id"] = str(value.get("id") or fallback_id or "")
     point["label"] = str(value.get("label") or "")
     point["kind"] = str(value.get("kind") or "")
@@ -280,9 +284,44 @@ def _route_overlay_features(mission: dict[str, Any], origin: Origin) -> list[dic
             "route_hash": str(artifact.get("route_hash") or ""),
             "waypoint_count": int(artifact.get("waypoint_count") or len(waypoints)),
             "distance_m": float((artifact.get("summary") or {}).get("total_distance_m") or artifact.get("total_distance_m") or 0.0),
-            "points": [{"x": point["x"], "y": point["y"], "z": point["z"]} for point in waypoints],
+            "points": [
+                {
+                    "x": point["x"], "y": point["y"], "z": point["z"],
+                    "lat": point["lat"], "lon": point["lon"], "alt": point["alt"],
+                }
+                for point in waypoints
+            ],
         })
     return features
+
+
+def _overlay_geofence(mission: dict[str, Any]) -> dict[str, Any] | None:
+    """Surface a Mission's stored inclusion fence (ADR 0023 Phase 5) for basemap
+    display. The fence rides inside mission content under ``geofence`` as WGS84
+    truth (``polygon``/``rally_points`` are ``{lat, lon[, alt]}``), so it passes
+    straight through. Returns ``None`` for fenceless or unusable (< 3 vertices)
+    fences so the client never draws a degenerate polygon."""
+    fence = mission.get("geofence") if isinstance(mission, dict) else None
+    if not isinstance(fence, dict):
+        return None
+    polygon = [
+        {"lat": float(v["lat"]), "lon": float(v["lon"])}
+        for v in fence.get("polygon") or []
+        if isinstance(v, dict) and v.get("lat") is not None and v.get("lon") is not None
+    ]
+    if len(polygon) < 3:
+        return None
+    rally = [
+        {"lat": float(v["lat"]), "lon": float(v["lon"])}
+        for v in fence.get("rally_points") or []
+        if isinstance(v, dict) and v.get("lat") is not None and v.get("lon") is not None
+    ]
+    out: dict[str, Any] = {"polygon": polygon, "rally_points": rally}
+    if fence.get("min_alt") is not None:
+        out["min_alt"] = float(fence["min_alt"])
+    if fence.get("max_alt") is not None:
+        out["max_alt"] = float(fence["max_alt"])
+    return out
 
 
 def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> dict[str, Any]:
@@ -297,7 +336,10 @@ def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> 
             "label": str(point.get("label") or f"Waypoint {index}"),
             "kind": str(point.get("kind") or "waypoint"),
             "index": index,
-            "point": {"x": point["x"], "y": point["y"], "z": point["z"]},
+            "point": {
+                "x": point["x"], "y": point["y"], "z": point["z"],
+                "lat": point["lat"], "lon": point["lon"], "alt": point["alt"],
+            },
             "provenance": provenance_map.get(str(point.get("id") or f"mission-wp-{index}"), "ai"),
         }
         for index, point in enumerate(waypoints, start=1)
@@ -341,6 +383,8 @@ def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> 
         "waypoint_count": len(waypoints),
         "bounds": bounds,
         "features": features,
+        "origin": {"lat": origin.lat, "lon": origin.lon, "alt": origin.alt},
+        "geofence": _overlay_geofence(mission),
         "mission_export": mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {},
     }
 

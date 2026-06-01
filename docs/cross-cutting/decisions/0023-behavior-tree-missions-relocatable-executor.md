@@ -100,6 +100,28 @@ execute missions and drive the rover."
 - Mapping of ADR 0021 Confirm/Autonomous gating onto per-node vs. per-mission
   granularity.
 
+## Note — Map sidebar ▶ button stays the legacy linear-plan upload (2026-06-01)
+
+The map mission-list ▶ ("Play") button is **not** wired to the behavior-tree
+session executor introduced by this ADR. It remains the legacy direct upload:
+`MapWidget._handleExecuteRequest` → `executeMission(revisionId)` →
+`POST /api/ai/mission-revisions/{id}/execute` → `MissionExecutionService.execute_revision`,
+which compiles the active revision's waypoints to a `.plan` and starts them on the
+controller. Lifecycle BT execution (this ADR + ADR 0021 Strict/Confirm/Autonomous
+gating) is reachable only through the AI execution tools
+(`arm_execution`/`execute_mission`/`cancel_execution`/`abort`) and the
+`/api/ai/execution/*` endpoints + Confirm banner.
+
+Decision: keep the two paths separate for now and **relabel** the button/modal so
+it no longer implies BT execution ("Upload linear plan to controller"), rather than
+adding mission-keyed REST endpoints that route the ▶ button through the
+execution-session path. The session executor is still maturing and lacks a real FC
+target (SITL smoke deferred); routing a one-click UI button into it now would commit
+to mode-gating/Confirm-banner UX on the map before that path is exercised end-to-end.
+Revisit when a Mission can be run BT-style from the map is a product requirement —
+at which point the ▶ button (or a new control) should call the same
+execution-session path, honoring `mission_lifecycle.execution_mode`.
+
 ## Follow-Ups
 
 - ADR 0021 → unchanged status (Accepted); this ADR extends its execution-mode

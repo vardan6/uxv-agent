@@ -555,7 +555,17 @@ class MavsdkMissionClient:
             self._run(self._system.mission_raw.upload_mission(mission_items))
 
     def clear_mission_items(self, *, mission_type: int = 0) -> None:
-        self._run(self._system.mission_raw.clear_mission())
+        # Honor mission_type so a FENCE/RALLY clear hits the typed store, not the
+        # main mission. MAVSDK MissionRaw has no clear_geofence/clear_rally; the
+        # MAVLink-standard typed clear is an empty upload of that type. Mirrors
+        # upload_mission_items' branching and the pymavlink client's
+        # mission_clear_all(mission_type).
+        if int(mission_type) == MISSION_TYPE_FENCE:
+            self._run(self._system.mission_raw.upload_geofence([]))
+        elif int(mission_type) == MISSION_TYPE_RALLY:
+            self._run(self._system.mission_raw.upload_rally_points([]))
+        else:
+            self._run(self._system.mission_raw.clear_mission())
 
 
 class MavlinkControllerMissionAdapter:
@@ -794,8 +804,18 @@ class MavlinkControllerMissionAdapter:
         the same fence so the firmware enforces it independently. Each mission
         type is uploaded separately and verified by read-back where the transport
         supports it; a transport that cannot read fence/rally back (MAVSDK) is
-        trusted on the upload ack. Mission types with nothing to upload are left
-        untouched. A non-usable fence (< 3 vertices) is refused fail-closed."""
+        trusted on the upload ack. A non-usable fence (< 3 vertices) is refused
+        fail-closed.
+
+        **Store scoping = persistent site config (decided 2026-06-01).** A mission
+        type with nothing to upload is intentionally left untouched — we do NOT
+        clear stale FENCE/RALLY stores on an empty upload. The FC's fence/rally is
+        treated as a site-wide safety boundary that persists across Missions, so a
+        fenceless Mission inherits whatever fence is already loaded. This is a
+        deliberate choice, not an oversight. Revisit when a first-class "scene"
+        concept lands (choose the scene a fence is authored on / applies to): at
+        that point fences become scene-scoped and an empty upload for the active
+        scene should clear its stores."""
         fence = parse_geofence(geofence)
         if not fence.is_usable:
             return ControllerMissionInstallResult(

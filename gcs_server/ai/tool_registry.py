@@ -16,7 +16,7 @@ try:
     from gcs_server.ai.mission_execution_session import build_mission_executor
     from gcs_server.ai.mission_export_service import MissionExportService
     from gcs_server.ai import mission_patterns
-    from gcs_server.ai.mission_tree import MissionTreeError, parse_tree
+    from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
     from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
     from gcs_server.ai.road_graph_service import RoadGraphService
@@ -31,7 +31,7 @@ except ModuleNotFoundError:
     from ai.mission_execution_session import build_mission_executor
     from ai.mission_export_service import MissionExportService
     from ai import mission_patterns
-    from ai.mission_tree import MissionTreeError, parse_tree
+    from ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
     from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
     from ai.provider_registry import resolve_provider as _resolve_provider
     from ai.road_graph_service import RoadGraphService
@@ -388,13 +388,13 @@ class ToolRegistry:
             ),
             tool(
                 "plan_route_around_group",
-                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. Does not upload to the flight controller; pair with export_mission after approval.",
+                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id — do not pass it to export_mission. Next step is propose_mission_draft with these waypoints to create a draft; then export_mission(draft_id) after approval. Does not upload to the flight controller.",
                 PLANNING,
                 self._plan_route_around_group,
             ),
             tool(
                 "plan_route_between",
-                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. Does not upload; pair with export_mission after approval.",
+                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id — do not pass it to export_mission. Next step is propose_mission_draft with these waypoints to create a draft; then export_mission(draft_id) after approval. Does not upload.",
                 PLANNING,
                 self._plan_route_between,
             ),
@@ -412,7 +412,7 @@ class ToolRegistry:
             ),
             tool(
                 "export_mission",
-                "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. Returns file_path, waypoint_count, and the plan structure.",
+                "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. The draft_id is the id returned by propose_mission_draft — NOT a route_hash from plan_route_* (those only fingerprint waypoints). Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. If draft_id is unknown, the result lists available_drafts for this session. Returns file_path, waypoint_count, and the plan structure.",
                 PLANNING,
                 self._export_mission,
                 side_effects=frozenset({"writes_file"}),
@@ -1099,8 +1099,9 @@ class ToolRegistry:
             return {"ok": False, "error": f"invalid {kind} params: {exc}"}
 
         tree = node.to_dict()
-        leaves = node.children or [node]
-        waypoint_count = sum(len(leaf.waypoints) for leaf in leaves)
+        # Count every navigable waypoint in the subtree, including nested
+        # sequences/passes — flatten_navigable_segments is the canonical walk.
+        waypoint_count = sum(len(segment) for segment in flatten_navigable_segments(node))
         return {
             "ok": True,
             "pattern": kind,
@@ -1159,15 +1160,20 @@ class ToolRegistry:
         context: ToolInvocationContext,
         draft_id: str,
     ) -> dict[str, Any]:
-        if not str(draft_id or "").strip():
+        clean_id = str(draft_id or "").strip()
+        if not clean_id:
             return {"ok": False, "error": "draft_id is required"}
         store = getattr(context.runtime, "ai_store", None)
         if store is None:
             return {"ok": False, "error": "AI store is not available"}
         draft_service = MissionDraftService(store.db_path)
-        draft = draft_service.get_draft(str(draft_id).strip())
+        draft, recovery = self._resolve_export_draft(
+            draft_service, clean_id, session_id=context.session_id
+        )
         if draft is None:
-            return {"ok": False, "error": f"draft '{draft_id}' not found"}
+            return recovery
+        # Auto-bridge may have resolved a different id than the caller passed.
+        clean_id = str(draft.get("id") or clean_id)
         profile = get_active_profile()
         rover = self._rover_snapshot(context)
         pos = rover.get("position") or {}
@@ -1181,11 +1187,79 @@ class ToolRegistry:
             }
         result = self._exporter.export(draft, profile=profile, home_position=home)
         if result.get("ok"):
-            updated = draft_service.mark_exported(str(draft_id).strip(), export_result=result)
+            updated = draft_service.mark_exported(clean_id, export_result=result)
             if updated is not None:
                 result["draft_status"] = updated.get("status", "")
                 result["mission_export"] = (updated.get("draft") or {}).get("mission_export") or {}
+            if recovery is not None:
+                # Auto-bridge recovered the draft from a non-draft id (e.g. a route_hash).
+                result["resolved_via"] = recovery.get("resolved_via")
+                result["resolved_draft_id"] = clean_id
         return result
+
+    @staticmethod
+    def _looks_like_route_hash(value: str) -> bool:
+        """A bare 12-char hex string with no ``draft`` prefix is a route_hash,
+        not a draft id. Draft ids are always prefixed (``ai-draft-``,
+        ``draft-draw-``, ``draft-fence-``). See :func:`_route_hash`."""
+        return bool(_re.fullmatch(r"[0-9a-f]{12}", value or "")) and "draft" not in value
+
+    def _resolve_export_draft(
+        self,
+        draft_service: "MissionDraftService",
+        requested_id: str,
+        *,
+        session_id: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Resolve the id passed to ``export_mission`` into a stored draft.
+
+        Returns ``(draft, recovery)``. On a direct hit ``recovery`` is ``None``.
+        When the id is not a draft but auto-bridges to a session draft (e.g. the
+        planner handed back a ``route_hash`` instead of the ``draft_id``),
+        ``recovery`` carries ``resolved_via`` describing the bridge. When nothing
+        resolves, ``draft`` is ``None`` and ``recovery`` is a directed error.
+        """
+        direct = draft_service.get_draft(requested_id)
+        if direct is not None:
+            return direct, None
+
+        session_drafts = draft_service.list_drafts(session_id=session_id, limit=20)
+
+        # Auto-bridge: a route_hash matches the route_artifacts of a session draft.
+        if self._looks_like_route_hash(requested_id):
+            for row in session_drafts:
+                payload = row.get("draft") or {}
+                artifacts = payload.get("route_artifacts") or []
+                for art in artifacts:
+                    if isinstance(art, dict) and str(art.get("route_hash") or "") == requested_id:
+                        return row, {"resolved_via": "route_hash->draft"}
+
+        # No permissive "sole draft" fallback: a route_hash miss must surface the
+        # directed error below rather than silently exporting an unrelated draft
+        # (ADR 0022/0023 pre-merge safety). Only an exact draft_id or an exact
+        # route_hash->artifact match writes a .plan.
+        available = [
+            {"draft_id": r.get("id"), "status": r.get("status")}
+            for r in session_drafts
+        ]
+        if self._looks_like_route_hash(requested_id):
+            hint = (
+                f"'{requested_id}' is a route_hash, not a draft_id. A route_hash only "
+                "fingerprints waypoints — it is not a persisted draft. Call "
+                "propose_mission_draft with the route waypoints first to create a draft, "
+                "get it approved, then call export_mission with the returned draft_id."
+            )
+        else:
+            hint = (
+                f"draft '{requested_id}' not found. Create one with propose_mission_draft "
+                "(get it approved), then export it with the returned draft_id."
+            )
+        return None, {
+            "ok": False,
+            "error": hint,
+            "next_tool": "propose_mission_draft",
+            "available_drafts": available,
+        }
 
     # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
 
@@ -1916,18 +1990,18 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "inputs": {"group_id": "string — one of known_groups; e.g. 'plant_a', 'plant_b', 'connector', 'building', 'start_hub'"},
         "required_inputs": ["group_id"],
         "upstream_from_tools": ["get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"],
-        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string", "known_groups": "string[]"},
-        "next_tools": ["export_mission (after approval)"],
+        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)", "known_groups": "string[]"},
+        "next_tools": ["propose_mission_draft (with waypoints) -> export_mission (after approval)"],
     },
     "plan_route_between": {
         "inputs": {"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
         "required_inputs": ["goal_target"],
         "upstream_from_tools": ["get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"],
-        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string"},
-        "next_tools": ["export_mission (after approval)"],
+        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)"},
+        "next_tools": ["propose_mission_draft (with waypoints) -> export_mission (after approval)"],
     },
     "export_mission": {
-        "inputs": {"draft_id": "string — ID of an approved mission draft"},
+        "inputs": {"draft_id": "string — the draft_id returned by propose_mission_draft (NOT a route_hash)"},
         "required_inputs": ["draft_id"],
         "upstream_from_tools": ["plan_route_around_group or plan_route_between (to populate draft waypoints)", "approval interrupt (draft must be approved before calling)"],
         "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},

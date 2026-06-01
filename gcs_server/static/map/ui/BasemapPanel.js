@@ -279,6 +279,10 @@ export class BasemapPanel {
     window.requestAnimationFrame(() => this._map?.invalidateSize(false));
   }
 
+  invalidateSize() {
+    if (this._visible) this._map?.invalidateSize(false);
+  }
+
   hide() {
     this._visible = false;
     this._el.hidden = true;
@@ -305,6 +309,7 @@ export class BasemapPanel {
       attribution: OSM_ATTRIBUTION,
     }).addTo(this._map);
     this._featureLayer = L.layerGroup().addTo(this._map);
+    this._fenceLayer = L.layerGroup().addTo(this._map);
     this._drawLayer = L.layerGroup().addTo(this._map);
     this._map.on('click', (e) => this._onMapClick(e.latlng));
     this._map.setView([0, 0], 2);
@@ -318,9 +323,44 @@ export class BasemapPanel {
     this._ensureMap();
     if (!this._map || !this._featureLayer) return;
     this._featureLayer.clearLayers();
+    this._fenceLayer?.clearLayers();
 
     const features = Array.isArray(payload?.features) ? payload.features : [];
     const latLngs = [];
+
+    // Stored inclusion geofence (Phase 5): a saved fence rendered on load, kept
+    // visually distinct from the in-progress green draw sketch in `_drawLayer`.
+    const fence = payload?.geofence;
+    const fencePoly = Array.isArray(fence?.polygon)
+      ? fence.polygon
+          .filter((v) => Number.isFinite(v?.lat) && Number.isFinite(v?.lon))
+          .map((v) => [v.lat, v.lon])
+      : [];
+    if (fencePoly.length >= 3 && this._fenceLayer) {
+      L.polygon(fencePoly, {
+        color: '#8e44ad',
+        weight: 2,
+        fillColor: '#8e44ad',
+        fillOpacity: 0.08,
+        dashArray: '6 4',
+      })
+        .bindTooltip('Inclusion geofence', { direction: 'top', sticky: true })
+        .addTo(this._fenceLayer);
+      latLngs.push(...fencePoly);
+      for (const rally of fence.rally_points || []) {
+        if (!Number.isFinite(rally?.lat) || !Number.isFinite(rally?.lon)) continue;
+        L.circleMarker([rally.lat, rally.lon], {
+          radius: 4,
+          color: '#8e44ad',
+          fillColor: '#d2b4de',
+          fillOpacity: 0.9,
+          weight: 2,
+        })
+          .bindTooltip('Rally point', { direction: 'top' })
+          .addTo(this._fenceLayer);
+        latLngs.push([rally.lat, rally.lon]);
+      }
+    }
 
     for (const feature of features) {
       if (feature?.type === 'route_line') {

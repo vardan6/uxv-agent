@@ -219,7 +219,8 @@ def _migration_009_add_mission_origin_datum(conn: sqlite3.Connection) -> None:
     # from). Distinct from ADR 0021's provenance `origin` (manual|ai_chat) on the
     # same table. These columns give per-Mission Origin a real home; read/write
     # paths that derive metres via `wgs84_to_local` migrate onto them in a later
-    # slice. NULL-equivalent default 0.0 means "datum not yet seeded".
+    # slice. Default 0.0 (null island) is a valid datum, honored as-is by read
+    # paths so missions are testable without a seeded GPS home.
     for column in ("origin_lat", "origin_lon", "origin_alt"):
         if _table_exists(conn, "missions") and not _column_exists(conn, "missions", column):
             conn.execute(

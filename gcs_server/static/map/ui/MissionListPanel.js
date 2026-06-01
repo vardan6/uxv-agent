@@ -21,10 +21,14 @@ function missionRowActionButtons(missionRow) {
       aria-label="Edit waypoints">✏</button>`);
   }
   if (MISSION_ROW_EXECUTABLE.has(status)) {
+    // Legacy linear-plan upload (ADR 0023): pushes the active revision's
+    // waypoints to the controller as a .plan and starts it. This is NOT the
+    // behavior-tree session executor — lifecycle BT runs are AI-tool/banner
+    // driven (arm_execution/execute_mission + /api/ai/execution/*).
     parts.push(`<button class="mission-row-action-btn is-execute" type="button"
       data-execute-mission-id="${String(missionRow.id || '')}"
-      title="Execute on rover (uploads and starts mission)"
-      aria-label="Execute on rover">▶</button>`);
+      title="Upload linear plan to controller (legacy direct upload — not behavior-tree execution)"
+      aria-label="Upload linear plan to controller">▶</button>`);
   }
   return parts.join('');
 }

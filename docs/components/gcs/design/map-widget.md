@@ -41,32 +41,45 @@ The durable payload concepts are:
 - `waypoint_count`
 - overlay `bounds`
 - route-line and waypoint features
+- per-Mission `origin` datum and an optional stored `geofence` (WGS84) for basemap display
 
 The backend overlay builder remains the source of truth for exact field shape.
 
 ### Coordinate System
 
-Mission overlay points are local scene metres `{x, y, z}`, not WGS84
-lat/lon.
+Mission overlay points now carry both local scene metres `{x, y, z}` and WGS84
+`{lat, lon, alt}` truth (ADR 0022). The server derives whichever side is missing
+from the per-Mission `origin` datum, so a frame can't drift.
 
 Design rule:
 
-- scene-mode rendering uses `L.CRS.Simple`
-- WGS84 export remains a server-side concern
-- any future WGS84 basemap mode must be a distinct widget mode with explicit
-  CRS metadata
+- scene-mode rendering uses `L.CRS.Simple` and consumes `{x, y, z}`
+- the WGS84 basemap mode is a distinct widget mode (`BasemapPanel`, own
+  `L.map` on EPSG:3857) that plots `{lat, lon}` directly — no client-side
+  re-projection
+- WGS84 remains the server-side stored truth
 
-### Mission Revision List
+### Flat Mission List
 
-Revision rows are grouped client-side by `operation_id`.
+One row per flat Mission (ADR 0021 §2 — one row = one Mission). Focus and
+visibility are keyed on the Mission id; the revision/operation history is
+internal detail behind an optional per-row expander, not the row itself.
 
 Design rules:
 
-- one top-level row per operation
-- default visible revision is the operation's active revision, falling back to
-  the newest revision
-- earlier revisions live under a collapsed earlier-revisions affordance
-- executing revisions remain force-visible
+- one top-level row per Mission, identified by its stable `#index`
+- row edit/execute resolve to the Mission's **active revision** and are gated by
+  its status: `executing` → locked (🔒, no edit/execute); `approved` /
+  `exported` / `cutover_pending` → executable; the broader editable set also
+  includes `proposed` / `awaiting_approval` / `planning`. `approve`/`reject`
+  stay off the flat row (draft plumbing is internal)
+- three-state selection model (ADR 0021 §4): **Visible** (overlay shown),
+  **Active** (focused; click promotes a Mission to Active+Visible), and
+  **Selected** (checkbox / shift-click range → batch Show/Hide/Clear). The
+  invariant "Active must be Visible" is enforced; a new Mission auto-promotes to
+  Active+Visible (not Selected)
+- earlier revisions of a Mission live under a collapsed expander affordance
+- an executing Mission remains force-visible
 
 ### Approval, Rejection, And Execution
 
@@ -75,6 +88,11 @@ The widget uses existing backend transitions rather than inventing new ones.
 Design rules:
 
 - approval writes mission approval/export state but does not execute the rover
+- the sidebar ▶ button is a **legacy linear-plan upload** (ADR 0023): it pushes
+  the active revision's waypoints to the controller as a `.plan` and starts them
+  via `execute_revision` (`POST /api/ai/mission-revisions/{id}/execute`). It is
+  **not** the behavior-tree session executor — lifecycle BT runs are
+  AI-tool/banner driven (`arm_execution`/`execute_mission` + `/api/ai/execution/*`)
 - execution is a separate explicit action with controller-version staleness
   checks
 - rejection is a separate explicit action
@@ -94,7 +112,6 @@ Design rule:
 These remain gated on real backend sources:
 
 - mission revision push events
-- geofence *display on load* (authoring + enforcement shipped via the BasemapPanel `🛡 Fence` draw mode and the executor; rendering an existing mission's stored fence polygon is still TODO)
 - standalone export affordances
 - home-point editing
 
@@ -148,6 +165,16 @@ Behavior rules:
 - superseded or completed revisions render dimmed
 - fit-to-bounds uses the focused mission when one exists, else the visible-set
   union
+
+Known gap (Phase 6 top priority, 2026-06-01): the scene-mode render is **not yet at
+parity with the replay page**. The widget draws the terrain heightmap
+(`TerrainCanvasLayer`) plus mission/vehicle layers, but has **no scene-objects layer**
+— the replay page renders 3d-env objects from the `/api/replay/scene-map` `objects`
+payload (`scene_map.py`), the widget does not. It also only fits-to-bounds off mission
+overlays, so with **no mission focused** the view stays at `setView([0,0],1)` and shows
+nothing. Required fix: add a scene-objects layer (port replay's object render) and
+fit/center to scene bounds on load so the 3d-env map renders standalone. This is the
+real blocker to manual-authoring and AI-overlay testing; see `roadmap.md` Phase 6.
 
 ## Accessibility And Keyboard Ownership
 
@@ -233,7 +260,6 @@ These stay outside the core widget contract until real backend/platform support
 exists:
 
 - replay-page migration details
-- geofence display on load (authoring + enforcement shipped; see Deferred Sources)
 - edit-during-execution
 - richer per-waypoint property schema editing
 - floating/second-monitor window behavior beyond re-parenting support

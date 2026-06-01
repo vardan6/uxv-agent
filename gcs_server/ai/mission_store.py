@@ -34,8 +34,9 @@ def _default_origin_datum() -> Origin:
     """The Origin datum (ADR 0022) a new Mission inherits when none is supplied.
 
     Seeded from the simulator terrain scene's georeference; falls back to a zero
-    Origin if the scene is unavailable (e.g. a real-rover build with no scene
-    file), which read paths treat as "datum not yet seeded".
+    Origin (0,0,0) if the scene is unavailable (e.g. a real-rover build with no
+    scene file). A zero Origin is a valid datum, not a sentinel — read paths
+    honor it as-is so the pipeline is testable without seeding a real GPS home.
     """
     try:
         return load_scene_origin()
@@ -118,8 +119,10 @@ class MissionStore:
     def get_origin_datum(self, mission_id: str) -> Origin | None:
         """Resolve a Mission's ADR 0022 coordinate-datum Origin.
 
-        Returns None if the Mission does not exist. The conversion paths that
-        derive local metres via ``wgs84_to_local`` read the datum through here.
+        Returns None only if the Mission does not exist. A stored 0,0,0 is a
+        valid datum (not a sentinel) and is returned as-is, so missions are
+        testable without a real GPS home. The conversion paths that derive local
+        metres via ``wgs84_to_local`` read the datum through here.
         """
         mission = self.get_mission(mission_id)
         if mission is None:

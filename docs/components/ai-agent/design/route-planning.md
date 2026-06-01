@@ -59,13 +59,13 @@ Output format: QGC `.plan` JSON. Reference: [../../../cross-cutting/research/fli
 - One `SimpleItem` per waypoint with `command=16` (`MAV_CMD_NAV_WAYPOINT`), `frame=3` (`GLOBAL_RELATIVE_ALT`), `params=[hold_s, accept_radius_m, 0, yaw_rad_or_NaN, lat, lon, alt]`
 - Trailing `command=20` (`NAV_RETURN_TO_LAUNCH`) for `route_to_then_around_then_back` outputs
 - Empty `geoFence` and `rallyPoints` blocks (schema requires the keys)
-- Local→geo projection: flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`, accurate to ~10 m over the scene's ~300 m extent
+- Coordinates: the exporter reads each waypoint's **stored WGS84 `lat/lon/alt` directly** ([ADR 0022](../../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md)). The legacy local→geo flat-earth projection (off the per-Mission origin datum, falling back to `coordinate_system.georeference.origin_lat / origin_lon`) survives only as a fallback for legacy waypoints that carry `x/y/z` but no stored WGS84; accurate to ~10 m over the scene's ~300 m extent
 
 Output path: `data/missions/<draft_id>.plan`. Recorded on the draft. The `.plan` file is the current hand-off boundary to the flight controller; MAVSDK `import_qgroundcontrol_mission` → `upload_mission` over UDP 14550 is the documented next slice and lives outside this PR.
 
-**Coordinate frame split.** All mission overlay coordinates inside the system (planner output, revision storage, map widget rendering) use **local scene metres** with `L.CRS.Simple` as the coordinate reference system. Conversion to WGS84 lat/lon happens **only at export time** in `MissionExportService` via a flat-earth approximation off `coordinate_system.georeference.origin_lat / origin_lon`. Nothing upstream of the exporter deals in lat/lon.
+**Coordinate frame (GPS-master, [ADR 0022](../../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md), supersedes ADR 0011).** WGS84 `lat/lon/alt` is the **stored, authoritative** coordinate for every waypoint (planner output, draft/revision storage, AI tool results). Local scene metres (`{x, y, z}`, `L.CRS.Simple`) are a **derived, displayed** view, not the master record — the map widget computes them on overlay load by converting WGS84 through the Mission's origin. Each Mission carries its **own origin datum** `{origin_lat, origin_lon, origin_alt}`: seeded from the terrain scene's georeference in the simulator, sourced from the rover's GPS/home position on real hardware. Both representations are derivable from `WGS84 + origin`; neither is persisted twice (that was the unit-drift bug ADR 0011 guarded against). `MissionExportService` reads the stored WGS84 directly rather than projecting at the boundary.
 
-**Coordinate caveat.** The current scene and its `coordinate_system.georeference` are development placeholders. When real rover hardware and real-world scene data arrive, both the map and its georeference are expected to be regenerated together. The projection code consumes the new origin without changes.
+**Coordinate caveat.** The WGS84 ⇄ local-metres conversion is a flat-earth approximation, sub-metre-accurate over a rover's working area; large-area / multi-site accuracy is an Open Question (ADR 0022). For simulator Missions the seeded origin still comes from the scene `coordinate_system.georeference`; when real-world scene data arrives the georeference is regenerated and the conversion code consumes the new origin without changes.
 
 ## Tool result shape
 
@@ -83,6 +83,21 @@ Planner-tool results returned to the agent are a **compact summary** — not the
 ```
 
 The full waypoint list is persisted on the Mission Draft step and fetched by the UI for map rendering and by `export_mission` for serialisation. The wire contract between agent and tools stays small and inspectable.
+
+### `route_hash` is not a `draft_id`
+
+`route_hash` is a content fingerprint of the waypoints (`sha1` of the rounded x,y list, 12 hex chars — `_route_hash` in `tool_registry.py`). It is **not** a persisted handle and must never be passed to `export_mission`. The pipeline has a required middle step:
+
+```
+plan_route_* ──(waypoints)──▶ propose_mission_draft ──(draft_id)──▶ export_mission(draft_id)
+   route_hash                  creates+persists draft        after approval
+```
+
+`plan_route_*` only computes a route; it persists nothing. Only `propose_mission_draft` creates a draft and returns the prefixed `draft_id` (`ai-draft-…`, `draft-draw-…`, `draft-fence-…`) that `export_mission` resolves via `MissionDraftService.get_draft`. Skipping `propose_mission_draft` and handing the bare `route_hash` to `export_mission` was a real planner failure mode (the export 404'd because no draft existed).
+
+**Guardrail + auto-bridge** (`_resolve_export_draft` in `tool_registry.py`). When `export_mission` gets an id that isn't a stored draft:
+- If it looks like a bare `route_hash` (12 hex, no `draft` substring), it tries to **auto-bridge** to an existing session draft by matching the hash against a draft's `route_artifacts`, and tags the result `resolved_via` / `resolved_draft_id`. It never fabricates a draft, so the ADR 0021 approval gate stays intact.
+- Otherwise it returns a directed error naming `propose_mission_draft` as the next tool plus `available_drafts` (the session's real draft ids + statuses), so the planner self-corrects instead of dead-ending.
 
 ## Per-waypoint defaults
 
