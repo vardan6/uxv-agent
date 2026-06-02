@@ -2451,7 +2451,7 @@ async def get_mission_overlay(mission_id: str, request: Request) -> JSONResponse
     if revision_id is None:
         raise HTTPException(status_code=404, detail="mission not found")
     if not revision_id:
-        raise HTTPException(status_code=404, detail="mission has no active revision")
+        return JSONResponse({"ok": True, "overlay": None})
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(revision_id=revision_id)})
 
 

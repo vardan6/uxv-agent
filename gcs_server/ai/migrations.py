@@ -228,6 +228,130 @@ def _migration_009_add_mission_origin_datum(conn: sqlite3.Connection) -> None:
             )
 
 
+def _migration_011_restore_mission_execution_tables(conn: sqlite3.Connection) -> None:
+    # Migration 10 (adr_0021_flat_missions, applied from master) dropped these
+    # tables, but this branch still uses them. Recreate them if absent so the
+    # server starts cleanly against a DB that has version 10 stamped.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_drafts (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          source_message_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          intent_json TEXT NOT NULL DEFAULT '{}',
+          target_resolution_json TEXT NOT NULL DEFAULT '{}',
+          draft_json TEXT NOT NULL DEFAULT '{}',
+          validation_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          approved_at REAL,
+          rejected_at REAL,
+          approval_note TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_session ON ai_mission_drafts(session_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_status ON ai_mission_drafts(status, updated_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_operations (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          source_message_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          active_revision_id TEXT NOT NULL DEFAULT '',
+          policy_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_revisions (
+          id TEXT PRIMARY KEY,
+          operation_id TEXT NOT NULL,
+          draft_id TEXT NOT NULL DEFAULT '',
+          parent_revision_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          mission_json TEXT NOT NULL DEFAULT '{}',
+          intent_json TEXT NOT NULL DEFAULT '{}',
+          target_resolution_json TEXT NOT NULL DEFAULT '{}',
+          validation_json TEXT NOT NULL DEFAULT '{}',
+          review_context_json TEXT NOT NULL DEFAULT '{}',
+          client_version INTEGER NOT NULL DEFAULT 0,
+          provenance_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          approved_at REAL,
+          rejected_at REAL,
+          FOREIGN KEY(operation_id) REFERENCES ai_mission_operations(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_controller_state (
+          controller_id TEXT PRIMARY KEY,
+          current_version INTEGER NOT NULL DEFAULT 0,
+          active_operation_id TEXT NOT NULL DEFAULT '',
+          active_revision_id TEXT NOT NULL DEFAULT '',
+          active_draft_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'idle',
+          verified_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          previous_verified_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          pending_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          last_cutover_attempt_json TEXT NOT NULL DEFAULT '{}',
+          last_error TEXT NOT NULL DEFAULT '',
+          last_cutover_at REAL,
+          verified_at REAL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_mission_execution_attempts (
+          id TEXT PRIMARY KEY,
+          operation_id TEXT NOT NULL DEFAULT '',
+          revision_id TEXT NOT NULL DEFAULT '',
+          expected_controller_version INTEGER,
+          observed_controller_version INTEGER NOT NULL DEFAULT 0,
+          installed_controller_version INTEGER,
+          status TEXT NOT NULL,
+          error_text TEXT NOT NULL DEFAULT '',
+          request_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_operations_session ON ai_mission_operations(session_id, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_operations_status ON ai_mission_operations(status, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_revisions_operation ON ai_mission_revisions(operation_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_revisions_draft ON ai_mission_revisions(draft_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_execution_attempts_revision ON ai_mission_execution_attempts(revision_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_mission_execution_attempts_operation ON ai_mission_execution_attempts(operation_id, created_at DESC)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
@@ -238,6 +362,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (7, "create_mission_index_counters", _migration_007_create_mission_index_counters),
     (8, "add_mission_active_operation", _migration_008_add_mission_active_operation),
     (9, "add_mission_origin_datum", _migration_009_add_mission_origin_datum),
+    (11, "restore_mission_execution_tables", _migration_011_restore_mission_execution_tables),
 )
 
 
