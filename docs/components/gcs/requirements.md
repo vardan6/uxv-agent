@@ -181,6 +181,9 @@ The map widget must:
 - provide **fit-bounds toolbar buttons**: fit to scene (full 3d-env extent), fit to focused mission, fit to visible-mission union — explicit buttons, not only auto-fit on focus change
 - show a **cursor/info bar** at the bottom of the map panel: cursor position in scene metres (and WGS84 when a Mission origin exists), current selection detail — parity with the replay page info bar
 - provide a **view mode selector**: Virtual Terrain (heightmap gradient + objects), CAD/Object View (objects only, flat background), Heightmap (raw elevation colourmap) — affects only the scene-mode render layers, not mission overlays
+- surface, on each mission row: a status stripe + status label, the mission's vehicle/profile icon, a created-at date, an origin badge that distinguishes manual (👤), AI (🤖), and AI-then-operator-edited (✏️), an inline-renamable name (auto-numbered when untitled), and an edit ⇄ done toggle
+- let a click anywhere on a mission row activate that mission (Active+Visible), with shift/meta/ctrl extending the multi-select
+- offer **mission-management affordances** in the list: a per-mission colour override (colour picker with custom hex + reset), a persisted list **sort** (by updated / created / status / label / selection / visibility), and a `⋯` overflow menu carrying sort and **JSON import / export**
 
 ### Mission CRUD
 
@@ -194,6 +197,9 @@ Operators must be able to:
 - **Approve a draft** (does not execute) using the "Approve draft" button; semantics: approval locks the revision for the `Execute mission` gate
 - **Execute mission** — a separate, explicit second action that hands the approved revision to the flight controller
 - **Export plan** — export the approved revision as a `.plan` file without executing
+- **Rename a mission** inline (double-click the name) and **Delete a mission** — singly, or in bulk from the selection batch bar; an executing mission is refused
+- **Recolour a mission** via its colour chip, overriding the automatic palette colour
+- **Import / export missions as JSON** via the list's `⋯` overflow menu — export serialises the visible/selected missions; import creates one flat Mission per entry
 
 The three verbs are **Approve draft**, **Execute mission**, and **Export plan**. The word "Accept" is not used.
 

@@ -832,24 +832,44 @@ select:focus-visible {
   backdrop-filter: blur(2px);
 }
 
-.map-ctrl-left {
+.map-ctrl-right {
   position: absolute;
   top: 8px;
-  left: 8px;
+  right: 8px;
   z-index: 500;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 4px;
   pointer-events: none;
 }
 
-.map-ctrl-left > * {
+.map-ctrl-right > * {
   pointer-events: auto;
 }
 
-.map-ctrl-left .map-layer-toolbar {
+.map-ctrl-right .map-layer-toolbar {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(2px);
+}
+
+.map-basemap-toggle {
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
+  color: var(--muted);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(2px);
+}
+
+.map-basemap-toggle.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 .map-fit-toolbar {
@@ -3584,6 +3604,7 @@ code {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  position: relative; /* anchor for colour-picker and overflow-menu popovers */
   background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
   border-right: 1px solid var(--line);
 }
@@ -3637,6 +3658,179 @@ code {
 
 .mission-list-settings:hover {
   opacity: 1;
+}
+
+.mission-list-overflow-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  letter-spacing: 0.05em;
+}
+
+.mission-list-overflow-btn:hover {
+  opacity: 1;
+}
+
+/* --- Colour picker popover --- */
+
+.mission-color-picker {
+  position: absolute;
+  z-index: 600;
+  background: var(--panel-strong, #1a1a2e);
+  border: 1px solid var(--line, #333);
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+  width: 200px;
+}
+
+.mission-color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.mission-color-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.mission-color-swatch:hover,
+.mission-color-swatch:focus {
+  transform: scale(1.15);
+  outline: none;
+}
+
+.mission-color-swatch.is-current {
+  border-color: #fff;
+}
+
+.mission-color-picker-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.mission-color-picker-custom label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  opacity: 0.85;
+  cursor: pointer;
+  flex: 1;
+}
+
+.mission-color-picker-custom input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line, #333);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+}
+
+.mission-color-reset {
+  background: none;
+  border: 1px solid var(--line, #333);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s ease;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.mission-color-reset:hover {
+  opacity: 1;
+}
+
+/* --- Overflow / sort menu popover --- */
+
+.mission-list-overflow-menu {
+  position: absolute;
+  z-index: 600;
+  background: var(--panel-strong, #1a1a2e);
+  border: 1px solid var(--line, #333);
+  border-radius: 10px;
+  padding: 8px 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+  width: 200px;
+}
+
+.mission-overflow-group {
+  padding: 4px 12px 6px;
+}
+
+.mission-overflow-group + .mission-overflow-group {
+  border-top: 1px solid var(--line, #333);
+  padding-top: 8px;
+}
+
+.mission-overflow-group-label {
+  margin: 0 0 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+
+.mission-overflow-sort-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mission-overflow-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: background 0.1s ease;
+}
+
+.mission-overflow-sort-row:hover {
+  background: color-mix(in srgb, var(--accent-soft, #2a3a5a) 60%, transparent);
+}
+
+.mission-overflow-sort-row input[type="radio"] {
+  accent-color: var(--accent, #4a90d9);
+  cursor: pointer;
+}
+
+.mission-overflow-action-btn {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mission-overflow-action-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.08));
 }
 
 .mission-list-empty {
@@ -3719,6 +3913,15 @@ code {
 .mission-row-status {
   grid-column: 1;
   background: #b8c1c5;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+
+.mission-row-status:hover {
+  filter: brightness(1.2);
 }
 
 .mission-row-select {
@@ -3777,6 +3980,15 @@ code {
   color: var(--muted);
 }
 
+.mission-batch-btn.is-delete {
+  color: #c72e0f;
+  border-color: color-mix(in srgb, #c72e0f 35%, transparent);
+}
+
+.mission-batch-btn.is-delete:hover {
+  background: color-mix(in srgb, #c72e0f 12%, transparent);
+}
+
 .mission-list-row.is-proposed .mission-row-status {
   background: #8da0cb;
 }
@@ -3828,6 +4040,14 @@ code {
 .mission-row-vehicle,
 .mission-row-origin {
   font-size: 0.95rem;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.mission-row-vehicle {
+  font-size: 0.8rem;
+  opacity: 0.75;
 }
 
 .mission-row-main {
@@ -5097,6 +5317,26 @@ code {
 
 .mission-row-action-btn.is-edit:hover {
   background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+.mission-row-action-btn.is-done {
+  color: #2ea043;
+  border-color: color-mix(in srgb, #2ea043 40%, transparent);
+}
+
+.mission-row-action-btn.is-done:hover {
+  background: color-mix(in srgb, #2ea043 14%, transparent);
+}
+
+.mission-row-edit-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  display: block;
 }
 
 /* Selection panel (floating waypoint inspector) */

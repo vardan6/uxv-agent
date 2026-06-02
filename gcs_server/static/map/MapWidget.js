@@ -8,7 +8,11 @@ import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
 import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
 import { GridLayer } from './layers/GridLayer.js';
 import { mapMissionsForList, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
+import { missionColorOverrides } from './state/missionColorOverrides.js';
+import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
+import { MissionColorPicker } from './ui/MissionColorPicker.js';
+import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
 import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
 import { ContextMenu } from './ui/ContextMenu.js';
@@ -137,6 +141,8 @@ export class MapWidget {
     this._confirmResolve = null;
     this._actionBusy = false;
     this._paletteByMissionId = new Map();
+    this._colorPicker = null;
+    this._overflowMenu = null;
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -214,7 +220,17 @@ export class MapWidget {
       onSelectedShowRequested: () => this._showSelectedMissions(),
       onSelectedHideRequested: () => this._hideSelectedMissions(),
       onSelectionCleared: () => this._clearSelection(),
+      onSelectedDeleteRequested: () => this._handleDeleteSelectedMissions(),
+      onMissionDoneEditRequested: () => {
+        editState.clearEdit();
+        this._overlayCacheByMissionId.clear();
+        this.refresh();
+      },
+      onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
+      onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
     });
+    this._colorPicker = new MissionColorPicker(this._listEl);
+    this._overflowMenu = new MissionListOverflowMenu(this._listEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -551,6 +567,13 @@ export class MapWidget {
       this._editingMissionId = '';
     }
     await this.refresh();
+  }
+
+  async _handleDeleteSelectedMissions() {
+    const ids = [...this._selectedMissionIds];
+    for (const id of ids) {
+      await this._handleDeleteMission(id);
+    }
   }
 
   async _handleRenameMission(missionId, name) {
@@ -998,15 +1021,23 @@ export class MapWidget {
   _render() {
     const editedMissionId = this._editingMissionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
-    const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder);
+    const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
+    const sortedMissions = sortMissions(
+      this._missions,
+      missionSortPreference.get(),
+      { selectedMissionIds: this._selectedMissionIds, visibleMissionIds },
+    );
+
     this._listPanel.renderMissions({
-      missions: this._missions,
+      missions: sortedMissions,
       focusedMissionId: this._focusedMissionId,
       visibleMissionIds,
       selectedMissionIds: this._selectedMissionIds,
       paletteByMissionId,
+      editingMissionId: this._editingMissionId,
+      vehicleKind: this._profilesById[this._activeProfileId]?.kind || 'ground',
     });
 
     // Exclude the actively-edited Mission from the read-only overlay so only
@@ -1070,9 +1101,10 @@ export class MapWidget {
 
   _applyViewMode(mode) {
     const configs = {
-      virtual_terrain: { terrain: true,  roads: true,  objects: true,  grid: true  },
-      cad:             { terrain: false, roads: true,  objects: true,  grid: true  },
-      heightmap:       { terrain: true,  roads: false, objects: false, grid: false },
+      virtual_terrain:  { terrain: true,  roads: true,  objects: true,  grid: true  },
+      cad:              { terrain: false, roads: true,  objects: true,  grid: true  },
+      heightmap:        { terrain: true,  roads: false, objects: false, grid: false },
+      'satellite-debug': { terrain: false, roads: false, objects: false, grid: false },
     };
     const cfg = configs[mode] || configs.virtual_terrain;
     this._terrainLayer?.setVisible(cfg.terrain);
@@ -1083,6 +1115,9 @@ export class MapWidget {
       for (const cb of this._layerToolbar.querySelectorAll('input[data-layer]')) {
         cb.checked = !!cfg[cb.dataset.layer];
       }
+    }
+    if (mode === 'satellite-debug' && this._basemapPanel && !this._basemapPanel.visible) {
+      this._toggleBasemap();
     }
   }
 
@@ -1121,10 +1156,6 @@ export class MapWidget {
     const visible = this._basemapPanel.toggle();
     this._basemapToggleBtn?.classList.toggle('is-active', visible);
     this._basemapToggleBtn?.setAttribute('aria-pressed', visible ? 'true' : 'false');
-    if (this._basemapToggleBtn) {
-      this._basemapToggleBtn.style.background = visible ? '#4a90d9' : '#fff';
-      this._basemapToggleBtn.style.color = visible ? '#fff' : '#1f5c99';
-    }
     if (visible) {
       const focusedPayload = this._focusedMissionId
         ? this._overlayCacheByMissionId.get(this._focusedMissionId)
@@ -1454,6 +1485,134 @@ export class MapWidget {
     );
   }
 
+  // --- Colour picker ---
+
+  _openColorPicker(missionId, anchorEl) {
+    const committedColor = this._paletteByMissionId.get(missionId) || '';
+    this._colorPicker.open(anchorEl, {
+      currentColor: committedColor,
+      onPreview: (previewColor) => {
+        const effective = previewColor || committedColor;
+        this._paletteByMissionId.set(missionId, effective);
+        this._refreshOverlayColors();
+        const row = this._listEl.querySelector(`[data-row-mission-id="${missionId}"]`);
+        const dot = row?.querySelector('.mission-row-color-dot');
+        if (dot) dot.style.setProperty('--mission-color', effective);
+      },
+      onPick: (color) => {
+        missionColorOverrides.set(missionId, color);
+        this._render();
+      },
+      onReset: () => {
+        missionColorOverrides.clear(missionId);
+        this._render();
+      },
+    });
+  }
+
+  _refreshOverlayColors() {
+    const editedMissionId = this._editingMissionId;
+    const palette = this._paletteByMissionId;
+    const overlays = this._visibleMissionOrder
+      .filter((mid) => mid !== editedMissionId)
+      .map((mid) => {
+        const payload = this._overlayCacheByMissionId.get(mid);
+        if (!payload?.available) return null;
+        return {
+          revisionId: mid,
+          payload,
+          color: palette.get(mid),
+          opacity: opacityForMission(mid, this._focusedMissionId),
+        };
+      })
+      .filter(Boolean);
+    this._overlayLayer.renderMany(overlays);
+  }
+
+  // --- Overflow / sort menu ---
+
+  _openOverflowMenu(anchorEl) {
+    this._overflowMenu.open(anchorEl, {
+      currentSort: missionSortPreference.get(),
+      onSortChange: (sortId) => {
+        missionSortPreference.set(sortId);
+        this._render();
+      },
+      onExport: () => this._handleExportMissions(),
+      onImport: () => this._handleImportMissions(),
+    });
+  }
+
+  async _handleExportMissions() {
+    const missions = this._missions || [];
+    if (!missions.length) return;
+    const exportItems = [];
+    for (const m of missions) {
+      const entry = { name: m.name, origin: m.origin };
+      if (m.activeRevisionId) {
+        const rev = await getRevision(m.activeRevisionId);
+        const wps = rev?.mission?.waypoints;
+        if (Array.isArray(wps) && wps.length) {
+          entry.waypoints = wps.map((wp) => {
+            const w = { id: wp.id };
+            if (wp.lat != null) w.lat = wp.lat;
+            if (wp.lon != null) w.lon = wp.lon;
+            if (wp.alt != null) w.alt = wp.alt;
+            if (wp.x != null) w.x = wp.x;
+            if (wp.y != null) w.y = wp.y;
+            if (wp.z != null) w.z = wp.z;
+            return w;
+          });
+        }
+      }
+      exportItems.push(entry);
+    }
+    const blob = new Blob(
+      [JSON.stringify({ version: 1, missions: exportItems }, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `missions-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  _handleImportMissions() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        this._showError('Import failed: invalid JSON');
+        return;
+      }
+      const items = Array.isArray(parsed?.missions) ? parsed.missions : (Array.isArray(parsed) ? parsed : []);
+      if (!items.length) {
+        this._showError('Import failed: no missions found in file');
+        return;
+      }
+      let created = 0;
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const name = String(item.name || 'Imported mission').trim() || 'Imported mission';
+        const waypoints = Array.isArray(item.waypoints) ? item.waypoints : [];
+        const result = await createMission({ name, waypoints: waypoints.length ? waypoints : null });
+        if (result.ok) created++;
+      }
+      if (created) await this.refresh();
+    });
+    input.click();
+  }
+
   // --- DOM ---
 
   _buildDOM() {
@@ -1588,27 +1747,12 @@ export class MapWidget {
     basemapToggleBtn.className = 'map-basemap-toggle';
     basemapToggleBtn.textContent = '🗺 Basemap';
     basemapToggleBtn.setAttribute('aria-pressed', 'false');
-    // Self-styled (sits above both the scene map and the basemap panel).
-    Object.assign(basemapToggleBtn.style, {
-      position: 'absolute',
-      top: '8px',
-      right: '8px',
-      zIndex: '500',
-      padding: '4px 10px',
-      font: '12px/1.4 system-ui, sans-serif',
-      cursor: 'pointer',
-      border: '1px solid rgba(0,0,0,0.25)',
-      borderRadius: '4px',
-      background: '#fff',
-      color: '#1f5c99',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-    });
     basemapToggleBtn.addEventListener('click', () => this._toggleBasemap());
     this._basemapToggleBtn = basemapToggleBtn;
 
-    // Top-left overlay column: view mode preset + layer toggles + fit-bounds buttons
-    const ctrlLeft = document.createElement('div');
-    ctrlLeft.className = 'map-ctrl-left';
+    // Top-right overlay column: basemap toggle + view mode preset + layer toggles + fit-bounds buttons
+    const ctrlRight = document.createElement('div');
+    ctrlRight.className = 'map-ctrl-right';
 
     const viewModeToolbar = document.createElement('div');
     viewModeToolbar.className = 'map-view-mode-toolbar';
@@ -1617,9 +1761,10 @@ export class MapWidget {
     viewModeSelect.className = 'map-view-mode-select';
     viewModeSelect.setAttribute('aria-label', 'Scene view mode');
     for (const [value, label] of [
-      ['virtual_terrain', 'Virtual Terrain'],
-      ['cad',             'CAD / Object View'],
-      ['heightmap',       'Heightmap'],
+      ['virtual_terrain',  'Virtual Terrain'],
+      ['cad',              'CAD / Object View'],
+      ['heightmap',        'Heightmap'],
+      ['satellite-debug',  'GPS / Satellite Debug'],
     ]) {
       const opt = document.createElement('option');
       opt.value = value;
@@ -1674,9 +1819,9 @@ export class MapWidget {
     }
     this._fitBtns = fitBtns;
 
-    ctrlLeft.append(viewModeToolbar, layerToolbar, fitToolbar);
+    ctrlRight.append(basemapToggleBtn, viewModeToolbar, layerToolbar, fitToolbar);
 
-    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlLeft, basemapToggleBtn, infoBar);
+    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar);
     shell.append(listEl, listResizer, mapWrap);
 
     // Context menu (absolute-positioned inside container)

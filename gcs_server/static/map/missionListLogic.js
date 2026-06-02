@@ -13,7 +13,14 @@ const SET2 = [
 // descriptors: one row = one Mission (ADR 0021 §2). Pure; no fetching.
 // `origin` here is provenance (manual|ai_chat), distinct from ADR 0022's
 // coordinate-datum Origin.
-const ORIGIN_BADGE = { manual: '👤', ai_chat: '🤖' };
+
+// ✏️ = AI-created then edited in-place (client_version bumped by edit_in_place mode).
+// 🤖 = AI-created, unmodified. 👤 = manually created.
+function computeOriginBadge(origin, clientVersion) {
+  if (origin === 'manual') return '👤';
+  if (origin === 'ai_chat') return clientVersion > 1 ? '✏️' : '🤖';
+  return '🤖';
+}
 
 export function mapMissionsForList(missions = []) {
   return (Array.isArray(missions) ? missions : []).map((m) => {
@@ -21,14 +28,15 @@ export function mapMissionsForList(missions = []) {
     const index = Number.isFinite(m.mission_index) ? Number(m.mission_index) : null;
     const name = String(m.name || '').trim();
     const origin = String(m.origin || 'manual');
+    const clientVersion = Number(m.client_version || 0);
     return {
       id,
       missionIndex: index,
       name: name || (index != null ? `Mission ${index}` : 'Untitled mission'),
       origin,
-      originBadge: ORIGIN_BADGE[origin] || '🤖',
+      originBadge: computeOriginBadge(origin, clientVersion),
       originChatId: String(m.origin_chat_id || ''),
-      clientVersion: Number(m.client_version || 0),
+      clientVersion,
       createdAt: Number(m.created_at || 0),
       updatedAt: Number(m.updated_at || 0),
       // Active-revision resolution from the list endpoint (ADR 0021 §2): the
@@ -54,10 +62,11 @@ export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
   return ordered;
 }
 
-export function assignPaletteColor(visibleIds) {
+// overrides: plain object from missionColorOverrides.getAll(), keyed by mission id string.
+export function assignPaletteColor(visibleIds, overrides = {}) {
   const palette = new Map();
-  Array.from(visibleIds || []).forEach((revisionId, index) => {
-    palette.set(revisionId, SET2[index % SET2.length]);
+  Array.from(visibleIds || []).forEach((missionId, index) => {
+    palette.set(missionId, overrides[String(missionId)] || SET2[index % SET2.length]);
   });
   return palette;
 }

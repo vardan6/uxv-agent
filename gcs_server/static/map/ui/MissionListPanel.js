@@ -6,6 +6,43 @@
 const MISSION_ROW_EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
 const MISSION_ROW_EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
 
+const VEHICLE_ICON = { ground: '🚗', multirotor: '🚁', fixed_wing: '✈️' };
+
+// Maps activeRevisionStatus → CSS class applied to the row div for status stripe colouring.
+const STATUS_CLASS = {
+  proposed: 'is-proposed',
+  awaiting_approval: 'is-proposed',
+  planning: 'is-proposed',
+  approved: 'is-approved',
+  exported: 'is-approved',
+  cutover_pending: 'is-approved',
+  executing: 'is-executing',
+  completed: 'is-completed',
+  superseded: 'is-superseded',
+  rejected: 'is-superseded',
+  validation_failed: 'is-superseded',
+};
+
+// Statuses that don't need a visible label (normal/unremarkable states).
+const HIDDEN_STATUS_LABELS = new Set([
+  'proposed', 'awaiting_approval', 'planning', 'approved',
+  'exported', 'cutover_pending', 'unknown', '',
+]);
+
+function statusLabel(status) {
+  const s = String(status || '');
+  if (HIDDEN_STATUS_LABELS.has(s)) return '';
+  return s.replaceAll('_', ' ');
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
 // Escape untrusted values before interpolating into the row HTML string. Mission
 // names and origin badges are AI-/operator-derived, so a name like
 // `"><img src=x onerror=...>` would otherwise become executable markup once the
@@ -20,7 +57,7 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function missionRowActionButtons(missionRow) {
+function missionRowActionButtons(missionRow, isEditing) {
   const activeRevisionId = String(missionRow.activeRevisionId || '');
   const status = String(missionRow.activeRevisionStatus || '');
   const safeId = escapeHtml(missionRow.id);
@@ -36,10 +73,21 @@ function missionRowActionButtons(missionRow) {
   }
   const parts = [];
   if (MISSION_ROW_EDITABLE.has(status)) {
-    parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-      data-edit-mission-id="${safeId}"
-      title="Edit waypoints"
-      aria-label="Edit waypoints">✏</button>`);
+    if (isEditing) {
+      parts.push(`<button class="mission-row-action-btn is-done" type="button"
+        data-done-edit-mission-id="${safeId}"
+        title="Finish editing"
+        aria-label="Finish editing">
+        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
+      </button>`);
+    } else {
+      parts.push(`<button class="mission-row-action-btn is-edit" type="button"
+        data-edit-mission-id="${safeId}"
+        title="Edit waypoints"
+        aria-label="Edit waypoints">
+        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+      </button>`);
+    }
   }
   if (MISSION_ROW_EXECUTABLE.has(status)) {
     // Legacy linear-plan upload (ADR 0023): pushes the active revision's
@@ -68,18 +116,27 @@ export function missionRowMarkup(missionRow, ctx = {}) {
     focusedMissionId = '',
     selectedMissionIds = new Set(),
     paletteByMissionId = new Map(),
+    editingMissionId = '',
+    vehicleKind = '',
   } = ctx;
   const id = String(missionRow.id || '');
   const isVisible = visibleMissionIds.has(id);
   const isFocused = focusedMissionId === id;
   const isSelected = selectedMissionIds.has(id);
+  const isEditing = editingMissionId === id;
+  const status = String(missionRow.activeRevisionStatus || '');
+  const statusCls = STATUS_CLASS[status] || '';
   const color = paletteByMissionId.get(id) || 'transparent';
   const indexLabel = missionRow.missionIndex != null ? `#${missionRow.missionIndex}` : '';
+  const label = statusLabel(status);
+  const dateStr = formatDate(missionRow.createdAt);
+  const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
+  const metaParts = [escapeHtml(indexLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
   const safeName = escapeHtml(missionRow.name);
   return `
-    <div class="mission-list-row${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}" data-mission-id="${safeId}">
-      <span class="mission-row-status" aria-hidden="true"></span>
+    <div class="mission-list-row${statusCls ? ' ' + statusCls : ''}${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}${isEditing ? ' is-editing' : ''}" data-mission-id="${safeId}" data-row-mission-id="${safeId}">
+      <button class="mission-row-status" type="button" data-color-chip-mission-id="${safeId}" title="Change mission colour" aria-label="Change colour for mission ${safeName}"></button>
       <label class="mission-row-select" title="Select for batch operations (shift-click for range)">
         <input
           type="checkbox"
@@ -99,12 +156,12 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         <span class="mission-row-color-dot" style="--mission-color:${escapeHtml(color)}"></span>
         <span class="mission-row-main">
           <span class="mission-row-title" data-rename-mission-id="${safeId}" data-current-name="${safeName}" title="Double-click to rename">${safeName}</span>
-          <span class="mission-row-meta">${escapeHtml(indexLabel)}</span>
+          <span class="mission-row-meta">${metaParts.join(' · ')}</span>
         </span>
-        <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}</span>
+        <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}${vehicleIcon ? `<span class="mission-row-vehicle" title="Vehicle type">${escapeHtml(vehicleIcon)}</span>` : ''}</span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowActionButtons(missionRow)}
+        ${missionRowActionButtons(missionRow, isEditing)}
         <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
         <button
           class="mission-row-eye"
@@ -136,6 +193,10 @@ export class MissionListPanel {
     this._onSelectedShowRequested = opts.onSelectedShowRequested || (() => {});
     this._onSelectedHideRequested = opts.onSelectedHideRequested || (() => {});
     this._onSelectionCleared = opts.onSelectionCleared || (() => {});
+    this._onSelectedDeleteRequested = opts.onSelectedDeleteRequested || (() => {});
+    this._onMissionDoneEditRequested = opts.onMissionDoneEditRequested || (() => {});
+    this._onColorChipClicked = opts.onColorChipClicked || (() => {});
+    this._onOverflowClicked = opts.onOverflowClicked || (() => {});
   }
 
   renderMissions({
@@ -144,6 +205,8 @@ export class MissionListPanel {
     visibleMissionIds = new Set(),
     selectedMissionIds = new Set(),
     paletteByMissionId = new Map(),
+    editingMissionId = '',
+    vehicleKind = '',
   } = {}) {
     const batchBar = selectedMissionIds.size
       ? `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
@@ -151,6 +214,7 @@ export class MissionListPanel {
             <button class="mission-batch-btn" type="button" data-batch-action="show">Show</button>
             <button class="mission-batch-btn" type="button" data-batch-action="hide">Hide</button>
             <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear">Clear</button>
+            <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete">Delete</button>
           </div>`
       : '';
     const header = `<div class="mission-list-header">
@@ -160,6 +224,8 @@ export class MissionListPanel {
               aria-label="New mission">＋</button>
             <a class="mission-list-settings" href="/settings?tab=mission-lifecycle"
               title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
+            <button class="mission-list-overflow-btn" type="button" data-overflow-menu
+              title="Mission list options" aria-label="Mission list options">⋯</button>
           </div>`;
     const body = missions.length
       ? batchBar + missions.map((missionRow) => missionRowMarkup(missionRow, {
@@ -167,6 +233,8 @@ export class MissionListPanel {
         focusedMissionId,
         selectedMissionIds,
         paletteByMissionId,
+        editingMissionId,
+        vehicleKind,
       })).join('')
       : `<div class="mission-list-empty">
             <p class="mission-list-empty-title">No missions yet</p>
@@ -189,8 +257,45 @@ export class MissionListPanel {
         this._onNewMissionRequested();
       });
     }
+    const overflowBtn = this._container.querySelector('[data-overflow-menu]');
+    if (overflowBtn) {
+      overflowBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onOverflowClicked(overflowBtn);
+      });
+    }
+    this._container.querySelectorAll('[data-color-chip-mission-id]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onColorChipClicked(btn.dataset.colorChipMissionId || '', btn);
+      });
+    });
+    // Full-row click: plain click focuses; shift/meta/ctrl toggles selection.
+    // Inner buttons already stopPropagation so they don't double-fire here.
+    this._container.querySelectorAll('[data-row-mission-id]').forEach((row) => {
+      row.addEventListener('click', (event) => {
+        const missionId = row.dataset.rowMissionId || '';
+        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+          this._onMissionSelectionToggled(missionId, { shift: event.shiftKey });
+        } else {
+          this._onMissionFocusRequested(missionId);
+        }
+      });
+    });
     this._container.querySelectorAll('[data-focus-mission-id]').forEach((button) => {
-      button.addEventListener('click', () => this._onMissionFocusRequested(button.dataset.focusMissionId || ''));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._onMissionFocusRequested(button.dataset.focusMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-done-edit-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionDoneEditRequested(button.dataset.doneEditMissionId || '');
+      });
     });
     this._container.querySelectorAll('[data-toggle-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
@@ -231,6 +336,7 @@ export class MissionListPanel {
         if (action === 'show') this._onSelectedShowRequested();
         else if (action === 'hide') this._onSelectedHideRequested();
         else if (action === 'clear') this._onSelectionCleared();
+        else if (action === 'delete') this._onSelectedDeleteRequested();
       });
     });
     this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {

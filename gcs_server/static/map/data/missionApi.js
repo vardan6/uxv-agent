@@ -42,14 +42,16 @@ export async function listMissions({ userId = '', limit = 200 } = {}) {
   }
 }
 
-// POST /api/ai/missions: create a blank manual Mission with an empty revision.
+// POST /api/ai/missions: create a manual Mission, optionally with initial waypoints.
 // Returns { ok, mission_id, operation_id, revision_id }.
-export async function createMission({ name = 'New mission', userId = '' } = {}) {
+export async function createMission({ name = 'New mission', userId = '', waypoints = null } = {}) {
   try {
+    const body = { name, user_id: userId };
+    if (Array.isArray(waypoints) && waypoints.length) body.waypoints = waypoints;
     const res = await fetch('/api/ai/missions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, user_id: userId }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, status: res.status, error: data.error || `HTTP ${res.status}` };

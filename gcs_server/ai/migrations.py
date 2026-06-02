@@ -352,6 +352,98 @@ def _migration_011_restore_mission_execution_tables(conn: sqlite3.Connection) ->
     )
 
 
+def _migration_017_reconcile_missions_schema(conn: sqlite3.Connection) -> None:
+    # Master's migration 16 (rebuild_missions_adr0021_schema) rewrote `missions`
+    # with INTEGER AUTOINCREMENT id and dropped `mission_index`,
+    # `active_operation_id`, and `origin_*` columns. This branch needs the
+    # TEXT-id schema with those columns. Rebuild if the master shape is present
+    # (detected by absence of `active_operation_id`).
+    if not _table_exists(conn, "missions"):
+        return
+    if _column_exists(conn, "missions", "active_operation_id"):
+        return  # already the branch schema — nothing to do
+
+    import uuid as _uuid
+    conn.execute("ALTER TABLE missions RENAME TO missions_pre17")
+    conn.execute(
+        """
+        CREATE TABLE missions (
+          id TEXT PRIMARY KEY,
+          created_by_user_id TEXT NOT NULL DEFAULT '',
+          mission_index INTEGER NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          origin TEXT NOT NULL DEFAULT 'manual',
+          origin_chat_id TEXT NOT NULL DEFAULT '',
+          client_version INTEGER NOT NULL DEFAULT 0,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          active_operation_id TEXT NOT NULL DEFAULT '',
+          origin_lat REAL NOT NULL DEFAULT 0.0,
+          origin_lon REAL NOT NULL DEFAULT 0.0,
+          origin_alt REAL NOT NULL DEFAULT 0.0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_user_index ON missions(created_by_user_id, mission_index)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_user_created ON missions(created_by_user_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_origin_chat ON missions(origin_chat_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_active_operation ON missions(active_operation_id)"
+    )
+    # Migrate existing rows; use the INTEGER id as mission_index and generate
+    # a stable TEXT id so the sidebar can still reference migrated missions.
+    old_rows = conn.execute(
+        """
+        SELECT id, name, origin, COALESCE(origin_chat_id, '') AS origin_chat_id,
+               client_version, created_at, COALESCE(created_by_user_id, '') AS created_by_user_id
+        FROM missions_pre17
+        ORDER BY id
+        """
+    ).fetchall()
+    for row in old_rows:
+        new_id = f"mission-migrated-{row[0]}"
+        conn.execute(
+            """
+            INSERT INTO missions (
+              id, created_by_user_id, mission_index, name, origin, origin_chat_id,
+              client_version, created_at, updated_at,
+              active_operation_id, origin_lat, origin_lon, origin_alt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0.0, 0.0, 0.0)
+            """,
+            (
+                new_id,
+                row["created_by_user_id"],
+                int(row["id"]),
+                str(row["name"] or ""),
+                str(row["origin"] or "manual"),
+                str(row["origin_chat_id"] or ""),
+                int(row["client_version"] or 0),
+                float(row["created_at"]),
+                float(row["created_at"]),
+            ),
+        )
+    # Update the index counter so new missions get fresh indices.
+    if old_rows:
+        max_index = max(int(r["id"]) for r in old_rows)
+        users = set(str(r["created_by_user_id"] or "") for r in old_rows)
+        for uid in users:
+            conn.execute(
+                """
+                INSERT INTO mission_index_counters (user_id, next_index)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET next_index = MAX(next_index, excluded.next_index)
+                """,
+                (uid, max_index + 1),
+            )
+    conn.execute("DROP TABLE missions_pre17")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
@@ -363,6 +455,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (8, "add_mission_active_operation", _migration_008_add_mission_active_operation),
     (9, "add_mission_origin_datum", _migration_009_add_mission_origin_datum),
     (11, "restore_mission_execution_tables", _migration_011_restore_mission_execution_tables),
+    (17, "reconcile_missions_schema", _migration_017_reconcile_missions_schema),
 )
 
 

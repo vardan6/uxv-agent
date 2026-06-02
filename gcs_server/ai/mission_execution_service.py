@@ -1613,11 +1613,16 @@ class MissionExecutionService:
         revision = self.get_revision(revision_id)
         return {"ok": True, "revision": revision}
 
-    def create_blank_operation(self, *, name: str = "") -> dict[str, Any]:
-        """Create a blank operation + empty revision for manual mission authoring.
+    def create_blank_operation(
+        self,
+        *,
+        name: str = "",
+        waypoints: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Create a blank operation + revision for manual mission authoring.
 
-        Used by the "➕ New mission" button: the operation has no session/source
-        and the revision has zero waypoints, ready for operator click-to-place.
+        Used by the "➕ New mission" button (no waypoints) and JSON import
+        (waypoints supplied). The operation has no session/source.
         """
         operation_id = f"mission-op-{uuid.uuid4().hex[:12]}"
         now = time.time()
@@ -1634,7 +1639,7 @@ class MissionExecutionService:
             conn.commit()
         result = self.create_client_revision(
             operation_id=operation_id,
-            waypoints=[],
+            waypoints=waypoints if waypoints is not None else [],
             label=name or "New mission",
         )
         if not result.get("ok"):

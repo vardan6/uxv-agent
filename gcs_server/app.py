@@ -1703,8 +1703,10 @@ async def create_blank_mission(request: Request) -> JSONResponse:
 
     name = str(payload.get("name", "") or "New mission").strip() or "New mission"
     user_id = str(payload.get("user_id", "") or "")
+    waypoints_raw = payload.get("waypoints")
+    waypoints = [wp for wp in waypoints_raw if isinstance(wp, dict)] if isinstance(waypoints_raw, list) else None
 
-    op_result = mission_execution.create_blank_operation(name=name)
+    op_result = mission_execution.create_blank_operation(name=name, waypoints=waypoints)
     if not op_result.get("ok"):
         return JSONResponse(
             {"ok": False, "error": op_result.get("error", "failed to create operation")},

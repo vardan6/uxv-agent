@@ -158,20 +158,70 @@ splitter is hidden and the shell collapses to a single-column stacked layout.
 
 ## Mission List Rules
 
-Each operation row carries:
+Each Mission row carries:
 
-- visibility control
-- status indication
-- vehicle/profile identity
-- mission name or equivalent label
-- provenance/origin indicator
-- action affordances appropriate to the revision state
+- a **status stripe** (4 px left edge) coloured by the active revision's status,
+  plus a matching **status label**
+- a **visibility control** (eye toggle) and a **selection checkbox**
+- a **colour chip** that doubles as a button — clicking it opens the per-Mission
+  colour picker (see *Mission Management Affordances*)
+- **vehicle/profile identity** — a per-row vehicle icon driven by the Mission's
+  `vehicle_profile_id`
+- the **mission name** (inline-renamable on double-click; an untitled Mission
+  gets a deterministic auto-number) and a **created-at** date in the row meta
+- a **provenance/origin indicator** — 👤 manual / 🤖 ai / ✏️ ai+edited (a Mission
+  whose AI proposal was operator-modified)
+- **action affordances** appropriate to the active revision's status: an
+  **edit ⇄ done** toggle, the legacy ▶ linear-plan upload, a 🗑 delete, and a 🔒
+  lock when executing. `approve`/`reject` stay off the row (ADR 0021)
 
 Behavior rules:
 
+- the whole row is clickable to promote the Mission to Active+Visible; modifier
+  clicks (shift / meta / ctrl) extend the Selected set. Inner controls
+  (checkbox, eye, edit, execute, delete, rename) stop propagation so they don't
+  double-fire, and inline rename (dblclick) keeps working alongside row-click
 - visible overlays are capped softly to avoid clutter
 - focus applies fit-to-bounds and dims non-focused visible missions
 - numbered waypoint badges remain visible because color alone is insufficient
+- every operator- or AI-derived value interpolated into row markup is escaped
+  (`escapeHtml`) before it reaches `innerHTML`; list state stays **mission-keyed**
+  (active revision id/status, `#index`), never revision-keyed
+
+## Mission Management Affordances
+
+Beyond per-row editing, the list offers Mission-management UX:
+
+- **Per-Mission colour override** — a colour picker (swatch grid + custom hex +
+  reset, with live hover-preview that re-renders the map in the candidate
+  colour). Resolution order is **override (if set) → automatic palette**
+  (`assignPaletteColor`, keyed on visibility order). Overrides persist client-side
+  (localStorage, keyed by Mission id) and layer above the auto palette without
+  breaking the soft visibility cap.
+- **Sort** — a persisted (localStorage) sort preference over the list: Updated
+  newest · Created newest · Status · Label A–Z · Selected first · Visible first.
+- **Overflow `⋯` menu** — a header menu hosting the sort options and **JSON
+  import / export**. Export serialises the visible/selected Missions to a JSON
+  blob; import creates one flat Mission per entry through the standard create
+  path (not a revision payload).
+- **Bulk actions** — the selection batch bar carries Show / Hide / Clear **and
+  bulk Delete** (delete loops the per-Mission delete, honouring the
+  executing → 409 guard, then refreshes once).
+
+Design decisions (the management suite is ported forward from `e4a7c61`
+additively — it predates the current flat-Mission/`escapeHtml` rewrite):
+
+- the control cluster (view-mode, layer toggles, fit buttons, info bar) lives
+  **top-right**, clear of the Leaflet zoom ± — the branch's own richer view-mode
+  cluster is *relocated* there rather than importing `e4a7c61`'s narrower
+  `MapViewToolbar`
+- bulk delete *extends* the existing batch bar rather than importing a second
+  bulk-action bar
+- selection stays in the widget's own selection state; no separate selection
+  store is reintroduced
+- `vehicle_profile_id` and a per-Mission provenance summary must be added to the
+  `list_missions` payload before the vehicle icon and ✏️ badge can render — those
+  are the only backend additions; every other affordance above is frontend-only
 
 ## Map Rendering Rules
 
@@ -299,11 +349,17 @@ concerns.
 The map panel needs a toolbar matching the replay page's controls.
 
 **Layer toggles** — implemented (2026-06-01). Four checkboxes in a
-`.map-layer-toolbar--overlay` pill (top-left, z-index 500) wired into
-`MapWidget._onLayerToggle`. Each toggle is local state, reset on load; applied
-to layers via `setVisible`/`setRoadsVisible`/`setObjectsVisible` after async
-scene load. Mission-overlay layers are never toggled from this bar — they are
-controlled by the mission list's Visible state.
+`.map-layer-toolbar--overlay` pill wired into `MapWidget._onLayerToggle`. Each
+toggle is local state, reset on load; applied to layers via
+`setVisible`/`setRoadsVisible`/`setObjectsVisible` after async scene load.
+Mission-overlay layers are never toggled from this bar — they are controlled by
+the mission list's Visible state.
+
+**Toolbar placement** — the whole control cluster (layer toggles, view-mode
+selector, fit buttons, basemap toggle, info bar) sits **top-right**, clear of the
+Leaflet zoom ± in the top-left. The first browser smoke (2026-06-02) found the
+original top-left placement collided with the zoom buttons and hid the fit
+buttons; relocating right matches the replay page and resolves both.
 
 Design rules (still applicable to remaining items):
 
@@ -317,6 +373,9 @@ heightmap gradient + objects), CAD/Object View (objects only, solid background),
 Heightmap (raw greyscale elevation). Mode change reconstructs or reconfigures the
 scene layers in place; mission overlays are unaffected. The replay page's
 "GPS/Satellite Debug" mode maps to the existing Basemap toggle (WGS84 OSM panel).
+View mode and the basemap toggle are **independent**: switching to CAD/Object
+View must not tear down the basemap/satellite view (a parity bug found in the
+2026-06-02 smoke).
 
 **Cursor/info bar** — fixed bar at the bottom of the map canvas. Left slot: cursor
 scene-metre coordinates (`x: N m, y: N m`), with WGS84 equivalent in parentheses
