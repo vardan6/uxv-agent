@@ -25,6 +25,7 @@ export function mapMissionsForList(missions = []) {
       missionIndex: index,
       name: name || (index != null ? `Mission ${index}` : 'Untitled mission'),
       vehicleProfileId: String(m.vehicle_profile_id || ''),
+      waypointCount: Math.max(0, Number(m.waypoint_count || 0)),
       origin,
       originBadge: computeOriginBadge(origin, clientVersion),
       originChatId: String(m.origin_chat_id || ''),

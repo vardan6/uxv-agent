@@ -6,6 +6,8 @@ const STORAGE_KEY = 'gcs-map-widget-mission-sort';
 export const SORT_OPTIONS = [
   { id: 'updated_desc',   label: 'Updated newest' },
   { id: 'created_desc',   label: 'Created newest' },
+  { id: 'waypoints_desc', label: 'Waypoint count high-low' },
+  { id: 'waypoints_asc',  label: 'Waypoint count low-high' },
   { id: 'status',         label: 'Status' },
   { id: 'label_asc',      label: 'Label A–Z' },
   { id: 'selected_first', label: 'Selected first' },
@@ -52,6 +54,12 @@ export function sortMissions(missions, sortId, { selectedMissionIds = new Set(),
   switch (sortId) {
     case 'created_desc':
       arr.sort((a, b) => (Number(b.createdAt || b.created_at || 0) - Number(a.createdAt || a.created_at || 0)) || tiebreak(a, b));
+      break;
+    case 'waypoints_desc':
+      arr.sort((a, b) => (Number(b.waypointCount || b.waypoint_count || 0) - Number(a.waypointCount || a.waypoint_count || 0)) || tiebreak(a, b));
+      break;
+    case 'waypoints_asc':
+      arr.sort((a, b) => (Number(a.waypointCount || a.waypoint_count || 0) - Number(b.waypointCount || b.waypoint_count || 0)) || tiebreak(a, b));
       break;
     case 'status':
       arr.sort((a, b) => (statusRank(a.activeRevisionStatus) - statusRank(b.activeRevisionStatus)) || tiebreak(a, b));

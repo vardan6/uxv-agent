@@ -24,12 +24,14 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 try:
+    from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
     from gcs_server.ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
     from gcs_server.ai.mission_executor import MissionExecutor, NodeStatus
     from gcs_server.ai.mission_leaf_driver import make_controller_leaf_driver
     from gcs_server.ai.mission_safety import parse_geofence
     from gcs_server.ai.mission_tree import Node, parse_mission_content
 except ModuleNotFoundError:
+    from ai.controller_mission_adapter import ControllerMissionAdapter
     from ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
     from ai.mission_executor import MissionExecutor, NodeStatus
     from ai.mission_leaf_driver import make_controller_leaf_driver
@@ -43,6 +45,7 @@ def build_mission_executor(
     *,
     mode: Optional[str] = None,
     on_step: Optional[Any] = None,
+    adapter: Optional[ControllerMissionAdapter] = None,
 ) -> tuple[MissionExecutor, Node]:
     """Build a :class:`MissionExecutor` ready to run ``mission_content``.
 
@@ -77,7 +80,8 @@ def build_mission_executor(
     # install fails rather than silently overwriting. The executor is sole writer
     # thereafter, so later segments don't re-assert. None when unreadable.
     expected_version: Optional[int] = None
-    adapter = service.controller_adapter
+    if adapter is None:
+        adapter = service.controller_adapter
     try:
         expected_version = int(adapter.get_controller_state().controller_version or 0)
     except Exception:
@@ -157,6 +161,7 @@ class MissionExecutionSessions:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_session: dict[str, ActiveExecution] = {}
+        self._adapter_overrides: dict[str, ControllerMissionAdapter] = {}
 
     def get(self, session_id: str) -> Optional[ActiveExecution]:
         with self._lock:
@@ -171,6 +176,23 @@ class MissionExecutionSessions:
                 if _clean(active.mission_id) == target:
                     return active
         return None
+
+    # --- Session-scoped adapter overrides (Phase E) ---------------------------
+    # Override the controller adapter used when building an executor for a
+    # specific AI chat session. Reverts naturally when the session ends (in-memory,
+    # keyed to session_id). Does not affect the global service adapter or sidebar.
+
+    def set_adapter_override(self, session_id: str, adapter: ControllerMissionAdapter) -> None:
+        with self._lock:
+            self._adapter_overrides[_clean(session_id)] = adapter
+
+    def clear_adapter_override(self, session_id: str) -> None:
+        with self._lock:
+            self._adapter_overrides.pop(_clean(session_id), None)
+
+    def get_adapter_override(self, session_id: str) -> Optional[ControllerMissionAdapter]:
+        with self._lock:
+            return self._adapter_overrides.get(_clean(session_id))
 
     def prepare(
         self,

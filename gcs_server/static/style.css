@@ -3637,6 +3637,31 @@ code {
   line-height: 1.2;
 }
 
+.mission-list-sort-label {
+  margin: 0;
+  font-size: 0.68rem;
+  opacity: 0.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mission-list-overflow-btn.has-active-sort {
+  opacity: 0.9;
+  position: relative;
+}
+
+.mission-list-overflow-btn.has-active-sort::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: -1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent, #4a90d9);
+}
+
 .mission-list-header-actions {
   display: flex;
   align-items: center;
@@ -3789,7 +3814,7 @@ code {
 /* --- Overflow / sort menu popover --- */
 
 .mission-list-overflow-menu {
-  position: absolute;
+  position: fixed;
   z-index: 600;
   background: var(--panel-strong, #1a1a2e);
   border: 1px solid var(--line, #333);

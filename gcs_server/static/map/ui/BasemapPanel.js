@@ -13,6 +13,11 @@
 const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
 const DEFAULT_ZOOM = 17;
+const BASEMAP_ZOOM_OPTIONS = {
+  zoomSnap: 0.25,
+  zoomDelta: 0.25,
+  wheelPxPerZoomLevel: 160,
+};
 
 export class BasemapPanel {
   // `onGenerate({ pattern, points, params })` is invoked when the operator
@@ -303,7 +308,7 @@ export class BasemapPanel {
 
   _ensureMap() {
     if (this._map || typeof L === 'undefined') return;
-    this._map = L.map(this._el, { zoomSnap: 0.5, worldCopyJump: true });
+    this._map = L.map(this._el, { ...BASEMAP_ZOOM_OPTIONS, worldCopyJump: true });
     this._tileLayer = L.tileLayer(OSM_TILE_URL, {
       maxZoom: 19,
       attribution: OSM_ATTRIBUTION,

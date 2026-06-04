@@ -38,6 +38,11 @@ function formatDate(ts) {
   });
 }
 
+function formatWaypointCount(count) {
+  const total = Math.max(0, Number(count || 0));
+  return `${total} pt${total === 1 ? '' : 's'}`;
+}
+
 // Escape untrusted values before interpolating into the row HTML string. Mission
 // names and origin badges are AI-/operator-derived, so a name like
 // `"><img src=x onerror=...>` would otherwise become executable markup once the
@@ -172,7 +177,8 @@ export function missionRowMarkup(missionRow, ctx = {}) {
   );
   const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
   const deleteGuarded = deleteGuardedMissionIds.has(id);
-  const metaParts = [escapeHtml(indexLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
+  const waypointLabel = formatWaypointCount(missionRow.waypointCount);
+  const metaParts = [escapeHtml(indexLabel), escapeHtml(waypointLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
   const safeName = escapeHtml(missionRow.name);
   return `
@@ -248,6 +254,7 @@ export class MissionListPanel {
     activeProfileId = '',
     deleteGuardedMissionIds = new Set(),
     canDeleteSelection = false,
+    sortLabel = '',
   } = {}) {
     const hasSelection = selectedMissionIds.size > 0;
     const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
@@ -257,10 +264,12 @@ export class MissionListPanel {
           <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear"${hasSelection ? '' : ' disabled'}>Clear</button>
           <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete"${canDeleteSelection ? '' : ' disabled'} title="${hasSelection && !canDeleteSelection ? 'Delete disabled while selection includes an armed or executing mission' : 'Delete selected missions'}">Delete</button>
         </div>`;
+    const safeSortLabel = escapeHtml(sortLabel);
     const header = `<div class="mission-list-header">
             <div class="mission-list-header-copy">
               <p class="section-kicker">Missions</p>
               <h2 class="mission-list-header-title">Routes</h2>
+              ${safeSortLabel ? `<p class="mission-list-sort-label" title="Active sort order">⇅ ${safeSortLabel}</p>` : ''}
             </div>
             <div class="mission-list-header-actions">
               <button class="mission-list-new-btn" type="button" data-new-mission
@@ -268,8 +277,8 @@ export class MissionListPanel {
                 aria-label="New mission">+ New</button>
               <a class="mission-list-settings-link" href="/settings?tab=mission-lifecycle"
                 title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
-              <button class="mission-list-overflow-btn" type="button" data-overflow-menu
-                title="Mission list options" aria-label="Mission list options">⋯</button>
+              <button class="mission-list-overflow-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
+                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">⋯</button>
             </div>
           </div>`;
     const missionRows = missions.length

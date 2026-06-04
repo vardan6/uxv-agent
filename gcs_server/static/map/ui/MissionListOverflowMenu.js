@@ -65,7 +65,7 @@ export class MissionListOverflowMenu {
 
     pop.append(sortGroup, ioGroup);
     pop.addEventListener('click', (e) => e.stopPropagation());
-    this._container.appendChild(pop);
+    document.body.appendChild(pop);
     this._popover = pop;
 
     this._positionNear(anchorEl);
@@ -74,6 +74,7 @@ export class MissionListOverflowMenu {
     this._dismissHandler = (e) => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
       if (e.type === 'mousedown' && pop.contains(e.target)) return;
+      if (e.type === 'mousedown' && anchorEl.contains(e.target)) return;
       this.close();
     };
     setTimeout(() => {
@@ -86,23 +87,18 @@ export class MissionListOverflowMenu {
 
   _positionNear(anchorEl) {
     if (!anchorEl || !this._popover) return;
-    const containerRect = this._container.getBoundingClientRect();
     const anchorRect = anchorEl.getBoundingClientRect();
     const popRect = this._popover.getBoundingClientRect();
     const inset = 8;
-    const scrollLeft = this._container.scrollLeft;
-    const scrollTop = this._container.scrollTop;
-    const visibleMinLeft = scrollLeft + inset;
-    const visibleMaxLeft = scrollLeft + this._container.clientWidth - popRect.width - inset;
-    const visibleMinTop = scrollTop + inset;
-    const visibleMaxTop = scrollTop + this._container.clientHeight - popRect.height - inset;
-    let left = anchorRect.right - containerRect.left + scrollLeft - popRect.width;
-    let top = anchorRect.bottom - containerRect.top + scrollTop + 6;
-    left = Math.max(visibleMinLeft, Math.min(left, Math.max(visibleMinLeft, visibleMaxLeft)));
-    if (top > visibleMaxTop) {
-      top = anchorRect.top - containerRect.top + scrollTop - popRect.height - 6;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchorRect.right - popRect.width;
+    let top = anchorRect.bottom + 6;
+    if (top + popRect.height + inset > vh) {
+      top = anchorRect.top - popRect.height - 6;
     }
-    top = Math.max(visibleMinTop, Math.min(top, Math.max(visibleMinTop, visibleMaxTop)));
+    left = Math.max(inset, Math.min(left, vw - popRect.width - inset));
+    top = Math.max(inset, Math.min(top, vh - popRect.height - inset));
     this._popover.style.left = `${left}px`;
     this._popover.style.top = `${top}px`;
   }

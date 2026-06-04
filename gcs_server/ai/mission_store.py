@@ -58,6 +58,55 @@ def _vehicle_profile_id_from_mission_json(value: str | None) -> str:
     return str(_load_json(value).get("vehicle_profile_id") or "").strip()
 
 
+def _waypoint_count_from_mission_json(value: str | None) -> int:
+    mission = _load_json(value)
+    if not mission:
+        return 0
+
+    direct = mission.get("waypoints")
+    if isinstance(direct, list):
+        return sum(1 for wp in direct if isinstance(wp, dict))
+
+    route_artifacts = mission.get("route_artifacts")
+    if isinstance(route_artifacts, list):
+        route_count = 0
+        for artifact in route_artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_waypoints = artifact.get("waypoints")
+            if isinstance(artifact_waypoints, list):
+                route_count += sum(1 for wp in artifact_waypoints if isinstance(wp, dict))
+        if route_count:
+            return route_count
+
+    steps = mission.get("steps")
+    if isinstance(steps, list):
+        step_count = 0
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            step_waypoints = step.get("waypoints")
+            if isinstance(step_waypoints, list):
+                step_count += sum(1 for wp in step_waypoints if isinstance(wp, dict))
+        if step_count:
+            return step_count
+
+    tree = mission.get("tree")
+    if isinstance(tree, dict):
+        def _count_tree_waypoints(node: dict[str, Any]) -> int:
+            total = 0
+            if node.get("type") == "nav_leaf" and isinstance(node.get("waypoints"), list):
+                total += sum(1 for wp in node["waypoints"] if isinstance(wp, dict))
+            for child in node.get("children") or []:
+                if isinstance(child, dict):
+                    total += _count_tree_waypoints(child)
+            return total
+
+        return _count_tree_waypoints(tree)
+
+    return 0
+
+
 class MissionStore:
     """Per-user CRUD over the flat `missions` table (ADR 0021 §2).
 
@@ -300,9 +349,11 @@ class MissionStore:
         missions: list[dict[str, Any]] = []
         for row in rows:
             mission = dict(row)
+            active_revision_mission_json = mission.pop("active_revision_mission_json", None)
             mission["vehicle_profile_id"] = _vehicle_profile_id_from_mission_json(
-                mission.pop("active_revision_mission_json", None)
+                active_revision_mission_json
             )
+            mission["waypoint_count"] = _waypoint_count_from_mission_json(active_revision_mission_json)
             missions.append(mission)
         return missions
 

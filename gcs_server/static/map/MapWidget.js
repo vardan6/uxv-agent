@@ -9,7 +9,7 @@ import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
 import { GridLayer } from './layers/GridLayer.js';
 import { mapMissionsForList, assignPaletteColor } from './missionListLogic.js';
 import { missionColorOverrides } from './state/missionColorOverrides.js';
-import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
+import { missionSortPreference, sortMissions, SORT_OPTIONS } from './state/missionSortPreference.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { MissionColorPicker } from './ui/MissionColorPicker.js';
 import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
@@ -89,6 +89,12 @@ function opacityForMission(missionId, focusedMissionId) {
   if (!focusedMissionId) return 1;
   return missionId === focusedMissionId ? 1 : 0.25;
 }
+
+const MAP_ZOOM_OPTIONS = {
+  zoomSnap: 0.25,
+  zoomDelta: 0.25,
+  wheelPxPerZoomLevel: 160,
+};
 
 export class MapWidget {
   constructor(container, opts = {}) {
@@ -189,7 +195,7 @@ export class MapWidget {
       zoom: 1,
       minZoom: -6,
       maxZoom: 8,
-      zoomSnap: 0.5,
+      ...MAP_ZOOM_OPTIONS,
       attributionControl: false,
     });
     this._map.createPane('missionPane');
@@ -1101,11 +1107,14 @@ export class MapWidget {
     const paletteByMissionId = assignPaletteColor(this._missions, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
+    const currentSortId = missionSortPreference.get();
     const sortedMissions = sortMissions(
       this._missions,
-      missionSortPreference.get(),
+      currentSortId,
       { selectedMissionIds: this._selectedMissionIds, visibleMissionIds },
     );
+    const sortLabel = currentSortId !== 'updated_desc'
+      ? (SORT_OPTIONS.find((o) => o.id === currentSortId)?.label ?? '') : '';
 
     this._listPanel.renderMissions({
       missions: sortedMissions,
@@ -1118,6 +1127,7 @@ export class MapWidget {
       activeProfileId: this._activeProfileId,
       deleteGuardedMissionIds,
       canDeleteSelection,
+      sortLabel,
     });
 
     // Exclude the actively-edited Mission from the read-only overlay so only
