@@ -11,10 +11,9 @@ from typing import Any
 
 DRAFT_STATUSES = frozenset({
     "draft",
+    "proposed",
     "needs_clarification",
     "validation_failed",
-    "awaiting_approval",
-    "approved",
     "exported",
     "rejected",
     "superseded",
@@ -147,7 +146,7 @@ def _draft_status_from_validation(validation: dict[str, Any]) -> str:
         return "validation_failed"
     if status == "needs_clarification":
         return "needs_clarification"
-    return "awaiting_approval"
+    return "proposed"
 
 
 def _json(data: Any) -> str:
@@ -245,22 +244,6 @@ class MissionDraftService:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def approve_draft(self, draft_id: str, *, note: str = "") -> dict[str, Any] | None:
-        now = time.time()
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE ai_mission_drafts
-                SET status = 'approved', approved_at = ?, updated_at = ?, approval_note = ?
-                WHERE id = ? AND status = 'awaiting_approval'
-                """,
-                (now, now, str(note or ""), draft_id),
-            )
-            conn.commit()
-        if cursor.rowcount == 0:
-            return None
-        return self.get_draft(draft_id)
-
     def reject_draft(self, draft_id: str, *, note: str = "") -> dict[str, Any] | None:
         now = time.time()
         with self._connect() as conn:
@@ -268,7 +251,7 @@ class MissionDraftService:
                 """
                 UPDATE ai_mission_drafts
                 SET status = 'rejected', rejected_at = ?, updated_at = ?, approval_note = ?
-                WHERE id = ? AND status IN ('awaiting_approval', 'needs_clarification')
+                WHERE id = ? AND status IN ('proposed', 'needs_clarification')
                 """,
                 (now, now, str(note or ""), draft_id),
             )
@@ -279,7 +262,7 @@ class MissionDraftService:
 
     def mark_exported(self, draft_id: str, *, export_result: dict[str, Any]) -> dict[str, Any] | None:
         current = self.get_draft(draft_id)
-        if current is None or current.get("status") not in ("approved", "exported"):
+        if current is None or current.get("status") in ("rejected", "superseded", "validation_failed"):
             return None
 
         draft_payload = dict(current.get("draft") or {})
@@ -296,7 +279,7 @@ class MissionDraftService:
                 """
                 UPDATE ai_mission_drafts
                 SET status = 'exported', draft_json = ?, updated_at = ?
-                WHERE id = ? AND status IN ('approved', 'exported')
+                WHERE id = ? AND status NOT IN ('rejected', 'superseded', 'validation_failed')
                 """,
                 (_json(draft_payload), now, draft_id),
             )
@@ -312,7 +295,7 @@ class MissionDraftService:
                 """
                 UPDATE ai_mission_drafts
                 SET status = 'superseded', updated_at = ?
-                WHERE id = ? AND status IN ('draft', 'awaiting_approval', 'needs_clarification')
+                WHERE id = ? AND status IN ('draft', 'proposed', 'needs_clarification')
                 """,
                 (now, draft_id),
             )

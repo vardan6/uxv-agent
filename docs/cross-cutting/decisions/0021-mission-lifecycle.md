@@ -114,3 +114,4 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 - ADR 0012 → status updated to *Superseded by ADR 0021*; content preserved (invariants 2–4 still in force per § Consequences above).
 - ADR 0019 and ADR 0020 → unchanged; remain Accepted.
 - Implementation of Confirm and Autonomous modes plus the flat-Mission UI is new work; `design.md` (ai-agent, gcs) will catch up incrementally as code lands.
+- **2026-06-04 — `approved`/`awaiting_approval` status cleanup complete.** Both statuses removed from all Python frozensets, SQL guards, and JS sets. `approve_revision()`, `approve_revision_for_draft()`, `approve_draft()`, the REST `/approve` endpoint, and the graph approval-interrupt nodes (`request_planning_shell_approval`, `record_approval`) are deleted. New revisions initialize to `proposed`. The `approved_at` DB column is retained as a dead no-op.

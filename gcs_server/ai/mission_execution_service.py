@@ -21,14 +21,12 @@ from .mission_safety import parse_geofence
 
 MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
     "planning",
-    "awaiting_approval",
-    "approved",
     "exported",
     "cutover_pending",
     "executing",
 })
 
-MISSION_EXECUTION_READY_STATUSES = frozenset({"approved", "exported", "executing"})
+MISSION_EXECUTION_READY_STATUSES = frozenset({"exported", "executing"})
 MISSION_CONTROLLER_ID = "primary"
 
 
@@ -166,8 +164,6 @@ def _canonicalize_mission_payload(draft_payload: dict[str, Any], origin: Origin)
 def _operation_status_from_revision(status: str) -> str:
     clean = str(status or "").strip().lower()
     if clean in {
-        "awaiting_approval",
-        "approved",
         "exported",
         "cutover_pending",
         "executing",
@@ -685,7 +681,7 @@ class MissionExecutionService:
             target_resolution={"mode": "create"},
             draft_payload=draft_payload,
             validation={"ok": True},
-            draft_status="awaiting_approval",
+            draft_status="proposed",
             origin_override=origin,
         )
         return {
@@ -746,7 +742,7 @@ class MissionExecutionService:
             target_resolution={"mode": "edit_in_place"},
             draft_payload=payload,
             validation={"ok": True},
-            draft_status="awaiting_approval",
+            draft_status="proposed",
             parent_operation_id=op_id,
         )
         return {
@@ -843,12 +839,6 @@ class MissionExecutionService:
         if not revision_id:
             return None
         return self.get_revision(revision_id)
-
-    def approve_revision(self, revision_id: str, *, note: str = "") -> dict[str, Any] | None:
-        return self._set_revision_status_by_revision_id(revision_id, status="approved", note=note, timestamp_field="approved_at")
-
-    def approve_revision_for_draft(self, draft_id: str, *, note: str = "") -> dict[str, Any] | None:
-        return self._set_revision_status(draft_id, status="approved", note=note, timestamp_field="approved_at")
 
     def reject_revision(self, revision_id: str, *, note: str = "") -> dict[str, Any] | None:
         return self._set_revision_status_by_revision_id(revision_id, status="rejected", note=note, timestamp_field="rejected_at")
@@ -1596,14 +1586,14 @@ class MissionExecutionService:
                   mission_json, intent_json, target_resolution_json, validation_json,
                   review_context_json, provenance_json, client_version,
                   created_at, updated_at, approved_at, rejected_at
-                ) VALUES (?, ?, '', ?, 'awaiting_approval', ?, '{}', '{}', '{}', '{}', ?, 0, ?, ?, NULL, NULL)
+                ) VALUES (?, ?, '', ?, 'proposed', ?, '{}', '{}', '{}', '{}', ?, 0, ?, ?, NULL, NULL)
                 """,
                 (revision_id, operation_id, parent_revision_id, _json(mission), _json(provenance), now, now),
             )
             conn.execute(
                 """
                 UPDATE ai_mission_operations
-                SET active_revision_id = ?, status = 'awaiting_approval', updated_at = ?
+                SET active_revision_id = ?, status = 'proposed', updated_at = ?
                 WHERE id = ?
                 """,
                 (revision_id, now, operation_id),
@@ -1716,7 +1706,7 @@ class MissionExecutionService:
                 INSERT INTO ai_mission_operations (
                   id, session_id, source_message_id, status, active_revision_id,
                   policy_json, created_at, updated_at
-                ) VALUES (?, ?, ?, 'awaiting_approval', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'proposed', ?, ?, ?, ?)
                 """,
                 (
                     operation_id,
@@ -1732,7 +1722,7 @@ class MissionExecutionService:
             conn.execute(
                 """
                 UPDATE ai_mission_operations
-                SET active_revision_id = ?, status = 'awaiting_approval', updated_at = ?
+                SET active_revision_id = ?, status = 'proposed', updated_at = ?
                 WHERE id = ?
                 """,
                 (rebased_revision_id, now, operation_id),
@@ -1745,7 +1735,7 @@ class MissionExecutionService:
               mission_json, intent_json, target_resolution_json, validation_json,
               review_context_json, provenance_json, client_version,
               created_at, updated_at, approved_at, rejected_at
-            ) VALUES (?, ?, '', ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, '', ?, 'proposed', ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL)
             """,
             (
                 rebased_revision_id,
@@ -1886,7 +1876,7 @@ class MissionExecutionService:
             return {"ok": False, "status": "revision_not_found", "error": "mission revision not found"}
 
         status = str(revision.get("status") or "")
-        LOCKED = frozenset({"approved", "exported", "cutover_pending", "executing"})
+        LOCKED = frozenset({"exported", "cutover_pending", "executing"})
         if status in LOCKED:
             return {
                 "ok": False,

@@ -12,8 +12,7 @@ Node order:
     [prepare_clarification]     only when planner requests clarification
     validate_draft
     store_draft
-    request_planning_shell_approval  interrupt() durable HITL
-    record_approval | record_rejection
+    [record_rejection]           only when operator rejects via REST
     finalize_response
 
 Error path: capture_request -> finalize_error (fatal input errors only).
@@ -897,7 +896,7 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
     mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
     mission_store = getattr(rt.app_runtime, "mission_store", None)
     draft_id = str(state.get("draft_id") or "").strip() or f"ai-draft-{uuid.uuid4().hex[:12]}"
-    draft_status = str(state.get("approval_status") or "awaiting_approval")
+    draft_status = str(state.get("approval_status") or "proposed")
     validation = state.get("validation") or {}
     mission_operation_id = ""
     mission_revision_id = ""
@@ -1064,22 +1063,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
             parts.append(f"Blocker: {blocker}")
         for warning in validation.get("warnings") or []:
             parts.append(f"Warning: {warning}")
-        if approval_status == "awaiting_approval":
-            if mission_revision_id:
-                parts.append(
-                    "Use POST /api/ai/mission-revisions/{revision_id}/approve to approve this mission revision."
-                )
-            else:
-                parts.append("Mission revision link missing; retry planning to create a revision-backed draft.")
-        elif approval_status == "approved":
-            note = state.get("approval_note", "")
-            parts.append("Mission draft approved as a planning artifact.")
-            mission_export = state.get("mission_export") or {}
-            if mission_export.get("file_path"):
-                parts.append(f"Mission exported: {mission_export.get('file_path')}.")
-            if note:
-                parts.append(f"Operator note: {note}")
-        elif approval_status == "rejected":
+        if approval_status == "rejected":
             note = state.get("approval_note", "")
             parts.append("Mission draft rejected.")
             if note:
@@ -1377,134 +1361,8 @@ def _route_after_planner_loop(state: PlanningShellGraphState) -> str:
     return "finalize_response"
 
 
-# ── Phase 2 nodes ─────────────────────────────────────────────────────────────
-
-def request_planning_shell_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Pause for operator approval of the planning draft.
-
-    Phase 2: calls interrupt() when a checkpointer is available.
-    Fallback: returns operator_decision='pending_rest' so the REST approve/reject
-    APIs continue working without a running graph thread.
-    """
-    rt = _runtime(config)
-    draft = state.get("draft") or {}
-    draft_id = state.get("draft_id", "")
-
-    approval_payload = {
-        "type": "planning_shell_draft_approval",
-        "draft_id": draft_id,
-        "mission_operation_id": state.get("mission_operation_id", ""),
-        "mission_revision_id": state.get("mission_revision_id", ""),
-        "goal": draft.get("goal", ""),
-        "risks": draft.get("risks") or [],
-        "route_summary": _route_summary_for_approval(draft),
-        "execution_allowed": False,
-        "approval_scope": "planning_artifact_only",
-    }
-
-    if _INTERRUPT_AVAILABLE and rt.checkpointer is not None:
-        decision = lg_interrupt(approval_payload)
-        decision_str = str((decision or {}).get("decision", "approve"))
-        note = str((decision or {}).get("note", ""))
-        return {
-            "operator_decision": decision_str,
-            "approval_note": note,
-            "node_trace": [_node_entry("request_planning_shell_approval", mode="interrupt", decision=decision_str)],
-        }
-
-    # REST fallback — graph finishes normally; approval via separate API calls
-    return {
-        "operator_decision": "pending_rest",
-        "node_trace": [_node_entry("request_planning_shell_approval", mode="rest_fallback")],
-    }
-
-
-def record_approval(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Record operator approval on the stored draft."""
-    rt = _runtime(config)
-    draft_id = state.get("draft_id", "")
-    revision_id = str(state.get("mission_revision_id") or "").strip()
-    note = state.get("approval_note", "")
-    mission_execution = getattr(rt.app_runtime, "mission_execution_service", None)
-    mission_errors: list[dict[str, Any]] = []
-    approved: dict[str, Any] | None = None
-    if mission_execution is not None and revision_id:
-        try:
-            approved = mission_execution.approve_revision(revision_id, note=note)
-        except Exception as exc:
-            mission_errors.append({
-                "node": "record_approval",
-                "code": "mission_execution_approval_error",
-                "severity": "warning",
-                "message": str(exc),
-                "recoverable": True,
-            })
-    if approved is None:
-        mission_errors.append({
-            "node": "record_approval",
-            "code": "revision_approval_missing",
-            "severity": "warning",
-            "message": "linked mission revision could not be approved",
-            "recoverable": True,
-        })
-    mission_export: dict[str, Any] = {}
-    export_error = ""
-    if approved and _route_summary_for_approval(approved.get("mission") or approved.get("draft") or {}).get("waypoint_count"):
-        try:
-            result = MissionExportService().export(
-                approved,
-                home_position=_home_position_from_rover_state(state.get("rover_state") or {}),
-            )
-            if result.get("ok"):
-                export_synced = None
-                if mission_execution is not None and revision_id:
-                    try:
-                        export_synced = mission_execution.mark_revision_exported_by_revision_id(
-                            revision_id,
-                            export_result=result,
-                        )
-                    except Exception as exc:
-                        mission_errors.append({
-                            "node": "record_approval",
-                            "code": "mission_execution_export_sync_error",
-                            "severity": "warning",
-                            "message": str(exc),
-                            "recoverable": True,
-                        })
-                mission_export = (export_synced or {}).get("mission", {}).get("mission_export") or {
-                    "file_path": result.get("file_path", ""),
-                    "waypoint_count": result.get("waypoint_count", 0),
-                    "vehicle_type": result.get("vehicle_type", 0),
-                }
-            else:
-                export_error = str(result.get("error") or "mission export failed")
-        except Exception as exc:
-            export_error = str(exc)
-    errors = mission_errors
-    if export_error:
-        errors.append({
-            "node": "record_approval",
-            "code": "mission_export_failed",
-            "severity": "warning",
-            "message": export_error,
-            "recoverable": True,
-        })
-    return {
-        "approval_status": "approved",
-        "mission_export": mission_export,
-        "errors": errors,
-        "node_trace": [_node_entry(
-            "record_approval",
-            ok=not export_error,
-            draft_id=draft_id,
-            mission_export=mission_export,
-            export_error=export_error or None,
-        )],
-    }
-
-
 def record_rejection(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
-    """Record operator rejection on the stored draft."""
+    """Record operator rejection on the stored revision."""
     rt = _runtime(config)
     draft_id = state.get("draft_id", "")
     revision_id = str(state.get("mission_revision_id") or "").strip()
@@ -1624,30 +1482,13 @@ def _route_after_validate_draft(state: PlanningShellGraphState) -> str:
 
 
 def _route_after_store_draft(state: PlanningShellGraphState) -> str:
-    status = state.get("approval_status", "")
-    if status == "awaiting_approval":
-        return "request_planning_shell_approval"
-    return "finalize_response"
-
-
-def _route_after_approval(state: PlanningShellGraphState) -> str:
-    decision = state.get("operator_decision", "")
-    if decision == "reject":
-        return "record_rejection"
-    if decision == "approve":
-        return "record_approval"
-    # pending_rest or empty — go straight to finalize
     return "finalize_response"
 
 
 # ── Graph construction ────────────────────────────────────────────────────────
 
 def build_planning_shell_graph(checkpointer: Any = None):
-    """Build and compile the planning-shell graph.
-
-    Pass a LangGraph checkpointer to enable interrupt/resume approval.
-    Without a checkpointer the graph falls back to REST-only approval.
-    """
+    """Build and compile the planning-shell graph."""
     graph: StateGraph = StateGraph(PlanningShellGraphState)
 
     graph.add_node("capture_request", capture_request)
@@ -1656,8 +1497,6 @@ def build_planning_shell_graph(checkpointer: Any = None):
     graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("validate_draft", validate_draft)
     graph.add_node("store_draft", store_draft)
-    graph.add_node("request_planning_shell_approval", request_planning_shell_approval)
-    graph.add_node("record_approval", record_approval)
     graph.add_node("record_rejection", record_rejection)
     graph.add_node("finalize_response", finalize_response)
     graph.add_node("finalize_error", finalize_error)
@@ -1694,21 +1533,7 @@ def build_planning_shell_graph(checkpointer: Any = None):
             "store_draft": "store_draft",
         },
     )
-    graph.add_conditional_edges(
-        "store_draft",
-        _route_after_store_draft,
-        {"request_planning_shell_approval": "request_planning_shell_approval", "finalize_response": "finalize_response"},
-    )
-    graph.add_conditional_edges(
-        "request_planning_shell_approval",
-        _route_after_approval,
-        {
-            "record_approval": "record_approval",
-            "record_rejection": "record_rejection",
-            "finalize_response": "finalize_response",
-        },
-    )
-    graph.add_edge("record_approval", "finalize_response")
+    graph.add_edge("store_draft", "finalize_response")
     graph.add_edge("record_rejection", "finalize_response")
     graph.add_edge("finalize_response", END)
     graph.add_edge("finalize_error", END)
@@ -1786,18 +1611,11 @@ async def _emit_chunk_events(
                 "retrieval_citations": update.get("retrieval_citations") or [],
                 "ts": time.time(),
             })
-        if update.get("approval_status") == "awaiting_approval":
-            draft_id = update.get("draft_id") or current_state.get("draft_id", "")
-            yield _json_line({
-                "type": "mission_draft_approval_required",
-                "draft_id": draft_id,
-                "ts": time.time(),
-            })
-        if update.get("approval_status") in ("approved", "rejected"):
+        if update.get("approval_status") == "rejected":
             yield _json_line({
                 "type": "mission_draft_decision",
                 "draft_id": update.get("draft_id") or current_state.get("draft_id", ""),
-                "approval_status": update["approval_status"],
+                "approval_status": "rejected",
                 "ts": time.time(),
             })
 
@@ -1816,12 +1634,7 @@ async def stream_planning_shell_graph(
     source_message_id: str = "",
     source_controls: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
-    """Async generator that runs the graph and yields NDJSON event lines.
-
-    Phase 2: when the graph hits interrupt() at request_planning_shell_approval,
-    emits graph_interrupt with the thread_id and stops streaming. The client
-    then calls the resume endpoint with the operator decision.
-    """
+    """Async generator that runs the graph and yields NDJSON event lines."""
     run_id = uuid.uuid4().hex[:12]
     thread_id = f"ai-session:{session_id}:run:{run_id}"
     graph = build_planning_shell_graph(checkpointer=runtime.checkpointer)

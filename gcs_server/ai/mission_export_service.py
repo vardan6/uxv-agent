@@ -64,7 +64,7 @@ class MissionExportService:
         profile: VehicleProfile | None = None,
         home_position: dict[str, float] | None = None,
     ) -> dict[str, Any]:
-        """Serialize an approved draft to a .plan file.
+        """Serialize a mission draft to a .plan file.
 
         Returns a result dict with ok, file_path, waypoint_count, and plan.
         """
@@ -72,13 +72,6 @@ class MissionExportService:
             profile = get_active_profile()
 
         draft_id = str(draft.get("id") or draft.get("draft_id") or "unknown")
-        status = str(draft.get("status") or "")
-        if status not in ("approved", "exported"):
-            return {
-                "ok": False,
-                "error": f"artifact '{draft_id}' is not approved or exported (status='{status}'); export requires approval",
-                "draft_id": draft_id,
-            }
 
         waypoints = self._collect_waypoints(draft)
         if not waypoints:

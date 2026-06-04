@@ -1486,10 +1486,10 @@ function handlePlanningShellStreamEvent(sessionId, eventData) {
       eventData.retrieval_citations || [],
     );
   } else if (eventData.type === 'mission_draft_created') {
-    setAiStatus(`Draft created (${eventData.draft_id || '?'}). Awaiting approval.`);
+    setAiStatus(`Draft created (${eventData.draft_id || '?'}).`);
   } else if (eventData.type === 'mission_draft_decision') {
     const status = eventData.approval_status || '';
-    setAiStatus(`Draft ${status}.`, status === 'approved' ? 'ok' : 'warn');
+    setAiStatus(`Draft ${status}.`, status === 'rejected' ? 'warn' : 'ok');
   } else if (eventData.type === 'graph_interrupt') {
     live.pendingInterrupt = {
       threadId: eventData.thread_id || live.planningShellThreadId || '',

@@ -412,7 +412,7 @@ class ToolRegistry:
             ),
             tool(
                 "export_mission",
-                "Convert an approved mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. The draft_id is the id returned by propose_mission_draft — NOT a route_hash from plan_route_* (those only fingerprint waypoints). Only callable after the operator has approved the draft (approval interrupt resolved positively). If called on an unapproved draft, returns a structured rejection — do not retry until approval is granted. If draft_id is unknown, the result lists available_drafts for this session. Returns file_path, waypoint_count, and the plan structure.",
+                "Convert a mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. The draft_id is the id returned by propose_mission_draft — NOT a route_hash from plan_route_* (those only fingerprint waypoints). If draft_id is unknown, the result lists available_drafts for this session. Returns file_path, waypoint_count, and the plan structure.",
                 PLANNING,
                 self._export_mission,
                 side_effects=frozenset({"writes_file"}),
@@ -474,14 +474,14 @@ class ToolRegistry:
             # Autonomous binds execute_mission; cancel_execution/abort always bind.
             tool(
                 "arm_execution",
-                "Confirm-mode only: arm an approved Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
+                "Confirm-mode only: arm a Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
                 EXECUTION,
                 self._arm_execution,
                 side_effects=frozenset({"drives_rover"}),
             ),
             tool(
                 "execute_mission",
-                "Autonomous-mode only: run an approved Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
+                "Autonomous-mode only: run a Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
                 EXECUTION,
                 self._execute_mission,
                 side_effects=frozenset({"drives_rover"}),
@@ -1247,12 +1247,12 @@ class ToolRegistry:
                 f"'{requested_id}' is a route_hash, not a draft_id. A route_hash only "
                 "fingerprints waypoints — it is not a persisted draft. Call "
                 "propose_mission_draft with the route waypoints first to create a draft, "
-                "get it approved, then call export_mission with the returned draft_id."
+                "then call export_mission with the returned draft_id."
             )
         else:
             hint = (
                 f"draft '{requested_id}' not found. Create one with propose_mission_draft "
-                "(get it approved), then export it with the returned draft_id."
+                "then export it with the returned draft_id."
             )
         return None, {
             "ok": False,

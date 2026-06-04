@@ -23,7 +23,7 @@ import { ConfirmExecutionBanner } from './ui/ConfirmExecutionBanner.js';
 import { BasemapPanel } from './ui/BasemapPanel.js';
 import { editState } from './state/editState.js';
 
-const LOCKED_STATUSES = new Set(['approved', 'exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
+const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
 const DEFAULT_VISIBLE_MISSION_LIMIT = 3;
 
 function collectEditableWaypoints(mission = {}) {

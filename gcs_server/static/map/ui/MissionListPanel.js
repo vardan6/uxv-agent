@@ -1,19 +1,16 @@
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
 // edit + execute resolve to the Mission's active revision and are gated by its
-// status. executing → locked (no edit/execute); approved|exported|
-// cutover_pending → executable. approve/reject stay off the flat row (draft
-// plumbing is internal).
-const MISSION_ROW_EDITABLE = new Set(['proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending']);
-const MISSION_ROW_EXECUTABLE = new Set(['approved', 'exported', 'cutover_pending']);
+// status. executing → locked (no edit/execute); exported|cutover_pending →
+// executable. approve/reject are removed — play button gates execution.
+const MISSION_ROW_EDITABLE = new Set(['proposed', 'planning', 'exported', 'cutover_pending']);
+const MISSION_ROW_EXECUTABLE = new Set(['exported', 'cutover_pending']);
 
 const VEHICLE_ICON = { ground: '🚗', multirotor: '🚁', fixed_wing: '✈️' };
 
 // Maps activeRevisionStatus → CSS class applied to the row div for status stripe colouring.
 const STATUS_CLASS = {
   proposed: 'is-proposed',
-  awaiting_approval: 'is-proposed',
   planning: 'is-proposed',
-  approved: 'is-approved',
   exported: 'is-approved',
   cutover_pending: 'is-approved',
   executing: 'is-executing',
@@ -25,7 +22,7 @@ const STATUS_CLASS = {
 
 // Statuses that don't need a visible label (normal/unremarkable states).
 const HIDDEN_STATUS_LABELS = new Set([
-  'proposed', 'awaiting_approval', 'planning', 'approved',
+  'proposed', 'planning',
   'exported', 'cutover_pending', 'unknown', '',
 ]);
 

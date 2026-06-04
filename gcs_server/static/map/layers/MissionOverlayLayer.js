@@ -23,12 +23,10 @@ function findSnapTarget(currentLl, waypoints, excludeIndex, map) {
 }
 
 const STYLE_BY_STATUS = {
-  proposed:          { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  awaiting_approval: { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  planning:          { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  approved:          { dashed: false, opacity: 1.0, fillOpacity: 1 },
-  exported:          { dashed: false, opacity: 1.0, fillOpacity: 1 },
-  cutover_pending:   { dashed: false, opacity: 1.0, fillOpacity: 1 },
+  proposed:        { dashed: true,  opacity: 1.0, fillOpacity: 0 },
+  planning:        { dashed: true,  opacity: 1.0, fillOpacity: 0 },
+  exported:        { dashed: false, opacity: 1.0, fillOpacity: 1 },
+  cutover_pending: { dashed: false, opacity: 1.0, fillOpacity: 1 },
   executing:         { dashed: false, opacity: 1.0, fillOpacity: 1 },
   completed:         { dashed: false, opacity: 0.35, fillOpacity: 0.35 },
   superseded:        { dashed: false, opacity: 0.35, fillOpacity: 0.35 },
@@ -62,7 +60,7 @@ export class MissionOverlayLayer {
 
     const style = styleFor(payload.status);
     const lineOpacity = opacity ?? style.opacity;
-    const fillOpacity = payload.status === 'proposed' || payload.status === 'awaiting_approval' || payload.status === 'planning'
+    const fillOpacity = payload.status === 'proposed' || payload.status === 'planning'
       ? 0
       : (opacity ?? style.fillOpacity);
     const routeLines = payload.features.filter(f => f.type === 'route_line');

@@ -35,7 +35,7 @@ export const missionSortPreference = {
 // Status ordering for the "Status" sort — actionable first, terminal last.
 const STATUS_ORDER = [
   'executing', 'armed', 'awaiting_confirmation',
-  'proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending',
+  'proposed', 'planning', 'exported', 'cutover_pending',
   'completed', 'superseded', 'rejected', 'validation_failed',
   'unknown', '',
 ];

@@ -69,7 +69,7 @@ class PlanningShellGraphState(TypedDict, total=False):
     validation: dict
     draft_usage_metadata: dict
     draft_response_metadata: dict
-    approval_status: str           # awaiting_approval | approved | rejected | validation_failed | needs_clarification
+    approval_status: str           # proposed | rejected | validation_failed | needs_clarification
     approval_note: str
     operator_decision: str         # Phase 2: approve | reject | pending_rest
 

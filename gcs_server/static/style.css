@@ -4010,10 +4010,6 @@ code {
   background: #8da0cb;
 }
 
-.mission-list-row.is-approved .mission-row-status {
-  background: #2ea043;
-}
-
 .mission-list-row.is-executing .mission-row-status {
   background: #c72e0f;
 }
