@@ -1906,7 +1906,8 @@ async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
 
 @app.patch("/api/ai/missions/{mission_id}")
 async def rename_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
-    """Rename a flat Mission (PATCH with {name})."""
+    """Update a flat Mission. PATCH with {name} to rename and/or {color} to set
+    the persisted per-Mission colour override (empty string clears it)."""
     runtime = _runtime(request)
     mission_store = getattr(runtime, "mission_store", None)
     if mission_store is None:
@@ -1917,12 +1918,25 @@ async def rename_mission_endpoint(mission_id: str, request: Request) -> JSONResp
         payload = {}
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
-    name = str(payload.get("name", "") or "").strip()
-    if not name:
-        return JSONResponse({"ok": False, "error": "name must be a non-empty string"}, status_code=400)
-    updated = mission_store.rename_mission(str(mission_id or "").strip(), name=name)
-    if updated is None:
-        raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    has_name = "name" in payload
+    has_color = "color" in payload
+    if not has_name and not has_color:
+        return JSONResponse({"ok": False, "error": "provide at least one of: name, color"}, status_code=400)
+    mid = str(mission_id or "").strip()
+    updated = None
+    if has_name:
+        name = str(payload.get("name", "") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name must be a non-empty string"}, status_code=400)
+        updated = mission_store.rename_mission(mid, name=name)
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
+    if has_color:
+        # Empty string is a valid value here: it clears the override.
+        color = str(payload.get("color", "") or "").strip()
+        updated = mission_store.set_color(mid, color=color)
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")
     return JSONResponse({"ok": True, "mission": updated})
 
 

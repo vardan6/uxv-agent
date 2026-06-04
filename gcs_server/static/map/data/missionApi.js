@@ -258,3 +258,20 @@ export async function renameMission(missionId, name) {
     return { ok: false, error: err.message || 'Network error' };
   }
 }
+
+// PATCH /api/ai/missions/{id} with {color}: persist the per-mission colour
+// override server-side. Pass '' to clear it (falls back to the auto palette).
+export async function setMissionColor(missionId, color) {
+  try {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(missionId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: color || '' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.detail || data.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}

@@ -309,6 +309,11 @@ class MissionStore:
     def rename_mission(self, mission_id: str, *, name: str) -> dict[str, Any] | None:
         return self._update_fields(mission_id, {"name": str(name or "")})
 
+    def set_color(self, mission_id: str, *, color: str) -> dict[str, Any] | None:
+        # Persist the per-Mission colour override. Empty string clears it (the
+        # sidebar then falls back to its by-visibility auto palette).
+        return self._update_fields(mission_id, {"color": str(color or "")})
+
     def set_origin(
         self,
         mission_id: str,

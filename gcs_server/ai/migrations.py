@@ -169,7 +169,8 @@ def _migration_006_create_missions(conn: sqlite3.Connection) -> None:
           origin_chat_id TEXT NOT NULL DEFAULT '',
           client_version INTEGER NOT NULL DEFAULT 0,
           created_at REAL NOT NULL,
-          updated_at REAL NOT NULL
+          updated_at REAL NOT NULL,
+          color TEXT NOT NULL DEFAULT ''
         )
         """
     )
@@ -380,7 +381,8 @@ def _migration_017_reconcile_missions_schema(conn: sqlite3.Connection) -> None:
           active_operation_id TEXT NOT NULL DEFAULT '',
           origin_lat REAL NOT NULL DEFAULT 0.0,
           origin_lon REAL NOT NULL DEFAULT 0.0,
-          origin_alt REAL NOT NULL DEFAULT 0.0
+          origin_alt REAL NOT NULL DEFAULT 0.0,
+          color TEXT NOT NULL DEFAULT ''
         )
         """
     )
@@ -444,6 +446,16 @@ def _migration_017_reconcile_missions_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE missions_pre17")
 
 
+def _migration_018_add_mission_color(conn: sqlite3.Connection) -> None:
+    # Per-Mission colour override, persisted server-side so a user's colour
+    # choice survives reloads and is shared across clients. Empty string means
+    # "no override" — the sidebar falls back to its by-visibility auto palette.
+    # Ports master's server-side mission colour onto this branch's flat-Mission
+    # store (master kept it on `mission_repository`, dropped here).
+    if _table_exists(conn, "missions") and not _column_exists(conn, "missions", "color"):
+        conn.execute("ALTER TABLE missions ADD COLUMN color TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
@@ -456,6 +468,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (9, "add_mission_origin_datum", _migration_009_add_mission_origin_datum),
     (11, "restore_mission_execution_tables", _migration_011_restore_mission_execution_tables),
     (17, "reconcile_missions_schema", _migration_017_reconcile_missions_schema),
+    (18, "add_mission_color", _migration_018_add_mission_color),
 )
 
 

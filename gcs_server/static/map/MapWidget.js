@@ -1,4 +1,4 @@
-import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission } from './data/missionApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
 import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
@@ -423,6 +423,9 @@ export class MapWidget {
       return;
     }
 
+    // Hydrate persisted per-mission colour overrides from the server before
+    // assigning palette colours so a saved colour survives reloads / other clients.
+    missionColorOverrides.seedFromServer(missionsPayload.missions || []);
     this._missions = mapMissionsForList(missionsPayload.missions || []);
     this._missionsById = new Map(this._missions.map((m) => [m.id, m]));
     this._syncVisibilityState(this._missions);
@@ -1533,10 +1536,18 @@ export class MapWidget {
       onPick: (color) => {
         missionColorOverrides.set(missionId, color);
         this._render();
+        // Persist the override server-side (fire-and-forget; local cache already
+        // updated for instant feedback).
+        setMissionColor(missionId, color).then((res) => {
+          if (!res.ok) console.warn('Failed to persist mission colour:', res.error);
+        });
       },
       onReset: () => {
         missionColorOverrides.clear(missionId);
         this._render();
+        setMissionColor(missionId, '').then((res) => {
+          if (!res.ok) console.warn('Failed to clear mission colour:', res.error);
+        });
       },
     });
   }

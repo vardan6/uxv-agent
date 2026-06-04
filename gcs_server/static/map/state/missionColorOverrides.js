@@ -28,4 +28,19 @@ export const missionColorOverrides = {
     const m = _loadAll(); delete m[String(missionId)]; _saveAll(m);
   },
   getAll() { return _loadAll(); },
+  // Hydrate the local cache from server-persisted mission colours so a user's
+  // override survives reloads and is shared across clients. The server `color`
+  // field is the source of truth: a non-empty value sets the override, an empty
+  // one clears it. `missions` is the raw payload from GET /api/ai/missions.
+  seedFromServer(missions = []) {
+    const m = _loadAll();
+    for (const mission of missions) {
+      const id = String(mission?.id ?? '');
+      if (!id) continue;
+      const color = String(mission?.color ?? '').trim();
+      if (color) m[id] = color;
+      else delete m[id];
+    }
+    _saveAll(m);
+  },
 };
