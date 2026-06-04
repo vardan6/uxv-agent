@@ -36,6 +36,7 @@ try:
     from gcs_server.ai.context_service import AIContextService
     from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from gcs_server.ai.data_access import build_data_access_manifest
+    from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
     from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from gcs_server.ai.agent_traces import AgentTraceStore
     from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
@@ -60,6 +61,7 @@ except ModuleNotFoundError:
     from ai.context_service import AIContextService
     from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
     from ai.data_access import build_data_access_manifest
+    from ai.controller_mission_adapter_factory import build_controller_mission_adapter
     from ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
     from ai.agent_traces import AgentTraceStore
     from ai.graph_runtime import PlanningShellGraphRuntime
@@ -227,6 +229,19 @@ async def lifespan(app: FastAPI):
         await runtime.control_service.stop()
         await runtime.mqtt_runtime.stop()
         runtime.ai_executor.shutdown(wait=False, cancel_futures=True)
+
+
+_VALID_ADAPTER_TYPES = frozenset({"json_file", "file_sink", "mavlink", "mavsdk"})
+
+
+def _read_controller_adapter_config(logging_config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": str(logging_config.get("controller_mission_adapter", "json_file") or "json_file").strip().lower(),
+        "mavlink_url": str(logging_config.get("controller_mission_mavlink_url") or ""),
+        "mavsdk_url": str(logging_config.get("controller_mission_mavsdk_url") or ""),
+        "heartbeat_timeout_s": float(logging_config.get("controller_mission_heartbeat_timeout_s", 5.0) or 5.0),
+        "request_timeout_s": float(logging_config.get("controller_mission_request_timeout_s", 5.0) or 5.0),
+    }
 
 
 def _resolve_gcs_data_path(path: object) -> Path:
@@ -3074,6 +3089,7 @@ async def get_mission_lifecycle(request: Request) -> dict[str, Any]:
             config.mission_lifecycle,
             build_default=resolve_build_default_mode(config),
         ),
+        "controller_adapter": _read_controller_adapter_config(config.logging),
         "build_default_mode": resolve_build_default_mode(config),
     }
 
@@ -3092,11 +3108,31 @@ async def save_mission_lifecycle(request: Request) -> JSONResponse:
         settings_payload,
         build_default=resolve_build_default_mode(config),
     )
+    if "controller_adapter" in payload:
+        adapter_payload = payload["controller_adapter"]
+        if not isinstance(adapter_payload, dict):
+            raise HTTPException(status_code=400, detail="controller_adapter must be an object")
+        adapter_type = str(adapter_payload.get("type", "json_file") or "json_file").strip().lower()
+        if adapter_type not in _VALID_ADAPTER_TYPES:
+            raise HTTPException(status_code=400, detail=f"unsupported adapter type: {adapter_type}")
+        logging_cfg = dict(config.raw.get("logging", {}))
+        logging_cfg["controller_mission_adapter"] = adapter_type
+        logging_cfg["controller_mission_mavlink_url"] = str(adapter_payload.get("mavlink_url") or "")
+        logging_cfg["controller_mission_mavsdk_url"] = str(adapter_payload.get("mavsdk_url") or "")
+        logging_cfg["controller_mission_heartbeat_timeout_s"] = float(adapter_payload.get("heartbeat_timeout_s") or 5.0)
+        logging_cfg["controller_mission_request_timeout_s"] = float(adapter_payload.get("request_timeout_s") or 5.0)
+        config.raw["logging"] = logging_cfg
+        try:
+            new_adapter = build_controller_mission_adapter(config.logging, path_resolver=_resolve_gcs_data_path)
+            runtime.mission_execution_service._controller_adapter = new_adapter
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     save_config(config)
     return JSONResponse(
         {
             "ok": True,
             "mission_lifecycle": config.raw["mission_lifecycle"],
+            "controller_adapter": _read_controller_adapter_config(config.logging),
             "build_default_mode": resolve_build_default_mode(config),
         }
     )

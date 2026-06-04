@@ -241,6 +241,34 @@
                 <span>Default mission name template</span>
                 <input id="mission-name-template" type="text" placeholder="Untitled mission">
               </label>
+              <p class="section-kicker" style="margin-top:1.2rem">Hardware Link</p>
+              <label>
+                <span>FC adapter type</span>
+                <select id="fc-adapter-type">
+                  <option value="json_file">json_file — state file (no real FC)</option>
+                  <option value="file_sink">file_sink — write missions to disk</option>
+                  <option value="mavlink">mavlink — MAVLink UDP/TCP</option>
+                  <option value="mavsdk">mavsdk — MAVSDK gRPC</option>
+                </select>
+              </label>
+              <label id="fc-mavlink-url-row" hidden>
+                <span>MAVLink connection URL</span>
+                <input id="fc-mavlink-url" type="text" placeholder="udp:127.0.0.1:14550">
+              </label>
+              <label id="fc-mavsdk-url-row" hidden>
+                <span>MAVSDK connection URL</span>
+                <input id="fc-mavsdk-url" type="text" placeholder="udp://127.0.0.1:14540">
+              </label>
+              <div id="fc-timeout-rows" hidden>
+                <label>
+                  <span>Heartbeat timeout (s)</span>
+                  <input id="fc-heartbeat-timeout" type="number" min="1" max="60" step="0.5" value="5">
+                </label>
+                <label>
+                  <span>Request timeout (s)</span>
+                  <input id="fc-request-timeout" type="number" min="1" max="60" step="0.5" value="5">
+                </label>
+              </div>
               <div class="form-actions form-actions-inline">
                 <button id="save-mission-lifecycle" type="button">Save Mission Lifecycle</button>
               </div>
