@@ -498,6 +498,28 @@ class ToolRegistry:
                 EXECUTION,
                 self._abort_execution,
             ),
+            # ── Mission-keyed pause / resume / stop (B.4) ────────────────────
+            # These work on any active execution regardless of who started it
+            # (operator via sidebar or AI via execute_mission). They do NOT
+            # require a session-owned execution — only a mission_id.
+            tool(
+                "pause_mission",
+                "Pause a running mission by its mission id. Works whether the mission was started by the operator (sidebar) or by AI (execute_mission). The rover parks at the FC level until resumed. Use resolve_mission_reference first if you only have a name or index, not the id.",
+                EXECUTION,
+                self._pause_mission_execution,
+            ),
+            tool(
+                "resume_mission",
+                "Resume a paused mission by its mission id. Use after pause_mission or when the operator asks to continue a mission that was paused. Use resolve_mission_reference first if you only have a name or index.",
+                EXECUTION,
+                self._resume_mission_execution,
+            ),
+            tool(
+                "stop_mission",
+                "Stop (abort) a running or paused mission by its mission id. Cooperatively halts the behavior tree at the next node-step boundary. Works regardless of who started the mission. Use resolve_mission_reference first if you only have a name or index.",
+                EXECUTION,
+                self._stop_mission_execution,
+            ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
         return {definition.name: definition for definition in with_contracts}
@@ -1533,6 +1555,24 @@ class ToolRegistry:
         if active.thread and active.thread.is_alive():
             return sessions.request_abort(context.session_id)
         return sessions.cancel(context.session_id)
+
+    def _pause_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.pause_for_mission(mission_id)
+
+    def _resume_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.resume_for_mission(mission_id)
+
+    def _stop_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.abort_for_mission(mission_id)
 
 
 def _resolve_confirm_timeout_s(runtime: Any) -> int:
