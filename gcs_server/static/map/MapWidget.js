@@ -24,6 +24,7 @@ import { BasemapPanel } from './ui/BasemapPanel.js';
 import { editState } from './state/editState.js';
 
 const LOCKED_STATUSES = new Set(['approved', 'exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
+const DEFAULT_VISIBLE_MISSION_LIMIT = 3;
 
 function collectEditableWaypoints(mission = {}) {
   if (Array.isArray(mission.waypoints) && mission.waypoints.length) {
@@ -135,6 +136,7 @@ export class MapWidget {
     this._activeProfileId = 'rover_default';
     this._profilesById = {};
     this._controllerVersion = null;
+    this._executionState = null;
     this._vehicleLayer = null;
     this._pollTimer = null;
     this._confirmModal = null;
@@ -295,6 +297,7 @@ export class MapWidget {
       this._resizeObserver.observe(this._container);
     }
     this._startPolling();
+    this._pollExecutionState().catch(() => {});
     this.refresh().catch((error) => this._showError(error?.message || 'Map refresh failed'));
   }
 
@@ -399,9 +402,11 @@ export class MapWidget {
       this._selectedMissionIds = new Set();
       this._selectionAnchorId = '';
       this._seenMissionIds = null;
+      this._executionState = null;
       // A new session owns a fresh execution; drop any banner from the old one.
       this._confirmBanner?.hide();
     }
+    this._pollExecutionState().catch(() => {});
     this.refresh();
   }
 
@@ -467,10 +472,21 @@ export class MapWidget {
 
   async _pollExecutionState() {
     if (!this._confirmBanner) return;
-    if (!this._sessionId) { this._confirmBanner.hide(); return; }
+    if (!this._sessionId) {
+      this._executionState = null;
+      this._confirmBanner.hide();
+      return;
+    }
     const result = await getExecutionState(this._sessionId);
     if (!result.ok) return;
-    this._confirmBanner.show(result.execution);
+    const nextState = result.execution || null;
+    const previousKey = `${this._executionState?.mission_id || ''}:${this._executionState?.status || ''}`;
+    const nextKey = `${nextState?.mission_id || ''}:${nextState?.status || ''}`;
+    this._executionState = nextState;
+    this._confirmBanner.show(nextState);
+    if (previousKey !== nextKey && this._missions.length) {
+      this._render();
+    }
   }
 
   async _handleConfirmExecution() {
@@ -491,6 +507,22 @@ export class MapWidget {
       clearTimeout(this._pollTimer);
       this._pollTimer = null;
     }
+  }
+
+  _deleteGuardedMissionIds() {
+    const missionId = String(this._executionState?.mission_id || '');
+    const status = String(this._executionState?.status || '');
+    if (!missionId || !new Set(['armed', 'awaiting_confirm', 'running']).has(status)) {
+      return new Set();
+    }
+    return new Set([missionId]);
+  }
+
+  _isMissionDeleteBlocked(missionId) {
+    const id = String(missionId || '');
+    if (!id) return false;
+    if (this._deleteGuardedMissionIds().has(id)) return true;
+    return String(this._missionsById.get(id)?.activeRevisionStatus || '') === 'executing';
   }
 
   // Resolve a flat Mission to its active revision id (overlay/edit/execute
@@ -550,6 +582,10 @@ export class MapWidget {
     if (this._actionBusy) return;
     const id = String(missionId || '').trim();
     if (!id) return;
+    if (this._isMissionDeleteBlocked(id)) {
+      this._showError('Mission cannot be deleted while armed, awaiting confirmation, or executing.');
+      return;
+    }
     this._actionBusy = true;
     const result = await deleteMission(id);
     this._actionBusy = false;
@@ -571,6 +607,10 @@ export class MapWidget {
 
   async _handleDeleteSelectedMissions() {
     const ids = [...this._selectedMissionIds];
+    if (ids.some((id) => this._isMissionDeleteBlocked(id))) {
+      this._showError('Selection includes a mission that is armed, awaiting confirmation, or executing.');
+      return;
+    }
     for (const id of ids) {
       await this._handleDeleteMission(id);
     }
@@ -975,7 +1015,7 @@ export class MapWidget {
       // First sync: default to overlaying everything (capped) and focusing one.
       if (!this._visibleMissionOrder.length) {
         const defaults = missions.map((m) => m.id).filter(Boolean);
-        this._visibleMissionOrder = enforceVisibilityCap(defaults, 3, executingIds);
+        this._visibleMissionOrder = enforceVisibilityCap(defaults, DEFAULT_VISIBLE_MISSION_LIMIT, executingIds);
         this._focusedMissionId = this._visibleMissionOrder[0] || '';
       }
     } else {
@@ -987,7 +1027,7 @@ export class MapWidget {
         for (const id of newIds) {
           if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
         }
-        this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, [...executingIds, newest]);
+        this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, DEFAULT_VISIBLE_MISSION_LIMIT, [...executingIds, newest]);
         this._focusedMissionId = newest;
       }
     }
@@ -1021,6 +1061,9 @@ export class MapWidget {
   _render() {
     const editedMissionId = this._editingMissionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
+    const deleteGuardedMissionIds = this._deleteGuardedMissionIds();
+    const canDeleteSelection = this._selectedMissionIds.size > 0
+      && [...this._selectedMissionIds].every((id) => !this._isMissionDeleteBlocked(id));
     const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
@@ -1037,7 +1080,10 @@ export class MapWidget {
       selectedMissionIds: this._selectedMissionIds,
       paletteByMissionId,
       editingMissionId: this._editingMissionId,
-      vehicleKind: this._profilesById[this._activeProfileId]?.kind || 'ground',
+      profilesById: this._profilesById,
+      activeProfileId: this._activeProfileId,
+      deleteGuardedMissionIds,
+      canDeleteSelection,
     });
 
     // Exclude the actively-edited Mission from the read-only overlay so only
@@ -1269,9 +1315,8 @@ export class MapWidget {
   }
 
   async _toggleVisibility(missionId) {
-    const executingIds = this._executingMissionIds();
     if (this._visibleMissionOrder.includes(missionId)) {
-      if (executingIds.includes(missionId)) return;
+      if (this._executingMissionIds().includes(missionId)) return;
       this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== missionId);
       if (this._focusedMissionId === missionId) {
         this._focusedMissionId = this._visibleMissionOrder[0] || '';
@@ -1280,7 +1325,6 @@ export class MapWidget {
       return;
     }
     this._visibleMissionOrder.push(missionId);
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, executingIds);
     if (!this._overlayCacheByMissionId.has(missionId)) {
       const payload = await getMissionOverlay(missionId);
       if (payload.ok) this._overlayCacheByMissionId.set(missionId, payload);
@@ -1301,9 +1345,6 @@ export class MapWidget {
     this._lastFitKey = null;
     if (id && !this._visibleMissionOrder.includes(id)) {
       this._visibleMissionOrder.push(id);
-      this._visibleMissionOrder = enforceVisibilityCap(
-        this._visibleMissionOrder, 3, [...this._executingMissionIds(), id],
-      );
       if (!this._overlayCacheByMissionId.has(id)) {
         const payload = await getMissionOverlay(id);
         if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
@@ -1333,10 +1374,6 @@ export class MapWidget {
             if (!this._overlayCacheByMissionId.has(rangeId)) toFetch.push(rangeId);
           }
         }
-        const alwaysOn = [...this._executingMissionIds(), this._focusedMissionId].filter(Boolean);
-        this._visibleMissionOrder = enforceVisibilityCap(
-          this._visibleMissionOrder, 3, alwaysOn,
-        );
         if (toFetch.length) {
           await Promise.all(toFetch.map(async (rid) => {
             const payload = await getMissionOverlay(rid);
@@ -1356,13 +1393,10 @@ export class MapWidget {
       }
     } else {
       this._selectedMissionIds.add(id);
-      // Show on map when selected: fetch overlay and make visible.
+      // Show on map when selected: explicit operator intent should not evict
+      // previously-visible missions behind a "soft" auto-layout cap.
       if (!this._visibleMissionOrder.includes(id)) {
         this._visibleMissionOrder.push(id);
-        const alwaysOn = [...this._executingMissionIds(), this._focusedMissionId].filter(Boolean);
-        this._visibleMissionOrder = enforceVisibilityCap(
-          this._visibleMissionOrder, 3, alwaysOn,
-        );
         if (!this._overlayCacheByMissionId.has(id)) {
           const payload = await getMissionOverlay(id);
           if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
@@ -1382,11 +1416,9 @@ export class MapWidget {
   }
 
   async _showSelectedMissions() {
-    const executingIds = this._executingMissionIds();
     for (const id of this._selectedMissionIds) {
       if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
     }
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, executingIds);
     await Promise.all(this._visibleMissionOrder.map(async (id) => {
       if (this._overlayCacheByMissionId.has(id)) return;
       const payload = await getMissionOverlay(id);
@@ -1412,7 +1444,6 @@ export class MapWidget {
     if (!nextMissionId) return;
     this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== nextMissionId);
     this._visibleMissionOrder.push(nextMissionId);
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, 3, this._executingMissionIds());
     this._focusedMissionId = nextMissionId;
   }
 
@@ -1496,8 +1527,8 @@ export class MapWidget {
         this._paletteByMissionId.set(missionId, effective);
         this._refreshOverlayColors();
         const row = this._listEl.querySelector(`[data-row-mission-id="${missionId}"]`);
-        const dot = row?.querySelector('.mission-row-color-dot');
-        if (dot) dot.style.setProperty('--mission-color', effective);
+        const chip = row?.querySelector('.mission-row-status');
+        if (chip) chip.style.setProperty('--mission-color', effective);
       },
       onPick: (color) => {
         missionColorOverrides.set(missionId, color);

@@ -1870,7 +1870,11 @@ async def set_mission_geofence(mission_id: str, request: Request) -> JSONRespons
 
 @app.delete("/api/ai/missions/{mission_id}")
 async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
-    """Delete a flat Mission by id. Refuses if the Mission is currently executing."""
+    """Delete a flat Mission by id.
+
+    Refuses while the Mission is executing or while a Confirm-mode run is armed
+    / awaiting confirmation for that Mission.
+    """
     runtime = _runtime(request)
     mission_store = getattr(runtime, "mission_store", None)
     if mission_store is None:
@@ -1882,6 +1886,18 @@ async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
     status = str((mission.get("activeRevisionStatus") or mission.get("active_revision_status") or "")).strip()
     if status == "executing":
         return JSONResponse({"ok": False, "error": "cannot delete a mission that is currently executing"}, status_code=409)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    active = sessions.get_for_mission(mid) if sessions is not None else None
+    active_status = str(getattr(active, "status", "") or "").strip()
+    if active_status in {"armed", "awaiting_confirm", "running"}:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "cannot delete a mission that is armed, awaiting confirmation, or running",
+                "execution_status": active_status,
+            },
+            status_code=409,
+        )
     ok = mission_store.delete_mission(mid)
     if not ok:
         raise HTTPException(status_code=404, detail=f"mission '{mission_id}' not found")

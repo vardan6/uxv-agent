@@ -145,7 +145,7 @@ Key frontend modules under `static/map/`:
 | `MapWidget.js` | Root widget; Leaflet init, layer orchestration, keyboard shortcuts |
 | `layers/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
 | `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
-| `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, per-row edit + legacy linear-plan upload (▶), and batch show/hide; row markup escapes AI-/operator-derived names |
+| `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, five fixed per-row action slots (play/pause, stop, edit, delete, visibility), batch show/hide. Row markup escapes AI-/operator-derived names. See [requirements.md §Mission Row Button Layout](../gcs/requirements.md#mission-row-button-layout) for slot spec. |
 | `layers/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
 | `ui/BasemapPanel.js` | Optional real 2D WGS84 basemap (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; default-off toggle (ADR 0022 Phase 4) |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
@@ -186,6 +186,10 @@ JSON settings import/export (shipped 2026-05-05) supports selected sections:
 Missing sections are ignored on apply so older JSON files do not erase newer settings. Raw API key values are not exported; provider settings use environment-variable `secret_ref` names. Import previews changes before applying.
 
 Shared config also contains `key_bindings`, which the dashboard reads for browser keyboard control. These bindings are also included in the AI Chat settings context so questions about configured controls use the same source as the UI.
+
+### Mission Lifecycle Tab
+
+See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lifecycle-tab) for the full field spec. For FC adapter protocol details and `mav_sim` integration see [`docs/mav_sim/design.md`](../../mav_sim/design.md).
 
 ## Main Files
 

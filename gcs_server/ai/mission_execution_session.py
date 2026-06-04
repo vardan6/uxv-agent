@@ -162,6 +162,16 @@ class MissionExecutionSessions:
         with self._lock:
             return self._by_session.get(_clean(session_id))
 
+    def get_for_mission(self, mission_id: str) -> Optional[ActiveExecution]:
+        target = _clean(mission_id)
+        if not target:
+            return None
+        with self._lock:
+            for active in self._by_session.values():
+                if _clean(active.mission_id) == target:
+                    return active
+        return None
+
     def prepare(
         self,
         session_id: str,

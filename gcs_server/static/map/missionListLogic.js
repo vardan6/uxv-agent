@@ -33,6 +33,7 @@ export function mapMissionsForList(missions = []) {
       id,
       missionIndex: index,
       name: name || (index != null ? `Mission ${index}` : 'Untitled mission'),
+      vehicleProfileId: String(m.vehicle_profile_id || ''),
       origin,
       originBadge: computeOriginBadge(origin, clientVersion),
       originChatId: String(m.origin_chat_id || ''),

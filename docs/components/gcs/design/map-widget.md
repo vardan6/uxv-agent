@@ -206,7 +206,7 @@ Beyond per-row editing, the list offers Mission-management UX:
   path (not a revision payload).
 - **Bulk actions** — the selection batch bar carries Show / Hide / Clear **and
   bulk Delete** (delete loops the per-Mission delete, honouring the
-  executing → 409 guard, then refreshes once).
+  armed/awaiting-confirm/running/executing guard, then refreshes once).
 
 Design decisions (the management suite is ported forward from `e4a7c61`
 additively — it predates the current flat-Mission/`escapeHtml` rewrite):
@@ -219,9 +219,10 @@ additively — it predates the current flat-Mission/`escapeHtml` rewrite):
   bulk-action bar
 - selection stays in the widget's own selection state; no separate selection
   store is reintroduced
-- `vehicle_profile_id` and a per-Mission provenance summary must be added to the
-  `list_missions` payload before the vehicle icon and ✏️ badge can render — those
-  are the only backend additions; every other affordance above is frontend-only
+- the only backend additions for the parity port were `list_missions`
+  surfacing `vehicle_profile_id` from the active revision plus the existing
+  per-Mission provenance summary already used for the ✏️ badge; every other
+  affordance above is frontend-only
 
 ## Map Rendering Rules
 

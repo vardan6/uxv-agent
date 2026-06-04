@@ -57,16 +57,23 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function missionRowActionButtons(missionRow, isEditing) {
+function missionRowActionButtons(missionRow, isEditing, { deleteGuarded = false } = {}) {
   const activeRevisionId = String(missionRow.activeRevisionId || '');
   const status = String(missionRow.activeRevisionStatus || '');
   const safeId = escapeHtml(missionRow.id);
   const safeName = escapeHtml(missionRow.name);
+  const deleteTitle = deleteGuarded
+    ? 'Delete disabled while mission is armed or awaiting confirmation'
+    : 'Delete mission';
+  const deleteAriaLabel = deleteGuarded
+    ? `Delete disabled for mission ${safeName} while mission is armed or awaiting confirmation`
+    : `Delete mission ${safeName}`;
+  const deleteDisabledAttr = deleteGuarded ? ' disabled aria-disabled="true"' : '';
   if (!activeRevisionId) {
     return `<button class="mission-row-action-btn is-delete" type="button"
       data-delete-mission-id="${safeId}"
-      title="Delete mission"
-      aria-label="Delete mission ${safeName}">🗑</button>`;
+      title="${deleteTitle}"
+      aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`;
   }
   if (status === 'executing') {
     return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
@@ -101,8 +108,8 @@ function missionRowActionButtons(missionRow, isEditing) {
   }
   parts.push(`<button class="mission-row-action-btn is-delete" type="button"
     data-delete-mission-id="${safeId}"
-    title="Delete mission"
-    aria-label="Delete mission ${safeName}">🗑</button>`);
+    title="${deleteTitle}"
+    aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`);
   return parts.join('');
 }
 
@@ -117,7 +124,9 @@ export function missionRowMarkup(missionRow, ctx = {}) {
     selectedMissionIds = new Set(),
     paletteByMissionId = new Map(),
     editingMissionId = '',
-    vehicleKind = '',
+    profilesById = {},
+    activeProfileId = '',
+    deleteGuardedMissionIds = new Set(),
   } = ctx;
   const id = String(missionRow.id || '');
   const isVisible = visibleMissionIds.has(id);
@@ -125,18 +134,25 @@ export function missionRowMarkup(missionRow, ctx = {}) {
   const isSelected = selectedMissionIds.has(id);
   const isEditing = editingMissionId === id;
   const status = String(missionRow.activeRevisionStatus || '');
+  const isExecuting = status === 'executing';
   const statusCls = STATUS_CLASS[status] || '';
   const color = paletteByMissionId.get(id) || 'transparent';
   const indexLabel = missionRow.missionIndex != null ? `#${missionRow.missionIndex}` : '';
   const label = statusLabel(status);
   const dateStr = formatDate(missionRow.createdAt);
+  const vehicleKind = String(
+    profilesById[missionRow.vehicleProfileId]?.kind
+    || profilesById[activeProfileId]?.kind
+    || 'ground'
+  );
   const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
+  const deleteGuarded = deleteGuardedMissionIds.has(id);
   const metaParts = [escapeHtml(indexLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
   const safeName = escapeHtml(missionRow.name);
   return `
     <div class="mission-list-row${statusCls ? ' ' + statusCls : ''}${isFocused ? ' is-focused' : ''}${isSelected ? ' is-selected' : ''}${isEditing ? ' is-editing' : ''}" data-mission-id="${safeId}" data-row-mission-id="${safeId}">
-      <button class="mission-row-status" type="button" data-color-chip-mission-id="${safeId}" title="Change mission colour" aria-label="Change colour for mission ${safeName}"></button>
+      <button class="mission-row-status" type="button" data-color-chip-mission-id="${safeId}" style="--mission-color:${escapeHtml(color)}" title="Change mission colour" aria-label="Change colour for mission ${safeName}"></button>
       <label class="mission-row-select" title="Select for batch operations (shift-click for range)">
         <input
           type="checkbox"
@@ -153,23 +169,29 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         aria-pressed="${isFocused ? 'true' : 'false'}"
         title="Focus mission"
       >
-        <span class="mission-row-color-dot" style="--mission-color:${escapeHtml(color)}"></span>
+        <span class="mission-row-leading">
+          ${vehicleIcon ? `<span class="mission-row-vehicle" title="Vehicle type">${escapeHtml(vehicleIcon)}</span>` : ''}
+          <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}</span>
+        </span>
         <span class="mission-row-main">
           <span class="mission-row-title" data-rename-mission-id="${safeId}" data-current-name="${safeName}" title="Double-click to rename">${safeName}</span>
           <span class="mission-row-meta">${metaParts.join(' · ')}</span>
         </span>
-        <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}${vehicleIcon ? `<span class="mission-row-vehicle" title="Vehicle type">${escapeHtml(vehicleIcon)}</span>` : ''}</span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowActionButtons(missionRow, isEditing)}
-        <span class="mission-row-visibility-text">${isVisible ? 'Visible' : 'Hidden'}</span>
+        ${missionRowActionButtons(missionRow, isEditing, { deleteGuarded })}
         <button
-          class="mission-row-eye"
+          class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
           type="button"
           data-toggle-mission-id="${safeId}"
-          aria-label="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
-          title="${isVisible ? 'Hide mission overlay' : 'Show mission overlay'}"
-        >${isVisible ? '👁' : '🚫'}</button>
+          aria-label="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+          title="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+          aria-disabled="${isExecuting ? 'true' : 'false'}"
+          ${isExecuting ? 'disabled' : ''}
+        >${isVisible
+          ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
+          : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
+        }</button>
       </span>
     </div>
   `;
@@ -206,35 +228,44 @@ export class MissionListPanel {
     selectedMissionIds = new Set(),
     paletteByMissionId = new Map(),
     editingMissionId = '',
-    vehicleKind = '',
+    profilesById = {},
+    activeProfileId = '',
+    deleteGuardedMissionIds = new Set(),
+    canDeleteSelection = false,
   } = {}) {
-    const batchBar = selectedMissionIds.size
-      ? `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
-            <span class="mission-batch-count">${selectedMissionIds.size} selected</span>
-            <button class="mission-batch-btn" type="button" data-batch-action="show">Show</button>
-            <button class="mission-batch-btn" type="button" data-batch-action="hide">Hide</button>
-            <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear">Clear</button>
-            <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete">Delete</button>
-          </div>`
-      : '';
+    const hasSelection = selectedMissionIds.size > 0;
+    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
+          <span class="mission-batch-count">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
+          <button class="mission-batch-btn" type="button" data-batch-action="show"${hasSelection ? '' : ' disabled'}>Show</button>
+          <button class="mission-batch-btn" type="button" data-batch-action="hide"${hasSelection ? '' : ' disabled'}>Hide</button>
+          <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear"${hasSelection ? '' : ' disabled'}>Clear</button>
+          <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete"${canDeleteSelection ? '' : ' disabled'} title="${hasSelection && !canDeleteSelection ? 'Delete disabled while selection includes an armed or executing mission' : 'Delete selected missions'}">Delete</button>
+        </div>`;
     const header = `<div class="mission-list-header">
-            <span class="mission-list-heading">Missions</span>
-            <button class="mission-list-new-btn" type="button" data-new-mission
-              title="New mission — place waypoints by clicking the map"
-              aria-label="New mission">＋</button>
-            <a class="mission-list-settings" href="/settings?tab=mission-lifecycle"
-              title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
-            <button class="mission-list-overflow-btn" type="button" data-overflow-menu
-              title="Mission list options" aria-label="Mission list options">⋯</button>
+            <div class="mission-list-header-copy">
+              <p class="section-kicker">Missions</p>
+              <h2 class="mission-list-header-title">Routes</h2>
+            </div>
+            <div class="mission-list-header-actions">
+              <button class="mission-list-new-btn" type="button" data-new-mission
+                title="New mission — place waypoints by clicking the map"
+                aria-label="New mission">+ New</button>
+              <a class="mission-list-settings-link" href="/settings?tab=mission-lifecycle"
+                title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
+              <button class="mission-list-overflow-btn" type="button" data-overflow-menu
+                title="Mission list options" aria-label="Mission list options">⋯</button>
+            </div>
           </div>`;
-    const body = missions.length
-      ? batchBar + missions.map((missionRow) => missionRowMarkup(missionRow, {
+    const missionRows = missions.length
+      ? missions.map((missionRow) => missionRowMarkup(missionRow, {
         visibleMissionIds,
         focusedMissionId,
         selectedMissionIds,
         paletteByMissionId,
         editingMissionId,
-        vehicleKind,
+        profilesById,
+        activeProfileId,
+        deleteGuardedMissionIds,
       })).join('')
       : `<div class="mission-list-empty">
             <p class="mission-list-empty-title">No missions yet</p>
@@ -244,6 +275,7 @@ export class MissionListPanel {
               ↑ Go to chat
             </button>
           </div>`;
+    const body = batchBar + missionRows;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
     this._bindMissions();
   }

@@ -54,6 +54,10 @@ def _load_json(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _vehicle_profile_id_from_mission_json(value: str | None) -> str:
+    return str(_load_json(value).get("vehicle_profile_id") or "").strip()
+
+
 class MissionStore:
     """Per-user CRUD over the flat `missions` table (ADR 0021 §2).
 
@@ -274,13 +278,16 @@ class MissionStore:
         # mission -> active operation -> active revision). The flat-Mission list
         # surface needs the active revision's id (overlay/execute target) and
         # status (edit/execute/locked affordances) without an N+1 round-trip.
+        # Also surface the revision's vehicle binding so each sidebar row can
+        # render its own vehicle icon instead of reusing the active profile.
         # Missions with no bridged operation/revision get empty strings.
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT m.*,
                        COALESCE(r.id, '') AS active_revision_id,
-                       COALESCE(r.status, '') AS active_revision_status
+                       COALESCE(r.status, '') AS active_revision_status,
+                       COALESCE(r.mission_json, '{}') AS active_revision_mission_json
                 FROM missions m
                 LEFT JOIN ai_mission_operations o ON o.id = m.active_operation_id
                 LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
@@ -290,7 +297,14 @@ class MissionStore:
                 """,
                 (str(user_id or ""), max(1, int(limit))),
             ).fetchall()
-        return [dict(row) for row in rows]
+        missions: list[dict[str, Any]] = []
+        for row in rows:
+            mission = dict(row)
+            mission["vehicle_profile_id"] = _vehicle_profile_id_from_mission_json(
+                mission.pop("active_revision_mission_json", None)
+            )
+            missions.append(mission)
+        return missions
 
     def rename_mission(self, mission_id: str, *, name: str) -> dict[str, Any] | None:
         return self._update_fields(mission_id, {"name": str(name or "")})

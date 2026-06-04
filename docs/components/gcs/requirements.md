@@ -117,6 +117,19 @@ Choose video mode flags. Changes are persisted and broadcast to all connected br
 
 Theme and display settings for the dashboard.
 
+### Mission Lifecycle Tab
+
+Controls how missions move from creation to execution. Settings:
+
+- **FC adapter type** — `json_file` (local simulation, default) / `file_sink` (write uploads to `data/fc_sink/`) / `mavlink` (real FC via pymavlink) / `mavsdk` (real FC via MAVSDK)
+- **Connection URL** — shown when adapter is `mavlink` or `mavsdk` (e.g. `udp:192.168.1.x:14550`)
+- **Heartbeat timeout** and **Request timeout** — shown when adapter is `mavlink` or `mavsdk`
+- **Execution mode** — Strict / Confirm / Autonomous (see ADR 0021 §1)
+- **Confirm timeout** — 3–60 s (shown when mode is Confirm)
+- **Auto-overlay new missions** — default on
+- **Steal map focus** when active chat creates a mission — default on
+- **Default name template** — default `"Untitled mission"`
+
 ### Add LLM Provider Tab
 
 Manage the LLM provider records used by AI Chat and the future rover-agent layer.
@@ -194,14 +207,44 @@ Operators must be able to:
 - **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually by clicking on the scene-mode map (CRS.Simple, local metres); the basemap Corridor/Survey draw tools are a separate pattern-generation path, not a substitute for this
 - **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
 - **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
-- **Approve a draft** (does not execute) using the "Approve draft" button; semantics: approval locks the revision for the `Execute mission` gate
-- **Execute mission** — a separate, explicit second action that hands the approved revision to the flight controller
-- **Export plan** — export the approved revision as a `.plan` file without executing
+- **Execute a mission** (▶) — uploads the mission to the FC and starts execution; available on any mission row with an active revision that is not already executing, paused, or completed
+- **Pause a mission** (⏸) — holds the vehicle in place mid-mission (mode switch to HOLD on the FC); shown while mission is `executing`; toggles back to ▶ for resume
+- **Resume a mission** (▶) — resumes from the next waypoint in sequence; shown while mission is `paused`
+- **Stop a mission** (⏹) — holds the vehicle in place and marks mission `aborted`; shown while mission is `executing` or `paused`
 - **Rename a mission** inline (double-click the name) and **Delete a mission** — singly, or in bulk from the selection batch bar; an executing mission is refused
 - **Recolour a mission** via its colour chip, overriding the automatic palette colour
 - **Import / export missions as JSON** via the list's `⋯` overflow menu — export serialises the visible/selected missions; import creates one flat Mission per entry
 
-The three verbs are **Approve draft**, **Execute mission**, and **Export plan**. The word "Accept" is not used.
+### Mission Row Button Layout
+
+Every mission row has five fixed button slots. Inactive slots are hidden but hold space so columns align across all rows.
+
+```
+[ ✏️ edit ] [ ▶/⏸ play-pause ] [ ⏹ stop ] [ 🗑 delete ] [ 👁 visibility ]
+```
+
+| Row state | edit | play-pause | stop | delete | vis |
+|---|---|---|---|---|---|
+| idle | ✏️ | ▶ | — | 🗑 | 👁 |
+| executing | — | ⏸ | ⏹ | 🗑 | 👁 |
+| paused | — | ▶ | ⏹ | 🗑 | 👁 |
+| completed / aborted | — | — | — | 🗑 | 👁 |
+
+Icon-only buttons; no text labels. Hover tooltip (`title`) on each active slot.
+
+### Mission Execution via AI Chat
+
+When execution mode is **Autonomous** or **Confirm** (ADR 0021 §1), the AI can execute
+directly from chat: "create a mission and run it" creates a mission in the sidebar and
+starts it immediately (Autonomous) or shows a confirmation banner (Confirm). The mission
+appears as `executing` in the sidebar with ⏸ and ⏹ buttons active.
+
+The operator can pause or stop from chat ("pause the mission", "stop the mission") in
+addition to using the sidebar buttons — both paths are available simultaneously.
+
+The word "Approve" is not used in the operator-facing UI. The approval concept was
+removed by ADR 0021. Internal draft statuses (`proposed`, `planning`, `exported`,
+`cutover_pending`) are pipeline plumbing not surfaced in the sidebar.
 
 ### Concurrency and edit-lock invariants
 
@@ -212,9 +255,10 @@ The three verbs are **Approve draft**, **Execute mission**, and **Export plan**.
 
 ### Safety invariants
 
-- Approval does not execute. Execution requires a second explicit operator action.
 - The edit lock during execution is not bypassable from the frontend.
 - The map widget never issues low-level MQTT commands directly.
+- Stop always holds the vehicle in place — it does not trigger RTL. The vehicle waits for manual operator control.
+- Pause and stop commands are available from both the sidebar buttons and AI chat simultaneously.
 
 The Mission CRUD and Safety Invariants sections above describe **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) supersedes [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md) and [ADR 0012](../../cross-cutting/decisions/0012-map-widget-safety-invariants.md) and introduces two additional modes — **Confirm** (operator confirms an AI-armed execution via a banner) and **Autonomous** (sim-build default; AI may execute directly). Mode lives in `Settings → Mission Lifecycle`. Invariants 2–4 of ADR 0012 (no client-side mutation of executing missions, no silent overwrites, no inventing backend contracts) survive all modes. ADR 0021 also defines the **flat Mission sidebar** (one row = one Mission, with `#index`, editable name, `origin`, `origin_chat_id`) and the **Visible / Selected / Active** three-state UI. See ADR 0021 for the full lifecycle and tool surface.
 
