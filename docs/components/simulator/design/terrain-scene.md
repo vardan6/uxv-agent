@@ -38,10 +38,15 @@ This GPS is not read from the operator laptop or browser. It is deterministic mo
 
 ## Why JSON Is Used Here
 
-JSON is the project source-of-truth format because both Python simulator code
-and JavaScript/browser-facing GCS code can consume it directly, and it remains
-easy to validate and review in Git. Future CAD or simulator exports may be
-generated from this manifest, but the manifest stays the composition/index file.
+JSON is used as the project source-of-truth format because both Python simulator code and JavaScript/browser-facing GCS code can consume it directly. It is also easy to validate and review in Git.
+
+Future CAD/simulator exports can be generated from this manifest:
+- `.usda` for NVIDIA Isaac Sim / OpenUSD workflows
+- `.glb` or `.gltf` for simulation-ready visual meshes
+- collision mesh files for physics
+- STEP or other CAD references for authoritative engineering assets
+
+The manifest remains the composition/index file even when individual objects later reference professional CAD-derived assets.
 
 ## Source And Pipeline Discipline
 
@@ -55,6 +60,10 @@ When redesigning the start hub, charging station, flat apron, roads, or physics 
 4. Run the simulator and test rover driving from spawn, docking-area exit, road entry, object collision, and no floating/buried station parts.
 5. When a broader map database or BUS-style synchronization pipeline exists, run that pipeline after the source update so every map representation is rebuilt from the same source design.
 
-If a future map-synchronization layer adds more build steps, the rule stays the
-same: update the source, regenerate derived artifacts, validate the final
-manifest, then test in the simulator.
+If a future map synchronization layer adds a transformation config or sync generator, the rule stays the same: update the source, build all derived map versions, validate the final `terrain_scene.v1.json`, then test in the simulator.
+
+## Editing Rule
+
+Edit the compact generator input only when you intentionally want to regenerate the whole scene.
+
+If the manifest is hand-edited, run the validator before using it. Long term, the compact seed file should either be removed or clearly archived once the expanded manifest is the only maintained source.

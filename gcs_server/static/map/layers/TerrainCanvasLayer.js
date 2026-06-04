@@ -75,4 +75,8 @@ export class TerrainCanvasLayer {
     this._opacity = opacity;
     this._overlay?.setOpacity(opacity);
   }
+
+  setVisible(visible) {
+    this._overlay?.setOpacity(visible ? this._opacity : 0);
+  }
 }

@@ -8,6 +8,7 @@ try:
         ControllerMissionAdapterError,
         JsonFileControllerMissionAdapter,
         MavlinkControllerMissionAdapter,
+        MavsdkControllerMissionAdapter,
     )
 except ModuleNotFoundError:
     from ai.controller_mission_adapter import (
@@ -15,6 +16,7 @@ except ModuleNotFoundError:
         ControllerMissionAdapterError,
         JsonFileControllerMissionAdapter,
         MavlinkControllerMissionAdapter,
+        MavsdkControllerMissionAdapter,
     )
 
 
@@ -40,5 +42,22 @@ def build_controller_mission_adapter(
             request_timeout_s=float(logging_config.get("controller_mission_request_timeout_s", 5.0) or 5.0),
             source_system=int(logging_config.get("controller_mission_source_system", 245) or 245),
             source_component=int(logging_config.get("controller_mission_source_component", 190) or 190),
+        )
+    if adapter_name == "mavsdk":
+        connection_url = str(
+            logging_config.get("controller_mission_mavsdk_url")
+            or logging_config.get("controller_mission_mavlink_url")
+            or ""
+        ).strip()
+        if not connection_url:
+            raise ControllerMissionAdapterError(
+                "controller_mission_mavsdk_url (or controller_mission_mavlink_url) is required "
+                "when controller_mission_adapter is 'mavsdk'"
+            )
+        return MavsdkControllerMissionAdapter(
+            connection_url=connection_url,
+            state_path=state_path,
+            heartbeat_timeout_s=float(logging_config.get("controller_mission_heartbeat_timeout_s", 5.0) or 5.0),
+            request_timeout_s=float(logging_config.get("controller_mission_request_timeout_s", 5.0) or 5.0),
         )
     raise ControllerMissionAdapterError(f"unsupported controller mission adapter: {adapter_name}")

@@ -59,6 +59,23 @@ Design rule:
 - the planner loop is the sole planning core; deterministic validation and
   approval/cutover boundaries remain outside free-form model reasoning
 
+`store_draft` also owns the flat-Mission bridge (ADR 0021 §2/§3): after
+persisting the operation/revision it creates or updates the operator-facing
+flat Mission (`MissionStore`). A new operation creates a Mission
+(`origin = ai_chat`) bridged via `set_active_operation`; an appended revision
+bumps the existing Mission's `client_version`. Without this step AI output
+never reaches the per-user Mission sidebar.
+
+The §3 create / clone-and-edit / edit-in-place surface is a single
+`mission_edit_mode` enum (`create` | `clone_and_edit` | `edit_in_place`) plus
+`source_mission_id` on the terminal `propose_mission_draft` tool — not three
+parallel tools (one tool schema is cheaper in prompt tokens and gives the model
+a clearer, named lifecycle choice). `store_draft` maps the mode onto operation
+reuse: `edit_in_place` reuses the source Mission's operation (mutating, bumps
+`client_version`); `create`/`clone_and_edit` force a new operation + Mission so
+the original is preserved. `clone_and_edit` is the default for AI edits;
+`edit_in_place` is used only when the operator explicitly asks.
+
 ## High-Level Flow
 
 Happy path:

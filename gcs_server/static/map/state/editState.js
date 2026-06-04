@@ -5,7 +5,7 @@
 const _subscribers = new Set();
 
 const _state = {
-  missionId: null,
+  revisionId: null,
   operationId: null,
   status: '',
   waypoints: [],        // [{id, x, y, z, label, kind, provenance}]
@@ -17,7 +17,7 @@ const _state = {
 
 function _notify() {
   const snapshot = {
-    missionId: _state.missionId,
+    revisionId: _state.revisionId,
     operationId: _state.operationId,
     status: _state.status,
     waypoints: [..._state.waypoints],
@@ -32,7 +32,7 @@ function _notify() {
 }
 
 export const editState = {
-  get missionId() { return _state.missionId; },
+  get revisionId() { return _state.revisionId; },
   get operationId() { return _state.operationId; },
   get status() { return _state.status; },
   get waypoints() { return _state.waypoints; },
@@ -42,12 +42,12 @@ export const editState = {
   get busy() { return _state.busy; },
 
   isEditable() {
-    return _state.missionId !== null && _state.status !== 'executing' && !_state.busy;
+    return _state.revisionId !== null && _state.status !== 'executing' && !_state.busy;
   },
 
-  beginEdit(mission) {
-    const provenance = mission.provenance || {};
-    const wps = (mission.mission?.waypoints || []).map((wp) => ({
+  beginEdit(revision) {
+    const provenance = revision.provenance || {};
+    const wps = (revision.mission?.waypoints || []).map((wp) => ({
       id: wp.id || '',
       x: Number(wp.x) || 0,
       y: Number(wp.y) || 0,
@@ -56,11 +56,11 @@ export const editState = {
       kind: wp.kind || 'waypoint',
       provenance: provenance[wp.id] || 'ai',
     }));
-    _state.missionId = String(mission.id || '');
-    _state.operationId = String(mission.operation_id || '');
-    _state.status = String(mission.status || '');
+    _state.revisionId = String(revision.id || '');
+    _state.operationId = String(revision.operation_id || '');
+    _state.status = String(revision.status || '');
     _state.waypoints = wps;
-    _state.clientVersion = Number(mission.client_version) || 0;
+    _state.clientVersion = Number(revision.client_version) || 0;
     _state.selectedIndices = new Set();
     // preserve editMode across mutation-driven refreshes
     _state.busy = false;
@@ -68,7 +68,7 @@ export const editState = {
   },
 
   clearEdit() {
-    _state.missionId = null;
+    _state.revisionId = null;
     _state.operationId = null;
     _state.status = '';
     _state.waypoints = [];

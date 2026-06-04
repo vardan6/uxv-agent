@@ -1,4 +1,4 @@
-// Curated swatch palette for the picker — distinct hues + a few neutrals.
+// Curated swatch palette for the colour picker — distinct hues + a few neutrals.
 export const MISSION_COLOR_PALETTE = [
   '#d16b5b', '#6f86c7', '#c27aa6', '#d0b24a',
   '#8e98a3', '#3f6f9f', '#b85c5c', '#7b68b2',
@@ -8,8 +8,39 @@ export const MISSION_COLOR_PALETTE = [
   '#3aaed8', '#f08c4a', '#a06cd5', '#c06078',
 ];
 
-export function defaultMissionColor(missionId) {
-  const numericId = Number.parseInt(missionId, 10);
-  if (!Number.isFinite(numericId)) return MISSION_COLOR_PALETTE[0];
-  return MISSION_COLOR_PALETTE[numericId % MISSION_COLOR_PALETTE.length];
+const OVERRIDE_STORAGE_KEY = 'gcs-map-widget-mission-colors';
+
+function _loadAll() {
+  try { return JSON.parse(localStorage.getItem(OVERRIDE_STORAGE_KEY) || '{}'); } catch { return {}; }
 }
+function _saveAll(obj) {
+  try { localStorage.setItem(OVERRIDE_STORAGE_KEY, JSON.stringify(obj)); } catch {}
+}
+
+// Per-mission colour overrides stored in localStorage. Resolution order:
+// override → auto palette (assignPaletteColor by visibility order).
+export const missionColorOverrides = {
+  get(missionId) { return _loadAll()[String(missionId)] || null; },
+  set(missionId, color) {
+    const m = _loadAll(); m[String(missionId)] = color; _saveAll(m);
+  },
+  clear(missionId) {
+    const m = _loadAll(); delete m[String(missionId)]; _saveAll(m);
+  },
+  getAll() { return _loadAll(); },
+  // Hydrate the local cache from server-persisted mission colours so a user's
+  // override survives reloads and is shared across clients. The server `color`
+  // field is the source of truth: a non-empty value sets the override, an empty
+  // one clears it. `missions` is the raw payload from GET /api/ai/missions.
+  seedFromServer(missions = []) {
+    const m = _loadAll();
+    for (const mission of missions) {
+      const id = String(mission?.id ?? '');
+      if (!id) continue;
+      const color = String(mission?.color ?? '').trim();
+      if (color) m[id] = color;
+      else delete m[id];
+    }
+    _saveAll(m);
+  },
+};

@@ -29,13 +29,15 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
             "pitch": 1.0,
         },
         "ai_context_budget_chars": 24000,
-        "mission_lifecycle": {
-            "execution_mode": "autonomous",
-            "confirm_timeout_s": 10,
-            "auto_overlay_new_missions": True,
-            "steal_map_focus_on_active_chat_mission": True,
-            "default_manual_mission_name": "Untitled mission",
-        },
+    },
+    "mission_lifecycle": {
+        # execution_mode is intentionally absent so a fresh config inherits the
+        # build-time default (sim -> autonomous, real-rover -> strict) resolved
+        # at read time. See ai/execution_mode.py (ADR 0021 §1 / §6).
+        "confirm_timeout_s": 10,
+        "auto_overlay_new_missions": True,
+        "steal_map_focus": True,
+        "default_name_template": "Untitled mission",
     },
     "llm_providers": [
         {
@@ -68,6 +70,7 @@ DEFAULT_GCS_SETTINGS["logging"] = {
     "controller_mission_state_path": "data/controller_mission_adapter.json",
     "controller_mission_adapter": "json_file",
     "controller_mission_mavlink_url": "",
+    "controller_mission_mavsdk_url": "",
     "controller_mission_heartbeat_timeout_s": 5.0,
     "controller_mission_request_timeout_s": 5.0,
     "controller_mission_source_system": 245,
@@ -123,6 +126,11 @@ class AppConfig:
     def ai_settings(self) -> dict[str, Any]:
         settings = self.raw.get("ai_settings", {})
         return settings if isinstance(settings, dict) else {}
+
+    @property
+    def mission_lifecycle(self) -> dict[str, Any]:
+        section = self.raw.get("mission_lifecycle", {})
+        return section if isinstance(section, dict) else {}
 
     @property
     def llm_providers(self) -> list[dict[str, Any]]:

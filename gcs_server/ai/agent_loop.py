@@ -8,8 +8,9 @@ from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from .data_access import build_data_access_manifest
+from .execution_mode import execution_tools_for_mode, resolve_execution_mode
 from .policy_engine import POLICY_DENIED_STOP_REASON, PolicyEngine
-from .tool_registry import DEFAULT_PERMISSIONS
+from .tool_registry import DEFAULT_PERMISSIONS, EXECUTION
 from .tool_result_cache import CACHEABLE_TOOL_NAMES, ToolResultCache
 
 
@@ -488,7 +489,11 @@ class AgentLoopRuntime:
         ctx = tool_context or {}
         runtime = ctx.get("runtime")
         timezone_name = str(ctx.get("timezone_name") or "").strip()
-        permissions = frozenset(DEFAULT_PERMISSIONS)
+        # EXECUTION is granted at the permission layer so the mode-bound execution
+        # tools can build and pass policy; the per-mode filter below (and Strict's
+        # empty arm/execute set) is what actually decides which execution tools the
+        # model sees. COMMAND_STAGING stays disabled in the registry.
+        permissions = frozenset(DEFAULT_PERMISSIONS | {EXECUTION})
         tools = self._tool_registry.build_langchain_tools(
             runtime,
             context_snapshot or {},
@@ -498,10 +503,22 @@ class AgentLoopRuntime:
         allowed_names = self._allowed_tool_names(context_snapshot)
         if allowed_names is not None:
             tools = [tool for tool in tools if str(getattr(tool, "name", "")) in allowed_names]
-        if not tools:
-            return None
         definitions = self._tool_registry.definitions()
         definition_map = {definition.name: definition for definition in definitions}
+        # ADR 0021 §1: gate execution-tier tools by the resolved execution mode.
+        # Strict binds neither arm nor execute; Confirm binds arm_execution;
+        # Autonomous binds execute_mission; cancel/abort always bind. Execution
+        # tools land with the Phase 3 executor, so this is a no-op until then.
+        execution_mode = resolve_execution_mode(getattr(runtime, "config", None)) if runtime is not None else "strict"
+        mode_bound_execution = execution_tools_for_mode(execution_mode)
+        tools = [
+            tool
+            for tool in tools
+            if getattr(definition_map.get(str(getattr(tool, "name", ""))), "permission", None) != EXECUTION
+            or str(getattr(tool, "name", "")) in mode_bound_execution
+        ]
+        if not tools:
+            return None
         manifest = build_data_access_manifest(definitions, allowed_tool_names=allowed_names)
 
         try:

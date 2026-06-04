@@ -24,9 +24,24 @@ class _FakeTool:
         self.name = name
 
 
+class _FakeDefinition:
+    # Minimal stand-in for tool_registry.ToolDefinition: prepare_tool_runtime
+    # calls registry.definitions() to build the execution-mode filter and the
+    # data-access manifest. "read_only" keeps the tool out of the EXECUTION gate.
+    def __init__(self, name: str, permission: str = "read_only"):
+        self.name = name
+        self.permission = permission
+        self.tier = 0
+        self.required_scopes = frozenset()
+        self.side_effects = frozenset()
+
+
 class _FakeRegistry:
     def build_langchain_tools(self, runtime, context_snapshot, *, timezone_name="", permissions=None):
         return [_FakeTool("query_objects_in_front")]
+
+    def definitions(self):
+        return [_FakeDefinition("query_objects_in_front")]
 
 
 class _FakeBoundModel:

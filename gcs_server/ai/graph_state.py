@@ -14,6 +14,7 @@ class PlanningShellGraphState(TypedDict, total=False):
 
     # ── Request identity ──────────────────────────────────────────────────────
     session_id: str
+    user_id: str                # per-user Mission store scope (ADR 0021 §2/§5)
     thread_id: str              # Phase 2: stable LangGraph thread ID for checkpoint/resume
     source_message_id: str
     user_prompt: str
@@ -60,13 +61,17 @@ class PlanningShellGraphState(TypedDict, total=False):
     draft: dict
     draft_id: str
     parent_operation_id: str     # non-empty when planner links proposal to an existing operation
+    mission_edit_mode: str       # ADR 0021 §3: create | clone_and_edit | edit_in_place
+    source_mission_id: str       # ADR 0021 §3: flat Mission the edit derives from
+    mission_id: str              # flat Mission (ADR 0021 §2) this proposal bridges to
     mission_operation_id: str
     mission_revision_id: str
-    mission_id: int                # ADR 0021 flat-Mission row id (0 when not yet persisted)
-    mission_client_version: int    # ADR 0020 optimistic-concurrency token for the active Mission
     validation: dict
     draft_usage_metadata: dict
     draft_response_metadata: dict
+    approval_status: str           # proposed | rejected | validation_failed | needs_clarification
+    approval_note: str
+    operator_decision: str         # Phase 2: approve | reject | pending_rest
 
     # ── Planner loop — Phase 5 ────────────────────────────────────────────────
     planner_agent_stop_reason: str  # stop reason from AgentLoopRuntime run

@@ -1,7 +1,7 @@
 const SHORTCUTS = [
   ['V', 'Toggle vertex-edit mode'],
   ['A', 'Toggle add-waypoint mode'],
-  ['F', 'Fit map to selection (falls back to scene)'],
+  ['F', 'Focus on selected mission'],
   ['Delete / Backspace', 'Delete selected waypoint(s)'],
   ['[ / ]', 'Step to previous / next waypoint'],
   ['Shift + click', 'Extend selection'],

@@ -19,8 +19,11 @@ The durable product rule is:
 - placeholder model IDs must be treated as unknown until replaced with concrete models and validated
 - local models may need explicit conformance checks even when the serving stack advertises tool support
 
-Operational guidance follows directly from that rule: prefer explicit
-`tool_calling` metadata, keep `ollama` behind conformance validation unless
-verified locally, do not bless placeholder model IDs as agent-capable, and keep
-dated context-window comparisons out of durable design docs. The full
-provider-by-provider matrix is audit material, not canonical design.
+## Operational Guidance
+
+- Prefer provider entries that declare `tool_calling` directly instead of relying on fallback inference.
+- Keep `ollama` models behind tool-call conformance validation unless they have been verified in this environment.
+- Do not rank placeholder or vendor-agnostic model IDs as agent-capable without concrete validation.
+- Keep context-window comparisons out of durable design docs; they are dated operational snapshots.
+
+The full provider-by-provider matrix is archival audit material rather than durable system design.

@@ -20,7 +20,6 @@ export class MissionColorPicker {
     const onPreview = opts.onPreview || (() => {});
     const onReset = opts.onReset || (() => {});
     const currentColor = opts.currentColor || '';
-    const defaultColor = opts.defaultColor || '';
 
     const pop = document.createElement('div');
     pop.className = 'mission-color-picker';
@@ -54,10 +53,10 @@ export class MissionColorPicker {
     const customRow = document.createElement('div');
     customRow.className = 'mission-color-picker-custom';
     const customLabel = document.createElement('label');
-    customLabel.textContent = 'Custom…';
+    customLabel.textContent = 'Custom… ';
     const customInput = document.createElement('input');
     customInput.type = 'color';
-    customInput.value = currentColor || defaultColor || '#66c2a5';
+    customInput.value = currentColor || '#66c2a5';
     customInput.addEventListener('input', () => onPreview(customInput.value));
     customInput.addEventListener('change', (e) => {
       e.stopPropagation();
@@ -86,7 +85,6 @@ export class MissionColorPicker {
 
     this._positionNear(anchorEl);
 
-    // Dismiss on outside click / Esc.
     this._dismissHandler = (e) => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
       if (e.type === 'mousedown' && pop.contains(e.target)) return;
@@ -104,8 +102,7 @@ export class MissionColorPicker {
     const anchorRect = anchorEl.getBoundingClientRect();
     let left = anchorRect.left - containerRect.left;
     let top = anchorRect.bottom - containerRect.top + 4;
-    // Clamp inside container
-    const popRect = { width: 200, height: 110 };
+    const popRect = { width: 200, height: 120 };
     const maxLeft = this._container.clientWidth - popRect.width - 8;
     if (left > maxLeft) left = Math.max(8, maxLeft);
     if (left < 8) left = 8;

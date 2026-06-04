@@ -8,10 +8,14 @@ from .tool_registry import DISABLED_PERMISSIONS, ToolDefinition
 
 POLICY_DENIED_STOP_REASON = "policy_denied"
 
+# EXECUTION is tier 4. Agent/planning-shell runs may reach it (the per-mode tool
+# binding decides whether any execution tool is actually present); plain chat
+# stays capped at PLANNING (tier 2). COMMAND_STAGING (tier 3) remains blocked by
+# DISABLED_PERMISSIONS regardless of this cap.
 _RUN_MODE_MAX_TIER = {
     "chat": 2,
-    "agent": 2,
-    "planning_shell": 2,
+    "agent": 4,
+    "planning_shell": 4,
 }
 
 

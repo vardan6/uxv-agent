@@ -117,6 +117,19 @@ Choose video mode flags. Changes are persisted and broadcast to all connected br
 
 Theme and display settings for the dashboard.
 
+### Mission Lifecycle Tab
+
+Controls how missions move from creation to execution. Settings:
+
+- **FC adapter type** — `json_file` (local simulation, default) / `file_sink` (write uploads to `data/fc_sink/`) / `mavlink` (real FC via pymavlink) / `mavsdk` (real FC via MAVSDK)
+- **Connection URL** — shown when adapter is `mavlink` or `mavsdk` (e.g. `udp:192.168.1.x:14550`)
+- **Heartbeat timeout** and **Request timeout** — shown when adapter is `mavlink` or `mavsdk`
+- **Execution mode** — Strict / Confirm / Autonomous (see ADR 0021 §1)
+- **Confirm timeout** — 3–60 s (shown when mode is Confirm)
+- **Auto-overlay new missions** — default on
+- **Steal map focus** when active chat creates a mission — default on
+- **Default name template** — default `"Untitled mission"`
+
 ### Add LLM Provider Tab
 
 Manage the LLM provider records used by AI Chat and the future rover-agent layer.
@@ -166,17 +179,24 @@ For the full AI agent product requirements — intent parsing, planning shell, m
 
 ### Map widget
 
-The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and mission overlays. The durable operator-facing entity is the flat **Mission** from ADR 0021: one sidebar row = one Mission, with stable `#index`, editable name, `origin`, and `origin_chat_id`. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.
+The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and all mission overlays. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.
 
 The map widget must:
 
 - render the terrain scene (scene objects, road graph, blockages, corridors) at all times
-- display a `MissionListPanel` showing one row per Mission, with the independent **Visible / Selected / Active** states defined by ADR 0021
-- render mission overlays for AI-created and operator-created Missions as distinct visual layers; per-waypoint provenance styling is no longer a load-bearing requirement for the flat Mission model
+- display a `MissionListPanel` showing revisions grouped by operation, with status badges
+- render mission overlays (AI-proposed and operator-authored) as distinct visual layers with provenance-aware per-waypoint styling (`ai` / `user` / `ai+edited`)
 - track and display the live vehicle position via the `/ws` telemetry stream (polling fallback at 2 s)
-- support a `SelectionPanel` that shows waypoint-level details for any selected waypoint
-- support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home)
+- support a `SelectionPanel` that shows waypoint-level details and provenance for any selected waypoint
+- support a context menu (right-click or long-press) for point-level actions (insert waypoint before/after, delete, set as home, detach from AI proposal)
 - display hint toasts for gestures and a keyboard help overlay
+- provide **layer visibility toggles** for the scene-mode layers: terrain heightmap, roads, scene objects, and grid — each independently show/hide-able from a toolbar within the map panel (parity with the replay page layer toolbar)
+- provide **fit-bounds toolbar buttons**: fit to scene (full 3d-env extent), fit to focused mission, fit to visible-mission union — explicit buttons, not only auto-fit on focus change
+- show a **cursor/info bar** at the bottom of the map panel: cursor position in scene metres (and WGS84 when a Mission origin exists), current selection detail — parity with the replay page info bar
+- provide a **view mode selector**: Virtual Terrain (heightmap gradient + objects), CAD/Object View (objects only, flat background), Heightmap (raw elevation colourmap) — affects only the scene-mode render layers, not mission overlays
+- surface, on each mission row: a status stripe + status label, the mission's vehicle/profile icon, a created-at date, an origin badge that distinguishes manual (👤), AI (🤖), and AI-then-operator-edited (✏️), an inline-renamable name (auto-numbered when untitled), and an edit ⇄ done toggle
+- let a click anywhere on a mission row activate that mission (Active+Visible), with shift/meta/ctrl extending the multi-select
+- offer **mission-management affordances** in the list: a per-mission colour override (colour picker with custom hex + reset), a persisted list **sort** (by updated / created / status / label / selection / visibility), and a `⋯` overflow menu carrying sort and **JSON import / export**
 
 ### Mission CRUD
 
@@ -184,122 +204,61 @@ The map widget is the primary mission authoring surface on `/ai`. No separate Mi
 
 Operators must be able to:
 
-- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually on the map
-- **Review AI-created missions** — the agent emits a new Mission row; the map renders it immediately
-- **Edit missions** — drag waypoints, add/delete waypoints, reorder
-- **Execute mission** — hand the Mission to the controller via the row's `▶` button (Strict) or via AI tool calls per the active execution mode (Confirm / Autonomous)
-- **Export plan** — export a Mission as a `.plan` file without executing when export is surfaced in the UI
+- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually by clicking on the scene-mode map (CRS.Simple, local metres); the basemap Corridor/Survey draw tools are a separate pattern-generation path, not a substitute for this
+- **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
+- **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
+- **Execute a mission** (▶) — uploads the mission to the FC and starts execution; available on any mission row with an active revision that is not already executing, paused, or completed
+- **Pause a mission** (⏸) — holds the vehicle in place mid-mission (mode switch to HOLD on the FC); shown while mission is `executing`; toggles back to ▶ for resume
+- **Resume a mission** (▶) — resumes from the next waypoint in sequence; shown while mission is `paused`
+- **Stop a mission** (⏹) — holds the vehicle in place and marks mission `aborted`; shown while mission is `executing` or `paused`
+- **Rename a mission** inline (double-click the name) and **Delete a mission** — singly, or in bulk from the selection batch bar; an executing mission is refused
+- **Recolour a mission** via its colour chip, overriding the automatic palette colour
+- **Import / export missions as JSON** via the list's `⋯` overflow menu — export serialises the visible/selected missions; import creates one flat Mission per entry
 
-Per [ADR 0022](../../cross-cutting/decisions/0022-drop-operator-approval-gate.md), Missions no longer carry an operator-facing approval state. Every Mission row is immediately playable; the safety gate lives in the execution mode (Strict / Confirm / Autonomous) and the executing-mission edit lock, not in a per-Mission approval flag.
+### Mission Row Button Layout
 
-### Mission editing UX
+Every mission row has five fixed button slots. Inactive slots are hidden but hold space so columns align across all rows.
 
-These rules describe operator-visible behaviour. Specific UI choices below are
-the current intent from the 2026-05-28 grilling cycle and may be adjusted
-after live UI review.
+```
+[ ✏️ edit ] [ ▶/⏸ play-pause ] [ ⏹ stop ] [ 🗑 delete ] [ 👁 visibility ]
+```
 
-- **Editing a locked mission** — when the operator presses edit on a mission
-  whose status is in the locked set (`approved`, `exported`, `cutover_pending`,
-  `executing`), the widget asks for explicit confirmation
-  ("This mission is locked. Create an editable copy?") before forking. Once
-  the fork is created, the original mission is hidden from the map for the
-  duration of the edit so its waypoints do not appear underneath the fork.
-  Exiting edit restores the original to the visible set.
-- **Edit-mode indication** — the row whose mission is being edited carries a
-  visible state indicator (currently a left-edge amber stripe + the row's
-  pencil icon swapped to a "done" glyph). The edit banner exposes a "Done"
-  button (auto-save is on; "Done" reads better than "Exit"). The pencil icon
-  on the row also toggles edit on/off. The state indicator never reuses a
-  mission's identity colour.
+| Row state | edit | play-pause | stop | delete | vis |
+|---|---|---|---|---|---|
+| idle | ✏️ | ▶ | — | 🗑 | 👁 |
+| executing | — | ⏸ | ⏹ | 🗑 | 👁 |
+| paused | — | ▶ | ⏹ | 🗑 | 👁 |
+| completed / aborted | — | — | — | 🗑 | 👁 |
 
-### Row click and selection
+Icon-only buttons; no text labels. Hover tooltip (`title`) on each active slot.
 
-- **Full-row click target** — clicking anywhere on a sidebar row activates
-  that mission. Inner controls (visibility, edit, colour, kebab) do not
-  activate the row.
-- **Multi-selection keys** — plain click sets selection to just this row;
-  shift-click extends the selection from the last plain-clicked row to the
-  clicked row in the current sort order; cmd/ctrl-click toggles a row in or
-  out of the selection. Active mission after multi-select = the last-clicked
-  row; active is always inside the selection.
-- **Map ↔ sidebar sync** — clicking a mission's polyline or any of its
-  waypoints on the map performs the same activation/selection as the
-  corresponding row click, with the same modifier keys.
-- **Empty area** — clicking empty sidebar space or empty map area does not
-  clear the selection.
-- **Bulk action bar** — the existing `BulkEditActionBar` becomes visible when
-  two or more missions are selected. Single-mission actions stay in the row
-  kebab.
+### Mission Execution via AI Chat
 
-### Map view controls
+When execution mode is **Autonomous** or **Confirm** (ADR 0021 §1), the AI can execute
+directly from chat: "create a mission and run it" creates a mission in the sidebar and
+starts it immediately (Autonomous) or shows a confirmation banner (Confirm). The mission
+appears as `executing` in the sidebar with ⏸ and ⏹ buttons active.
 
-The widget exposes a floating toolbar (top-right of the map):
+The operator can pause or stop from chat ("pause the mission", "stop the mission") in
+addition to using the sidebar buttons — both paths are available simultaneously.
 
-- **Fit to scene** — pans/zooms so the full scene bounds fill the viewport.
-- **Fit to selection** (keyboard `f`) — fits to the bounding box of the
-  current selection, or the active mission when no multi-selection is in
-  play.
-- **Map style** — switches between terrain (default), scene image, and a
-  plain grid background. The chosen style is remembered locally per browser.
-
-The map is clamped to scene bounds — the operator cannot pan past the scene
-edges or zoom out further than "scene fills viewport." Fit-to-scene is the
-return affordance.
-
-### Per-mission colour
-
-- Each mission has an identity colour, surfaced as a swatch in the sidebar
-  row. The widget assigns one automatically from a curated palette; the
-  operator can change it by opening the row's colour picker (palette swatches
-  + a "Custom…" hex picker). A reset affordance restores the
-  palette-assigned default.
-- The mission colour is durable across reloads.
-- Mission colour is independent of state indicators (edit-mode stripe,
-  selection, active focus); state never overrides identity.
-
-### Sorting
-
-The sidebar exposes a sort dropdown. Available orderings:
-
-- Updated date (newest first) — default
-- Created date (newest first)
-- Status
-- Label A-Z
-- Selected missions first, then by updated date
-- Visible missions first, then by updated date
-
-The choice is remembered locally per browser.
-
-### Import / Export
-
-The sidebar header offers an overflow menu containing Import, Export active,
-Export selection, and Export all visible. Options that do not apply (e.g.
-"Export selection" with nothing selected) are disabled.
-
-- **Import** — accepts a JSON file containing a single mission object or an
-  array of missions. Imported missions enter at the lowest writable status
-  (currently `planning`); their incoming IDs and audit/timestamp fields are
-  discarded server-side. Invalid input shows a toast; partial batches are not
-  applied.
-- **Export** — produces JSON containing only authored content (waypoints,
-  labels, colour). Lifecycle and infrastructure fields (`id`, `status`,
-  timestamps, `client_version`, audit fields) are stripped so that the
-  exported file is a recipe, not a snapshot.
-- KML / GPX / CSV are out of scope for now; the widget's coordinate frame is
-  scene-local, not WGS84.
+The word "Approve" is not used in the operator-facing UI. The approval concept was
+removed by ADR 0021. Internal draft statuses (`proposed`, `planning`, `exported`,
+`cutover_pending`) are pipeline plumbing not surfaced in the sidebar.
 
 ### Concurrency and edit-lock invariants
 
 - All edits carry `client_version` for optimistic CAS. The backend rejects stale writes with `409 Conflict`.
-- Manual edits mutate the Active Mission in place. AI-driven changes default to clone-and-edit, producing a new Mission row unless the operator explicitly requests an in-place AI edit.
-- No mutation of an executing mission is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
-- The widget consumes the flat Mission API directly; overlay payloads still emit `revision_id` as an alias of `mission_id` (cosmetic).
+- Editing a locked revision (`approved`, `executing`, `completed`) forks a new client-authored revision with provenance inheritance rather than mutating in place.
+- No mutation of an executing revision is permitted. The widget enforces this with short-circuit gesture handlers; the backend enforces it server-side.
+- The `Execute mission` button is shown only for the operation's **active** revision. Attempting to execute a sibling revision is rejected with `stale_revision`.
 
 ### Safety invariants
 
-- Execution requires a separate explicit operator action in Strict, an operator confirmation banner in Confirm, or an AI tool call in Autonomous. Per [ADR 0022](../../cross-cutting/decisions/0022-drop-operator-approval-gate.md), there is no per-Mission approval gate in front of any of these.
 - The edit lock during execution is not bypassable from the frontend.
 - The map widget never issues low-level MQTT commands directly.
+- Stop always holds the vehicle in place — it does not trigger RTL. The vehicle waits for manual operator control.
+- Pause and stop commands are available from both the sidebar buttons and AI chat simultaneously.
 
 The Mission CRUD and Safety Invariants sections above describe **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) supersedes [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md) and [ADR 0012](../../cross-cutting/decisions/0012-map-widget-safety-invariants.md) and introduces two additional modes — **Confirm** (operator confirms an AI-armed execution via a banner) and **Autonomous** (sim-build default; AI may execute directly). Mode lives in `Settings → Mission Lifecycle`. Invariants 2–4 of ADR 0012 (no client-side mutation of executing missions, no silent overwrites, no inventing backend contracts) survive all modes. ADR 0021 also defines the **flat Mission sidebar** (one row = one Mission, with `#index`, editable name, `origin`, `origin_chat_id`) and the **Visible / Selected / Active** three-state UI. See ADR 0021 for the full lifecycle and tool surface.
 

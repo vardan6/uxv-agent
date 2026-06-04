@@ -7,6 +7,83 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from .mission_safety import (
+    MISSION_TYPE_FENCE,
+    MISSION_TYPE_RALLY,
+    Geofence,
+    parse_geofence,
+)
+
+# MAVLink command/frame values for the FENCE (type 1) and RALLY (type 2) mission
+# stores. Kept here — not in mission_safety — so the safety core stays MAVLink-free
+# (ADR 0023 Phase 5): mission_safety owns the projection-free geometry, this module
+# owns the wire encoding.
+_MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION = 5001
+_MAV_CMD_NAV_RALLY_POINT = 5100
+_MAV_FRAME_GLOBAL = 0
+
+
+def _mission_item_int(
+    *,
+    seq: int,
+    command: int,
+    lat: float,
+    lon: float,
+    alt: float = 0.0,
+    param1: float = 0.0,
+    param2: float = 0.0,
+    param3: float = 0.0,
+    param4: float = 0.0,
+) -> dict[str, Any]:
+    """Build one MISSION_ITEM_INT in the normalized download shape (lat/lon as
+    1e7 ints), the same dict the download path emits so read-back compares cleanly."""
+    return {
+        "seq": int(seq),
+        "frame": _MAV_FRAME_GLOBAL,
+        "command": int(command),
+        "current": 0,
+        "autocontinue": 1,
+        "param1": float(param1),
+        "param2": float(param2),
+        "param3": float(param3),
+        "param4": float(param4),
+        "x": int(round(float(lat) * 1e7)),
+        "y": int(round(float(lon) * 1e7)),
+        "z": float(alt),
+    }
+
+
+def _geofence_upload_items(geofence: Geofence) -> dict[int, list[dict[str, Any]]]:
+    """Encode an inclusion fence + rally points as per-``mission_type`` item lists.
+
+    Each polygon vertex becomes a FENCE_POLYGON_VERTEX_INCLUSION item carrying the
+    total vertex count in ``param1`` (ArduPilot/PX4 use it to delimit the polygon);
+    each rally point becomes a RALLY_POINT item. Empty lists are returned for a
+    store with nothing to upload so the caller can skip untouched mission types.
+    """
+    vertex_count = len(geofence.polygon)
+    fence_items = [
+        _mission_item_int(
+            seq=seq,
+            command=_MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION,
+            param1=float(vertex_count),
+            lat=vertex.lat,
+            lon=vertex.lon,
+        )
+        for seq, vertex in enumerate(geofence.polygon)
+    ]
+    rally_items = [
+        _mission_item_int(
+            seq=seq,
+            command=_MAV_CMD_NAV_RALLY_POINT,
+            lat=rally.lat,
+            lon=rally.lon,
+            alt=rally.alt,
+        )
+        for seq, rally in enumerate(geofence.rally_points)
+    ]
+    return {MISSION_TYPE_FENCE: fence_items, MISSION_TYPE_RALLY: rally_items}
+
 
 def _snapshot_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -89,10 +166,37 @@ class ControllerMissionInstallResult:
     raw_result: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class ControllerLinkHealth:
+    """Liveness probe for a controller link (heartbeat + mission readability)."""
+
+    ok: bool
+    adapter: str
+    connected: bool
+    detail: str = ""
+    controller_version: int = 0
+    error: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": bool(self.ok),
+            "adapter": self.adapter,
+            "connected": bool(self.connected),
+            "detail": self.detail,
+            "controller_version": int(self.controller_version),
+            "error": self.error,
+            "raw": dict(self.raw),
+        }
+
+
 class ControllerMissionAdapter(Protocol):
     adapter_name: str
 
     def get_controller_state(self) -> ControllerMissionAdapterState:
+        ...
+
+    def check_health(self) -> ControllerLinkHealth:
         ...
 
     def install_mission(
@@ -103,20 +207,19 @@ class ControllerMissionAdapter(Protocol):
     ) -> ControllerMissionInstallResult:
         ...
 
-    def cancel_mission(
+    def clear_mission(
         self,
         *,
-        mode: str = "clear",
         expected_controller_version: int | None = None,
     ) -> ControllerMissionInstallResult:
         ...
 
-
-# ADR 0021 § 1 — abort options exposed by adapters that implement cancel_mission.
-# `clear`   — universal: overwrite the controller mission with zero items.
-# `hold`    — MAVLink-only: switch flight mode to HOLD/LOITER (not yet implemented).
-# `disarm`  — MAVLink-only: send disarm command (not yet implemented; air-disarm risk).
-CANCEL_MODES = ("clear", "hold", "disarm")
+    def upload_geofence(
+        self,
+        *,
+        geofence: dict[str, Any],
+    ) -> ControllerMissionInstallResult:
+        ...
 
 
 class ControllerMissionAdapterError(RuntimeError):
@@ -175,12 +278,30 @@ def _normalize_downloaded_items(items: list[dict[str, Any]]) -> list[dict[str, A
 def _mission_items_equivalent(expected: list[dict[str, Any]], observed: list[dict[str, Any]]) -> bool:
     clean_expected = _normalize_downloaded_items(expected)
     clean_observed = _normalize_downloaded_items(observed)
-    if clean_expected == clean_observed:
+    # Canonical JSON so NaN params (e.g. unspecified yaw) compare equal rather
+    # than tripping float('nan') != float('nan').
+    if _snapshots_equivalent({"items": clean_expected}, {"items": clean_observed}):
         return True
     # ArduPilot may expose a leading home item on read-back; accept that shape.
-    if len(clean_observed) == len(clean_expected) + 1 and clean_observed[1:] == clean_expected:
+    if len(clean_observed) == len(clean_expected) + 1 and _snapshots_equivalent(
+        {"items": clean_expected}, {"items": clean_observed[1:]}
+    ):
         return True
     return False
+
+
+def _snapshots_equivalent(expected: dict[str, Any], observed: dict[str, Any]) -> bool:
+    """Compare two snapshots by canonical JSON rather than dict equality.
+
+    Mission plans legitimately carry ``NaN`` floats (e.g. an unspecified
+    waypoint yaw on a ground rover), and ``float('nan') != float('nan')`` makes
+    a plain ``==`` reject an otherwise-identical read-back. Serializing both
+    sides to sorted JSON folds ``NaN`` to the same token, so the comparison
+    reflects the mission content, not float identity.
+    """
+    dumped_expected = json.dumps(expected, sort_keys=True, separators=(",", ":"))
+    dumped_observed = json.dumps(observed, sort_keys=True, separators=(",", ":"))
+    return dumped_expected == dumped_observed
 
 
 def _controller_version_for_items(items: list[dict[str, Any]]) -> int:
@@ -235,11 +356,11 @@ class PymavlinkMissionClient:
             raise ControllerMissionAdapterError(f"timed out waiting for MAVLink message: {types}")
         return msg
 
-    def download_mission_items(self) -> list[dict[str, Any]]:
+    def download_mission_items(self, *, mission_type: int = 0) -> list[dict[str, Any]]:
         self._connection.mav.mission_request_list_send(
             self._connection.target_system,
             self._connection.target_component,
-            0,
+            int(mission_type),
         )
         count_msg = self._recv(["MISSION_COUNT"])
         count = int(getattr(count_msg, "count", 0) or 0)
@@ -249,7 +370,7 @@ class PymavlinkMissionClient:
                 self._connection.target_system,
                 self._connection.target_component,
                 seq,
-                0,
+                int(mission_type),
             )
             item_msg = self._recv(["MISSION_ITEM_INT", "MISSION_ITEM"])
             payload = item_msg.to_dict() if hasattr(item_msg, "to_dict") else dict(item_msg)
@@ -271,16 +392,16 @@ class PymavlinkMissionClient:
             self._connection.target_system,
             self._connection.target_component,
             self._mavutil.mavlink.MAV_MISSION_ACCEPTED,
-            0,
+            int(mission_type),
         )
         return items
 
-    def upload_mission_items(self, items: list[dict[str, Any]]) -> None:
+    def upload_mission_items(self, items: list[dict[str, Any]], *, mission_type: int = 0) -> None:
         self._connection.mav.mission_count_send(
             self._connection.target_system,
             self._connection.target_component,
             len(items),
-            0,
+            int(mission_type),
         )
         for item in items:
             request_msg = self._recv(["MISSION_REQUEST_INT", "MISSION_REQUEST"])
@@ -301,23 +422,150 @@ class PymavlinkMissionClient:
                 item["x"],
                 item["y"],
                 item["z"],
-                0,
+                int(mission_type),
             )
         ack_msg = self._recv(["MISSION_ACK"])
         ack_type = int(getattr(ack_msg, "type", self._mavutil.mavlink.MAV_MISSION_ACCEPTED))
         if ack_type != self._mavutil.mavlink.MAV_MISSION_ACCEPTED:
             raise ControllerMissionAdapterError(f"mission upload rejected with MAV_MISSION type={ack_type}")
 
-    def clear_mission_items(self) -> None:
+    def clear_mission_items(self, *, mission_type: int = 0) -> None:
         self._connection.mav.mission_clear_all_send(
             self._connection.target_system,
             self._connection.target_component,
-            0,
+            int(mission_type),
         )
         ack_msg = self._recv(["MISSION_ACK"])
         ack_type = int(getattr(ack_msg, "type", self._mavutil.mavlink.MAV_MISSION_ACCEPTED))
         if ack_type != self._mavutil.mavlink.MAV_MISSION_ACCEPTED:
             raise ControllerMissionAdapterError(f"mission clear rejected with MAV_MISSION type={ack_type}")
+
+
+class MavsdkMissionClient:
+    """MAVSDK ``MissionRaw`` transport with the same sync surface as
+    :class:`PymavlinkMissionClient`.
+
+    MAVSDK is asyncio-native; this client owns a private event loop and drives
+    each coroutine to completion synchronously so the adapter logic stays
+    transport-agnostic. ``MissionRaw`` exchanges the same ``MISSION_ITEM_INT``
+    field set the pymavlink client already normalises, so the dict shape is
+    identical on both backends.
+    """
+
+    def __init__(
+        self,
+        connection_url: str,
+        *,
+        heartbeat_timeout_s: float = 5.0,
+        request_timeout_s: float = 5.0,
+        **_ignored: Any,
+    ) -> None:
+        try:
+            import asyncio
+
+            from mavsdk import System
+            from mavsdk.mission_raw import MissionItem
+        except ImportError as exc:
+            raise ControllerMissionAdapterError(
+                "mavsdk is not installed; install gcs_server/requirements-gcs.txt"
+            ) from exc
+        self._asyncio = asyncio
+        self._mission_item_cls = MissionItem
+        self._request_timeout_s = float(request_timeout_s)
+        self._loop = asyncio.new_event_loop()
+        self._system = System()
+        self._run(self._connect(connection_url, float(heartbeat_timeout_s)))
+
+    def _run(self, coro: Any) -> Any:
+        return self._loop.run_until_complete(coro)
+
+    async def _connect(self, connection_url: str, timeout_s: float) -> None:
+        await self._system.connect(system_address=connection_url)
+
+        async def _await_connected() -> bool:
+            async for state in self._system.core.connection_state():
+                if state.is_connected:
+                    return True
+            return False
+
+        try:
+            connected = await self._asyncio.wait_for(_await_connected(), timeout=timeout_s)
+        except self._asyncio.TimeoutError as exc:
+            raise ControllerMissionAdapterError("timed out waiting for MAVSDK connection") from exc
+        if not connected:
+            raise ControllerMissionAdapterError("MAVSDK connection closed before becoming ready")
+
+    def close(self) -> None:
+        try:
+            self._loop.close()
+        except Exception:
+            pass
+
+    def download_mission_items(self, *, mission_type: int = 0) -> list[dict[str, Any]]:
+        if int(mission_type) != 0:
+            # MAVSDK's MissionRaw plugin uploads FENCE/RALLY but exposes no
+            # read-back for them; signal "unverifiable" so the adapter trusts the
+            # upload rather than failing verification (FC stays authoritative).
+            raise ControllerMissionAdapterError(
+                f"MAVSDK MissionRaw cannot read back mission_type={mission_type} for verification"
+            )
+        raw_items = self._run(self._system.mission_raw.download_mission())
+        items: list[dict[str, Any]] = []
+        for index, raw in enumerate(raw_items or []):
+            items.append({
+                "seq": int(getattr(raw, "seq", index) or index),
+                "frame": int(getattr(raw, "frame", 0) or 0),
+                "command": int(getattr(raw, "command", 0) or 0),
+                "current": int(getattr(raw, "current", 0) or 0),
+                "autocontinue": int(getattr(raw, "autocontinue", 1) or 0),
+                "param1": float(getattr(raw, "param1", 0.0) or 0.0),
+                "param2": float(getattr(raw, "param2", 0.0) or 0.0),
+                "param3": float(getattr(raw, "param3", 0.0) or 0.0),
+                "param4": float(getattr(raw, "param4", 0.0) or 0.0),
+                "x": int(getattr(raw, "x", 0) or 0),
+                "y": int(getattr(raw, "y", 0) or 0),
+                "z": float(getattr(raw, "z", 0.0) or 0.0),
+            })
+        return items
+
+    def upload_mission_items(self, items: list[dict[str, Any]], *, mission_type: int = 0) -> None:
+        mission_items = [
+            self._mission_item_cls(
+                int(item["seq"]),
+                int(item["frame"]),
+                int(item["command"]),
+                int(item["current"]),
+                int(item["autocontinue"]),
+                float(item["param1"]),
+                float(item["param2"]),
+                float(item["param3"]),
+                float(item["param4"]),
+                int(item["x"]),
+                int(item["y"]),
+                float(item["z"]),
+                int(mission_type),
+            )
+            for item in items
+        ]
+        if int(mission_type) == MISSION_TYPE_FENCE:
+            self._run(self._system.mission_raw.upload_geofence(mission_items))
+        elif int(mission_type) == MISSION_TYPE_RALLY:
+            self._run(self._system.mission_raw.upload_rally_points(mission_items))
+        else:
+            self._run(self._system.mission_raw.upload_mission(mission_items))
+
+    def clear_mission_items(self, *, mission_type: int = 0) -> None:
+        # Honor mission_type so a FENCE/RALLY clear hits the typed store, not the
+        # main mission. MAVSDK MissionRaw has no clear_geofence/clear_rally; the
+        # MAVLink-standard typed clear is an empty upload of that type. Mirrors
+        # upload_mission_items' branching and the pymavlink client's
+        # mission_clear_all(mission_type).
+        if int(mission_type) == MISSION_TYPE_FENCE:
+            self._run(self._system.mission_raw.upload_geofence([]))
+        elif int(mission_type) == MISSION_TYPE_RALLY:
+            self._run(self._system.mission_raw.upload_rally_points([]))
+        else:
+            self._run(self._system.mission_raw.clear_mission())
 
 
 class MavlinkControllerMissionAdapter:
@@ -452,21 +700,45 @@ class MavlinkControllerMissionAdapter:
         finally:
             self._close_client(client)
 
-    def cancel_mission(
+    def check_health(self) -> ControllerLinkHealth:
+        try:
+            client = self._open_client()
+        except Exception as exc:
+            return ControllerLinkHealth(
+                ok=False,
+                adapter=self.adapter_name,
+                connected=False,
+                detail="failed to establish controller link",
+                error=str(exc),
+                raw={"connection_url": self._connection_url},
+            )
+        try:
+            downloaded = client.download_mission_items()
+        except Exception as exc:
+            return ControllerLinkHealth(
+                ok=False,
+                adapter=self.adapter_name,
+                connected=True,
+                detail="link up but mission read failed",
+                error=str(exc),
+                raw={"connection_url": self._connection_url},
+            )
+        finally:
+            self._close_client(client)
+        return ControllerLinkHealth(
+            ok=True,
+            adapter=self.adapter_name,
+            connected=True,
+            detail="heartbeat ok; mission readable",
+            controller_version=_controller_version_for_items(downloaded),
+            raw={"connection_url": self._connection_url, "item_count": len(downloaded)},
+        )
+
+    def clear_mission(
         self,
         *,
-        mode: str = "clear",
         expected_controller_version: int | None = None,
     ) -> ControllerMissionInstallResult:
-        normalized = str(mode or "clear").strip().lower()
-        if normalized != "clear":
-            return ControllerMissionInstallResult(
-                ok=False,
-                status="cancel_mode_not_implemented",
-                controller_state=self.get_controller_state(),
-                error=f"cancel mode '{normalized}' is not implemented for {self.adapter_name}",
-                raw_result={"requested_mode": normalized, "implemented_modes": ["clear"]},
-            )
         client = self._open_client()
         try:
             previous_items = client.download_mission_items()
@@ -482,6 +754,7 @@ class MavlinkControllerMissionAdapter:
                         "observed_controller_version": observed_version,
                     },
                 )
+
             try:
                 client.clear_mission_items()
                 downloaded_after = client.download_mission_items()
@@ -494,22 +767,100 @@ class MavlinkControllerMissionAdapter:
                     error=str(exc),
                     raw_result={"stage": "clear", "rollback": rollback_result["status"]},
                 )
+
             if downloaded_after:
+                rollback_result = self._rollback_previous(client, previous_items)
                 return ControllerMissionInstallResult(
                     ok=False,
-                    status="cutover_failed",
-                    controller_state=self._state_for_items(downloaded_after),
-                    error="controller still reports mission items after clear",
-                    raw_result={"stage": "verify"},
+                    status=rollback_result["status"],
+                    controller_state=rollback_result["state"],
+                    error="controller mission still present after clear",
+                    raw_result={"stage": "verify", "rollback": rollback_result["status"]},
                 )
+
+            state = ControllerMissionAdapterState(
+                controller_version=0,
+                status="idle",
+                raw_state={"downloaded_items": [], "connection_url": self._connection_url},
+            )
             return ControllerMissionInstallResult(
                 ok=True,
-                status="cancelled",
-                controller_state=self._state_for_items([]),
-                raw_result={"verified": True, "mode": normalized},
+                status="cleared",
+                controller_state=state,
+                raw_result={"verified": True},
             )
         finally:
             self._close_client(client)
+
+    def upload_geofence(
+        self,
+        *,
+        geofence: dict[str, Any],
+    ) -> ControllerMissionInstallResult:
+        """Upload the inclusion FENCE (type 1) and RALLY (type 2) stores to the FC.
+
+        Defense-in-depth (ADR 0023 Phase 5): the executor already refuses a
+        breaching mission *early*; this makes the FC authoritative by uploading
+        the same fence so the firmware enforces it independently. Each mission
+        type is uploaded separately and verified by read-back where the transport
+        supports it; a transport that cannot read fence/rally back (MAVSDK) is
+        trusted on the upload ack. A non-usable fence (< 3 vertices) is refused
+        fail-closed.
+
+        **Store scoping = persistent site config (decided 2026-06-01).** A mission
+        type with nothing to upload is intentionally left untouched — we do NOT
+        clear stale FENCE/RALLY stores on an empty upload. The FC's fence/rally is
+        treated as a site-wide safety boundary that persists across Missions, so a
+        fenceless Mission inherits whatever fence is already loaded. This is a
+        deliberate choice, not an oversight. Revisit when a first-class "scene"
+        concept lands (choose the scene a fence is authored on / applies to): at
+        that point fences become scene-scoped and an empty upload for the active
+        scene should clear its stores."""
+        fence = parse_geofence(geofence)
+        if not fence.is_usable:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="geofence_unusable",
+                controller_state=self.get_controller_state(),
+                error="inclusion fence has fewer than three vertices; refusing to upload",
+            )
+        by_type = _geofence_upload_items(fence)
+        client = self._open_client()
+        try:
+            uploaded: dict[str, int] = {}
+            for mission_type, items in by_type.items():
+                if not items:
+                    continue
+                client.upload_mission_items(items, mission_type=mission_type)
+                try:
+                    downloaded = client.download_mission_items(mission_type=mission_type)
+                except ControllerMissionAdapterError:
+                    downloaded = None  # transport cannot read this store back
+                if downloaded is not None and not _mission_items_equivalent(items, downloaded):
+                    return ControllerMissionInstallResult(
+                        ok=False,
+                        status="geofence_verify_failed",
+                        controller_state=self.get_controller_state(),
+                        error=f"geofence read-back verification failed for mission_type={mission_type}",
+                        raw_result={"mission_type": int(mission_type)},
+                    )
+                uploaded[str(mission_type)] = len(items)
+        except Exception as exc:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="geofence_upload_failed",
+                controller_state=self.get_controller_state(),
+                error=str(exc),
+                raw_result={"stage": "geofence_upload"},
+            )
+        finally:
+            self._close_client(client)
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="geofence_installed",
+            controller_state=self.get_controller_state(),
+            raw_result={"uploaded": uploaded},
+        )
 
     def _open_client(self) -> Any:
         if self._client_factory is not None:
@@ -576,6 +927,26 @@ class MavlinkControllerMissionAdapter:
         return {"status": "cutover_failed", "state": self._state_for_items(restored)}
 
 
+class MavsdkControllerMissionAdapter(MavlinkControllerMissionAdapter):
+    """MAVSDK-backed controller link.
+
+    Reuses the transport-agnostic install/verify/rollback/state machinery from
+    :class:`MavlinkControllerMissionAdapter` and only swaps the transport client
+    for :class:`MavsdkMissionClient`.
+    """
+
+    adapter_name = "mavsdk_controller"
+
+    def _open_client(self) -> Any:
+        if self._client_factory is not None:
+            return self._client_factory()
+        return MavsdkMissionClient(
+            self._connection_url,
+            heartbeat_timeout_s=self._heartbeat_timeout_s,
+            request_timeout_s=self._request_timeout_s,
+        )
+
+
 class JsonFileControllerMissionAdapter:
     """Local stand-in for an external controller boundary.
 
@@ -592,6 +963,100 @@ class JsonFileControllerMissionAdapter:
 
     def get_controller_state(self) -> ControllerMissionAdapterState:
         return self._state_from_record(self._load_record())
+
+    def check_health(self) -> ControllerLinkHealth:
+        state = self.get_controller_state()
+        return ControllerLinkHealth(
+            ok=True,
+            adapter=self.adapter_name,
+            connected=True,
+            detail="local json-file controller stand-in",
+            controller_version=int(state.controller_version),
+            raw={"state_path": str(self._state_path)},
+        )
+
+    def clear_mission(
+        self,
+        *,
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        current_record = self._load_record()
+        current_state = self._state_from_record(current_record)
+        if expected_controller_version is not None and current_state.controller_version != int(expected_controller_version):
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="stale_controller_version",
+                controller_state=current_state,
+                error="expected controller mission version does not match the live controller state",
+                raw_result={
+                    "expected_controller_version": expected_controller_version,
+                    "observed_controller_version": current_state.controller_version,
+                },
+            )
+        try:
+            self._write_record({
+                "controller_version": 0,
+                "status": "idle",
+                "verified_snapshot": {},
+                "operation_id": "",
+                "revision_id": "",
+                "draft_id": "",
+                "updated_at": time.time(),
+            })
+            cleared_state = self.get_controller_state()
+        except Exception as exc:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="cutover_failed",
+                controller_state=current_state,
+                error=str(exc),
+                raw_result={"stage": "clear"},
+            )
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="cleared",
+            controller_state=cleared_state,
+            raw_result={"verified": True},
+        )
+
+    def upload_geofence(
+        self,
+        *,
+        geofence: dict[str, Any],
+    ) -> ControllerMissionInstallResult:
+        """Persist the inclusion fence + rally points alongside the local mission
+        record so the stand-in mirrors a controller that owns a FENCE/RALLY store.
+        Refuses a non-usable fence (< 3 vertices) fail-closed, like the real link."""
+        fence = parse_geofence(geofence)
+        if not fence.is_usable:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="geofence_unusable",
+                controller_state=self.get_controller_state(),
+                error="inclusion fence has fewer than three vertices; refusing to upload",
+            )
+        record = self._load_record()
+        record["geofence"] = fence.to_dict()
+        record["geofence_updated_at"] = time.time()
+        try:
+            self._write_record(record)
+        except Exception as exc:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="geofence_upload_failed",
+                controller_state=self.get_controller_state(),
+                error=str(exc),
+                raw_result={"stage": "geofence_upload"},
+            )
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="geofence_installed",
+            controller_state=self.get_controller_state(),
+            raw_result={"uploaded": {
+                str(MISSION_TYPE_FENCE): len(fence.polygon),
+                str(MISSION_TYPE_RALLY): len(fence.rally_points),
+            }},
+        )
 
     def install_mission(
         self,
@@ -640,7 +1105,7 @@ class JsonFileControllerMissionAdapter:
         expected_snapshot = _snapshot_dict(pending_snapshot)
         verified = (
             verified_state.controller_version == int(expected_snapshot.get("controller_version") or 0)
-            and verified_state.to_snapshot() == expected_snapshot
+            and _snapshots_equivalent(expected_snapshot, verified_state.to_snapshot())
         )
         if verified:
             return ControllerMissionInstallResult(
@@ -671,62 +1136,6 @@ class JsonFileControllerMissionAdapter:
             controller_state=rollback_state,
             error="controller mission read-back verification failed",
             raw_result={"verified": False},
-        )
-
-    def cancel_mission(
-        self,
-        *,
-        mode: str = "clear",
-        expected_controller_version: int | None = None,
-    ) -> ControllerMissionInstallResult:
-        normalized = str(mode or "clear").strip().lower()
-        if normalized not in ("clear",):
-            current_state = self.get_controller_state()
-            return ControllerMissionInstallResult(
-                ok=False,
-                status="cancel_mode_not_implemented",
-                controller_state=current_state,
-                error=f"cancel mode '{normalized}' is not implemented for {self.adapter_name}",
-                raw_result={"requested_mode": normalized, "implemented_modes": ["clear"]},
-            )
-        current_record = self._load_record()
-        current_state = self._state_from_record(current_record)
-        if expected_controller_version is not None and current_state.controller_version != int(expected_controller_version):
-            return ControllerMissionInstallResult(
-                ok=False,
-                status="stale_controller_version",
-                controller_state=current_state,
-                error="expected controller mission version does not match the live controller state",
-                raw_result={
-                    "expected_controller_version": int(expected_controller_version),
-                    "observed_controller_version": current_state.controller_version,
-                },
-            )
-        next_record = {
-            "controller_version": int(current_state.controller_version or 0) + 1,
-            "status": "cancelled",
-            "verified_snapshot": {},
-            "updated_at": time.time(),
-            "operation_id": "",
-            "revision_id": "",
-            "draft_id": "",
-        }
-        try:
-            self._write_record(next_record)
-            verified_state = self.get_controller_state()
-        except Exception as exc:
-            return ControllerMissionInstallResult(
-                ok=False,
-                status="cutover_failed",
-                controller_state=current_state,
-                error=str(exc),
-                raw_result={"stage": "cancel"},
-            )
-        return ControllerMissionInstallResult(
-            ok=True,
-            status="cancelled",
-            controller_state=verified_state,
-            raw_result={"verified": True, "mode": normalized},
         )
 
     def _load_record(self) -> dict[str, Any]:

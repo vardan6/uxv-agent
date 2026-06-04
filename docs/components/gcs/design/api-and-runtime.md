@@ -104,18 +104,12 @@ Durable rules:
 - Agent mode uses tool surfaces for on-demand detail instead of preloading all
   large context into the prompt
 
-Mission boundary:
+Mission-execution boundary:
 
-- canonical mission state lives in the flat `MissionRepository`
-- `mission_execution_service` is the controller handoff boundary only
-- the `/ai` map widget consumes the flat Mission API directly
-  (`/api/ai/missions[...]`); legacy revision/draft endpoints and the
-  transitional `revision_id` overlay alias have been removed. The
-  controller-state field is `active_mission_id`.
-- mission-level `DELETE /api/ai/missions/{id}` is **soft** (sets
-  `deleted_at`); it is rejected with HTTP 409 when the controller has the
-  mission `executing` or `armed`. `POST /api/ai/missions/{id}/restore` flips
-  the row back. `#index` is never reused (ADR 0021 § 2).
+- canonical mission revision and controller-cutover state live behind the
+  backend `mission_execution` boundary
+- planning-shell compatibility flows may still sync into that boundary, but the
+  GCS should treat `mission_execution` as the durable owner of mission state
 
 ## Current Architecture Limits
 

@@ -26,19 +26,28 @@ Primary tables:
 
 ## Status Model
 
-Revision/operation statuses currently used by the backend include:
+User-facing states and sidebar button layout: see [GCS requirements §Mission Row Button Layout](../../gcs/requirements.md#mission-row-button-layout).
+
+### Internal revision/operation statuses (backend pipeline)
+
+Used by the execution service and adapter pipeline. Not shown in the sidebar UI.
 
 - `planning`
-- `awaiting_approval`
-- `approved`
 - `exported`
-- `cutover_pending`
+- `cutover_pending` — transient: set immediately before `install_mission()` is called; lasts milliseconds, transitions to `executing` or rolls back on failure
 - `executing`
+- `paused` — vehicle holding at current position; GCS-side pause state
+- `aborted` — stopped by operator; terminal
 - `rejected`
 - `validation_failed`
 - `needs_clarification`
 
-Controller-state statuses currently used include:
+**Removed:** `awaiting_approval` and `approved` — dropped per ADR 0021. The
+two-approval model (ADR 0002) is superseded. The `approved_at` DB column is retained
+as a dead no-op (SQLite full-table rebuild not justified). No new code should reference
+these statuses.
+
+### Controller-state statuses
 
 - `idle`
 - `verifying`
@@ -74,7 +83,7 @@ Two optimistic concurrency controls protect mission state:
 
 Stale-cutover handling:
 
-- when execution rejects on stale controller version, the system creates a rebased `awaiting_approval` revision for re-review against latest verified controller state
+- when execution rejects on stale controller version, the system creates a rebased revision for re-review against latest verified controller state
 
 ## Adapter Boundary Contract
 
@@ -86,6 +95,27 @@ Required adapter semantics:
 - compare controller mission version before cutover
 - install mission payload
 - verify installed mission by read-back
+- clear the controller-owned mission (Read → empty Write → read-back verify), resetting to an idle version-0 state
+- probe link health (heartbeat reachable + mission readable) without mutating controller state
+- **pause** — hold vehicle in place mid-mission (mode switch to HOLD, see [ADR 0024](../../../cross-cutting/decisions/0024-mission-pause-stop-mechanism.md))
+- **resume** — continue from next waypoint in sequence (firmware default)
+- **stop** — hold in place, GCS marks mission `aborted`; does not trigger RTL (ADR 0024)
 - surface failure details for audit and rollback logic
 
-The default local adapter is implementation detail; contract behavior is stable regardless of transport.
+Transports: `json_file` (local simulation, default), `file_sink` (write uploads to
+`data/fc_sink/` as timestamped JSON files, for development without a real FC or
+`mav_sim`), plus real external links over pymavlink and MAVSDK (`MissionRaw`). External
+links take a connection URL + heartbeat/request timeouts; the version compared before
+cutover is a CRC over the normalized mission items. The default local adapter is
+implementation detail; contract behavior is stable regardless of transport.
+
+The adapter type and connection URL are configurable from `Settings → Mission Lifecycle`.
+For development monitoring, point the mavlink adapter at `mav_sim` (UDP 14550) to see
+all mission traffic in the `mav_sim` web UI (port 9010). See [`docs/mav_sim/design.md`](../../../mav_sim/design.md).
+
+Navigation-leaf command subset (export): a `.plan` waypoint may carry optional
+per-leaf fields that emit additional MAVLink items — `speed_mps` → `DO_CHANGE_SPEED`,
+`roi:{lat,lon[,alt]}` → `DO_SET_ROI` (both inserted ahead of the nav leaf), and
+`loiter_time_s` → the nav leaf becomes `NAV_LOITER_TIME` instead of `NAV_WAYPOINT`.
+`DO_JUMP` is intentionally not emitted — loop structure belongs to the behavior tree
+(ADR 0023). `doJumpId` is a single 1-based running sequence across all emitted items.

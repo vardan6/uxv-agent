@@ -1,7 +1,7 @@
 import { SORT_OPTIONS } from '../state/missionSortPreference.js';
 
-// Header-overflow popover: sort radio list + JSON import/export shortcuts.
-// Lives inside the map widget container so it scrolls with the panel.
+// Header-overflow popover: sort radio list.
+// Import/export (JSON) will be wired in Phase D2.
 
 export class MissionListOverflowMenu {
   constructor(container) {
@@ -16,8 +16,8 @@ export class MissionListOverflowMenu {
     this._opts = opts;
     const currentSort = opts.currentSort || SORT_OPTIONS[0].id;
     const onSortChange = opts.onSortChange || (() => {});
-    const onImport     = opts.onImport     || (() => {});
-    const onExport     = opts.onExport     || (() => {});
+    const onExport = opts.onExport || (() => {});
+    const onImport = opts.onImport || (() => {});
 
     const pop = document.createElement('div');
     pop.className = 'mission-list-overflow-menu';
@@ -41,7 +41,6 @@ export class MissionListOverflowMenu {
       row.querySelector('input').addEventListener('change', (e) => {
         if (e.target.checked) {
           onSortChange(option.id);
-          // Keep menu open so the operator sees the order change in place.
         }
       });
       sortList.appendChild(row);
@@ -50,38 +49,18 @@ export class MissionListOverflowMenu {
 
     const ioGroup = document.createElement('div');
     ioGroup.className = 'mission-overflow-group';
-    ioGroup.innerHTML = `<p class="mission-overflow-group-label">JSON</p>`;
-    const ioRow = document.createElement('div');
-    ioRow.className = 'mission-overflow-io-row';
-
+    ioGroup.innerHTML = `<p class="mission-overflow-group-label">File</p>`;
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.className = 'mission-overflow-action-btn';
+    exportBtn.textContent = 'Export missions…';
+    exportBtn.addEventListener('click', () => { this.close(); onExport(); });
     const importBtn = document.createElement('button');
     importBtn.type = 'button';
-    importBtn.className = 'mission-overflow-action';
-    importBtn.textContent = 'Import…';
-    importBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onImport();
-      this.close();
-    });
-    ioRow.appendChild(importBtn);
-
-    for (const mode of [
-      { id: 'active',    label: 'Export active' },
-      { id: 'selection', label: 'Export selection' },
-      { id: 'visible',   label: 'Export visible' },
-    ]) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'mission-overflow-action';
-      btn.textContent = mode.label;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onExport(mode.id);
-        this.close();
-      });
-      ioRow.appendChild(btn);
-    }
-    ioGroup.appendChild(ioRow);
+    importBtn.className = 'mission-overflow-action-btn';
+    importBtn.textContent = 'Import missions…';
+    importBtn.addEventListener('click', () => { this.close(); onImport(); });
+    ioGroup.append(exportBtn, importBtn);
 
     pop.append(sortGroup, ioGroup);
     pop.addEventListener('click', (e) => e.stopPropagation());
@@ -105,7 +84,7 @@ export class MissionListOverflowMenu {
     if (!anchorEl || !this._popover) return;
     const containerRect = this._container.getBoundingClientRect();
     const anchorRect = anchorEl.getBoundingClientRect();
-    const popWidth = 260;
+    const popWidth = 200;
     let left = anchorRect.right - containerRect.left - popWidth;
     let top  = anchorRect.bottom - containerRect.top + 4;
     if (left < 8) left = 8;

@@ -35,7 +35,7 @@ export const missionSortPreference = {
 // Status ordering for the "Status" sort — actionable first, terminal last.
 const STATUS_ORDER = [
   'executing', 'armed', 'awaiting_confirmation',
-  'proposed', 'awaiting_approval', 'planning', 'approved', 'exported', 'cutover_pending',
+  'proposed', 'planning', 'exported', 'cutover_pending',
   'completed', 'superseded', 'rejected', 'validation_failed',
   'unknown', '',
 ];
@@ -44,18 +44,17 @@ const statusRank = (s) => {
   return idx === -1 ? STATUS_ORDER.length : idx;
 };
 
-const titleOf = (row) => String(row?.mission?.goal || row?.goal || row?.label || `Mission ${row?.id || ''}`).toLowerCase();
+const titleOf = (row) => String(row?.mission?.goal || row?.goal || row?.label || row?.name || `Mission ${row?.id || ''}`).toLowerCase();
 
 export function sortMissions(missions, sortId, { selectedMissionIds = new Set(), visibleMissionIds = new Set() } = {}) {
   const arr = Array.isArray(missions) ? [...missions] : [];
-  // Stable secondary key: updated_at desc, then id, so equal-rank entries don't shuffle.
-  const tiebreak = (a, b) => (Number(b.updated_at || 0) - Number(a.updated_at || 0)) || String(a.id).localeCompare(String(b.id));
+  const tiebreak = (a, b) => (Number(b.updatedAt || b.updated_at || 0) - Number(a.updatedAt || a.updated_at || 0)) || String(a.id).localeCompare(String(b.id));
   switch (sortId) {
     case 'created_desc':
-      arr.sort((a, b) => (Number(b.created_at || 0) - Number(a.created_at || 0)) || tiebreak(a, b));
+      arr.sort((a, b) => (Number(b.createdAt || b.created_at || 0) - Number(a.createdAt || a.created_at || 0)) || tiebreak(a, b));
       break;
     case 'status':
-      arr.sort((a, b) => (statusRank(a.status) - statusRank(b.status)) || tiebreak(a, b));
+      arr.sort((a, b) => (statusRank(a.activeRevisionStatus) - statusRank(b.activeRevisionStatus)) || tiebreak(a, b));
       break;
     case 'label_asc':
       arr.sort((a, b) => titleOf(a).localeCompare(titleOf(b)) || tiebreak(a, b));
@@ -76,7 +75,7 @@ export function sortMissions(missions, sortId, { selectedMissionIds = new Set(),
       break;
     case 'updated_desc':
     default:
-      arr.sort((a, b) => (Number(b.updated_at || 0) - Number(a.updated_at || 0)) || tiebreak(a, b));
+      arr.sort((a, b) => tiebreak(a, b));
       break;
   }
   return arr;

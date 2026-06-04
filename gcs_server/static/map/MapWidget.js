@@ -1,31 +1,30 @@
-import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState } from './data/missionApi.js';
-import { getMission, createMission, updateMissionWaypoint, insertMissionWaypoint, deleteMissionWaypoint, deleteMission, restoreMission, updateMissionColor } from './data/missionMutationApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
+import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
 import { MissionOverlayLayer } from './layers/MissionOverlayLayer.js';
 import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
-import { normalizeMissionRows, enforceVisibilityCap } from './missionListLogic.js';
+import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
+import { GridLayer } from './layers/GridLayer.js';
+import { mapMissionsForList, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
+import { missionColorOverrides } from './state/missionColorOverrides.js';
+import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
+import { MissionColorPicker } from './ui/MissionColorPicker.js';
+import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
 import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
 import { ContextMenu } from './ui/ContextMenu.js';
 import { HintToasts } from './ui/HintToasts.js';
 import { ElevationProfilePanel } from './ui/ElevationProfilePanel.js';
 import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
-import { MapViewToolbar, MAP_STYLES } from './ui/MapViewToolbar.js';
-import { MissionColorPicker } from './ui/MissionColorPicker.js';
-import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
-import { MissionBulkActionBar } from './ui/MissionBulkActionBar.js';
-import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
+import { ConfirmExecutionBanner } from './ui/ConfirmExecutionBanner.js';
+import { BasemapPanel } from './ui/BasemapPanel.js';
 import { editState } from './state/editState.js';
-import { selectionState } from './state/selectionState.js';
-import { defaultMissionColor } from './state/missionColorOverrides.js';
 
-const MAP_STYLE_STORAGE_KEY = 'gcs-map-widget-style';
-const SCENE_MAP_PAD = 0.05; // 5% padding around scene bounds for maxBounds clamp
-
-const LOCKED_STATUSES = new Set(['executing']);
+const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
+const DEFAULT_VISIBLE_MISSION_LIMIT = 3;
 
 function collectEditableWaypoints(mission = {}) {
   if (Array.isArray(mission.waypoints) && mission.waypoints.length) {
@@ -87,8 +86,9 @@ function boundsUnion(boundsList = []) {
   };
 }
 
-function missionIdOf(row) {
-  return String(row?.id || row?.mission_id || '').trim();
+function opacityForMission(missionId, focusedMissionId) {
+  if (!focusedMissionId) return 1;
+  return missionId === focusedMissionId ? 1 : 0.25;
 }
 
 export class MapWidget {
@@ -102,6 +102,8 @@ export class MapWidget {
     this._emptyState = null;
     this._mapEl = null;
     this._listEl = null;
+    this._listResizerEl = null;
+    this._resizeObserver = null;
     this._shellEl = null;
     this._mapWrapEl = null;
     this._listPanel = null;
@@ -112,30 +114,37 @@ export class MapWidget {
     this._editBannerText = null;
     this._selectionPanelWrap = null;
     this._mounted = false;
-    // Mission state machine (ADR-0021 flat-mission model):
-    //   _missions             — full list of mission rows from the server (source of truth).
-    //   _missionCache         — per-mission overlay payloads keyed by id (waypoints/bounds).
-    //   _visibleMissionOrder  — eye-icon toggled subset, in operator-controlled draw order.
-    //   selectionState        — shared pure store; sole source for selected /
-    //                            active / anchor mission ids (was three local
-    //                            fields prior to Slice 3).
+    // Flat-Mission read path (ADR 0021 §2). One row = one Mission; overlay,
+    // visibility, focus and palette are all keyed on the Mission id. Each
+    // Mission resolves to its active revision (for overlay/edit/execute) via
+    // its list descriptor's activeRevisionId.
     this._missions = [];
-    this._missionCache = new Map();
+    this._missionsById = new Map();
+    this._overlayCacheByMissionId = new Map();
     this._visibleMissionOrder = [];
+    this._focusedMissionId = '';
+    // Selected set (ADR 0021 §4): batch-operation target, independent of
+    // Visible/Active. `_selectionAnchorId` is the range anchor for shift-click.
+    // `_seenMissionIds` tracks which Missions existed at the last sync so a
+    // newly-created one can be auto-promoted to Active+Visible (not Selected).
+    this._selectedMissionIds = new Set();
+    this._selectionAnchorId = '';
+    this._seenMissionIds = null;
+    // The Mission whose active revision is currently being edited (edit
+    // internals below stay revision-keyed via editState).
+    this._editingMissionId = '';
     this._activeProfileId = 'rover_default';
     this._profilesById = {};
     this._controllerVersion = null;
+    this._executionState = null;
     this._vehicleLayer = null;
     this._pollTimer = null;
     this._confirmModal = null;
     this._confirmResolve = null;
     this._actionBusy = false;
     this._paletteByMissionId = new Map();
-    // When editing forks a locked mission, hide the source from the map for
-    // the duration of the edit so the operator doesn't see a "ghost" copy
-    // alongside the editable fork. Restored on every edit exit by the
-    // editState subscriber.
-    this._editForkSource = null; // { missionId, index } | null
+    this._colorPicker = null;
+    this._overflowMenu = null;
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -145,17 +154,27 @@ export class MapWidget {
     this._elevationPanel = null;
     this._sampleHeight = () => 0;
     this._terrainLayer = null;
-    this._bulkActionBar = null;
-    this._didInitialFit = false;
+    this._sceneObjectsLayer = null;
+    this._gridLayer = null;
     this._sceneBounds = null;
-    this._viewToolbar = null;
-    this._mapStyle = 'terrain';
-    try { this._mapStyle = localStorage.getItem(MAP_STYLE_STORAGE_KEY) || 'terrain'; } catch (_) {}
-    if (!MAP_STYLES.some((s) => s.id === this._mapStyle)) this._mapStyle = 'terrain';
-    this._colorPicker = null;
-    this._colorPreview = null; // { missionId, color } | null — live hover preview override
-    this._overflowMenu = null;
-    this._missionBulkBar = null;
+    // Tracks the last bounds key used for auto-fit so _render() doesn't reset
+    // the pan/zoom every poll cycle — only refit when the fit target changes.
+    this._lastFitKey = null;
+    this._bulkActionBar = null;
+    // Confirm-mode async banner (ADR 0021 §1): shows the armed run's confirm
+    // window and [Play]; polled alongside the overlay refresh.
+    this._confirmBanner = null;
+    // Real 2D WGS84 basemap render mode (Phase 4): an additive, read-only second
+    // view plotting the focused mission on an OSM map by lat/lon. Default off.
+    this._basemapPanel = null;
+    this._basemapToggleBtn = null;
+    this._layerToolbar = null;
+    this._fitBtns = null;
+    this._viewModeSelect = null;
+    this._infoBar = null;
+    this._infoBarCoords = null;
+    this._infoBarGps = null;
+    this._infoBarSel = null;
   }
 
   mount() {
@@ -185,31 +204,35 @@ export class MapWidget {
       if (editState.editMode === 'add' && editState.isEditable()) {
         const ll = e.latlng;
         this._handleGhostClick(editState.waypoints.length, { x: ll.lng, y: ll.lat, z: 0 });
-      } else if (editState.missionId) {
+      } else if (editState.revisionId) {
         editState.clearSelection();
       }
     });
+    this._map.on('mousemove', (e) => this._onMapMouseMove(e));
 
     this._listPanel = new MissionListPanel(this._listEl, {
-      onRowClicked: (missionId, modifiers) => this._handleRowClicked(missionId, modifiers),
-      onVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
-      onSelectionToggled: (missionId, opts) => this._toggleMissionSelection(missionId, opts),
-      onExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
-      onEditRequested: (missionId) => this._onEditRequested(missionId),
-      onDoneEditRequested: () => this._exitEditMode(),
-      onCreateRequested: () => this._handleCreateMission(),
-      onDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
+      onMissionFocusRequested: (missionId) => this.setFocus(missionId),
+      onMissionVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
+      onMissionExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
+      onMissionEditRequested: (missionId) => this._onEditRequested(missionId),
+      onMissionDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
+      onMissionRenameRequested: (missionId, name) => this._handleRenameMission(missionId, name),
+      onNewMissionRequested: () => this._handleNewMission(),
+      onMissionSelectionToggled: (missionId, opts) => this._toggleSelection(missionId, opts),
+      onSelectedShowRequested: () => this._showSelectedMissions(),
+      onSelectedHideRequested: () => this._hideSelectedMissions(),
+      onSelectionCleared: () => this._clearSelection(),
+      onSelectedDeleteRequested: () => this._handleDeleteSelectedMissions(),
+      onMissionDoneEditRequested: () => {
+        editState.clearEdit();
+        this._overlayCacheByMissionId.clear();
+        this.refresh();
+      },
       onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
       onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
     });
-    this._colorPicker = new MissionColorPicker(this._mapWrapEl);
-    this._overflowMenu = new MissionListOverflowMenu(this._mapWrapEl);
-    this._missionBulkBar = new MissionBulkActionBar(this._listEl, {
-      onDelete: () => this._handleDeleteSelectedMissions(),
-      onHide: () => this._hideSelectedMissions(),
-      onShow: () => this._showSelectedMissions(),
-      onClearSelection: () => selectionState.clearSelection(),
-    });
+    this._colorPicker = new MissionColorPicker(this._listEl);
+    this._overflowMenu = new MissionListOverflowMenu(this._listEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -224,22 +247,25 @@ export class MapWidget {
     });
 
     fetchSceneMap().then((sceneMap) => {
-      if (sceneMap?.bounds) {
-        this._sceneBounds = sceneMap.bounds;
-        this._applySceneBoundsClamp();
+      if (sceneMap) {
         this._terrainLayer = new TerrainCanvasLayer(sceneMap);
         this._terrainLayer.addTo(this._map);
-        this._applyMapStyle();
+        this._sceneObjectsLayer = new SceneObjectsLayer(sceneMap);
+        this._sceneObjectsLayer.addTo(this._map);
+        this._gridLayer = new GridLayer(sceneMap);
+        this._gridLayer.addTo(this._map);
+        this._sceneBounds = sceneMap.bounds || null;
+        this._applyViewMode(this._viewModeSelect?.value || 'virtual_terrain');
+        this._updateFitButtons();
+        // Center on the scene so the 3d-env map renders standalone, even with
+        // no mission focused. Only do so while nothing is focused/edited, so we
+        // don't yank the view away from a mission the user is already looking at.
+        if (this._sceneBounds && !this._focusedMissionId && !editState.revisionId) {
+          this._fitBounds(this._sceneBounds);
+        }
       }
       this._sampleHeight = makeSampler(sceneMap);
       this._updateElevationProfile();
-    });
-
-    this._viewToolbar = new MapViewToolbar(this._mapWrapEl, {
-      initialStyle: this._mapStyle,
-      onFitScene: () => this._fitScene(),
-      onFitSelection: () => this._fitSelection(),
-      onStyleChange: (styleId) => this._setMapStyle(styleId),
     });
 
     this._editStateSubscriber = (snapshot) => this._onEditStateChange(snapshot);
@@ -251,10 +277,10 @@ export class MapWidget {
 
     // Marquee multi-select: capture-phase mousedown on empty map starts a rubber-band selector.
     // stopImmediatePropagation prevents Leaflet's drag handler from panning during the gesture.
-    // Only active when a mission is loaded and not in add mode (add mode uses click-to-append).
+    // Only active when a revision is loaded and not in add mode (add mode uses click-to-append).
     this._marqueeHandler = (e) => {
       if (e.button !== 0) return;
-      if (!editState.missionId || editState.editMode === 'add') return;
+      if (!editState.revisionId || editState.editMode === 'add') return;
       if (e.target.closest('.leaflet-interactive')) return;
       e.stopImmediatePropagation();
       this._startMarquee(e);
@@ -262,25 +288,85 @@ export class MapWidget {
     this._mapEl.addEventListener('mousedown', this._marqueeHandler, true);
 
     this._mounted = true;
+    this._bindListResizer();
     window.requestAnimationFrame(() => this.invalidateSize());
+    // The map area is user-resizable (CSS `resize: vertical`); re-measure
+    // Leaflet whenever the container's box changes so tiles fill the new size.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._resizeObserver = new ResizeObserver(() => this.invalidateSize());
+      this._resizeObserver.observe(this._container);
+    }
     this._startPolling();
+    this._pollExecutionState().catch(() => {});
     this.refresh().catch((error) => this._showError(error?.message || 'Map refresh failed'));
+  }
+
+  _bindListResizer() {
+    const resizer = this._listResizerEl;
+    const shell = this._shellEl;
+    if (!resizer || !shell) return;
+    const MAP_LIST_WIDTH_KEY = 'gcs-map-list-width';
+    const MAP_LIST_MIN = 180;
+    const MAP_LIST_MAX = 480;
+    const clamp = (v) => Math.max(MAP_LIST_MIN, Math.min(MAP_LIST_MAX, Number(v) || 280));
+    const setWidth = (w, persist = true) => {
+      const next = clamp(w);
+      shell.style.setProperty('--map-list-width', `${next}px`);
+      resizer.setAttribute('aria-valuenow', String(next));
+      if (persist) {
+        try { window.localStorage.setItem(MAP_LIST_WIDTH_KEY, String(next)); } catch (_) {}
+      }
+    };
+    try {
+      const stored = window.localStorage.getItem(MAP_LIST_WIDTH_KEY);
+      if (stored) setWidth(stored, false);
+    } catch (_) {}
+    resizer.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      resizer.setPointerCapture(e.pointerId);
+      shell.classList.add('is-list-resizing');
+    });
+    resizer.addEventListener('pointermove', (e) => {
+      if (!resizer.hasPointerCapture(e.pointerId)) return;
+      const rect = shell.getBoundingClientRect();
+      setWidth(e.clientX - rect.left);
+    });
+    resizer.addEventListener('pointerup', (e) => {
+      if (resizer.hasPointerCapture(e.pointerId)) resizer.releasePointerCapture(e.pointerId);
+      shell.classList.remove('is-list-resizing');
+    });
+    resizer.addEventListener('pointercancel', () => shell.classList.remove('is-list-resizing'));
+    resizer.addEventListener('lostpointercapture', () => shell.classList.remove('is-list-resizing'));
+    resizer.addEventListener('keydown', (e) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const cur = Number(resizer.getAttribute('aria-valuenow')) || 280;
+      if (e.key === 'Home') setWidth(MAP_LIST_MIN);
+      else if (e.key === 'End') setWidth(MAP_LIST_MAX);
+      else setWidth(cur + (e.key === 'ArrowRight' ? 24 : -24));
+    });
   }
 
   destroy() {
     this._mounted = false;
     this._stopPolling();
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
+    this._confirmBanner?.destroy();
+    this._confirmBanner = null;
+    this._basemapPanel?.destroy();
+    this._basemapPanel = null;
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
     this._terrainLayer = null;
-    this._viewToolbar?.destroy();
-    this._viewToolbar = null;
-    this._colorPicker?.close();
-    this._colorPicker = null;
-    this._overflowMenu?.close();
-    this._overflowMenu = null;
-    this._missionCache.clear();
+    this._sceneObjectsLayer?.remove();
+    this._sceneObjectsLayer = null;
+    this._gridLayer?.remove();
+    this._gridLayer = null;
+    this._overlayCacheByMissionId.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
       this._editStateSubscriber = null;
@@ -301,17 +387,26 @@ export class MapWidget {
 
   invalidateSize() {
     this._map?.invalidateSize(false);
+    this._basemapPanel?.invalidateSize();
   }
 
   setSessionId(sessionId) {
     const nextSessionId = sessionId || '';
     if (nextSessionId !== this._sessionId) {
       this._sessionId = nextSessionId;
-      this._missionCache.clear();
+      this._overlayCacheByMissionId.clear();
       this._missions = [];
+      this._missionsById = new Map();
       this._visibleMissionOrder = [];
-      selectionState.clearSelection();
+      this._focusedMissionId = '';
+      this._selectedMissionIds = new Set();
+      this._selectionAnchorId = '';
+      this._seenMissionIds = null;
+      this._executionState = null;
+      // A new session owns a fresh execution; drop any banner from the old one.
+      this._confirmBanner?.hide();
     }
+    this._pollExecutionState().catch(() => {});
     this.refresh();
   }
 
@@ -319,24 +414,23 @@ export class MapWidget {
     if (!this._map) return;
     this._hideError();
     await Promise.all([this._loadVehicleProfiles(), this._loadControllerState()]);
-    const missionsPayload = await listMissions({ sessionId: this._sessionId, limit: 100 });
+    const missionsPayload = await listMissions({ limit: 200 });
     if (!missionsPayload.ok) {
       this._showError(missionsPayload.error || 'fetch failed');
       this._overlayLayer.clear();
-      this._listPanel.render();
+      this._listPanel.renderMissions();
       this._showEmpty(true);
       return;
     }
 
-    const previousMissionIds = new Set(this._missions.map((mission) => missionIdOf(mission)));
-    const missions = normalizeMissionRows(missionsPayload.missions || []);
-    this._missions = missions;
-    const preferredMissionId = missions.find((mission) => !previousMissionIds.has(missionIdOf(mission)))?.id || '';
-    const isInitialFit = !this._didInitialFit;
-    this._syncVisibilityState(missions, { preferredMissionId });
+    // Hydrate persisted per-mission colour overrides from the server before
+    // assigning palette colours so a saved colour survives reloads / other clients.
+    missionColorOverrides.seedFromServer(missionsPayload.missions || []);
+    this._missions = mapMissionsForList(missionsPayload.missions || []);
+    this._missionsById = new Map(this._missions.map((m) => [m.id, m]));
+    this._syncVisibilityState(this._missions);
     await this._primeVisibleOverlays();
-    this._render({ fit: isInitialFit });
-    if (isInitialFit && this._missions.length) this._didInitialFit = true;
+    this._render();
   }
 
   async _loadVehicleProfiles() {
@@ -366,13 +460,49 @@ export class MapWidget {
     this._stopPolling();
     const tick = () => {
       if (!this._mounted) return;
-      // Skip automatic refresh while user has an active edit session.
-      if (document.visibilityState !== 'hidden' && !editState.missionId) {
-        this.refresh().catch(() => {});
+      if (document.visibilityState !== 'hidden') {
+        // The confirm banner must keep polling even mid-edit so an armed run's
+        // window is never hidden; the overlay refresh still defers to edits.
+        this._pollExecutionState().catch(() => {});
+        if (!editState.revisionId) {
+          this.refresh().catch(() => {});
+        }
       }
       this._pollTimer = setTimeout(tick, 5000);
     };
     this._pollTimer = setTimeout(tick, 5000);
+  }
+
+  async _pollExecutionState() {
+    if (!this._confirmBanner) return;
+    if (!this._sessionId) {
+      this._executionState = null;
+      this._confirmBanner.hide();
+      return;
+    }
+    const result = await getExecutionState(this._sessionId);
+    if (!result.ok) return;
+    const nextState = result.execution || null;
+    const previousKey = `${this._executionState?.mission_id || ''}:${this._executionState?.status || ''}`;
+    const nextKey = `${nextState?.mission_id || ''}:${nextState?.status || ''}`;
+    this._executionState = nextState;
+    this._confirmBanner.show(nextState);
+    if (previousKey !== nextKey && this._missions.length) {
+      this._render();
+    }
+  }
+
+  async _handleConfirmExecution() {
+    const result = await confirmExecution(this._sessionId);
+    if (!result.ok) this._showError(result.error || 'Could not start mission.');
+    this._confirmBanner.hide();
+    this._pollExecutionState().catch(() => {});
+  }
+
+  async _handleCancelExecution() {
+    await cancelExecution(this._sessionId);
+    this._confirmBanner.hide();
+    this._pollExecutionState().catch(() => {});
   }
 
   _stopPolling() {
@@ -382,187 +512,187 @@ export class MapWidget {
     }
   }
 
-  async _handleCreateMission() {
-    if (this._actionBusy) return;
-    this._actionBusy = true;
-    const result = await createMission({ waypoints: [], label: '', session_id: this._sessionId });
-    this._actionBusy = false;
-    if (!result.ok) {
-      this._showError(result.error || 'Create mission failed');
-      return;
+  _deleteGuardedMissionIds() {
+    const missionId = String(this._executionState?.mission_id || '');
+    const status = String(this._executionState?.status || '');
+    if (!missionId || !new Set(['armed', 'awaiting_confirm', 'running']).has(status)) {
+      return new Set();
     }
-    this._missionCache.clear();
-    await this.refresh();
-    const newId = result.mission && result.mission.id;
-    if (newId) this.setFocus(String(newId));
+    return new Set([missionId]);
   }
 
-  async _handleDeleteMission(missionId) {
-    if (this._actionBusy || !missionId) return;
-    this._actionBusy = true;
-    const result = await deleteMission(missionId);
-    this._actionBusy = false;
-    if (!result.ok) {
-      this._showError(result.error || 'Delete failed');
-      return;
-    }
-    this._missionCache.clear();
-    await this.refresh();
-    this._hintToasts?.showWithAction(`Mission #${missionId} deleted.`, {
-      actionLabel: 'Undo',
-      onAction: () => this._handleRestoreMission(missionId),
-    });
+  _isMissionDeleteBlocked(missionId) {
+    const id = String(missionId || '');
+    if (!id) return false;
+    if (this._deleteGuardedMissionIds().has(id)) return true;
+    return String(this._missionsById.get(id)?.activeRevisionStatus || '') === 'executing';
   }
 
-  async _handleRestoreMission(missionId) {
-    if (this._actionBusy || !missionId) return;
-    this._actionBusy = true;
-    const result = await restoreMission(missionId);
-    this._actionBusy = false;
-    if (!result.ok) {
-      this._showError(result.error || 'Restore failed');
-      return;
-    }
-    this._missionCache.clear();
-    await this.refresh();
-  }
-
-  async _handleDeleteSelectedMissions() {
-    if (this._actionBusy) return;
-    const ids = [...selectionState.selectedMissionIds];
-    if (ids.length < 2) return;
-    this._actionBusy = true;
-    for (const missionId of ids) {
-      const result = await deleteMission(missionId);
-      if (!result.ok) {
-        this._actionBusy = false;
-        this._showError(result.error || 'Bulk delete failed');
-        this._missionCache.clear();
-        await this.refresh();
-        return;
-      }
-    }
-    this._actionBusy = false;
-    this._missionCache.clear();
-    selectionState.clearSelection();
-    await this.refresh();
-    this._hintToasts?.show(`Deleted ${ids.length} missions.`);
-  }
-
-  _hideSelectedMissions() {
-    const ids = [...selectionState.selectedMissionIds];
-    const executingIds = this._executingMissionIds();
-    for (const id of ids) {
-      if (!executingIds.includes(id)) {
-        this._visibleMissionOrder = this._visibleMissionOrder.filter((v) => v !== id);
-      }
-    }
-    this._render();
-  }
-
-  async _showSelectedMissions() {
-    const ids = [...selectionState.selectedMissionIds];
-    const executingIds = this._executingMissionIds();
-    for (const id of ids) {
-      if (!this._visibleMissionOrder.includes(id)) {
-        this._visibleMissionOrder.push(id);
-      }
-    }
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
-    const toLoad = ids.filter((id) => !this._missionCache.has(id));
-    await Promise.all(toLoad.map(async (id) => {
-      const payload = await getMissionOverlay(id);
-      if (payload.ok) this._missionCache.set(id, payload);
-    }));
-    this._render();
+  // Resolve a flat Mission to its active revision id (overlay/edit/execute
+  // target). Empty when the Mission has no bridged active revision yet.
+  _activeRevisionIdFor(missionId) {
+    return String(this._missionsById.get(String(missionId || ''))?.activeRevisionId || '');
   }
 
   async _handleExecuteRequest(missionId) {
     if (this._actionBusy || !missionId) return;
-    const confirmed = await this._showConfirmModal(missionId);
+    const revisionId = this._activeRevisionIdFor(missionId);
+    if (!revisionId) { this._showError('Mission has no executable revision yet.'); return; }
+    const confirmed = await this._showConfirmModal(revisionId);
     if (!confirmed) return;
     this._actionBusy = true;
-    const result = await executeMission(missionId, { expectedControllerVersion: this._controllerVersion });
+    const result = await executeMission(revisionId, { expectedControllerVersion: this._controllerVersion });
     this._actionBusy = false;
     if (!result.ok) {
+      if (result.status === 'stale_revision') {
+        await this._recoverFromStaleExecution(result, revisionId);
+        return;
+      }
       if (result.status === 'stale_controller_version') {
-        await this._recoverFromStaleControllerVersion(result, missionId);
+        await this._recoverFromStaleControllerVersion(result, revisionId);
         return;
       }
       this._showError(result.error || 'Execute failed');
       return;
     }
-    this._missionCache.clear();
+    this._overlayCacheByMissionId.clear();
     await this.refresh();
+  }
+
+  // --- New mission ---
+
+  async _handleNewMission() {
+    if (this._actionBusy) return;
+    this._actionBusy = true;
+    const result = await createMission({ name: 'New mission' });
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Could not create mission');
+      return;
+    }
+    const missionId = result.mission_id;
+    // Refresh so _syncVisibilityState auto-promotes the new mission to Active+Visible.
+    this._overlayCacheByMissionId.clear();
+    await this.refresh();
+    // Enter edit mode immediately so the user can click to place waypoints.
+    await this._onEditRequested(missionId);
+    editState.setEditMode('add');
+  }
+
+  // --- Mission CRUD ---
+
+  async _handleDeleteMission(missionId) {
+    if (this._actionBusy) return;
+    const id = String(missionId || '').trim();
+    if (!id) return;
+    if (this._isMissionDeleteBlocked(id)) {
+      this._showError('Mission cannot be deleted while armed, awaiting confirmation, or executing.');
+      return;
+    }
+    this._actionBusy = true;
+    const result = await deleteMission(id);
+    this._actionBusy = false;
+    if (!result.ok) {
+      this._showError(result.error || 'Could not delete mission');
+      return;
+    }
+    // Clean up local state for the removed Mission.
+    this._overlayCacheByMissionId.delete(id);
+    this._visibleMissionOrder = this._visibleMissionOrder.filter((x) => x !== id);
+    this._selectedMissionIds.delete(id);
+    if (this._focusedMissionId === id) this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    if (this._editingMissionId === id) {
+      editState.clearEdit();
+      this._editingMissionId = '';
+    }
+    await this.refresh();
+  }
+
+  async _handleDeleteSelectedMissions() {
+    const ids = [...this._selectedMissionIds];
+    if (ids.some((id) => this._isMissionDeleteBlocked(id))) {
+      this._showError('Selection includes a mission that is armed, awaiting confirmation, or executing.');
+      return;
+    }
+    for (const id of ids) {
+      await this._handleDeleteMission(id);
+    }
+  }
+
+  async _handleRenameMission(missionId, name) {
+    const id = String(missionId || '').trim();
+    if (!id || !name) return;
+    const result = await renameMission(id, name);
+    if (!result.ok) {
+      this._showError(result.error || 'Could not rename mission');
+      return;
+    }
+    // Update the in-memory list entry so the sidebar re-renders without a full refresh.
+    const mission = this._missionsById.get(id);
+    if (mission) mission.name = name;
+    this._render();
   }
 
   // --- Edit flow ---
 
+  // Edit resolves the Mission to its active revision, then edits that revision.
+  // The edit internals below stay revision-keyed (editState); _editingMissionId
+  // ties the edited revision back to its Mission for overlay/palette/focus.
   async _onEditRequested(missionId) {
-    const rawResult = await getMission(missionId);
+    const revisionId = this._activeRevisionIdFor(missionId);
+    if (!revisionId) { this._showError('Mission has no editable revision yet.'); return; }
+    this._editingMissionId = String(missionId || '');
+    const rawResult = await getRevision(revisionId);
     if (!rawResult.ok) {
-      this._showError(rawResult.error || 'Could not load mission for editing');
+      this._showError(rawResult.error || 'Could not load revision for editing');
       return;
     }
-    let missionToEdit = rawResult;
+    // rawResult has revision fields spread at the top level (normalized in missionMutationApi).
+    let revisionToEdit = rawResult;
 
     if (LOCKED_STATUSES.has(String(rawResult.status || ''))) {
-      const confirmed = window.confirm('This mission is locked. Create an editable copy?');
-      if (!confirmed) return;
       // Fork: create a new proposed successor so the original stays intact.
       const waypoints = collectEditableWaypoints(rawResult.mission || {});
-      const forkResult = await createMission({
+      const forkResult = await createClientRevision({
         operation_id: rawResult.operation_id,
         waypoints,
-        label: `Edit of …${String(missionId).slice(-6)}`,
-        from_mission_id: missionId,
+        label: `Edit of …${String(revisionId).slice(-6)}`,
+        from_revision_id: revisionId,
       });
       if (!forkResult.ok) {
-        this._showError(forkResult.error || 'Could not fork mission for editing');
+        this._showError(forkResult.error || 'Could not fork revision for editing');
         return;
       }
-      missionToEdit = forkResult.mission;
-      const sourceIdx = this._visibleMissionOrder.indexOf(missionId);
-      if (sourceIdx >= 0) {
-        this._editForkSource = { missionId, index: sourceIdx };
-        this._visibleMissionOrder.splice(sourceIdx, 1);
-      }
-      this._prepareMissionForEditing(missionToEdit.id || missionId);
-      this._missionCache.clear();
+      revisionToEdit = forkResult.revision;
+      this._overlayCacheByMissionId.clear();
       await this.refresh();
     }
 
-    this._prepareMissionForEditing(missionToEdit.id || missionId);
-    editState.beginEdit(missionToEdit);
-    this.setFocus(missionToEdit.id || missionId, { fit: false });
+    this._pinMissionInView(this._editingMissionId);
+    editState.beginEdit(revisionToEdit);
+    this.setFocus(this._editingMissionId);
     this._render(); // drop edited mission from renderMany
-  }
-
-  _exitEditMode() {
-    editState.clearEdit();
-    this._missionCache.clear();
-    this.refresh();
   }
 
   async _handleDragEnd(idx, newPoint, preDragLatLng, marker) {
     if (!editState.isEditable()) return;
     editState.setBusy(true);
-    const result = await updateMissionWaypoint(editState.missionId, idx + 1, {
+    const result = await updateWaypoint(editState.revisionId, idx + 1, {
       point: newPoint,
       expected_version: editState.clientVersion,
     });
     if (result.ok) {
-      editState.beginEdit(result.mission);
+      editState.beginEdit(result.revision);
     } else {
       // Snap the marker back to its pre-drag position.
       if (preDragLatLng && marker) marker.setLatLng(preDragLatLng);
       editState.setBusy(false);
       if (result.status === 'version_conflict') {
         this._showError('Edit conflict — refreshing.');
-        const fresh = await getMission(editState.missionId);
+        const fresh = await getRevision(editState.revisionId);
         if (fresh.ok) editState.beginEdit(fresh);
-      } else if (result.status === 'mission_locked' || result.status === 'revision_locked') {
-        this._showError('This mission is locked. Use the Edit button to create an editable copy.');
+      } else if (result.status === 'revision_locked') {
+        this._showError('This revision is locked. Use the Edit button to create an editable copy.');
       } else {
         this._showError(result.error || 'Waypoint update failed');
       }
@@ -573,13 +703,13 @@ export class MapWidget {
   async _handleGhostClick(afterIndex, point) {
     if (!editState.isEditable()) return;
     editState.setBusy(true);
-    const result = await insertMissionWaypoint(editState.missionId, {
+    const result = await insertWaypoint(editState.revisionId, {
       point,
       expected_version: editState.clientVersion,
       after_index: afterIndex,
     });
     if (result.ok) {
-      editState.beginEdit(result.mission);
+      editState.beginEdit(result.revision);
     } else {
       editState.setBusy(false);
       this._showError(result.error || 'Insert failed');
@@ -591,20 +721,20 @@ export class MapWidget {
     const sortedIndices = [...editState.selectedIndices].sort((a, b) => b - a); // descending
     if (!sortedIndices.length) return;
     editState.setBusy(true);
-    let prevMission = null;
+    let prevRevision = null;
     for (const idx of sortedIndices) {
-      const missionRowId = prevMission ? prevMission.id : editState.missionId;
-      const version = prevMission ? prevMission.client_version : editState.clientVersion;
-      const result = await deleteMissionWaypoint(missionRowId, idx + 1, version);
+      const revId = prevRevision ? prevRevision.id : editState.revisionId;
+      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
+      const result = await deleteWaypoint(revId, idx + 1, version);
       if (!result.ok) {
         editState.setBusy(false);
         this._showError(result.error || 'Delete failed');
-        if (prevMission) editState.beginEdit(prevMission);
+        if (prevRevision) editState.beginEdit(prevRevision);
         return;
       }
-      prevMission = result.mission;
+      prevRevision = result.revision;
     }
-    if (prevMission) editState.beginEdit(prevMission);
+    if (prevRevision) editState.beginEdit(prevRevision);
   }
 
   async _handleBulkSetAltitude(z) {
@@ -612,25 +742,25 @@ export class MapWidget {
     const sortedIndices = [...editState.selectedIndices].sort((a, b) => a - b);
     if (!sortedIndices.length) return;
     editState.setBusy(true);
-    let prevMission = null;
+    let prevRevision = null;
     for (const idx of sortedIndices) {
-      const missionRowId = prevMission ? prevMission.id : editState.missionId;
-      const version = prevMission ? prevMission.client_version : editState.clientVersion;
+      const revId = prevRevision ? prevRevision.id : editState.revisionId;
+      const version = prevRevision ? prevRevision.client_version : editState.clientVersion;
       const wp = editState.waypoints[idx];
       if (!wp) continue;
-        const result = await updateMissionWaypoint(missionRowId, idx + 1, {
+      const result = await updateWaypoint(revId, idx + 1, {
         point: { x: wp.x, y: wp.y, z },
         expected_version: version,
       });
       if (!result.ok) {
         editState.setBusy(false);
         this._showError(result.error || 'Altitude update failed');
-        if (prevMission) editState.beginEdit(prevMission);
+        if (prevRevision) editState.beginEdit(prevRevision);
         return;
       }
-      prevMission = result.mission;
+      prevRevision = result.revision;
     }
-    if (prevMission) editState.beginEdit(prevMission);
+    if (prevRevision) editState.beginEdit(prevRevision);
   }
 
   _handleMarkerClick(idx, event) {
@@ -737,22 +867,15 @@ export class MapWidget {
   // --- editState subscriber ---
 
   _onEditStateChange(snapshot) {
-    if (!snapshot.missionId) {
+    if (!snapshot.revisionId) {
+      this._editingMissionId = '';
       this._overlayLayer.clearEditable();
       this._selectionPanel.hide();
       this._bulkActionBar?.hide();
       this._editBanner.hidden = true;
       this._mapEl.classList.remove('is-edit-mode', 'is-locked');
+      this._updateInfoBarSelection(null);
       this._updateElevationProfile();
-      if (this._editForkSource) {
-        const { missionId, index } = this._editForkSource;
-        this._editForkSource = null;
-        if (!this._visibleMissionOrder.includes(missionId)) {
-          const insertAt = Math.min(index, this._visibleMissionOrder.length);
-          this._visibleMissionOrder.splice(insertAt, 0, missionId);
-        }
-      }
-      this._render();
       return;
     }
 
@@ -763,7 +886,7 @@ export class MapWidget {
     this._editBanner.hidden = false;
     const modeLabel = snapshot.editMode === 'vertex' ? ' · vertex edit' : snapshot.editMode === 'add' ? ' · add mode' : '';
     this._editBannerText.textContent =
-      `Editing — ${snapshot.status} · rev …${snapshot.missionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
+      `Editing — ${snapshot.status} · rev …${snapshot.revisionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
 
     if (snapshot.selectedIndices.size === 1) {
       const idx = [...snapshot.selectedIndices][0];
@@ -774,9 +897,10 @@ export class MapWidget {
       this._selectionPanel.hide();
     }
 
+    this._updateInfoBarSelection(snapshot);
     this._bulkActionBar?.update(snapshot.selectedIndices, snapshot.waypoints, editState.isEditable());
 
-    const color = this._paletteByMissionId.get(snapshot.missionId) || '#4a90d9';
+    const color = this._paletteByMissionId.get(this._editingMissionId) || '#4a90d9';
     this._overlayLayer.renderEditable(snapshot.waypoints, {
       color,
       selectedIndices: snapshot.selectedIndices,
@@ -817,18 +941,17 @@ export class MapWidget {
       if (this._contextMenu.isOpen) { this._contextMenu.close(); return; }
       if (editState.selectedIndices.size) { editState.clearSelection(); return; }
       if (editState.editMode) { editState.setEditMode(null); return; }
-      if (editState.missionId) {
+      if (editState.revisionId) {
         editState.clearEdit();
-        this._missionCache.clear();
+        this._overlayCacheByMissionId.clear();
         this.refresh();
       }
       return;
     }
 
-    if (key === 'f' || key === 'F') { e.preventDefault(); this._fitSelection(); return; }
+    if (!editState.revisionId) return;
 
-    if (!editState.missionId) return;
-
+    if (key === 'f' || key === 'F') { e.preventDefault(); this.setFocus(this._editingMissionId); return; }
     if (key === '[') { e.preventDefault(); editState.stepSelection(-1); return; }
     if (key === ']') { e.preventDefault(); editState.stepSelection(1); return; }
 
@@ -847,12 +970,12 @@ export class MapWidget {
 
   // --- Confirm modal ---
 
-  _showConfirmModal(missionId) {
+  _showConfirmModal(revisionId) {
     return new Promise((resolve) => {
       this._confirmResolve = resolve;
       const modal = this._confirmModal;
       if (!modal) { resolve(false); return; }
-      modal.querySelector('.map-confirm-mission-id').textContent = String(missionId).slice(-8);
+      modal.querySelector('.map-confirm-revision-id').textContent = String(revisionId).slice(-8);
       modal.querySelector('.map-confirm-controller-version').textContent =
         this._controllerVersion !== null ? String(this._controllerVersion) : 'unknown';
       modal.hidden = false;
@@ -869,370 +992,318 @@ export class MapWidget {
     }
   }
 
-  // --- Visibility / focus / expand ---
+  // --- Visibility / focus ---
 
-  _executingMissionIds() {
-    return this._missions
-      .filter((mission) => String(mission.status || '') === 'executing')
-      .map((mission) => missionIdOf(mission));
+  // A Mission is "executing" (locked-visible) when its active revision is.
+  _executingMissionIds(missions = this._missions) {
+    return missions
+      .filter((m) => String(m.activeRevisionStatus || '') === 'executing')
+      .map((m) => m.id);
   }
 
-  _syncVisibilityState(missions, { preferredMissionId = '' } = {}) {
-    const knownMissionIds = new Set(missions.map((mission) => missionIdOf(mission)));
-    this._visibleMissionOrder = this._visibleMissionOrder.filter((missionId) => knownMissionIds.has(missionId));
-    selectionState.prune(knownMissionIds);
+  _syncVisibilityState(missions) {
+    const knownMissionIds = new Set(missions.map((m) => m.id));
+    this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => knownMissionIds.has(id));
+    this._selectedMissionIds = new Set([...this._selectedMissionIds].filter((id) => knownMissionIds.has(id)));
+    if (this._selectionAnchorId && !knownMissionIds.has(this._selectionAnchorId)) {
+      this._selectionAnchorId = '';
+    }
+    if (this._focusedMissionId && !knownMissionIds.has(this._focusedMissionId)) {
+      this._focusedMissionId = '';
+    }
 
-    const executingIds = this._executingMissionIds();
-    if (!this._visibleMissionOrder.length) {
-      const defaults = missions
-        .map((mission) => missionIdOf(mission))
-        .filter(Boolean);
-      this._visibleMissionOrder = enforceVisibilityCap(defaults, Infinity, executingIds);
+    const executingIds = this._executingMissionIds(missions);
+
+    if (this._seenMissionIds === null) {
+      // First sync: default to overlaying everything (capped) and focusing one.
+      if (!this._visibleMissionOrder.length) {
+        const defaults = missions.map((m) => m.id).filter(Boolean);
+        this._visibleMissionOrder = enforceVisibilityCap(defaults, DEFAULT_VISIBLE_MISSION_LIMIT, executingIds);
+        this._focusedMissionId = this._visibleMissionOrder[0] || '';
+      }
     } else {
-      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
+      // Smart binding (ADR 0021 §4): a newly-created Mission becomes Active and
+      // Visible (but not Selected). Detect ids absent from the previous sync.
+      const newIds = missions.map((m) => m.id).filter((id) => id && !this._seenMissionIds.has(id));
+      if (newIds.length) {
+        const newest = newIds[newIds.length - 1];
+        for (const id of newIds) {
+          if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
+        }
+        this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, DEFAULT_VISIBLE_MISSION_LIMIT, [...executingIds, newest]);
+        this._focusedMissionId = newest;
+      }
     }
 
-    if (preferredMissionId && knownMissionIds.has(preferredMissionId)) {
-      this._pinMissionInView(preferredMissionId);
+    // Invariant: the Active Mission must be Visible.
+    if (this._focusedMissionId && !this._visibleMissionOrder.includes(this._focusedMissionId)) {
+      this._focusedMissionId = this._visibleMissionOrder[0] || '';
     }
-    if (!selectionState.activeMissionId) {
-      const fallback = this._visibleMissionOrder[0] || '';
-      if (fallback) selectionState.setActive(fallback);
-    }
+
+    this._seenMissionIds = knownMissionIds;
   }
 
   async _primeVisibleOverlays() {
     const loads = this._visibleMissionOrder.map(async (missionId) => {
-      if (this._missionCache.has(missionId)) return;
+      if (this._overlayCacheByMissionId.has(missionId)) return;
       const payload = await getMissionOverlay(missionId);
       if (payload.ok) {
-        this._missionCache.set(missionId, payload);
+        this._overlayCacheByMissionId.set(missionId, payload);
       }
     });
     await Promise.all(loads);
 
-    if (!this._missionCache.size && this._sessionId) {
+    if (!this._overlayCacheByMissionId.size && this._sessionId && this._focusedMissionId) {
       const payload = await getCurrentOverlay(this._sessionId);
-      const overlayMissionId = String(payload.mission_id || '').trim();
-      if (payload.ok && overlayMissionId) {
-        this._missionCache.set(overlayMissionId, payload);
+      if (payload.ok && payload.available) {
+        this._overlayCacheByMissionId.set(this._focusedMissionId, payload);
       }
     }
   }
 
-  _render({ fit = false } = {}) {
-    const editedMissionId = editState.missionId;
+  _render() {
+    const editedMissionId = this._editingMissionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
-    const paletteByMissionId = new Map(
-      this._missions.map((m) => [missionIdOf(m), m.color || '#66c2a5'])
-    );
-    if (this._colorPreview && paletteByMissionId.has(this._colorPreview.missionId)) {
-      paletteByMissionId.set(this._colorPreview.missionId, this._colorPreview.color);
-    }
+    const deleteGuardedMissionIds = this._deleteGuardedMissionIds();
+    const canDeleteSelection = this._selectedMissionIds.size > 0
+      && [...this._selectedMissionIds].every((id) => !this._isMissionDeleteBlocked(id));
+    const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
-    const selectedMissionIds = selectionState.selectedMissionIds;
-    const activeMissionId = selectionState.activeMissionId;
+    const sortedMissions = sortMissions(
+      this._missions,
+      missionSortPreference.get(),
+      { selectedMissionIds: this._selectedMissionIds, visibleMissionIds },
+    );
 
-    const sortedMissions = sortMissions(this._missions, missionSortPreference.get(), {
-      selectedMissionIds,
-      visibleMissionIds,
-    });
-
-    this._listPanel.render({
+    this._listPanel.renderMissions({
       missions: sortedMissions,
+      focusedMissionId: this._focusedMissionId,
       visibleMissionIds,
-      selectedMissionIds,
-      activeMissionId,
+      selectedMissionIds: this._selectedMissionIds,
       paletteByMissionId,
+      editingMissionId: this._editingMissionId,
       profilesById: this._profilesById,
       activeProfileId: this._activeProfileId,
-      editingMissionId: editedMissionId || '',
+      deleteGuardedMissionIds,
+      canDeleteSelection,
     });
-    this._missionBulkBar?.update(selectedMissionIds.size);
 
-    // Exclude the actively-edited mission from the read-only overlay so only
+    // Exclude the actively-edited Mission from the read-only overlay so only
     // the editable layer shows it.
-    const hasSelection = selectedMissionIds.size > 0;
     const overlays = this._visibleMissionOrder
       .filter((missionId) => missionId !== editedMissionId)
       .map((missionId) => {
-        const payload = this._missionCache.get(missionId);
+        const payload = this._overlayCacheByMissionId.get(missionId);
         if (!payload?.available) return null;
-        const isActive = missionId === activeMissionId;
-        const isSelected = selectedMissionIds.has(missionId);
-        // Visual channels (design § Map Rendering Rules):
-        //   selected   → full opacity
-        //   unselected → dimmed 0.6
-        //   active     → stroke bump (additive to selected/unselected opacity)
-        // When the selection is empty fall back to the prior behavior so the
-        // map doesn't suddenly grey-out everything on first paint.
-        const opacity = hasSelection ? (isSelected ? 1.0 : 0.6) : 1.0;
-        const weight = isActive ? 4 : 2.5;
         return {
-          missionId,
+          revisionId: missionId,
           payload,
           color: paletteByMissionId.get(missionId),
-          opacity,
-          weight,
-          onClick: (event) => this._handleRowClicked(missionId, {
-            shiftKey: !!event?.shiftKey,
-            metaKey: !!event?.metaKey,
-            ctrlKey: !!event?.ctrlKey,
-          }),
+          opacity: opacityForMission(missionId, this._focusedMissionId),
         };
       })
       .filter(Boolean);
 
     this._overlayLayer.renderMany(overlays);
-    if (fit) {
-      const focusedPayload = activeMissionId ? this._missionCache.get(activeMissionId) : null;
-      const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
-      this._fitBounds(focusedPayload?.bounds || unionBounds);
+    const focusedPayload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
+    const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
+    // Only refit when the logical target changes; skip on every poll tick so the
+    // user can freely pan/zoom without the view snapping back every 5 seconds.
+    // Derive fitTarget and fitKey from the SAME winning source so they can't
+    // diverge: if the focused mission's payload hasn't loaded yet (e.g. it arrives
+    // via the 5s poll rather than the awaited setFocus path), we fall through to
+    // union/scene for BOTH — otherwise fitKey would lock to the mission id while
+    // fitTarget used scene bounds, and the later payload load wouldn't trigger a refit.
+    let fitTarget = null;
+    let fitKey = null;
+    if (focusedPayload?.bounds) {
+      fitTarget = focusedPayload.bounds;
+      fitKey = this._focusedMissionId;
+    } else if (unionBounds) {
+      fitTarget = unionBounds;
+      fitKey = this._visibleMissionOrder.join(',');
+    } else if (this._sceneBounds) {
+      fitTarget = this._sceneBounds;
+      fitKey = 'scene';
     }
-    this._showEmpty(!this._missions.length);
+    if (fitKey && fitKey !== this._lastFitKey) {
+      this._lastFitKey = fitKey;
+      this._fitBounds(fitTarget);
+    }
+    // The empty state covers the whole canvas, so skip it when the scene is
+    // loaded — terrain + objects IS the content even with no missions drawn yet.
+    this._updateFitButtons();
+    this._showEmpty(!overlays.length && !editedMissionId && !this._sceneBounds);
     this._updateElevationProfile();
+    if (this._basemapPanel?.visible) this._basemapPanel.render(focusedPayload);
+  }
+
+  _onLayerToggle(key, visible) {
+    switch (key) {
+      case 'terrain': this._terrainLayer?.setVisible(visible); break;
+      case 'roads':   this._sceneObjectsLayer?.setRoadsVisible(visible); break;
+      case 'objects': this._sceneObjectsLayer?.setObjectsVisible(visible); break;
+      case 'grid':    this._gridLayer?.setVisible(visible); break;
+    }
+  }
+
+  _applyViewMode(mode) {
+    const configs = {
+      virtual_terrain:  { terrain: true,  roads: true,  objects: true,  grid: true  },
+      cad:              { terrain: false, roads: true,  objects: true,  grid: true  },
+      heightmap:        { terrain: true,  roads: false, objects: false, grid: false },
+      'satellite-debug': { terrain: false, roads: false, objects: false, grid: false },
+    };
+    const cfg = configs[mode] || configs.virtual_terrain;
+    this._terrainLayer?.setVisible(cfg.terrain);
+    this._sceneObjectsLayer?.setRoadsVisible(cfg.roads);
+    this._sceneObjectsLayer?.setObjectsVisible(cfg.objects);
+    this._gridLayer?.setVisible(cfg.grid);
+    if (this._layerToolbar) {
+      for (const cb of this._layerToolbar.querySelectorAll('input[data-layer]')) {
+        cb.checked = !!cfg[cb.dataset.layer];
+      }
+    }
+    if (mode === 'satellite-debug' && this._basemapPanel && !this._basemapPanel.visible) {
+      this._toggleBasemap();
+    }
+  }
+
+  _handleFitClick(key) {
+    let bounds = null;
+    if (key === 'scene') {
+      bounds = this._sceneBounds;
+    } else if (key === 'mission') {
+      const payload = this._focusedMissionId
+        ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+        : null;
+      bounds = payload?.bounds || null;
+    } else if (key === 'all') {
+      const allBounds = [...this._overlayCacheByMissionId.values()].map((p) => p?.bounds).filter(Boolean);
+      bounds = boundsUnion([...allBounds, this._sceneBounds]);
+    }
+    if (!bounds) return;
+    this._lastFitKey = null;
+    this._fitBounds(bounds);
+  }
+
+  _updateFitButtons() {
+    if (!this._fitBtns) return;
+    const focusedPayload = this._focusedMissionId
+      ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+      : null;
+    this._fitBtns.scene.disabled = !this._sceneBounds;
+    this._fitBtns.mission.disabled = !focusedPayload?.bounds;
+    this._fitBtns.all.disabled = !this._sceneBounds && !this._overlayCacheByMissionId.size;
+  }
+
+  // Real 2D WGS84 basemap render mode (Phase 4): show/hide the geographic view
+  // and (re)plot the focused mission on it by lat/lon.
+  _toggleBasemap() {
+    if (!this._basemapPanel) return;
+    const visible = this._basemapPanel.toggle();
+    this._basemapToggleBtn?.classList.toggle('is-active', visible);
+    this._basemapToggleBtn?.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    if (visible) {
+      const focusedPayload = this._focusedMissionId
+        ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+        : null;
+      this._basemapPanel.render(focusedPayload);
+    }
+  }
+
+  // Persist an operator-drawn pattern (corridor/survey) sketched on the basemap
+  // as a new Mission, then reload the list so it appears in the sidebar (Phase 4).
+  async _handleDrawnPattern({ pattern, points, params }) {
+    const result = await createDrawnPattern({
+      pattern,
+      points,
+      params,
+      sessionId: this._sessionId,
+    });
+    if (result.ok) {
+      await this.refresh().catch(() => {});
+    }
+    return result;
+  }
+
+  async _handleSetGeofence({ polygon = [], clear = false } = {}) {
+    if (!this._focusedMissionId) {
+      return { ok: false, error: 'Focus a mission first (click it in the list).' };
+    }
+    const result = await setMissionGeofence(this._focusedMissionId, {
+      polygon,
+      clear,
+      sessionId: this._sessionId,
+    });
+    if (result.ok) {
+      await this.refresh().catch(() => {});
+    }
+    return result;
+  }
+
+  _focusedOrigin() {
+    if (!this._focusedMissionId) return null;
+    return this._overlayCacheByMissionId.get(this._focusedMissionId)?.origin || null;
+  }
+
+  _onMapMouseMove(e) {
+    if (!this._infoBarCoords) return;
+    const x = e.latlng.lng;
+    const y = e.latlng.lat;
+    const xSign = x >= 0 ? '+' : '';
+    const ySign = y >= 0 ? '+' : '';
+    this._infoBarCoords.textContent = `x ${xSign}${x.toFixed(2)} m  y ${ySign}${y.toFixed(2)} m`;
+    if (this._infoBarGps) {
+      const origin = this._focusedOrigin();
+      if (origin) {
+        const METRES_PER_DEG = 111320.0;
+        const lat = origin.lat + y / METRES_PER_DEG;
+        const lon = origin.lon + x / (METRES_PER_DEG * Math.cos(origin.lat * Math.PI / 180));
+        const latDir = lat >= 0 ? 'N' : 'S';
+        const lonDir = lon >= 0 ? 'E' : 'W';
+        this._infoBarGps.textContent = `${Math.abs(lat).toFixed(6)}°${latDir}  ${Math.abs(lon).toFixed(6)}°${lonDir}`;
+      } else {
+        this._infoBarGps.textContent = '';
+      }
+    }
+  }
+
+  _updateInfoBarSelection(snapshot) {
+    if (!this._infoBarSel) return;
+    if (!snapshot || snapshot.selectedIndices.size !== 1) {
+      this._infoBarSel.textContent = '';
+      return;
+    }
+    const idx = [...snapshot.selectedIndices][0];
+    const wp = snapshot.waypoints[idx];
+    if (!wp) { this._infoBarSel.textContent = ''; return; }
+    const PROV = { ai: 'AI', user: 'user', 'ai+edited': 'AI+edited' };
+    const prov = PROV[wp.provenance] || (wp.provenance || 'AI');
+    this._infoBarSel.textContent = `WP ${idx + 1} · ${prov} · z ${wp.z.toFixed(2)} m`;
   }
 
   _updateElevationProfile() {
     if (!this._elevationPanel) return;
     // During active edit: show live edit waypoints
-    if (editState.missionId && editState.waypoints.length) {
-      const color = this._paletteByMissionId.get(editState.missionId) || '#4a90d9';
+    if (editState.revisionId && editState.waypoints.length) {
+      const color = this._paletteByMissionId.get(this._editingMissionId) || '#4a90d9';
       const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
       this._elevationPanel.update(editState.waypoints, this._sampleHeight, { color, vehicleKind });
       return;
     }
-    // Otherwise: show focused mission
-    const activeMissionId = selectionState.activeMissionId;
-    const payload = activeMissionId ? this._missionCache.get(activeMissionId) : null;
+    // Otherwise: show focused Mission
+    const payload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
     if (!payload?.available) { this._elevationPanel.clear(); return; }
     const wps = (payload.features || [])
       .filter((f) => f.type === 'waypoint')
       .sort((a, b) => a.index - b.index)
       .map((f) => ({ ...f.point, index: f.index }));
     if (!wps.length) { this._elevationPanel.clear(); return; }
-    const color = this._paletteByMissionId.get(activeMissionId) || '#4a90d9';
+    const color = this._paletteByMissionId.get(this._focusedMissionId) || '#4a90d9';
     const vehicleKind = this._profilesById[this._activeProfileId]?.kind || 'ground';
     this._elevationPanel.update(wps, this._sampleHeight, { color, vehicleKind });
-  }
-
-  _openColorPicker(missionId, anchorEl) {
-    if (!missionId || !this._colorPicker) return;
-    const mission = this._missions.find((m) => missionIdOf(m) === missionId);
-    const defaultColor = defaultMissionColor(missionId);
-    const currentColor = mission?.color || defaultColor;
-    this._colorPicker.open(anchorEl, {
-      currentColor,
-      defaultColor,
-      onPick: async (color) => {
-        this._colorPreview = null;
-        const result = await updateMissionColor(missionId, color);
-        if (result.ok && result.mission) {
-          const idx = this._missions.findIndex((m) => missionIdOf(m) === missionId);
-          if (idx >= 0) this._missions[idx] = { ...this._missions[idx], color: result.mission.color };
-        }
-        this._render();
-      },
-      onReset: async () => {
-        this._colorPreview = null;
-        const result = await updateMissionColor(missionId, defaultColor);
-        if (result.ok && result.mission) {
-          const idx = this._missions.findIndex((m) => missionIdOf(m) === missionId);
-          if (idx >= 0) this._missions[idx] = { ...this._missions[idx], color: result.mission.color };
-        }
-        this._render();
-      },
-      onPreview: (color) => {
-        this._colorPreview = color ? { missionId, color } : null;
-        this._render();
-      },
-    });
-  }
-
-  _openOverflowMenu(anchorEl) {
-    if (!this._overflowMenu) return;
-    this._overflowMenu.open(anchorEl, {
-      currentSort: missionSortPreference.get(),
-      onSortChange: (id) => {
-        missionSortPreference.set(id);
-        this._render();
-      },
-      onImport: () => this._handleImportMissions(),
-      onExport: (mode) => this._handleExportMissions(mode),
-    });
-  }
-
-  _missionIdsForExport(mode) {
-    if (mode === 'active') {
-      const id = selectionState.activeMissionId;
-      return id ? [id] : [];
-    }
-    if (mode === 'selection') {
-      return Array.from(selectionState.selectedMissionIds);
-    }
-    // visible
-    return [...this._visibleMissionOrder];
-  }
-
-  async _handleExportMissions(mode) {
-    const ids = this._missionIdsForExport(mode);
-    if (!ids.length) {
-      this._showError(`No missions to export (${mode}).`);
-      return;
-    }
-    const fetched = await Promise.all(ids.map((id) => getMission(id)));
-    const records = [];
-    for (const [i, result] of fetched.entries()) {
-      if (!result.ok) {
-        this._showError(`Export aborted: could not load mission ${ids[i]} — ${result.error || 'unknown error'}`);
-        return;
-      }
-      const mission = result.mission || result;
-      const waypoints = collectEditableWaypoints(mission).map(({ id: _id, ...rest }) => rest);
-      records.push({
-        label: mission.goal || mission.label || result.goal || result.label || '',
-        waypoints,
-        vehicle_profile_id: mission.vehicle_profile_id || result.vehicle_profile_id || undefined,
-      });
-    }
-    const payload = records.length === 1 ? records[0] : records;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.download = `missions-${mode}-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
-
-  _handleImportMissions() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.addEventListener('change', async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const parsed = JSON.parse(text);
-        const records = Array.isArray(parsed) ? parsed : [parsed];
-        // All-or-nothing validation on the client side first; the API calls
-        // themselves are sequential so a mid-stream network failure can still
-        // leave a partial import, but at least every record was structurally
-        // valid before any POST went out.
-        for (const [i, rec] of records.entries()) {
-          if (!rec || typeof rec !== 'object') throw new Error(`Item ${i}: not an object`);
-          if (!Array.isArray(rec.waypoints)) throw new Error(`Item ${i}: missing waypoints array`);
-          for (const [j, wp] of rec.waypoints.entries()) {
-            if (!wp || typeof wp !== 'object') throw new Error(`Item ${i} waypoint ${j}: not an object`);
-            if (!Number.isFinite(Number(wp.x)) || !Number.isFinite(Number(wp.y))) {
-              throw new Error(`Item ${i} waypoint ${j}: x/y must be numeric`);
-            }
-          }
-        }
-        let imported = 0;
-        for (const rec of records) {
-          const waypoints = rec.waypoints.map((wp) => ({
-            x: Number(wp.x) || 0,
-            y: Number(wp.y) || 0,
-            z: Number(wp.z) || 0,
-            label: wp.label || '',
-            kind: wp.kind || 'waypoint',
-          }));
-          const result = await createMission({
-            waypoints,
-            label: String(rec.label || '').slice(0, 200),
-            session_id: this._sessionId,
-          });
-          if (!result.ok) {
-            this._showError(`Imported ${imported}/${records.length}; failed on next: ${result.error || 'create failed'}`);
-            this._missionCache.clear();
-            await this.refresh();
-            return;
-          }
-          imported += 1;
-        }
-        this._missionCache.clear();
-        await this.refresh();
-        this._hintToasts?.show(`Imported ${imported} mission${imported === 1 ? '' : 's'}.`);
-      } catch (err) {
-        this._showError(`Import failed — ${err.message || err}`);
-      }
-    });
-    input.click();
-  }
-
-  _applySceneBoundsClamp() {
-    if (!this._map || !this._sceneBounds) return;
-    const b = this._sceneBounds;
-    const padX = (b.max_x - b.min_x) * SCENE_MAP_PAD;
-    const padY = (b.max_y - b.min_y) * SCENE_MAP_PAD;
-    const sw = [b.min_y - padY, b.min_x - padX];
-    const ne = [b.max_y + padY, b.max_x + padX];
-    this._map.setMaxBounds([sw, ne]);
-    // Clamp min-zoom to whatever fits the full scene; anything looser shows void.
-    const fitZoom = this._map.getBoundsZoom([sw, ne], false);
-    if (Number.isFinite(fitZoom)) this._map.setMinZoom(fitZoom);
-  }
-
-  _setMapStyle(styleId) {
-    if (!MAP_STYLES.some((s) => s.id === styleId)) return;
-    this._mapStyle = styleId;
-    try { localStorage.setItem(MAP_STYLE_STORAGE_KEY, styleId); } catch (_) {}
-    this._applyMapStyle();
-  }
-
-  _applyMapStyle() {
-    if (!this._terrainLayer) return;
-    switch (this._mapStyle) {
-      case 'plain-grid':
-        this._terrainLayer.setOpacity(0);
-        this._mapEl.classList.add('is-plain-grid');
-        break;
-      case 'scene-image':
-        this._terrainLayer.setOpacity(1.0);
-        this._mapEl.classList.remove('is-plain-grid');
-        break;
-      case 'terrain':
-      default:
-        this._terrainLayer.setOpacity(0.92);
-        this._mapEl.classList.remove('is-plain-grid');
-        break;
-    }
-  }
-
-  _fitScene() {
-    if (this._sceneBounds) {
-      this._fitBounds(this._sceneBounds);
-      return;
-    }
-    const unionBounds = boundsUnion(
-      this._visibleMissionOrder
-        .map((id) => this._missionCache.get(id)?.bounds)
-        .filter(Boolean),
-    );
-    if (unionBounds) this._fitBounds(unionBounds);
-  }
-
-  _fitSelection() {
-    const selectedIds = selectionState.selectedMissionIds;
-    const sourceIds = selectedIds.size
-      ? Array.from(selectedIds)
-      : (selectionState.activeMissionId ? [selectionState.activeMissionId] : []);
-    const bounds = boundsUnion(
-      sourceIds
-        .map((id) => this._missionCache.get(id)?.bounds)
-        .filter(Boolean),
-    );
-    if (bounds) {
-      this._fitBounds(bounds);
-      return;
-    }
-    this._fitScene();
   }
 
   _fitBounds(bounds) {
@@ -1247,111 +1318,198 @@ export class MapWidget {
   }
 
   async _toggleVisibility(missionId) {
-    const executingIds = this._executingMissionIds();
     if (this._visibleMissionOrder.includes(missionId)) {
-      if (executingIds.includes(missionId)) return;
+      if (this._executingMissionIds().includes(missionId)) return;
       this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== missionId);
-      if (selectionState.activeMissionId === missionId) {
-        selectionState.setActive('');
+      if (this._focusedMissionId === missionId) {
+        this._focusedMissionId = this._visibleMissionOrder[0] || '';
       }
       this._render();
       return;
     }
-    if (!this._visibleMissionOrder.includes(missionId)) {
-      this._visibleMissionOrder.push(missionId);
-    }
-    this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, executingIds);
-    if (!this._missionCache.has(missionId)) {
+    this._visibleMissionOrder.push(missionId);
+    if (!this._overlayCacheByMissionId.has(missionId)) {
       const payload = await getMissionOverlay(missionId);
-      if (payload.ok) this._missionCache.set(missionId, payload);
+      if (payload.ok) this._overlayCacheByMissionId.set(missionId, payload);
       else this._showError(payload.error || 'Overlay fetch failed');
     }
-    if (!selectionState.activeMissionId) selectionState.setActive(missionId);
+    if (!this._focusedMissionId) this._focusedMissionId = missionId;
     this._render();
   }
 
-  // Single handler for clicks on a mission — fires from sidebar rows AND from
-  // the read-only map overlay (polyline / waypoint circle). Modifier semantics
-  // are defined here once and shared by both surfaces (design § Selection
-  // Store).
-  _handleRowClicked(missionId, { shiftKey = false, metaKey = false, ctrlKey = false } = {}) {
-    if (!missionId) return;
-    if (shiftKey) {
-      const order = this._missions.map((m) => missionIdOf(m));
-      const anchor = selectionState.anchorMissionId || selectionState.activeMissionId || missionId;
-      const a = order.indexOf(anchor);
-      const b = order.indexOf(missionId);
-      const range = (a >= 0 && b >= 0)
-        ? order.slice(Math.min(a, b), Math.max(a, b) + 1)
-        : [missionId];
-      selectionState.selectRange(range, missionId);
-      this._render();
-      return;
+  // Make a Mission Active. Smart binding (ADR 0021 §4): clicking a row makes it
+  // Active and turns Visible on — so focusing also overlays it (and the
+  // "Active must be Visible" invariant holds by construction).
+  async setFocus(missionId) {
+    const id = missionId || '';
+    this._focusedMissionId = id;
+    // Force a bounds refit for this focus change even if the key would otherwise
+    // match (e.g. refocusing the same mission after the user panned away).
+    this._lastFitKey = null;
+    if (id && !this._visibleMissionOrder.includes(id)) {
+      this._visibleMissionOrder.push(id);
+      if (!this._overlayCacheByMissionId.has(id)) {
+        const payload = await getMissionOverlay(id);
+        if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
+        else this._showError(payload.error || 'Overlay fetch failed');
+      }
     }
-    if (metaKey || ctrlKey) {
-      selectionState.toggle(missionId);
-      this.setFocus(missionId, { fit: false });
-      return;
-    }
-    selectionState.selectSingle(missionId);
-    this.setFocus(missionId, { fit: false });
-  }
-
-  _toggleMissionSelection(missionId, { checked = false } = {}) {
-    selectionState.setSelectedFlag(missionId, checked);
     this._render();
   }
 
-  async setFocus(missionId, { fit = true } = {}) {
-    const nextMissionId = String(missionId || '').trim();
-    selectionState.setActive(nextMissionId);
-    if (nextMissionId && !this._visibleMissionOrder.includes(nextMissionId)) {
-      this._visibleMissionOrder.push(nextMissionId);
-      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
+  // --- Selected set / batch operations (ADR 0021 §4) ---
+
+  async _toggleSelection(missionId, { shift = false } = {}) {
+    const id = String(missionId || '');
+    if (!id) return;
+    const order = this._missions.map((m) => m.id);
+    if (shift && this._selectionAnchorId) {
+      const a = order.indexOf(this._selectionAnchorId);
+      const b = order.indexOf(id);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        const toFetch = [];
+        for (let i = lo; i <= hi; i += 1) {
+          const rangeId = order[i];
+          this._selectedMissionIds.add(rangeId);
+          if (!this._visibleMissionOrder.includes(rangeId)) {
+            this._visibleMissionOrder.push(rangeId);
+            if (!this._overlayCacheByMissionId.has(rangeId)) toFetch.push(rangeId);
+          }
+        }
+        if (toFetch.length) {
+          await Promise.all(toFetch.map(async (rid) => {
+            const payload = await getMissionOverlay(rid);
+            if (payload.ok) this._overlayCacheByMissionId.set(rid, payload);
+          }));
+        }
+        this._render();
+        return;
+      }
     }
-    if (nextMissionId && !this._missionCache.has(nextMissionId)) {
-      const payload = await getMissionOverlay(nextMissionId);
-      if (payload.ok) this._missionCache.set(nextMissionId, payload);
-      else this._showError(payload.error || 'Overlay fetch failed');
+    const wasSelected = this._selectedMissionIds.has(id);
+    if (wasSelected) {
+      this._selectedMissionIds.delete(id);
+      // Hide from map when deselected, unless it's the focused/active mission.
+      if (id !== this._focusedMissionId) {
+        this._visibleMissionOrder = this._visibleMissionOrder.filter((x) => x !== id);
+      }
+    } else {
+      this._selectedMissionIds.add(id);
+      // Show on map when selected: explicit operator intent should not evict
+      // previously-visible missions behind a "soft" auto-layout cap.
+      if (!this._visibleMissionOrder.includes(id)) {
+        this._visibleMissionOrder.push(id);
+        if (!this._overlayCacheByMissionId.has(id)) {
+          const payload = await getMissionOverlay(id);
+          if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
+          else this._showError(payload.error || 'Overlay fetch failed');
+        }
+      }
     }
-    this._render({ fit });
+    this._selectionAnchorId = id;
+    this._render();
+  }
+
+  _clearSelection() {
+    if (!this._selectedMissionIds.size) return;
+    this._selectedMissionIds = new Set();
+    this._selectionAnchorId = '';
+    this._render();
+  }
+
+  async _showSelectedMissions() {
+    for (const id of this._selectedMissionIds) {
+      if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
+    }
+    await Promise.all(this._visibleMissionOrder.map(async (id) => {
+      if (this._overlayCacheByMissionId.has(id)) return;
+      const payload = await getMissionOverlay(id);
+      if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
+    }));
+    if (!this._focusedMissionId) this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    this._render();
+  }
+
+  _hideSelectedMissions() {
+    const executingIds = new Set(this._executingMissionIds());
+    this._visibleMissionOrder = this._visibleMissionOrder.filter(
+      (id) => !this._selectedMissionIds.has(id) || executingIds.has(id),
+    );
+    if (this._focusedMissionId && !this._visibleMissionOrder.includes(this._focusedMissionId)) {
+      this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    }
+    this._render();
   }
 
   _pinMissionInView(missionId) {
     const nextMissionId = String(missionId || '').trim();
     if (!nextMissionId) return;
-    if (!this._visibleMissionOrder.includes(nextMissionId)) {
-      this._visibleMissionOrder.push(nextMissionId);
-      this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, Infinity, this._executingMissionIds());
+    this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => id !== nextMissionId);
+    this._visibleMissionOrder.push(nextMissionId);
+    this._focusedMissionId = nextMissionId;
+  }
+
+  // Resolve a revision id back to the flat Mission whose active revision it is
+  // (used by the recovery flows after a refresh reloads the Mission list).
+  _missionIdForRevision(revisionId) {
+    const target = String(revisionId || '').trim();
+    if (!target) return '';
+    const match = this._missions.find((m) => String(m.activeRevisionId || '') === target);
+    return match ? match.id : '';
+  }
+
+  async _recoverFromStaleExecution(result, requestedRevisionId) {
+    const activeRevision = result.active_revision || null;
+    const activeRevisionId = String(result.active_revision_id || activeRevision?.id || '').trim();
+
+    this._overlayCacheByMissionId.clear();
+    await this.refresh();
+
+    const activeMissionId = this._missionIdForRevision(activeRevisionId);
+    if (activeMissionId) {
+      this._pinMissionInView(activeMissionId);
+      this._render();
+      this._showError(
+        `Revision …${String(requestedRevisionId).slice(-6)} is stale. Focused active revision …${activeRevisionId.slice(-6)} instead.`,
+      );
+      return;
     }
-    selectionState.setActive(nextMissionId);
+
+    this._showError(result.error || 'Execute failed');
   }
 
-  _prepareMissionForEditing(missionId) {
-    this._pinMissionInView(missionId);
-  }
-
-  async _recoverFromStaleControllerVersion(result, requestedMissionId) {
+  async _recoverFromStaleControllerVersion(result, requestedRevisionId) {
     const controllerState = result.controller_state || {};
     const latestVersion = controllerState.controller_version ?? null;
     if (latestVersion !== null && latestVersion !== undefined) {
       this._controllerVersion = latestVersion;
     }
 
-    const controllerActiveMissionId = String(controllerState.active_mission_id || '').trim();
-    if (controllerActiveMissionId) {
-      this._pinMissionInView(controllerActiveMissionId);
-    }
+    const activeRevisionId = String(controllerState.active_revision_id || '').trim();
+    const rebasedRevision = result.rebased_revision || {};
+    const rebasedRevisionId = String(rebasedRevision.id || result.rebased_revision_id || '').trim();
 
-    this._missionCache.clear();
+    this._overlayCacheByMissionId.clear();
     await this.refresh();
 
-    const requestedSuffix = String(requestedMissionId).slice(-6);
+    const requestedSuffix = String(requestedRevisionId).slice(-6);
     const versionText = latestVersion !== null && latestVersion !== undefined ? String(latestVersion) : 'unknown';
-    if (controllerActiveMissionId) {
-      this.setFocus(controllerActiveMissionId);
+    const rebasedMissionId = this._missionIdForRevision(rebasedRevisionId);
+    const activeMissionId = this._missionIdForRevision(activeRevisionId);
+    if (rebasedMissionId) {
+      this._pinMissionInView(rebasedMissionId);
+      this._render();
       this._showError(
-        `Controller mission version changed to ${versionText}. Refreshed from stale execute on …${requestedSuffix}; review active mission …${controllerActiveMissionId.slice(-6)} and retry.`,
+        `Controller mission version changed to ${versionText}. Created rebased revision …${rebasedRevisionId.slice(-6)} from stale execute on …${requestedSuffix}; review and approve it before retrying.`,
+      );
+      return;
+    }
+    if (activeMissionId) {
+      this._pinMissionInView(activeMissionId);
+      this._render();
+      this._showError(
+        `Controller mission version changed to ${versionText}. Refreshed from stale execute on …${requestedSuffix}; review active revision …${activeRevisionId.slice(-6)} and retry.`,
       );
       return;
     }
@@ -1359,6 +1517,142 @@ export class MapWidget {
     this._showError(
       `Controller mission version changed to ${versionText}. Refreshed after stale execute on …${requestedSuffix}; retry when ready.`,
     );
+  }
+
+  // --- Colour picker ---
+
+  _openColorPicker(missionId, anchorEl) {
+    const committedColor = this._paletteByMissionId.get(missionId) || '';
+    this._colorPicker.open(anchorEl, {
+      currentColor: committedColor,
+      onPreview: (previewColor) => {
+        const effective = previewColor || committedColor;
+        this._paletteByMissionId.set(missionId, effective);
+        this._refreshOverlayColors();
+        const row = this._listEl.querySelector(`[data-row-mission-id="${missionId}"]`);
+        const chip = row?.querySelector('.mission-row-status');
+        if (chip) chip.style.setProperty('--mission-color', effective);
+      },
+      onPick: (color) => {
+        missionColorOverrides.set(missionId, color);
+        this._render();
+        // Persist the override server-side (fire-and-forget; local cache already
+        // updated for instant feedback).
+        setMissionColor(missionId, color).then((res) => {
+          if (!res.ok) console.warn('Failed to persist mission colour:', res.error);
+        });
+      },
+      onReset: () => {
+        missionColorOverrides.clear(missionId);
+        this._render();
+        setMissionColor(missionId, '').then((res) => {
+          if (!res.ok) console.warn('Failed to clear mission colour:', res.error);
+        });
+      },
+    });
+  }
+
+  _refreshOverlayColors() {
+    const editedMissionId = this._editingMissionId;
+    const palette = this._paletteByMissionId;
+    const overlays = this._visibleMissionOrder
+      .filter((mid) => mid !== editedMissionId)
+      .map((mid) => {
+        const payload = this._overlayCacheByMissionId.get(mid);
+        if (!payload?.available) return null;
+        return {
+          revisionId: mid,
+          payload,
+          color: palette.get(mid),
+          opacity: opacityForMission(mid, this._focusedMissionId),
+        };
+      })
+      .filter(Boolean);
+    this._overlayLayer.renderMany(overlays);
+  }
+
+  // --- Overflow / sort menu ---
+
+  _openOverflowMenu(anchorEl) {
+    this._overflowMenu.open(anchorEl, {
+      currentSort: missionSortPreference.get(),
+      onSortChange: (sortId) => {
+        missionSortPreference.set(sortId);
+        this._render();
+      },
+      onExport: () => this._handleExportMissions(),
+      onImport: () => this._handleImportMissions(),
+    });
+  }
+
+  async _handleExportMissions() {
+    const missions = this._missions || [];
+    if (!missions.length) return;
+    const exportItems = [];
+    for (const m of missions) {
+      const entry = { name: m.name, origin: m.origin };
+      if (m.activeRevisionId) {
+        const rev = await getRevision(m.activeRevisionId);
+        const wps = rev?.mission?.waypoints;
+        if (Array.isArray(wps) && wps.length) {
+          entry.waypoints = wps.map((wp) => {
+            const w = { id: wp.id };
+            if (wp.lat != null) w.lat = wp.lat;
+            if (wp.lon != null) w.lon = wp.lon;
+            if (wp.alt != null) w.alt = wp.alt;
+            if (wp.x != null) w.x = wp.x;
+            if (wp.y != null) w.y = wp.y;
+            if (wp.z != null) w.z = wp.z;
+            return w;
+          });
+        }
+      }
+      exportItems.push(entry);
+    }
+    const blob = new Blob(
+      [JSON.stringify({ version: 1, missions: exportItems }, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `missions-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  _handleImportMissions() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        this._showError('Import failed: invalid JSON');
+        return;
+      }
+      const items = Array.isArray(parsed?.missions) ? parsed.missions : (Array.isArray(parsed) ? parsed : []);
+      if (!items.length) {
+        this._showError('Import failed: no missions found in file');
+        return;
+      }
+      let created = 0;
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const name = String(item.name || 'Imported mission').trim() || 'Imported mission';
+        const waypoints = Array.isArray(item.waypoints) ? item.waypoints : [];
+        const result = await createMission({ name, waypoints: waypoints.length ? waypoints : null });
+        if (result.ok) created++;
+      }
+      if (created) await this.refresh();
+    });
+    input.click();
   }
 
   // --- DOM ---
@@ -1388,8 +1682,19 @@ export class MapWidget {
 
     const listEl = document.createElement('div');
     listEl.className = 'map-widget-list';
-    listEl.style.position = 'relative';
     this._listEl = listEl;
+
+    const listResizer = document.createElement('button');
+    listResizer.type = 'button';
+    listResizer.className = 'map-list-resizer';
+    listResizer.setAttribute('role', 'separator');
+    listResizer.setAttribute('aria-label', 'Resize mission list');
+    listResizer.setAttribute('aria-orientation', 'vertical');
+    listResizer.setAttribute('aria-valuemin', '180');
+    listResizer.setAttribute('aria-valuemax', '480');
+    listResizer.setAttribute('aria-valuenow', '280');
+    listResizer.title = 'Drag to resize mission list';
+    this._listResizerEl = listResizer;
 
     const mapWrap = document.createElement('div');
     mapWrap.className = 'map-widget-wrap';
@@ -1423,9 +1728,13 @@ export class MapWidget {
     const exitEditBtn = document.createElement('button');
     exitEditBtn.type = 'button';
     exitEditBtn.className = 'map-edit-exit-btn';
-    exitEditBtn.textContent = 'Done';
-    exitEditBtn.setAttribute('aria-label', 'Finish editing');
-    exitEditBtn.addEventListener('click', () => this._exitEditMode());
+    exitEditBtn.textContent = '✕ Exit edit';
+    exitEditBtn.setAttribute('aria-label', 'Exit edit mode');
+    exitEditBtn.addEventListener('click', () => {
+      editState.clearEdit();
+      this._overlayCacheByMissionId.clear();
+      this.refresh();
+    });
     editBanner.append(editBannerText, exitEditBtn);
     this._editBanner = editBanner;
     this._editBannerText = editBannerText;
@@ -1446,36 +1755,116 @@ export class MapWidget {
     marqueeEl.setAttribute('aria-hidden', 'true');
     this._marqueeEl = marqueeEl;
 
+    // Cursor/info bar: scene-metre coordinates, WGS84 when origin known, selection detail
+    const infoBar = document.createElement('div');
+    infoBar.className = 'map-info-bar--map';
+    infoBar.setAttribute('aria-hidden', 'true');
+    const infoCoords = document.createElement('span');
+    infoCoords.textContent = '—';
+    const infoGps = document.createElement('span');
+    const infoSel = document.createElement('span');
+    infoBar.append(infoCoords, infoGps, infoSel);
+    this._infoBar = infoBar;
+    this._infoBarCoords = infoCoords;
+    this._infoBarGps = infoGps;
+    this._infoBarSel = infoSel;
+
     // Hint toasts (floating transient hints, e.g., "Hold Alt to snap")
     this._hintToasts = new HintToasts(mapWrap);
 
-    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl);
+    // Confirm-mode execution banner (hidden until a run is awaiting confirm)
+    this._confirmBanner = new ConfirmExecutionBanner(mapWrap, {
+      onConfirm: () => this._handleConfirmExecution(),
+      onCancel: () => this._handleCancelExecution(),
+    });
 
-    const layoutResizer = document.createElement('button');
-    layoutResizer.type = 'button';
-    layoutResizer.className = 'map-widget-layout-resizer';
-    layoutResizer.setAttribute('role', 'separator');
-    layoutResizer.setAttribute('aria-label', 'Resize mission sidebar');
-    layoutResizer.setAttribute('aria-orientation', 'vertical');
-    layoutResizer.setAttribute('aria-valuemin', '240');
-    layoutResizer.setAttribute('aria-valuemax', '640');
-    layoutResizer.setAttribute('aria-valuenow', '340');
-    layoutResizer.title = 'Drag to resize mission sidebar';
-    this._layoutResizer = layoutResizer;
+    // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene
+    // map when active; the toggle stays visible above it.
+    this._basemapPanel = new BasemapPanel(mapWrap, {
+      onGenerate: (sketch) => this._handleDrawnPattern(sketch),
+      onSetGeofence: (fence) => this._handleSetGeofence(fence),
+    });
+    const basemapToggleBtn = document.createElement('button');
+    basemapToggleBtn.type = 'button';
+    basemapToggleBtn.className = 'map-basemap-toggle';
+    basemapToggleBtn.textContent = '🗺 Basemap';
+    basemapToggleBtn.setAttribute('aria-pressed', 'false');
+    basemapToggleBtn.addEventListener('click', () => this._toggleBasemap());
+    this._basemapToggleBtn = basemapToggleBtn;
 
-    const heightResizer = document.createElement('button');
-    heightResizer.type = 'button';
-    heightResizer.className = 'map-widget-height-resizer';
-    heightResizer.setAttribute('role', 'separator');
-    heightResizer.setAttribute('aria-label', 'Resize map height');
-    heightResizer.setAttribute('aria-orientation', 'horizontal');
-    heightResizer.setAttribute('aria-valuemin', '320');
-    heightResizer.setAttribute('aria-valuemax', '1100');
-    heightResizer.setAttribute('aria-valuenow', '540');
-    heightResizer.title = 'Drag to resize map height';
-    this._heightResizer = heightResizer;
+    // Top-right overlay column: basemap toggle + view mode preset + layer toggles + fit-bounds buttons
+    const ctrlRight = document.createElement('div');
+    ctrlRight.className = 'map-ctrl-right';
 
-    shell.append(listEl, layoutResizer, mapWrap, heightResizer);
+    const viewModeToolbar = document.createElement('div');
+    viewModeToolbar.className = 'map-view-mode-toolbar';
+    viewModeToolbar.setAttribute('aria-label', 'View mode');
+    const viewModeSelect = document.createElement('select');
+    viewModeSelect.className = 'map-view-mode-select';
+    viewModeSelect.setAttribute('aria-label', 'Scene view mode');
+    for (const [value, label] of [
+      ['virtual_terrain',  'Virtual Terrain'],
+      ['cad',              'CAD / Object View'],
+      ['heightmap',        'Heightmap'],
+      ['satellite-debug',  'GPS / Satellite Debug'],
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      viewModeSelect.append(opt);
+    }
+    viewModeSelect.value = 'virtual_terrain';
+    viewModeSelect.addEventListener('change', () => this._applyViewMode(viewModeSelect.value));
+    this._viewModeSelect = viewModeSelect;
+    viewModeToolbar.append(viewModeSelect);
+
+    const layerToolbar = document.createElement('div');
+    layerToolbar.className = 'map-layer-toolbar';
+    layerToolbar.setAttribute('aria-label', 'Map layers');
+    const layerDefs = [
+      { key: 'terrain',  label: 'Terrain' },
+      { key: 'roads',    label: 'Roads' },
+      { key: 'objects',  label: 'Objects' },
+      { key: 'grid',     label: 'Grid' },
+    ];
+    for (const { key, label } of layerDefs) {
+      const lbl = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.dataset.layer = key;
+      cb.addEventListener('change', () => this._onLayerToggle(key, cb.checked));
+      lbl.append(cb, document.createTextNode(' '), Object.assign(document.createElement('span'), { textContent: label }));
+      layerToolbar.append(lbl);
+    }
+    this._layerToolbar = layerToolbar;
+
+    const fitToolbar = document.createElement('div');
+    fitToolbar.className = 'map-fit-toolbar';
+    fitToolbar.setAttribute('aria-label', 'Fit view');
+    const fitDefs = [
+      { key: 'scene',   label: 'Scene' },
+      { key: 'mission', label: 'Mission' },
+      { key: 'all',     label: 'All' },
+    ];
+    const fitBtns = {};
+    for (const { key, label } of fitDefs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'map-fit-btn';
+      btn.textContent = label;
+      btn.disabled = true;
+      btn.title = `Fit view to ${label.toLowerCase()} bounds`;
+      btn.addEventListener('click', () => this._handleFitClick(key));
+      fitToolbar.append(btn);
+      fitBtns[key] = btn;
+    }
+    this._fitBtns = fitBtns;
+
+    ctrlRight.append(basemapToggleBtn, viewModeToolbar, layerToolbar, fitToolbar);
+
+    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar);
+    shell.append(listEl, listResizer, mapWrap);
 
     // Context menu (absolute-positioned inside container)
     this._contextMenu = new ContextMenu(this._container);
@@ -1489,15 +1878,17 @@ export class MapWidget {
     confirmModal.hidden = true;
     confirmModal.innerHTML = `
       <div class="map-confirm-dialog">
-        <h3 id="map-confirm-title" class="map-confirm-title">Execute mission on rover?</h3>
+        <h3 id="map-confirm-title" class="map-confirm-title">Upload linear plan to controller?</h3>
         <p class="map-confirm-body">
-          This will upload the mission to the rover and start execution.<br>
-          Mission: <code class="map-confirm-mission-id"></code> &nbsp;
+          This uploads the active revision's waypoints to the controller as a
+          linear plan and starts it (legacy direct upload — not behavior-tree
+          execution).<br>
+          Revision: <code class="map-confirm-revision-id"></code> &nbsp;
           Controller version: <code class="map-confirm-controller-version"></code>
         </p>
         <div class="map-confirm-actions">
           <button class="map-confirm-cancel" type="button">Cancel</button>
-          <button class="map-confirm-ok" type="button">Execute on rover</button>
+          <button class="map-confirm-ok" type="button">Upload plan</button>
         </div>
       </div>
     `;
@@ -1516,89 +1907,6 @@ export class MapWidget {
 
     // Keyboard help overlay (<dialog> appended to container by constructor)
     this._keyboardHelp = new KeyboardHelpOverlay(this._container);
-
-    this._setupResizing(shell);
-  }
-
-  _setupResizing(shell) {
-    const W_KEY = 'gcs-map-widget-sidebar-width';
-    const H_KEY = 'gcs-map-widget-shell-height';
-    const W_MIN = 240, W_MAX = 640, W_DEFAULT = 340;
-    const H_MIN = 320, H_MAX = 1100, H_DEFAULT = 540;
-    const MOBILE_QUERY = '(max-width: 1100px)';
-    const clampW = (v) => Math.max(W_MIN, Math.min(W_MAX, Number(v) || W_DEFAULT));
-    const clampH = (v) => Math.max(H_MIN, Math.min(H_MAX, Number(v) || H_DEFAULT));
-
-    const setWidth = (v, persist = true) => {
-      const w = clampW(v);
-      shell.style.setProperty('--map-sidebar-w', `${w}px`);
-      this._layoutResizer.setAttribute('aria-valuenow', String(w));
-      if (persist) {
-        try { localStorage.setItem(W_KEY, String(w)); } catch (_) {}
-      }
-    };
-    const setHeight = (v, persist = true) => {
-      const h = clampH(v);
-      shell.style.setProperty('--map-shell-h', `${h}px`);
-      this._heightResizer.setAttribute('aria-valuenow', String(h));
-      if (persist) {
-        try { localStorage.setItem(H_KEY, String(h)); } catch (_) {}
-      }
-      window.requestAnimationFrame(() => this.invalidateSize());
-    };
-
-    try { setWidth(localStorage.getItem(W_KEY) || W_DEFAULT, false); } catch (_) { setWidth(W_DEFAULT, false); }
-    try { setHeight(localStorage.getItem(H_KEY) || H_DEFAULT, false); } catch (_) { setHeight(H_DEFAULT, false); }
-
-    const bindPointerDrag = (handle, dragClass, onPointer) => {
-      handle.addEventListener('pointerdown', (event) => {
-        if (window.matchMedia(MOBILE_QUERY).matches) return;
-        event.preventDefault();
-        handle.setPointerCapture(event.pointerId);
-        shell.classList.add(dragClass);
-        onPointer(event);
-      });
-      handle.addEventListener('pointermove', (event) => {
-        if (!handle.hasPointerCapture(event.pointerId)) return;
-        onPointer(event);
-      });
-      const release = (event) => {
-        if (event && handle.hasPointerCapture(event.pointerId)) {
-          handle.releasePointerCapture(event.pointerId);
-        }
-        shell.classList.remove(dragClass);
-        window.requestAnimationFrame(() => this.invalidateSize());
-      };
-      handle.addEventListener('pointerup', release);
-      handle.addEventListener('pointercancel', () => shell.classList.remove(dragClass));
-      handle.addEventListener('lostpointercapture', () => shell.classList.remove(dragClass));
-    };
-
-    bindPointerDrag(this._layoutResizer, 'is-resizing', (event) => {
-      const rect = shell.getBoundingClientRect();
-      setWidth(event.clientX - rect.left);
-    });
-    bindPointerDrag(this._heightResizer, 'is-height-resizing', (event) => {
-      const rect = shell.getBoundingClientRect();
-      setHeight(event.clientY - rect.top);
-    });
-
-    this._layoutResizer.addEventListener('keydown', (event) => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault();
-      const current = Number(this._layoutResizer.getAttribute('aria-valuenow')) || W_DEFAULT;
-      if (event.key === 'Home') setWidth(W_MIN);
-      else if (event.key === 'End') setWidth(W_MAX);
-      else setWidth(current + (event.key === 'ArrowRight' ? 24 : -24));
-    });
-    this._heightResizer.addEventListener('keydown', (event) => {
-      if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault();
-      const current = Number(this._heightResizer.getAttribute('aria-valuenow')) || H_DEFAULT;
-      if (event.key === 'Home') setHeight(H_MIN);
-      else if (event.key === 'End') setHeight(H_MAX);
-      else setHeight(current + (event.key === 'ArrowDown' ? 24 : -24));
-    });
   }
 
   _showError(msg) {

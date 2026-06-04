@@ -3,12 +3,6 @@
 Date: 2026-05-26
 Status: Accepted
 
-> **Note (2026-05-28):** [ADR 0022](./0022-drop-operator-approval-gate.md)
-> retires the per-Mission operator approval gate. Execution gating now lives
-> entirely in the mode (Strict / Confirm / Autonomous) plus the
-> executing-mission edit lock; there is no separate per-Mission approval
-> step. ADR 0021's mode framing is unchanged.
-
 ## Context
 
 ADR 0002 made "AI cannot cause rover motion" a *structural* invariant. ADR 0012 made "approval is not execution" a non-negotiable map-widget invariant. Together they hard-coded a single safety stance for every build, every operator, every environment.
@@ -29,12 +23,12 @@ This ADR replaces the structural framing with a configurable policy, defines the
 
 Mode lives in **Settings → Mission Lifecycle**. Defaults: sim build → Autonomous; real-rover build → Strict. The build-time gate that enforces the real-rover default is an Open Question.
 
-`cancel_execution` and `abort` are always bound regardless of mode. ADR 0020's `expected_controller_version` guards every `arm_execution` and `execute_mission` call.
+`cancel_execution` and `abort` are always bound regardless of mode. ADR 0020's `expected_controller_version` guards AI execution as a **narrow first-install gate** (implementation detail, 2026-06-01): the LLM never supplies the version (it cannot know it), so the executor captures the version observed at authorization and CAS-gates only its *first* controller install against it. The executor is the sole writer for the rest of the run, so subsequent nav-segment installs build on the version it wrote and do not re-assert. This still prevents a third party who mutated the controller between authorization and start from being silently overwritten — the safety property ADR 0020 intends.
 
 ### 2. Mission is a flat, first-class entity
 
 - **One sidebar row = one Mission.** No parent/child, no draft/revision surfaced in the UI.
-- **Fields:** `#index` (stable integer handle, never reused), `name` (editable, defaults to AI-derived summary or `"Untitled mission"`), `origin` (`manual` | `ai_chat`, mutable), `origin_chat_id` (FK or null), `created_at`, `created_by_user_id`, `color` (hex string, assigned at creation, user-overridable via `PATCH /api/ai/missions/{id}/color`). Internal `client_version` per ADR 0020 still tracks edit concurrency.
+- **Fields:** `#index` (stable integer handle, never reused), `name` (editable, defaults to AI-derived summary or `"Untitled mission"`), `origin` (`manual` | `ai_chat`, mutable), `origin_chat_id` (FK or null), `created_at`, `created_by_user_id`. Internal `client_version` per ADR 0020 still tracks edit concurrency.
 - **Manual and AI-chat creation produce structurally identical Missions.** CRUD applies equally to both.
 - **Persistence scope:** per-user global store. The sidebar shows all of a user's Missions across chats. `origin_chat_id` is captured for future filter UI but not surfaced now.
 
@@ -61,6 +55,8 @@ AI-driven changes are non-destructive by default; only manual edits and explicit
 **Smart bindings.** Clicking a sidebar row makes it Active and turns Visible on. A newly created mission becomes Active and Visible (but not Selected). Eye icon, checkbox, and click are otherwise independent.
 
 **Invariant.** The Active Mission must be Visible. Hiding the Active Mission clears Active.
+
+**Sidebar-row affordances.** A flat Mission row surfaces only operator-facing actions: click → Active (focus), eye → Visible, **edit** (per § 3, mutates in place), and **execute** (mode-gated per § 1). Execute/edit resolve to the Mission's active revision; an `executing` Mission locks both. Draft-lifecycle actions (approve / reject) are **not** on the flat row — per "draft/revision plumbing stays internal" (Consequences), they live on the draft-review surface, not the Mission list.
 
 ### 5. Chat reference resolution
 
@@ -90,7 +86,7 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 - The operator-facing concept is the Mission. Draft / revision plumbing stays internal.
 - Comparison is native: regenerations and AI edits produce new rows by default; old and new stay overlayable.
 - ADR 0019 (per-waypoint provenance) remains in force, orthogonal to Mission-level `origin`.
-- ADR 0020 (optimistic concurrency) is used by the new tool surface — `edit_mission_in_place` bumps `client_version`, execute paths carry `expected_controller_version`.
+- ADR 0020 (optimistic concurrency) is used by the new tool surface — `edit_mission_in_place` bumps `client_version`; execute paths carry `expected_controller_version` (the legacy revision-execute endpoint via its client token, AI execution via the narrow first-install gate described in §1).
 - Single source of truth for the lifecycle replaces content previously spread across ADRs 0002 and 0012 plus several `design.md` sections. Those `design.md` sections will follow as implementation lands; until then, the system runs effectively in Strict mode.
 
 ## Alternatives Considered
@@ -118,3 +114,4 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 - ADR 0012 → status updated to *Superseded by ADR 0021*; content preserved (invariants 2–4 still in force per § Consequences above).
 - ADR 0019 and ADR 0020 → unchanged; remain Accepted.
 - Implementation of Confirm and Autonomous modes plus the flat-Mission UI is new work; `design.md` (ai-agent, gcs) will catch up incrementally as code lands.
+- **2026-06-04 — `approved`/`awaiting_approval` status cleanup complete.** Both statuses removed from all Python frozensets, SQL guards, and JS sets. `approve_revision()`, `approve_revision_for_draft()`, `approve_draft()`, the REST `/approve` endpoint, and the graph approval-interrupt nodes (`request_planning_shell_approval`, `record_approval`) are deleted. New revisions initialize to `proposed`. The `approved_at` DB column is retained as a dead no-op.

@@ -23,12 +23,10 @@ function findSnapTarget(currentLl, waypoints, excludeIndex, map) {
 }
 
 const STYLE_BY_STATUS = {
-  proposed:          { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  awaiting_approval: { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  planning:          { dashed: true,  opacity: 1.0, fillOpacity: 0 },
-  approved:          { dashed: false, opacity: 1.0, fillOpacity: 1 },
-  exported:          { dashed: false, opacity: 1.0, fillOpacity: 1 },
-  cutover_pending:   { dashed: false, opacity: 1.0, fillOpacity: 1 },
+  proposed:        { dashed: true,  opacity: 1.0, fillOpacity: 0 },
+  planning:        { dashed: true,  opacity: 1.0, fillOpacity: 0 },
+  exported:        { dashed: false, opacity: 1.0, fillOpacity: 1 },
+  cutover_pending: { dashed: false, opacity: 1.0, fillOpacity: 1 },
   executing:         { dashed: false, opacity: 1.0, fillOpacity: 1 },
   completed:         { dashed: false, opacity: 0.35, fillOpacity: 0.35 },
   superseded:        { dashed: false, opacity: 0.35, fillOpacity: 0.35 },
@@ -56,44 +54,33 @@ export class MissionOverlayLayer {
     this._editGroup = L.layerGroup().addTo(map);
   }
 
-  render(payload, { color = DEFAULT_COLOR, opacity = null, weight = 2.5, onClick = null } = {}) {
+  render(payload, { color = DEFAULT_COLOR, opacity = null } = {}) {
     this._group.clearLayers();
     if (!payload?.available || !Array.isArray(payload.features)) return;
 
     const style = styleFor(payload.status);
     const lineOpacity = opacity ?? style.opacity;
-    const fillOpacity = payload.status === 'proposed' || payload.status === 'awaiting_approval' || payload.status === 'planning'
+    const fillOpacity = payload.status === 'proposed' || payload.status === 'planning'
       ? 0
       : (opacity ?? style.fillOpacity);
     const routeLines = payload.features.filter(f => f.type === 'route_line');
     const waypoints = payload.features.filter(f => f.type === 'waypoint');
 
-    const attachClick = (layer) => {
-      if (!onClick) return;
-      layer.on('click', (e) => {
-        L.DomEvent.stopPropagation(e);
-        onClick(e.originalEvent || {});
-      });
-    };
-
     for (const feature of routeLines) {
       if (!Array.isArray(feature.points) || feature.points.length < 2) continue;
-      const polyline = L.polyline(feature.points.map(p => [p.y, p.x]), {
+      L.polyline(feature.points.map(p => [p.y, p.x]), {
         color,
-        weight,
+        weight: 2.5,
         opacity: lineOpacity,
         dashArray: style.dashed ? '6,6' : undefined,
         pane: 'missionPane',
-        interactive: !!onClick,
-      });
-      attachClick(polyline);
-      polyline.addTo(this._group);
+      }).addTo(this._group);
     }
 
     for (const feature of waypoints) {
       const p = feature.point;
       if (!p) continue;
-      const circle = L.circleMarker([p.y, p.x], {
+      L.circleMarker([p.y, p.x], {
         radius: 7,
         color,
         weight: 2,
@@ -101,10 +88,7 @@ export class MissionOverlayLayer {
         fillColor: color,
         fillOpacity,
         pane: 'missionPane',
-        interactive: !!onClick,
-      });
-      attachClick(circle);
-      circle.addTo(this._group);
+      }).addTo(this._group);
 
       const icon = L.divIcon({
         className: 'map-wp-badge',
@@ -128,12 +112,7 @@ export class MissionOverlayLayer {
     const nestedGroup = L.layerGroup().addTo(this._group);
     const originalGroup = this._group;
     this._group = nestedGroup;
-    this.render(overlay.payload, {
-      color: overlay.color || DEFAULT_COLOR,
-      opacity: overlay.opacity,
-      weight: overlay.weight,
-      onClick: overlay.onClick,
-    });
+    this.render(overlay.payload, { color: overlay.color || DEFAULT_COLOR, opacity: overlay.opacity });
     this._group = originalGroup;
   }
 
