@@ -8,7 +8,8 @@ PYTHON_BIN="$ROOT/.venv/bin/python"
 if [ ! -x "$PYTHON_BIN" ]; then
   echo "Shared venv not found at $ROOT/.venv"
   echo "Create it from the repository root:"
-  echo "  ./merge_root_venvs.sh"
+  echo "  python3 -m venv .venv"
+  echo "  .venv/bin/python -m pip install -r gcs_server/requirements-gcs.txt"
   exit 1
 fi
 

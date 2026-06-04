@@ -182,6 +182,27 @@ export async function executeMission(revisionId, { expectedControllerVersion = n
   }
 }
 
+// Mission execution controls (B.3): mission-keyed pause / resume / stop.
+// The sidebar never exposes session_id — routes look up the active session by mission id.
+async function _missionControl(missionId, action) {
+  try {
+    const res = await fetch(`/api/ai/missions/${encodeURIComponent(missionId)}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.error || data.detail || `HTTP ${res.status}`, ...data };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
+export async function pauseMission(missionId) { return _missionControl(missionId, 'pause'); }
+export async function resumeMission(missionId) { return _missionControl(missionId, 'resume'); }
+export async function stopMission(missionId) { return _missionControl(missionId, 'stop'); }
+
 // Confirm-banner support (ADR 0021 §1). getExecutionState polls the in-flight
 // run for a session; when status === 'awaiting_confirm' the banner shows a
 // countdown (confirm_remaining_s) and a [Play] that calls confirmExecution.

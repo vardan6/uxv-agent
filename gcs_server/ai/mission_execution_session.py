@@ -291,6 +291,55 @@ class MissionExecutionSessions:
         active.executor.request_abort()
         return {"ok": True, **active.snapshot()}
 
+    def request_pause(self, session_id: str) -> dict[str, Any]:
+        active = self.get(session_id)
+        if active is None:
+            return {"ok": False, "error": "no execution for this session"}
+        if not (active.thread and active.thread.is_alive()):
+            return {"ok": False, "error": "execution is not running", **active.snapshot()}
+        active.executor.request_pause()
+        active.status = "paused"
+        return {"ok": True, **active.snapshot()}
+
+    def resume(self, session_id: str) -> dict[str, Any]:
+        active = self.get(session_id)
+        if active is None:
+            return {"ok": False, "error": "no execution for this session"}
+        if active.status != "paused":
+            return {"ok": False, "error": f"execution is not paused (status: {active.status})", **active.snapshot()}
+        active.executor.resume()
+        active.status = "running"
+        return {"ok": True, **active.snapshot()}
+
+    # --- Mission-keyed variants (sidebar routes never expose session_id) ------
+
+    def pause_for_mission(self, mission_id: str) -> dict[str, Any]:
+        active = self.get_for_mission(mission_id)
+        if active is None:
+            return {"ok": False, "error": "no active execution for this mission"}
+        if not (active.thread and active.thread.is_alive()):
+            return {"ok": False, "error": "execution is not running", **active.snapshot()}
+        active.executor.request_pause()
+        active.status = "paused"
+        return {"ok": True, **active.snapshot()}
+
+    def resume_for_mission(self, mission_id: str) -> dict[str, Any]:
+        active = self.get_for_mission(mission_id)
+        if active is None:
+            return {"ok": False, "error": "no active execution for this mission"}
+        if active.status != "paused":
+            return {"ok": False, "error": f"execution is not paused (status: {active.status})", **active.snapshot()}
+        active.executor.resume()
+        active.status = "running"
+        return {"ok": True, **active.snapshot()}
+
+    def abort_for_mission(self, mission_id: str) -> dict[str, Any]:
+        active = self.get_for_mission(mission_id)
+        if active is None:
+            return {"ok": False, "error": "no active execution for this mission"}
+        active.executor.request_abort()
+        return {"ok": True, **active.snapshot()}
+
 
 def _clean(session_id: Any) -> str:
     return str(session_id or "").strip()

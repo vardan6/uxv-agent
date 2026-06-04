@@ -1,4 +1,4 @@
-import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, pauseMission, resumeMission, stopMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
 import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
@@ -214,6 +214,9 @@ export class MapWidget {
       onMissionFocusRequested: (missionId) => this.setFocus(missionId),
       onMissionVisibilityToggled: (missionId) => this._toggleVisibility(missionId),
       onMissionExecuteRequested: (missionId) => this._handleExecuteRequest(missionId),
+      onMissionPauseRequested: (missionId) => this._handleMissionPause(missionId),
+      onMissionResumeRequested: (missionId) => this._handleMissionResume(missionId),
+      onMissionStopRequested: (missionId) => this._handleMissionStop(missionId),
       onMissionEditRequested: (missionId) => this._onEditRequested(missionId),
       onMissionDeleteRequested: (missionId) => this._handleDeleteMission(missionId),
       onMissionRenameRequested: (missionId, name) => this._handleRenameMission(missionId, name),
@@ -556,6 +559,29 @@ export class MapWidget {
       return;
     }
     this._overlayCacheByMissionId.clear();
+    await this.refresh();
+  }
+
+  // --- Mission playback controls (B.3) ---
+
+  async _handleMissionPause(missionId) {
+    if (!missionId) return;
+    const result = await pauseMission(missionId);
+    if (!result.ok) { this._showError(result.error || 'Pause failed'); return; }
+    await this.refresh();
+  }
+
+  async _handleMissionResume(missionId) {
+    if (!missionId) return;
+    const result = await resumeMission(missionId);
+    if (!result.ok) { this._showError(result.error || 'Resume failed'); return; }
+    await this.refresh();
+  }
+
+  async _handleMissionStop(missionId) {
+    if (!missionId) return;
+    const result = await stopMission(missionId);
+    if (!result.ok) { this._showError(result.error || 'Stop failed'); return; }
     await this.refresh();
   }
 

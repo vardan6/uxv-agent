@@ -1679,6 +1679,11 @@ async def list_missions(
     """
     runtime = _runtime(request)
     missions = runtime.mission_store.list_missions(user_id=user_id, limit=limit)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is not None:
+        for m in missions:
+            active = sessions.get_for_mission(str(m.get("id") or ""))
+            m["session_status"] = active.status if active is not None else ""
     return {"missions": missions}
 
 
@@ -2743,6 +2748,45 @@ async def cancel_execution_endpoint(request: Request) -> JSONResponse:
         "mission_execution_cancel",
         {"session_id": session_id, "ok": bool(result.get("ok")), "status": result.get("status", "")},
     )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/missions/{mission_id}/pause")
+async def pause_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    mid = str(mission_id or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="mission_id is required")
+    result = sessions.pause_for_mission(mid)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/missions/{mission_id}/resume")
+async def resume_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    mid = str(mission_id or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="mission_id is required")
+    result = sessions.resume_for_mission(mid)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+@app.post("/api/ai/missions/{mission_id}/stop")
+async def stop_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    sessions = getattr(runtime, "mission_execution_sessions", None)
+    if sessions is None:
+        raise HTTPException(status_code=503, detail="execution sessions unavailable")
+    mid = str(mission_id or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="mission_id is required")
+    result = sessions.abort_for_mission(mid)
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 

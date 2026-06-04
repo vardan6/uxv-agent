@@ -221,6 +221,12 @@ class ControllerMissionAdapter(Protocol):
     ) -> ControllerMissionInstallResult:
         ...
 
+    def pause_mission(self) -> None:
+        ...
+
+    def stop_mission(self) -> None:
+        ...
+
 
 class ControllerMissionAdapterError(RuntimeError):
     pass
@@ -862,6 +868,14 @@ class MavlinkControllerMissionAdapter:
             raw_result={"uploaded": uploaded},
         )
 
+    def pause_mission(self) -> None:
+        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink
+        pass
+
+    def stop_mission(self) -> None:
+        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink; caller marks mission aborted
+        pass
+
     def _open_client(self) -> Any:
         if self._client_factory is not None:
             return self._client_factory()
@@ -1137,6 +1151,12 @@ class JsonFileControllerMissionAdapter:
             error="controller mission read-back verification failed",
             raw_result={"verified": False},
         )
+
+    def pause_mission(self) -> None:
+        pass
+
+    def stop_mission(self) -> None:
+        pass
 
     def _load_record(self) -> dict[str, Any]:
         return _load_json_file(self._state_path)

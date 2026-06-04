@@ -54,60 +54,91 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function missionRowActionButtons(missionRow, isEditing, { deleteGuarded = false } = {}) {
-  const activeRevisionId = String(missionRow.activeRevisionId || '');
+// Five fixed button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
+// Inactive slots use visibility:hidden so row width stays constant.
+// sessionStatus is the in-memory executor state injected by GET /api/ai/missions.
+function missionRowActionButtons(missionRow, isEditing, {
+  deleteGuarded = false,
+  isVisible = false,
+  isExecuting = false,
+} = {}) {
   const status = String(missionRow.activeRevisionStatus || '');
+  const sessionStatus = String(missionRow.sessionStatus || '');
   const safeId = escapeHtml(missionRow.id);
   const safeName = escapeHtml(missionRow.name);
-  const deleteTitle = deleteGuarded
-    ? 'Delete disabled while mission is armed or awaiting confirmation'
-    : 'Delete mission';
-  const deleteAriaLabel = deleteGuarded
-    ? `Delete disabled for mission ${safeName} while mission is armed or awaiting confirmation`
-    : `Delete mission ${safeName}`;
-  const deleteDisabledAttr = deleteGuarded ? ' disabled aria-disabled="true"' : '';
-  if (!activeRevisionId) {
-    return `<button class="mission-row-action-btn is-delete" type="button"
-      data-delete-mission-id="${safeId}"
-      title="${deleteTitle}"
-      aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`;
+
+  const isSessionRunning = sessionStatus === 'running';
+  const isSessionPaused = sessionStatus === 'paused';
+  const isActive = isSessionRunning || isSessionPaused || isExecuting;
+
+  // Slot 1 — edit ✏️
+  const canEdit = MISSION_ROW_EDITABLE.has(status) && !isActive;
+  let editSlot;
+  if (canEdit && isEditing) {
+    editSlot = `<button class="mission-row-action-btn is-done" type="button"
+      data-done-edit-mission-id="${safeId}"
+      title="Finish editing" aria-label="Finish editing">
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
+    </button>`;
+  } else if (canEdit) {
+    editSlot = `<button class="mission-row-action-btn is-edit" type="button"
+      data-edit-mission-id="${safeId}"
+      title="Edit waypoints" aria-label="Edit waypoints for mission ${safeName}">
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+    </button>`;
+  } else {
+    editSlot = `<button class="mission-row-action-btn is-edit" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+    </button>`;
   }
-  if (status === 'executing') {
-    return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
+
+  // Slot 2 — play ▶ or pause ⏸
+  let playPauseSlot;
+  if (isSessionRunning) {
+    playPauseSlot = `<button class="mission-row-action-btn is-pause" type="button"
+      data-pause-mission-id="${safeId}"
+      title="Pause mission" aria-label="Pause mission ${safeName}">⏸</button>`;
+  } else if (isSessionPaused || MISSION_ROW_EXECUTABLE.has(status)) {
+    const isResume = isSessionPaused;
+    const attr = isResume ? `data-resume-mission-id="${safeId}"` : `data-execute-mission-id="${safeId}"`;
+    const title = isResume ? 'Resume mission' : 'Execute mission';
+    playPauseSlot = `<button class="mission-row-action-btn is-execute" type="button"
+      ${attr}
+      title="${title}" aria-label="${title} ${safeName}">▶</button>`;
+  } else {
+    playPauseSlot = `<button class="mission-row-action-btn is-execute" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>▶</button>`;
   }
-  const parts = [];
-  if (MISSION_ROW_EDITABLE.has(status)) {
-    if (isEditing) {
-      parts.push(`<button class="mission-row-action-btn is-done" type="button"
-        data-done-edit-mission-id="${safeId}"
-        title="Finish editing"
-        aria-label="Finish editing">
-        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
-      </button>`);
-    } else {
-      parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-        data-edit-mission-id="${safeId}"
-        title="Edit waypoints"
-        aria-label="Edit waypoints">
-        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-      </button>`);
-    }
-  }
-  if (MISSION_ROW_EXECUTABLE.has(status)) {
-    // Legacy linear-plan upload (ADR 0023): pushes the active revision's
-    // waypoints to the controller as a .plan and starts it. This is NOT the
-    // behavior-tree session executor — lifecycle BT runs are AI-tool/banner
-    // driven (arm_execution/execute_mission + /api/ai/execution/*).
-    parts.push(`<button class="mission-row-action-btn is-execute" type="button"
-      data-execute-mission-id="${safeId}"
-      title="Upload linear plan to controller (legacy direct upload — not behavior-tree execution)"
-      aria-label="Upload linear plan to controller">▶</button>`);
-  }
-  parts.push(`<button class="mission-row-action-btn is-delete" type="button"
+
+  // Slot 3 — stop ⏹
+  const stopSlot = (isSessionRunning || isSessionPaused)
+    ? `<button class="mission-row-action-btn is-stop" type="button"
+        data-stop-mission-id="${safeId}"
+        title="Stop mission" aria-label="Stop mission ${safeName}">⏹</button>`
+    : `<button class="mission-row-action-btn is-stop" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>⏹</button>`;
+
+  // Slot 4 — delete 🗑
+  const deleteDisabled = deleteGuarded || isActive;
+  const deleteTitle = deleteDisabled ? 'Delete disabled while mission is active' : 'Delete mission';
+  const deleteAttr = deleteDisabled ? ' disabled aria-disabled="true"' : '';
+  const deleteSlot = `<button class="mission-row-action-btn is-delete" type="button"
     data-delete-mission-id="${safeId}"
-    title="${deleteTitle}"
-    aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`);
-  return parts.join('');
+    title="${deleteTitle}" aria-label="Delete mission ${safeName}"${deleteAttr}>🗑</button>`;
+
+  // Slot 5 — visibility 👁
+  const eyeSlot = `<button
+    class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
+    type="button"
+    data-toggle-mission-id="${safeId}"
+    aria-label="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+    title="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+    aria-disabled="${isExecuting ? 'true' : 'false'}"
+    ${isExecuting ? 'disabled' : ''}
+  >${isVisible
+    ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
+    : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
+  }</button>`;
+
+  return editSlot + playPauseSlot + stopSlot + deleteSlot + eyeSlot;
 }
 
 // Pure markup for one flat-Mission row (ADR 0021 §2: one row = one Mission).
@@ -176,19 +207,7 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         </span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowActionButtons(missionRow, isEditing, { deleteGuarded })}
-        <button
-          class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
-          type="button"
-          data-toggle-mission-id="${safeId}"
-          aria-label="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
-          title="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
-          aria-disabled="${isExecuting ? 'true' : 'false'}"
-          ${isExecuting ? 'disabled' : ''}
-        >${isVisible
-          ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
-          : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
-        }</button>
+        ${missionRowActionButtons(missionRow, isEditing, { deleteGuarded, isVisible, isExecuting })}
       </span>
     </div>
   `;
@@ -203,6 +222,9 @@ export class MissionListPanel {
     this._onMissionVisibilityToggled = opts.onMissionVisibilityToggled || (() => {});
     this._onMissionEditRequested = opts.onMissionEditRequested || (() => {});
     this._onMissionExecuteRequested = opts.onMissionExecuteRequested || (() => {});
+    this._onMissionPauseRequested = opts.onMissionPauseRequested || (() => {});
+    this._onMissionResumeRequested = opts.onMissionResumeRequested || (() => {});
+    this._onMissionStopRequested = opts.onMissionStopRequested || (() => {});
     this._onMissionDeleteRequested = opts.onMissionDeleteRequested || (() => {});
     this._onMissionRenameRequested = opts.onMissionRenameRequested || (() => {});
     // Selected state (ADR 0021 §4): batch-operation target set, driven by the
@@ -345,6 +367,27 @@ export class MissionListPanel {
         event.preventDefault();
         event.stopPropagation();
         this._onMissionExecuteRequested(button.dataset.executeMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-pause-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionPauseRequested(button.dataset.pauseMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-resume-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionResumeRequested(button.dataset.resumeMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-stop-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionStopRequested(button.dataset.stopMissionId || '');
       });
     });
     // Selection checkboxes: click carries shiftKey for range extension. Bind on

@@ -24,9 +24,13 @@ MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
     "exported",
     "cutover_pending",
     "executing",
+    "paused",
 })
 
-MISSION_EXECUTION_READY_STATUSES = frozenset({"exported", "executing"})
+# Revision statuses that allow (re-)execution. "paused" and "aborted" are
+# included so the play button re-launches a mission that was parked or stopped
+# without requiring a fresh export.
+MISSION_EXECUTION_READY_STATUSES = frozenset({"exported", "executing", "paused", "aborted"})
 MISSION_CONTROLLER_ID = "primary"
 
 
@@ -1033,16 +1037,7 @@ class MissionExecutionService:
                 rebased_revision = self._create_rebased_revision_from_controller_state(
                     revision,
                     conn=conn,
-                    controller_state=self._controller_state_from_row(
-                        conn.execute(
-                            """
-                            SELECT *
-                            FROM ai_mission_controller_state
-                            WHERE controller_id = ?
-                            """,
-                            (MISSION_CONTROLLER_ID,),
-                        ).fetchone()
-                    ),
+                    controller_state=self._controller_state_from_row(controller_row),
                     observed_controller_version=observed_version,
                     expected_controller_version=expected_controller_version,
                 )
@@ -1311,6 +1306,53 @@ class MissionExecutionService:
             "controller_state": self.get_controller_state(),
         }
 
+    def pause_mission(self, operation_id: str) -> dict[str, Any]:
+        """Send HOLD to the FC adapter and mark the operation paused in the DB.
+
+        Called by the API layer after the executor thread has been parked via
+        ``MissionExecutionSessions.request_pause()``.  Adapter errors are
+        returned rather than raised so the caller can decide whether to roll
+        back the in-memory pause.
+        """
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
+        try:
+            self._controller_adapter.pause_mission()
+        except Exception as exc:
+            return {"ok": False, "status": "adapter_error", "error": str(exc), "operation_id": op_id}
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ai_mission_operations SET status = 'paused', updated_at = ? WHERE id = ?",
+                (now, op_id),
+            )
+            conn.commit()
+        return {"ok": True, "status": "paused", "operation_id": op_id}
+
+    def abort_mission(self, operation_id: str) -> dict[str, Any]:
+        """Send HOLD to the FC adapter and mark the operation aborted in the DB.
+
+        Stop keeps the vehicle in place (ADR 0024 — no RTL).  Called by the
+        API layer after ``MissionExecutionSessions.request_abort()`` has
+        signalled the executor to stop cooperatively.
+        """
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
+        try:
+            self._controller_adapter.stop_mission()
+        except Exception as exc:
+            return {"ok": False, "status": "adapter_error", "error": str(exc), "operation_id": op_id}
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ai_mission_operations SET status = 'aborted', updated_at = ? WHERE id = ?",
+                (now, op_id),
+            )
+            conn.commit()
+        return {"ok": True, "status": "aborted", "operation_id": op_id}
+
     def get_controller_state(self) -> dict[str, Any]:
         with self._connect() as conn:
             row = self._ensure_controller_state_row(conn)
@@ -1413,7 +1455,6 @@ class MissionExecutionService:
                   r.review_context_json,
                   r.created_at AS revision_created_at,
                   r.updated_at AS revision_updated_at,
-                  r.approved_at,
                   r.rejected_at
                 FROM ai_mission_operations o
                 LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
@@ -1470,7 +1511,6 @@ class MissionExecutionService:
             "waypoint_count": waypoint_count,
             "created_at": row["operation_created_at"],
             "updated_at": row["operation_updated_at"],
-            "approved_at": row["approved_at"],
             "rejected_at": row["rejected_at"],
             "controller_state": controller_state,
             "controller_status": controller_status,

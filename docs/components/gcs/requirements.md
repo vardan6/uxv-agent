@@ -209,7 +209,7 @@ Operators must be able to:
 - **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
 - **Execute a mission** (▶) — uploads the mission to the FC and starts execution; available on any mission row with an active revision that is not already executing, paused, or completed
 - **Pause a mission** (⏸) — holds the vehicle in place mid-mission (mode switch to HOLD on the FC); shown while mission is `executing`; toggles back to ▶ for resume
-- **Resume a mission** (▶) — resumes from the next waypoint in sequence; shown while mission is `paused`
+- **Resume a mission** (▶) — resumes without rewinding the mission when the active FC adapter has asserted the required firmware resume policy; shown while mission is `paused`
 - **Stop a mission** (⏹) — holds the vehicle in place and marks mission `aborted`; shown while mission is `executing` or `paused`
 - **Rename a mission** inline (double-click the name) and **Delete a mission** — singly, or in bulk from the selection batch bar; an executing mission is refused
 - **Recolour a mission** via its colour chip, overriding the automatic palette colour
@@ -241,6 +241,10 @@ appears as `executing` in the sidebar with ⏸ and ⏹ buttons active.
 
 The operator can pause or stop from chat ("pause the mission", "stop the mission") in
 addition to using the sidebar buttons — both paths are available simultaneously.
+
+On real ArduPilot adapters, the backend must assert the firmware resume policy
+(`MIS_RESTART` / `AUTO_RESUME`) before exposing resume as a no-rewind control; see
+ADR 0024.
 
 The word "Approve" is not used in the operator-facing UI. The approval concept was
 removed by ADR 0021. Internal draft statuses (`proposed`, `planning`, `exported`,

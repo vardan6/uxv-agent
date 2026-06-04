@@ -4240,6 +4240,26 @@ code {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+.mission-row-action-btn.is-pause {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.mission-row-action-btn.is-pause:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.mission-row-action-btn.is-stop {
+  color: var(--muted);
+  border-color: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
+.mission-row-action-btn.is-stop:hover {
+  color: #c72e0f;
+  border-color: color-mix(in srgb, #c72e0f 40%, transparent);
+  background: color-mix(in srgb, #c72e0f 10%, transparent);
+}
+
 .mission-row-lock {
   font-size: 0.9rem;
   opacity: 0.7;

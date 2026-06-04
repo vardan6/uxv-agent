@@ -45,6 +45,7 @@ export function mapMissionsForList(missions = []) {
       // affordances. Empty when the Mission has no bridged active revision yet.
       activeRevisionId: String(m.active_revision_id || ''),
       activeRevisionStatus: String(m.active_revision_status || ''),
+      sessionStatus: String(m.session_status || ''),
     };
   });
 }

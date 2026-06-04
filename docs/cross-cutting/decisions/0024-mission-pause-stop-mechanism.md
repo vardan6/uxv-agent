@@ -45,9 +45,16 @@ logged events — no FC command is sent.
 - Pause exits AUTO mode, matching industry GCS behaviour (QGC, Mission Planner)
 - Resume continues from next waypoint — the vehicle may skip part of the segment it was
   on when paused; this is the firmware default and matches operator expectations from
-  other GCS tools
-- `MAV_CMD_DO_PAUSE_CONTINUE` is not used and should not be added later without a
-  firmware compatibility audit
+  other GCS tools.
+  **Caveat (added 2026-06-04):** resume-from-next is *parameter-dependent*, not
+  unconditional. On ArduPilot it is governed by `MIS_RESTART` / `AUTO_RESUME` — if those
+  select restart, switching back to AUTO replays the mission from the beginning. The
+  MAVLink adapter must read (and assert/set) this parameter on connect rather than
+  assuming the default, or a real FC may restart on resume.
+- `MAV_CMD_DO_PAUSE_CONTINUE` is not used here and should not be added without a firmware
+  compatibility audit. (Note: ArduPilot Copter later added support via PR #19317; the
+  inconsistency across firmware/vehicle types is what we are avoiding, not a claim it is
+  universally absent.)
 - MAVSDK implementation is straightforward (`action.hold()` / back to mission)
 - pymavlink implementation requires a `SET_MODE` send + confirmation
 

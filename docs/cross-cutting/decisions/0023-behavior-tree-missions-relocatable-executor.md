@@ -146,3 +146,4 @@ execution-session path, honoring `mission_lifecycle.execution_mode`.
   defense-in-depth stance, but a real-rover Strict/Confirm build arguably wants a
   deployment-time policy that *refuses* a fenceless mission rather than running it
   open. Revisit alongside the real-rover hardening Open Questions before hardware.
+- **Cooperative pause added to `MissionExecutor` (2026-06-04, Phase B.0).** `request_abort()` is joined by `request_pause()`/`resume()` backed by a `threading.Event` (`_pause_event`). The executor blocks inside `_tick()` while paused and unblocks on `resume()` or `request_abort()` (abort always unblocks). `MissionExecutionSessions` exposes `request_pause`/`resume` mirroring the existing `request_abort` surface. The `ControllerMissionAdapter` protocol gained matching `pause_mission()`/`stop_mission()` methods (no-op on all current adapters; real FC SET_MODE → HOLD per ADR 0024 is Phase B.3+).
