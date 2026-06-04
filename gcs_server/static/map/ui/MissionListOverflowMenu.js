@@ -8,6 +8,7 @@ export class MissionListOverflowMenu {
     this._container = container;
     this._popover = null;
     this._dismissHandler = null;
+    this._repositionHandler = null;
     this._opts = null;
   }
 
@@ -68,6 +69,7 @@ export class MissionListOverflowMenu {
     this._popover = pop;
 
     this._positionNear(anchorEl);
+    this._repositionHandler = () => this._positionNear(anchorEl);
 
     this._dismissHandler = (e) => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
@@ -77,6 +79,8 @@ export class MissionListOverflowMenu {
     setTimeout(() => {
       document.addEventListener('mousedown', this._dismissHandler);
       document.addEventListener('keydown', this._dismissHandler);
+      this._container.addEventListener('scroll', this._repositionHandler, { passive: true });
+      window.addEventListener('resize', this._repositionHandler);
     }, 0);
   }
 
@@ -84,12 +88,21 @@ export class MissionListOverflowMenu {
     if (!anchorEl || !this._popover) return;
     const containerRect = this._container.getBoundingClientRect();
     const anchorRect = anchorEl.getBoundingClientRect();
-    const popWidth = 200;
-    let left = anchorRect.right - containerRect.left - popWidth;
-    let top  = anchorRect.bottom - containerRect.top + 4;
-    if (left < 8) left = 8;
-    const maxLeft = this._container.clientWidth - popWidth - 8;
-    if (left > maxLeft) left = Math.max(8, maxLeft);
+    const popRect = this._popover.getBoundingClientRect();
+    const inset = 8;
+    const scrollLeft = this._container.scrollLeft;
+    const scrollTop = this._container.scrollTop;
+    const visibleMinLeft = scrollLeft + inset;
+    const visibleMaxLeft = scrollLeft + this._container.clientWidth - popRect.width - inset;
+    const visibleMinTop = scrollTop + inset;
+    const visibleMaxTop = scrollTop + this._container.clientHeight - popRect.height - inset;
+    let left = anchorRect.right - containerRect.left + scrollLeft - popRect.width;
+    let top = anchorRect.bottom - containerRect.top + scrollTop + 6;
+    left = Math.max(visibleMinLeft, Math.min(left, Math.max(visibleMinLeft, visibleMaxLeft)));
+    if (top > visibleMaxTop) {
+      top = anchorRect.top - containerRect.top + scrollTop - popRect.height - 6;
+    }
+    top = Math.max(visibleMinTop, Math.min(top, Math.max(visibleMinTop, visibleMaxTop)));
     this._popover.style.left = `${left}px`;
     this._popover.style.top = `${top}px`;
   }
@@ -103,6 +116,11 @@ export class MissionListOverflowMenu {
       document.removeEventListener('mousedown', this._dismissHandler);
       document.removeEventListener('keydown', this._dismissHandler);
       this._dismissHandler = null;
+    }
+    if (this._repositionHandler) {
+      this._container.removeEventListener('scroll', this._repositionHandler);
+      window.removeEventListener('resize', this._repositionHandler);
+      this._repositionHandler = null;
     }
     this._opts = null;
   }

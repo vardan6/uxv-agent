@@ -858,6 +858,7 @@ select:focus-visible {
   font-size: 0.75rem;
   line-height: 1.4;
   cursor: pointer;
+  margin-top: 6px;
   border: 1px solid rgba(0, 0, 0, 0.2);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
@@ -3558,6 +3559,7 @@ code {
   gap: 0;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .map-widget-shell.is-list-resizing {
@@ -3694,49 +3696,63 @@ code {
   z-index: 600;
   background: var(--panel-strong, #1a1a2e);
   border: 1px solid var(--line, #333);
-  border-radius: 10px;
-  padding: 8px;
+  border-radius: 12px;
+  padding: 12px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
-  width: 200px;
+  width: min(296px, calc(100% - 16px));
+  box-sizing: border-box;
 }
 
 .mission-color-picker-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 4px;
-  margin-bottom: 6px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .mission-color-swatch {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 4px;
-  border: 2px solid transparent;
+  min-width: 0;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line, #333) 80%, transparent);
   cursor: pointer;
-  transition: transform 0.1s ease, border-color 0.1s ease;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  transition: transform 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease;
 }
 
 .mission-color-swatch:hover,
 .mission-color-swatch:focus {
-  transform: scale(1.15);
+  transform: translateY(-1px) scale(1.03);
+  border-color: color-mix(in srgb, var(--accent, #4a90d9) 55%, #ffffff 10%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.18),
+    0 0 0 2px color-mix(in srgb, var(--accent, #4a90d9) 18%, transparent);
   outline: none;
 }
 
 .mission-color-swatch.is-current {
   border-color: #fff;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.22),
+    0 0 0 2px rgba(255,255,255,0.16);
 }
 
 .mission-color-picker-custom {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .mission-color-picker-custom label {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   font-size: 0.78rem;
   opacity: 0.85;
   cursor: pointer;
@@ -3744,11 +3760,11 @@ code {
 }
 
 .mission-color-picker-custom input[type="color"] {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 1px solid var(--line, #333);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   background: none;
 }
@@ -3913,7 +3929,7 @@ code {
 .mission-list-row {
   position: relative;
   display: grid;
-  grid-template-columns: 4px auto 1fr auto;
+  grid-template-columns: 12px auto 1fr auto;
   min-height: 58px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -3958,6 +3974,7 @@ code {
 .mission-batch-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -3970,6 +3987,7 @@ code {
   font-size: 0.78rem;
   font-weight: 600;
   margin-right: auto;
+  min-width: 0;
 }
 
 .mission-batch-btn {
@@ -4006,17 +4024,13 @@ code {
   pointer-events: none;
 }
 
-.mission-list-row.is-proposed .mission-row-status {
-  background: #8da0cb;
-}
-
 .mission-list-row.is-executing .mission-row-status {
-  background: #c72e0f;
+  box-shadow: inset 0 0 0 2px rgba(199, 46, 15, 0.65);
 }
 
 .mission-list-row.is-completed .mission-row-status,
 .mission-list-row.is-superseded .mission-row-status {
-  background: #8b949e;
+  opacity: 0.55;
 }
 
 .mission-row-focus {
@@ -5597,7 +5611,8 @@ code {
 .map-elevation-panel {
   background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
   border-top: 1px solid var(--line);
-  flex-shrink: 0;
+  flex: 0 0 160px;
+  overflow: hidden;
 }
 
 .map-elev-header {
@@ -5616,14 +5631,7 @@ code {
 }
 
 .map-elev-toggle {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0 2px;
-  font-size: 0.85rem;
-  line-height: 1;
+  display: none;
 }
 
 .map-elev-chip {
@@ -5641,11 +5649,13 @@ code {
 .map-elev-chip-danger  { background: color-mix(in srgb, #e05050 20%, transparent); color: #e05050; border: 1px solid color-mix(in srgb, #e05050 35%, transparent); }
 
 .map-elev-chart-wrap {
-  padding: 0 0 2px;
+  height: 130px;
   overflow: hidden;
+  padding: 0 0 2px;
 }
 
-.map-elev-chart-wrap[hidden] { display: none; }
+/* Panel is fixed-height — never collapse the chart wrap regardless of JS state */
+.map-elev-chart-wrap[hidden] { display: block; }
 
 .map-elev-empty {
   padding: 10px 14px;

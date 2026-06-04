@@ -7,7 +7,7 @@ import { LiveVehicleLayer } from './layers/LiveVehicleLayer.js';
 import { TerrainCanvasLayer } from './layers/TerrainCanvasLayer.js';
 import { SceneObjectsLayer } from './layers/SceneObjectsLayer.js';
 import { GridLayer } from './layers/GridLayer.js';
-import { mapMissionsForList, enforceVisibilityCap, assignPaletteColor } from './missionListLogic.js';
+import { mapMissionsForList, assignPaletteColor } from './missionListLogic.js';
 import { missionColorOverrides } from './state/missionColorOverrides.js';
 import { missionSortPreference, sortMissions } from './state/missionSortPreference.js';
 import { MissionListPanel } from './ui/MissionListPanel.js';
@@ -24,7 +24,6 @@ import { BasemapPanel } from './ui/BasemapPanel.js';
 import { editState } from './state/editState.js';
 
 const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
-const DEFAULT_VISIBLE_MISSION_LIMIT = 3;
 
 function collectEditableWaypoints(mission = {}) {
   if (Array.isArray(mission.waypoints) && mission.waypoints.length) {
@@ -234,7 +233,7 @@ export class MapWidget {
       onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
       onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
     });
-    this._colorPicker = new MissionColorPicker(this._listEl);
+    this._colorPicker = new MissionColorPicker(this._shellEl, { scrollEl: this._listEl });
     this._overflowMenu = new MissionListOverflowMenu(this._listEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
@@ -467,7 +466,7 @@ export class MapWidget {
         // The confirm banner must keep polling even mid-edit so an armed run's
         // window is never hidden; the overlay refresh still defers to edits.
         this._pollExecutionState().catch(() => {});
-        if (!editState.revisionId) {
+        if (!editState.revisionId && !this._colorPicker?.isOpen()) {
           this.refresh().catch(() => {});
         }
       }
@@ -600,9 +599,8 @@ export class MapWidget {
     // Refresh so _syncVisibilityState auto-promotes the new mission to Active+Visible.
     this._overlayCacheByMissionId.clear();
     await this.refresh();
-    // Enter edit mode immediately so the user can click to place waypoints.
+    await this._ensureMissionHasColor(missionId);
     await this._onEditRequested(missionId);
-    editState.setEditMode('add');
   }
 
   // --- Mission CRUD ---
@@ -697,6 +695,11 @@ export class MapWidget {
     this._pinMissionInView(this._editingMissionId);
     editState.beginEdit(revisionToEdit);
     this.setFocus(this._editingMissionId);
+    if (editState.waypoints.length <= 1) {
+      if (editState.editMode !== 'add') editState.setEditMode('add');
+    } else {
+      this._hintToasts?.show('Press A to add waypoints · V for vertex edit', { duration: 4000 });
+    }
     this._render(); // drop edited mission from renderMany
   }
 
@@ -910,7 +913,7 @@ export class MapWidget {
     this._mapEl.classList.toggle('is-edit-mode', snapshot.editMode === 'add');
 
     this._editBanner.hidden = false;
-    const modeLabel = snapshot.editMode === 'vertex' ? ' · vertex edit' : snapshot.editMode === 'add' ? ' · add mode' : '';
+    const modeLabel = snapshot.editMode === 'vertex' ? ' · vertex edit' : snapshot.editMode === 'add' ? ' · add mode' : ' · A: add  V: vertex';
     this._editBannerText.textContent =
       `Editing — ${snapshot.status} · rev …${snapshot.revisionId.slice(-8)}${modeLabel}${snapshot.busy ? ' (saving…)' : ''}`;
 
@@ -1041,10 +1044,9 @@ export class MapWidget {
     const executingIds = this._executingMissionIds(missions);
 
     if (this._seenMissionIds === null) {
-      // First sync: default to overlaying everything (capped) and focusing one.
+      // First sync: default all missions to visible and focus the first.
       if (!this._visibleMissionOrder.length) {
-        const defaults = missions.map((m) => m.id).filter(Boolean);
-        this._visibleMissionOrder = enforceVisibilityCap(defaults, DEFAULT_VISIBLE_MISSION_LIMIT, executingIds);
+        this._visibleMissionOrder = missions.map((m) => m.id).filter(Boolean);
         this._focusedMissionId = this._visibleMissionOrder[0] || '';
       }
     } else {
@@ -1056,7 +1058,10 @@ export class MapWidget {
         for (const id of newIds) {
           if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
         }
-        this._visibleMissionOrder = enforceVisibilityCap(this._visibleMissionOrder, DEFAULT_VISIBLE_MISSION_LIMIT, [...executingIds, newest]);
+        // Ensure executing missions are always visible.
+        for (const id of executingIds) {
+          if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
+        }
         this._focusedMissionId = newest;
       }
     }
@@ -1093,7 +1098,7 @@ export class MapWidget {
     const deleteGuardedMissionIds = this._deleteGuardedMissionIds();
     const canDeleteSelection = this._selectedMissionIds.size > 0
       && [...this._selectedMissionIds].every((id) => !this._isMissionDeleteBlocked(id));
-    const paletteByMissionId = assignPaletteColor(this._visibleMissionOrder, missionColorOverrides.getAll());
+    const paletteByMissionId = assignPaletteColor(this._missions, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
     const sortedMissions = sortMissions(
@@ -1250,6 +1255,7 @@ export class MapWidget {
     });
     if (result.ok) {
       await this.refresh().catch(() => {});
+      await this._ensureMissionHasColor(result.mission_id);
     }
     return result;
   }
@@ -1416,10 +1422,6 @@ export class MapWidget {
     const wasSelected = this._selectedMissionIds.has(id);
     if (wasSelected) {
       this._selectedMissionIds.delete(id);
-      // Hide from map when deselected, unless it's the focused/active mission.
-      if (id !== this._focusedMissionId) {
-        this._visibleMissionOrder = this._visibleMissionOrder.filter((x) => x !== id);
-      }
     } else {
       this._selectedMissionIds.add(id);
       // Show on map when selected: explicit operator intent should not evict
@@ -1548,7 +1550,7 @@ export class MapWidget {
   // --- Colour picker ---
 
   _openColorPicker(missionId, anchorEl) {
-    const committedColor = this._paletteByMissionId.get(missionId) || '';
+    let committedColor = this._paletteByMissionId.get(missionId) || '';
     this._colorPicker.open(anchorEl, {
       currentColor: committedColor,
       onPreview: (previewColor) => {
@@ -1562,6 +1564,7 @@ export class MapWidget {
       onPick: (color) => {
         missionColorOverrides.set(missionId, color);
         this._render();
+        committedColor = color;
         // Persist the override server-side (fire-and-forget; local cache already
         // updated for instant feedback).
         setMissionColor(missionId, color).then((res) => {
@@ -1571,11 +1574,27 @@ export class MapWidget {
       onReset: () => {
         missionColorOverrides.clear(missionId);
         this._render();
+        committedColor = this._paletteByMissionId.get(missionId) || '';
         setMissionColor(missionId, '').then((res) => {
           if (!res.ok) console.warn('Failed to clear mission colour:', res.error);
         });
       },
     });
+  }
+
+  async _ensureMissionHasColor(missionId) {
+    const id = String(missionId || '').trim();
+    if (!id) return;
+    const existing = String(missionColorOverrides.get(id) || '').trim();
+    if (existing) return;
+    const assigned = this._paletteByMissionId?.get(id)
+      || assignPaletteColor(this._missions, missionColorOverrides.getAll()).get(id)
+      || '';
+    if (!assigned) return;
+    missionColorOverrides.set(id, assigned);
+    this._render();
+    const res = await setMissionColor(id, assigned);
+    if (!res.ok) console.warn('Failed to persist mission colour:', res.error);
   }
 
   _refreshOverlayColors() {
@@ -1668,15 +1687,18 @@ export class MapWidget {
         this._showError('Import failed: no missions found in file');
         return;
       }
-      let created = 0;
+      const createdMissionIds = [];
       for (const item of items) {
         if (!item || typeof item !== 'object') continue;
         const name = String(item.name || 'Imported mission').trim() || 'Imported mission';
         const waypoints = Array.isArray(item.waypoints) ? item.waypoints : [];
         const result = await createMission({ name, waypoints: waypoints.length ? waypoints : null });
-        if (result.ok) created++;
+        if (result.ok) createdMissionIds.push(result.mission_id);
       }
-      if (created) await this.refresh();
+      if (createdMissionIds.length) {
+        await this.refresh();
+        await Promise.all(createdMissionIds.map((missionId) => this._ensureMissionHasColor(missionId)));
+      }
     });
     input.click();
   }
@@ -1818,7 +1840,8 @@ export class MapWidget {
     basemapToggleBtn.addEventListener('click', () => this._toggleBasemap());
     this._basemapToggleBtn = basemapToggleBtn;
 
-    // Top-right overlay column: basemap toggle + view mode preset + layer toggles + fit-bounds buttons
+    // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons,
+    // with the basemap toggle kept as a separate bottom action.
     const ctrlRight = document.createElement('div');
     ctrlRight.className = 'map-ctrl-right';
 
@@ -1887,7 +1910,7 @@ export class MapWidget {
     }
     this._fitBtns = fitBtns;
 
-    ctrlRight.append(basemapToggleBtn, viewModeToolbar, layerToolbar, fitToolbar);
+    ctrlRight.append(layerToolbar, viewModeToolbar, fitToolbar, basemapToggleBtn);
 
     mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar);
     shell.append(listEl, listResizer, mapWrap);

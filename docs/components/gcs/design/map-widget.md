@@ -160,8 +160,8 @@ splitter is hidden and the shell collapses to a single-column stacked layout.
 
 Each Mission row carries:
 
-- a **status stripe** (4 px left edge) coloured by the active revision's status,
-  plus a matching **status label**
+- a **Mission colour stripe** (left edge) driven by the row's per-Mission
+  colour, plus a matching **status label** for the active revision's state
 - a **visibility control** (eye toggle) and a **selection checkbox**
 - a **colour chip** that doubles as a button — clicking it opens the per-Mission
   colour picker (see *Mission Management Affordances*)
@@ -181,7 +181,7 @@ Behavior rules:
   clicks (shift / meta / ctrl) extend the Selected set. Inner controls
   (checkbox, eye, edit, execute, delete, rename) stop propagation so they don't
   double-fire, and inline rename (dblclick) keeps working alongside row-click
-- visible overlays are capped softly to avoid clutter
+- all missions are visible by default; users toggle visibility per-mission via the eye button
 - focus applies fit-to-bounds and dims non-focused visible missions
 - numbered waypoint badges remain visible because color alone is insufficient
 - every operator- or AI-derived value interpolated into row markup is escaped
@@ -195,9 +195,14 @@ Beyond per-row editing, the list offers Mission-management UX:
 - **Per-Mission colour override** — a colour picker (swatch grid + custom hex +
   reset, with live hover-preview that re-renders the map in the candidate
   colour). Resolution order is **override (if set) → automatic palette**
-  (`assignPaletteColor`, keyed on visibility order). Overrides persist client-side
-  (localStorage, keyed by Mission id) and layer above the auto palette without
-  breaking the soft visibility cap.
+  (`assignPaletteColor`, keyed on the full Mission set, not only the visible
+  subset). Overrides persist client-side (localStorage, keyed by Mission id)
+  and layer above the auto palette.
+- **Auto-colour assignment** — Missions without an override receive a stable
+  palette colour chosen against the whole Mission set so hidden rows and newly
+  created rows do not collapse to the same visible stripe colour. Newly created,
+  imported, and basemap-drawn Missions persist that auto-picked colour
+  immediately so later refreshes and other clients see the same row colour.
 - **Sort** — a persisted (localStorage) sort preference over the list: Updated
   newest · Created newest · Status · Label A–Z · Selected first · Visible first.
 - **Overflow `⋯` menu** — a header menu hosting the sort options and **JSON
@@ -219,10 +224,21 @@ additively — it predates the current flat-Mission/`escapeHtml` rewrite):
   bulk-action bar
 - selection stays in the widget's own selection state; no separate selection
   store is reintroduced
+- the colour picker is mounted on the stable widget shell, not the rerendered
+  list subtree, so poll-driven refreshes and list rerenders do not tear down
+  the popover mid-interaction; background mission refresh is skipped while the
+  picker is open
 - the only backend additions for the parity port were `list_missions`
   surfacing `vehicle_profile_id` from the active revision plus the existing
   per-Mission provenance summary already used for the ✏️ badge; every other
   affordance above is frontend-only
+
+Top-right control stack order is:
+
+1. layer toggles (`Terrain`, `Roads`, `Objects`, `Grid`)
+2. view-mode selector (`Virtual Terrain`, `CAD / Object View`, `Heightmap`, `GPS / Satellite Debug`)
+3. fit buttons (`Scene`, `Mission`, `All`)
+4. `Basemap` as a separate bottom action beneath the main stack
 
 ## Map Rendering Rules
 
@@ -308,9 +324,21 @@ The widget supports:
 - waypoint selection and multi-selection
 - waypoint dragging
 - insert-before / insert-after behavior
-- add-waypoint mode
+- add-waypoint mode (`A` key or auto-entered)
 - delete and focus shortcuts
 - explicit help and context actions
+
+Design rules:
+
+- entering edit mode on a mission with ≤ 1 waypoints **automatically activates
+  add mode** — the user can click immediately to place the first waypoints
+  without pressing `A` first; this covers both new missions and existing
+  near-empty ones
+- entering edit mode on a mission with ≥ 2 waypoints shows a one-shot hint
+  toast ("Press A to add waypoints · V for vertex edit") and also surfaces
+  the shortcuts passively in the edit-mode banner (`· A: add  V: vertex`)
+- the hint toast auto-dismisses after 4 s; the banner shortcut label is
+  replaced by the active sub-mode name when a sub-mode is engaged
 
 The exact input affordances may evolve, but they must continue to respect the
 locking and concurrency rules above.
@@ -384,15 +412,33 @@ when the focused mission has a known origin datum. Right slot: selection detail
 (waypoint index, provenance, altitude) when a waypoint is selected; otherwise
 shows mission/scene summary. Sourced from Leaflet `mousemove` + `editState`.
 
-## Scene-Mode Manual Mission Creation (Phase 7 — planned)
+## Elevation Profile Panel
 
-The `➕ New mission` flow (requirements §Mission CRUD) must work in scene-mode
+A horizontal panel below the map area shows the terrain-vs-altitude profile for
+the focused or actively-edited mission.
+
+Design rules:
+
+- the panel is **always visible** — shows a placeholder message when no mission
+  is focused or when < 2 waypoints exist; this keeps the layout stable and
+  prevents disruptive shifts while the user is placing waypoints
+- during active edit the panel tracks `editState.waypoints` live; when no edit
+  is active it tracks the focused mission's overlay cache
+- below-terrain and low-clearance thresholds are vehicle-kind-sensitive
+  (`multirotor: 3 m`, `fixed_wing: 5 m`)
+- the panel can be collapsed via a toggle button and supports click-to-highlight
+  on the map
+
+## Scene-Mode Manual Mission Creation
+
+The `➕ New mission` flow (requirements §Mission CRUD) works in scene-mode
 (CRS.Simple), not only via the basemap draw tools.
 
 Design rules:
-- `➕ New mission` creates a blank Mission via backend, promotes it to Active, and
-  enters `editState.editMode = 'add'` — the existing `map click → insertWaypoint`
-  path already handles placement once `add` mode is active
+- `➕ New mission` creates a blank Mission via backend, promotes it to Active,
+  and add mode is entered automatically (new mission has 0 waypoints, so the
+  ≤1-waypoint auto-add rule fires) — the existing `map click → insertWaypoint`
+  path handles placement
 - this is distinct from the Basemap Corridor/Survey tools: those generate a whole
   pattern server-side from drawn WGS84 geometry; scene-mode add is click-to-place
   individual waypoints in local metres

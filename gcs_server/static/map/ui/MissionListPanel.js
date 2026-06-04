@@ -1,10 +1,8 @@
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
-// edit + execute resolve to the Mission's active revision and are gated by its
-// status. executing → locked (no edit/execute); exported|cutover_pending →
-// executable. approve/reject are removed — play button gates execution.
+// edit resolves to the Mission's active revision and remains status-gated;
+// execute is available for any idle row with an active revision. executing →
+// locked (no edit/execute). approve/reject are removed — play gates execution.
 const MISSION_ROW_EDITABLE = new Set(['proposed', 'planning', 'exported', 'cutover_pending']);
-const MISSION_ROW_EXECUTABLE = new Set(['exported', 'cutover_pending']);
-
 const VEHICLE_ICON = { ground: '🚗', multirotor: '🚁', fixed_wing: '✈️' };
 
 // Maps activeRevisionStatus → CSS class applied to the row div for status stripe colouring.
@@ -54,8 +52,8 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-// Five fixed button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
-// Inactive slots use visibility:hidden so row width stays constant.
+// Up to five button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
+// Edit/play/stop render only when applicable; delete and eye are always present.
 // sessionStatus is the in-memory executor state injected by GET /api/ai/missions.
 function missionRowActionButtons(missionRow, isEditing, {
   deleteGuarded = false,
@@ -64,6 +62,7 @@ function missionRowActionButtons(missionRow, isEditing, {
 } = {}) {
   const status = String(missionRow.activeRevisionStatus || '');
   const sessionStatus = String(missionRow.sessionStatus || '');
+  const hasActiveRevision = Boolean(String(missionRow.activeRevisionId || '').trim());
   const safeId = escapeHtml(missionRow.id);
   const safeName = escapeHtml(missionRow.name);
 
@@ -87,9 +86,7 @@ function missionRowActionButtons(missionRow, isEditing, {
       <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
     </button>`;
   } else {
-    editSlot = `<button class="mission-row-action-btn is-edit" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>
-      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-    </button>`;
+    editSlot = '';
   }
 
   // Slot 2 — play ▶ or pause ⏸
@@ -98,7 +95,7 @@ function missionRowActionButtons(missionRow, isEditing, {
     playPauseSlot = `<button class="mission-row-action-btn is-pause" type="button"
       data-pause-mission-id="${safeId}"
       title="Pause mission" aria-label="Pause mission ${safeName}">⏸</button>`;
-  } else if (isSessionPaused || MISSION_ROW_EXECUTABLE.has(status)) {
+  } else if (isSessionPaused || (hasActiveRevision && !isActive)) {
     const isResume = isSessionPaused;
     const attr = isResume ? `data-resume-mission-id="${safeId}"` : `data-execute-mission-id="${safeId}"`;
     const title = isResume ? 'Resume mission' : 'Execute mission';
@@ -106,15 +103,15 @@ function missionRowActionButtons(missionRow, isEditing, {
       ${attr}
       title="${title}" aria-label="${title} ${safeName}">▶</button>`;
   } else {
-    playPauseSlot = `<button class="mission-row-action-btn is-execute" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>▶</button>`;
+    playPauseSlot = '';
   }
 
-  // Slot 3 — stop ⏹
+  // Slot 3 — stop ⏹ (only shown when a session is active)
   const stopSlot = (isSessionRunning || isSessionPaused)
     ? `<button class="mission-row-action-btn is-stop" type="button"
         data-stop-mission-id="${safeId}"
         title="Stop mission" aria-label="Stop mission ${safeName}">⏹</button>`
-    : `<button class="mission-row-action-btn is-stop" type="button" style="visibility:hidden" aria-hidden="true" tabindex="-1" disabled>⏹</button>`;
+    : '';
 
   // Slot 4 — delete 🗑
   const deleteDisabled = deleteGuarded || isActive;

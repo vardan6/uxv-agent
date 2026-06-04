@@ -446,6 +446,17 @@ def _migration_017_reconcile_missions_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE missions_pre17")
 
 
+def _migration_019_normalize_awaiting_approval_status(conn: sqlite3.Connection) -> None:
+    # Phase A removed awaiting_approval from all active status sets and the
+    # approve_revision() call path, but existing DB rows may still carry it.
+    # Promote those revisions to 'exported' (the closest equivalent — the
+    # revision was ready to run, just pending a gate that no longer exists).
+    if _table_exists(conn, "ai_mission_revisions"):
+        conn.execute(
+            "UPDATE ai_mission_revisions SET status = 'exported' WHERE status = 'awaiting_approval'"
+        )
+
+
 def _migration_018_add_mission_color(conn: sqlite3.Connection) -> None:
     # Per-Mission colour override, persisted server-side so a user's colour
     # choice survives reloads and is shared across clients. Empty string means
@@ -469,6 +480,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (11, "restore_mission_execution_tables", _migration_011_restore_mission_execution_tables),
     (17, "reconcile_missions_schema", _migration_017_reconcile_missions_schema),
     (18, "add_mission_color", _migration_018_add_mission_color),
+    (19, "normalize_awaiting_approval_status", _migration_019_normalize_awaiting_approval_status),
 )
 
 
