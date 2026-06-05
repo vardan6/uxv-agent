@@ -2,24 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-try:
-    from gcs_server.ai.controller_mission_adapter import (
-        ControllerMissionAdapter,
-        ControllerMissionAdapterError,
-        FileSinkControllerMissionAdapter,
-        JsonFileControllerMissionAdapter,
-        MavlinkControllerMissionAdapter,
-        MavsdkControllerMissionAdapter,
-    )
-except ModuleNotFoundError:
-    from ai.controller_mission_adapter import (
-        ControllerMissionAdapter,
-        ControllerMissionAdapterError,
-        FileSinkControllerMissionAdapter,
-        JsonFileControllerMissionAdapter,
-        MavlinkControllerMissionAdapter,
-        MavsdkControllerMissionAdapter,
-    )
+from gcs_server.ai.controller_mission_adapter import (
+    ControllerMissionAdapter,
+    ControllerMissionAdapterError,
+    FileSinkControllerMissionAdapter,
+    JsonFileControllerMissionAdapter,
+    MavlinkControllerMissionAdapter,
+    MavsdkControllerMissionAdapter,
+)
 
 
 def build_controller_mission_adapter(

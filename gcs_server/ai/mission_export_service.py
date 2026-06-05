@@ -15,12 +15,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-try:
-    from gcs_server.ai.coordinate_frame import load_scene_origin, local_to_wgs84
-    from gcs_server.ai.vehicle_profile import VehicleProfile, get_active_profile
-except ModuleNotFoundError:
-    from ai.coordinate_frame import load_scene_origin, local_to_wgs84
-    from ai.vehicle_profile import VehicleProfile, get_active_profile
+from gcs_server.ai.coordinate_frame import load_scene_origin, local_to_wgs84
+from gcs_server.ai.vehicle_profile import VehicleProfile, get_active_profile
 
 _MISSIONS_DIR = Path(__file__).resolve().parents[1] / "data" / "missions"
 

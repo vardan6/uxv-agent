@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 import uvicorn
 
-try:
-    from gcs_server.config import load_config
-except ModuleNotFoundError:
-    from config import load_config
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+del _os, _sys
+
+from gcs_server.config import load_config
 
 
 if __name__ == "__main__":

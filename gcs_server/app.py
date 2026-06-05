@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime
 import json
 import os
+import sys
 import re
 import threading
 import uuid
@@ -32,56 +33,32 @@ warnings.filterwarnings(
     category=LangChainPendingDeprecationWarning,
 )
 
-try:
-    from gcs_server.ai.context_service import AIContextService
-    from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
-    from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
-    from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-    from gcs_server.ai.agent_traces import AgentTraceStore
-    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
-    from gcs_server.ai.intent_service import IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
-    from gcs_server.ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
-    from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
-    from gcs_server.config import load_config, save_config
-    from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
-    from gcs_server.scene_map import get_scene_map_payload
-except ModuleNotFoundError:
-    from ai.context_service import AIContextService
-    from ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
-    from ai.data_access import build_data_access_manifest
-    from ai.controller_mission_adapter_factory import build_controller_mission_adapter
-    from ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-    from ai.agent_traces import AgentTraceStore
-    from ai.graph_runtime import PlanningShellGraphRuntime
-    from ai.intent_service import IntentService
-    from ai.mission_draft_service import MissionDraftService, validate_draft_payload
-    from ai.mission_export_service import MissionExportService
-    from ai.provider_registry import evict_model_cache, resolve_intent_provider
-    from ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
-    from ai.session_store import normalize_source_controls
-    from ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
-    from ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
-    from config import load_config, save_config
-    from runtime import AppRuntime, GCS_DIR, build_runtime
-    from scene_map import get_scene_map_payload
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gcs_server.ai.context_service import AIContextService
+from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
+from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
+from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
+from gcs_server.ai.agent_traces import AgentTraceStore
+from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
+from gcs_server.ai.intent_service import IntentService
+from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai.provider_registry import evict_model_cache, resolve_intent_provider
+from gcs_server.ai.retrieval import (
+    build_loaded_data_refs,
+    build_retrieval_citations,
+    build_retrieved_sources,
+    normalize_retrieval_request,
+)
+from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.planning_shell_graph import resume_planning_shell_graph, stream_planning_shell_graph
+from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
+from gcs_server.config import load_config, save_config
+from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
+from gcs_server.scene_map import get_scene_map_payload
 
 # Phase 2: LangGraph checkpointer for interrupt/resume approval
 try:

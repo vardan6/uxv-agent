@@ -44,38 +44,21 @@ try:
 except ImportError:
     _INTERRUPT_AVAILABLE = False
 
-try:
-    from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
-    from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
-    from gcs_server.ai.graph_state import PlanningShellGraphState
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai.mission_draft_service import validate_draft_payload
-    from gcs_server.ai.provider_registry import resolve_provider
-    from gcs_server.ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
-except ModuleNotFoundError:
-    from ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
-    from ai.data_access import build_data_access_manifest
-    from ai.graph_runtime import PlanningShellGraphRuntime
-    from ai.graph_state import PlanningShellGraphState
-    from ai.mission_export_service import MissionExportService
-    from ai.mission_draft_service import validate_draft_payload
-    from ai.provider_registry import resolve_provider
-    from ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from ai.session_store import normalize_source_controls
-    from ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
+from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
+from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
+from gcs_server.ai.graph_state import PlanningShellGraphState
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai.mission_draft_service import validate_draft_payload
+from gcs_server.ai.provider_registry import resolve_provider
+from gcs_server.ai.retrieval import (
+    build_loaded_data_refs,
+    build_retrieval_citations,
+    build_retrieved_sources,
+    normalize_retrieval_request,
+)
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────

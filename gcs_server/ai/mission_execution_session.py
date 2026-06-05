@@ -23,20 +23,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-try:
-    from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
-    from gcs_server.ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
-    from gcs_server.ai.mission_executor import MissionExecutor, NodeStatus
-    from gcs_server.ai.mission_leaf_driver import make_controller_leaf_driver
-    from gcs_server.ai.mission_safety import parse_geofence
-    from gcs_server.ai.mission_tree import Node, parse_mission_content
-except ModuleNotFoundError:
-    from ai.controller_mission_adapter import ControllerMissionAdapter
-    from ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
-    from ai.mission_executor import MissionExecutor, NodeStatus
-    from ai.mission_leaf_driver import make_controller_leaf_driver
-    from ai.mission_safety import parse_geofence
-    from ai.mission_tree import Node, parse_mission_content
+from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
+from gcs_server.ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
+from gcs_server.ai.mission_executor import MissionExecutor, NodeStatus
+from gcs_server.ai.mission_leaf_driver import make_controller_leaf_driver
+from gcs_server.ai.mission_safety import parse_geofence
+from gcs_server.ai.mission_tree import Node, parse_mission_content
 
 
 def build_mission_executor(

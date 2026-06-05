@@ -8,36 +8,20 @@ from typing import Any, Callable
 import json
 import re as _re
 
-try:
-    from gcs_server.ai.context_service import AIContextService
-    from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.intent_service import IntentService as _IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService
-    from gcs_server.ai.mission_execution_session import build_mission_executor
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai import mission_patterns
-    from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
-    from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
-    from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
-    from gcs_server.ai.road_graph_service import RoadGraphService
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.spatial_query_service import SpatialQueryService
-    from gcs_server.ai.vehicle_profile import get_active_profile
-except ModuleNotFoundError:
-    from ai.context_service import AIContextService
-    from ai.data_access import build_data_access_manifest
-    from ai.intent_service import IntentService as _IntentService
-    from ai.mission_draft_service import MissionDraftService
-    from ai.mission_execution_session import build_mission_executor
-    from ai.mission_export_service import MissionExportService
-    from ai import mission_patterns
-    from ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
-    from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
-    from ai.provider_registry import resolve_provider as _resolve_provider
-    from ai.road_graph_service import RoadGraphService
-    from ai.session_store import normalize_source_controls
-    from ai.spatial_query_service import SpatialQueryService
-    from ai.vehicle_profile import get_active_profile
+from gcs_server.ai.context_service import AIContextService
+from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.intent_service import IntentService as _IntentService
+from gcs_server.ai.mission_draft_service import MissionDraftService
+from gcs_server.ai.mission_execution_session import build_mission_executor
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai import mission_patterns
+from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
+from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
+from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
+from gcs_server.ai.road_graph_service import RoadGraphService
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.spatial_query_service import SpatialQueryService
+from gcs_server.ai.vehicle_profile import get_active_profile
 
 
 READ_ONLY = "read_only"
@@ -1580,12 +1564,8 @@ class ToolRegistry:
         if clean_type not in _valid:
             return {"ok": False, "error": f"unsupported adapter_type '{clean_type}'; must be one of {sorted(_valid)} or 'default'"}
         try:
-            try:
-                from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
-                from gcs_server.runtime import GCS_DIR
-            except ModuleNotFoundError:
-                from ai.controller_mission_adapter_factory import build_controller_mission_adapter
-                from runtime import GCS_DIR
+            from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
+            from gcs_server.runtime import GCS_DIR
         except Exception as exc:
             return {"ok": False, "error": f"could not import adapter factory: {exc}"}
         config = getattr(context.runtime, "config", None)
@@ -1634,10 +1614,7 @@ class ToolRegistry:
 def _resolve_confirm_timeout_s(runtime: Any) -> int:
     """Confirm-banner timeout from the persisted mission_lifecycle setting,
     clamped to [3, 60] s (ADR 0021 §6); falls back to the default when unset."""
-    try:
-        from gcs_server.ai.execution_mode import normalize_confirm_timeout
-    except ModuleNotFoundError:
-        from ai.execution_mode import normalize_confirm_timeout
+    from gcs_server.ai.execution_mode import normalize_confirm_timeout
     section: Any = None
     try:
         section = runtime.config.mission_lifecycle

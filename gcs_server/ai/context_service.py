@@ -8,16 +8,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    from gcs_server.scene_map import get_scene_map_payload
-    from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.spatial_query_service import SpatialQueryService
-except ModuleNotFoundError:
-    from scene_map import get_scene_map_payload
-    from ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-    from ai.session_store import normalize_source_controls
-    from ai.spatial_query_service import SpatialQueryService
+from gcs_server.scene_map import get_scene_map_payload
+from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.spatial_query_service import SpatialQueryService
 
 
 @dataclass(frozen=True, slots=True)

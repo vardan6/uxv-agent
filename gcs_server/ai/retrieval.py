@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    from gcs_server.ai.session_store import normalize_source_controls
-except ModuleNotFoundError:
-    from ai.session_store import normalize_source_controls
+from gcs_server.ai.session_store import normalize_source_controls
 
 
 def normalize_retrieval_request(
