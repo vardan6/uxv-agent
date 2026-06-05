@@ -25,9 +25,12 @@ Constraints:
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 try:
     from langchain_core.runnables import RunnableConfig
@@ -1115,7 +1118,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
                 meta=meta,
             )
         except Exception:
-            pass
+            logger.warning("finalize_response: failed to persist assistant message for session %s", session_id, exc_info=True)
 
     return {
         "node_trace": [_node_entry(
@@ -1150,7 +1153,7 @@ def finalize_error(state: PlanningShellGraphState, config: RunnableConfig) -> di
                 },
             )
         except Exception:
-            pass
+            logger.warning("finalize_error: failed to persist error message for session %s", session_id, exc_info=True)
 
     return {
         "node_trace": [_node_entry("finalize_error", message=message)],
@@ -1427,7 +1430,7 @@ async def prepare_clarification(state: PlanningShellGraphState, config: Runnable
             if full_ctx.get("scene"):
                 refreshed_scene = full_ctx["scene"]
         except Exception:
-            pass
+            logger.debug("prepare_clarification: context refresh failed, using stale state", exc_info=True)
 
         return {
             "clarification_request": clarification_payload,

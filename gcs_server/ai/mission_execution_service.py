@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from .controller_mission_adapter import (
     ControllerMissionAdapter,
@@ -53,6 +56,7 @@ def _load_json_file(path: str) -> Any:
     try:
         return json.loads(Path(path).read_text())
     except Exception:
+        logger.warning("_load_json_file: failed to read %s", path, exc_info=True)
         return {}
 
 
