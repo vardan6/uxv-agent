@@ -27,3 +27,5 @@ Architecture Decision Records. Numbering is monotonic and never reused. Supersed
 | [0021](./0021-mission-lifecycle.md) | Mission Lifecycle: Configurable Execution Modes, Flat Mission Model, And Chat-Driven Operations |
 | [0022](./0022-gps-master-coordinate-frame.md) | GPS-Master Coordinate Frame: WGS84 Is The Stored Truth, Local Metres Is Derived, Origin Per Mission |
 | [0023](./0023-behavior-tree-missions-relocatable-executor.md) | Behavior-Tree Missions With A Relocatable Server-Side Executor; FC Upload Is The Navigation-Leaf Layer |
+| [0024](./0024-mission-pause-stop-mechanism.md) | Mission Pause/Stop: Mode Switch Over MAV_CMD_DO_PAUSE_CONTINUE |
+| [0025](./0025-operational-constraints-schema-and-scope.md) | Operational Constraints (Allowed Corridors & Blockages): Schema, Scope, And Lifecycle *(Proposed)* |
