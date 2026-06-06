@@ -1,10 +1,8 @@
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
-// edit + execute resolve to the Mission's active revision and are gated by its
-// status. executing → locked (no edit/execute); exported|cutover_pending →
-// executable. approve/reject are removed — play button gates execution.
+// edit resolves to the Mission's active revision and remains status-gated;
+// execute is available for any idle row with an active revision. executing →
+// locked (no edit/execute). approve/reject are removed — play gates execution.
 const MISSION_ROW_EDITABLE = new Set(['proposed', 'planning', 'exported', 'cutover_pending']);
-const MISSION_ROW_EXECUTABLE = new Set(['exported', 'cutover_pending']);
-
 const VEHICLE_ICON = { ground: '🚗', multirotor: '🚁', fixed_wing: '✈️' };
 
 // Maps activeRevisionStatus → CSS class applied to the row div for status stripe colouring.
@@ -35,9 +33,35 @@ function statusLabel(status) {
 function formatDate(ts) {
   if (!ts) return '';
   return new Date(ts * 1000).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric',
+    month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
   });
+}
+
+function formatWaypointCount(count) {
+  const total = Math.max(0, Number(count || 0));
+  return `${total} pt${total === 1 ? '' : 's'}`;
+}
+
+function batchActionIcon(action) {
+  if (action === 'show-all') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3.2"/></svg>';
+  }
+  if (action === 'hide-all') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 3 18 18"/><path d="M10.6 6.2A11.6 11.6 0 0 1 12 6c6.2 0 10 6 10 6a17.3 17.3 0 0 1-4.1 4.5"/><path d="M6.2 8.3A17.5 17.5 0 0 0 2 12s3.8 6 10 6c1.7 0 3.3-.4 4.7-1.1"/><path d="M9.9 9.9A3 3 0 0 0 12 15c.5 0 1-.1 1.4-.3"/></svg>';
+  }
+  return '';
+}
+
+function batchActionButton({ action, label, title, disabled = false }) {
+  return `<button
+    class="mission-batch-icon-btn"
+    type="button"
+    data-batch-action="${escapeHtml(action)}"
+    aria-label="${escapeHtml(label)}"
+    title="${escapeHtml(title)}"
+    ${disabled ? 'disabled' : ''}
+  >${batchActionIcon(action)}</button>`;
 }
 
 // Escape untrusted values before interpolating into the row HTML string. Mission
@@ -54,60 +78,92 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function missionRowActionButtons(missionRow, isEditing, { deleteGuarded = false } = {}) {
-  const activeRevisionId = String(missionRow.activeRevisionId || '');
+// Up to five button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
+// Edit/play/stop render only when applicable; delete and eye are always present.
+// sessionStatus is the in-memory executor state injected by GET /api/ai/missions.
+function missionRowUtilityActions(missionRow, isEditing, {
+  deleteGuarded = false,
+  isExecuting = false,
+} = {}) {
   const status = String(missionRow.activeRevisionStatus || '');
+  const sessionStatus = String(missionRow.sessionStatus || '');
+  const hasActiveRevision = Boolean(String(missionRow.activeRevisionId || '').trim());
   const safeId = escapeHtml(missionRow.id);
   const safeName = escapeHtml(missionRow.name);
-  const deleteTitle = deleteGuarded
-    ? 'Delete disabled while mission is armed or awaiting confirmation'
-    : 'Delete mission';
-  const deleteAriaLabel = deleteGuarded
-    ? `Delete disabled for mission ${safeName} while mission is armed or awaiting confirmation`
-    : `Delete mission ${safeName}`;
-  const deleteDisabledAttr = deleteGuarded ? ' disabled aria-disabled="true"' : '';
-  if (!activeRevisionId) {
-    return `<button class="mission-row-action-btn is-delete" type="button"
-      data-delete-mission-id="${safeId}"
-      title="${deleteTitle}"
-      aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`;
+
+  const isSessionRunning = sessionStatus === 'running';
+  const isSessionPaused = sessionStatus === 'paused';
+  const isActive = isSessionRunning || isSessionPaused || isExecuting;
+
+  // Slot 1 — edit ✏️
+  const canEdit = MISSION_ROW_EDITABLE.has(status) && !isActive;
+  let editSlot;
+  if (canEdit && isEditing) {
+    editSlot = `<button class="mission-row-action-btn is-done" type="button"
+      data-done-edit-mission-id="${safeId}"
+      title="Finish editing" aria-label="Finish editing">
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
+    </button>`;
+  } else if (canEdit) {
+    editSlot = `<button class="mission-row-action-btn is-edit" type="button"
+      data-edit-mission-id="${safeId}"
+      title="Edit waypoints" aria-label="Edit waypoints for mission ${safeName}">
+      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+    </button>`;
+  } else {
+    editSlot = '';
   }
-  if (status === 'executing') {
-    return `<span class="mission-row-lock" aria-label="Mission is executing" title="Mission is executing — editing locked">🔒</span>`;
+
+  // Slot 2 — play ▶ or pause ⏸
+  let playPauseSlot;
+  if (isSessionRunning) {
+    playPauseSlot = `<button class="mission-row-action-btn is-pause" type="button"
+      data-pause-mission-id="${safeId}"
+      title="Pause mission" aria-label="Pause mission ${safeName}">⏸</button>`;
+  } else if (isSessionPaused || (hasActiveRevision && !isActive)) {
+    const isResume = isSessionPaused;
+    const attr = isResume ? `data-resume-mission-id="${safeId}"` : `data-execute-mission-id="${safeId}"`;
+    const title = isResume ? 'Resume mission' : 'Execute mission';
+    playPauseSlot = `<button class="mission-row-action-btn is-execute" type="button"
+      ${attr}
+      title="${title}" aria-label="${title} ${safeName}">▶</button>`;
+  } else {
+    playPauseSlot = '';
   }
-  const parts = [];
-  if (MISSION_ROW_EDITABLE.has(status)) {
-    if (isEditing) {
-      parts.push(`<button class="mission-row-action-btn is-done" type="button"
-        data-done-edit-mission-id="${safeId}"
-        title="Finish editing"
-        aria-label="Finish editing">
-        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
-      </button>`);
-    } else {
-      parts.push(`<button class="mission-row-action-btn is-edit" type="button"
-        data-edit-mission-id="${safeId}"
-        title="Edit waypoints"
-        aria-label="Edit waypoints">
-        <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-      </button>`);
-    }
-  }
-  if (MISSION_ROW_EXECUTABLE.has(status)) {
-    // Legacy linear-plan upload (ADR 0023): pushes the active revision's
-    // waypoints to the controller as a .plan and starts it. This is NOT the
-    // behavior-tree session executor — lifecycle BT runs are AI-tool/banner
-    // driven (arm_execution/execute_mission + /api/ai/execution/*).
-    parts.push(`<button class="mission-row-action-btn is-execute" type="button"
-      data-execute-mission-id="${safeId}"
-      title="Upload linear plan to controller (legacy direct upload — not behavior-tree execution)"
-      aria-label="Upload linear plan to controller">▶</button>`);
-  }
-  parts.push(`<button class="mission-row-action-btn is-delete" type="button"
+
+  // Slot 3 — stop ⏹ (only shown when a session is active)
+  const stopSlot = (isSessionRunning || isSessionPaused)
+    ? `<button class="mission-row-action-btn is-stop" type="button"
+        data-stop-mission-id="${safeId}"
+        title="Stop mission" aria-label="Stop mission ${safeName}">⏹</button>`
+    : '';
+
+  // Slot 4 — delete 🗑
+  const deleteDisabled = deleteGuarded || isActive;
+  const deleteTitle = deleteDisabled ? 'Delete disabled while mission is active' : 'Delete mission';
+  const deleteAttr = deleteDisabled ? ' disabled aria-disabled="true"' : '';
+  const deleteSlot = `<button class="mission-row-action-btn is-delete" type="button"
     data-delete-mission-id="${safeId}"
-    title="${deleteTitle}"
-    aria-label="${deleteAriaLabel}"${deleteDisabledAttr}>🗑</button>`);
-  return parts.join('');
+    title="${deleteTitle}" aria-label="Delete mission ${safeName}"${deleteAttr}>🗑</button>`;
+
+  return editSlot + playPauseSlot + stopSlot + deleteSlot;
+}
+
+function missionRowVisibilityButton(missionId, missionName, { isVisible = false, isExecuting = false } = {}) {
+  const safeId = escapeHtml(missionId);
+  const safeName = escapeHtml(missionName);
+  return `<button
+    class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
+    type="button"
+    data-toggle-mission-id="${safeId}"
+    aria-label="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+    title="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
+    aria-disabled="${isExecuting ? 'true' : 'false'}"
+    ${isExecuting ? 'disabled' : ''}
+  >${isVisible
+    ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
+    : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
+  }</button>`;
 }
 
 // Pure markup for one flat-Mission row (ADR 0021 §2: one row = one Mission).
@@ -144,7 +200,8 @@ export function missionRowMarkup(missionRow, ctx = {}) {
   );
   const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
   const deleteGuarded = deleteGuardedMissionIds.has(id);
-  const metaParts = [escapeHtml(indexLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
+  const waypointLabel = formatWaypointCount(missionRow.waypointCount);
+  const metaParts = [escapeHtml(indexLabel), escapeHtml(waypointLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
   const safeName = escapeHtml(missionRow.name);
   return `
@@ -176,19 +233,10 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         </span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowActionButtons(missionRow, isEditing, { deleteGuarded })}
-        <button
-          class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
-          type="button"
-          data-toggle-mission-id="${safeId}"
-          aria-label="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
-          title="${isExecuting ? 'Mission overlay locked while executing' : (isVisible ? 'Hide mission overlay' : 'Show mission overlay')}"
-          aria-disabled="${isExecuting ? 'true' : 'false'}"
-          ${isExecuting ? 'disabled' : ''}
-        >${isVisible
-          ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
-          : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
-        }</button>
+        ${missionRowUtilityActions(missionRow, isEditing, { deleteGuarded, isExecuting })}
+      </span>
+      <span class="mission-row-visibility">
+        ${missionRowVisibilityButton(id, missionRow.name, { isVisible, isExecuting })}
       </span>
     </div>
   `;
@@ -203,16 +251,18 @@ export class MissionListPanel {
     this._onMissionVisibilityToggled = opts.onMissionVisibilityToggled || (() => {});
     this._onMissionEditRequested = opts.onMissionEditRequested || (() => {});
     this._onMissionExecuteRequested = opts.onMissionExecuteRequested || (() => {});
+    this._onMissionPauseRequested = opts.onMissionPauseRequested || (() => {});
+    this._onMissionResumeRequested = opts.onMissionResumeRequested || (() => {});
+    this._onMissionStopRequested = opts.onMissionStopRequested || (() => {});
     this._onMissionDeleteRequested = opts.onMissionDeleteRequested || (() => {});
     this._onMissionRenameRequested = opts.onMissionRenameRequested || (() => {});
     // Selected state (ADR 0021 §4): batch-operation target set, driven by the
     // per-row checkbox (shift-click extends a range). Distinct from Visible/Active.
     this._onNewMissionRequested = opts.onNewMissionRequested || (() => {});
     this._onMissionSelectionToggled = opts.onMissionSelectionToggled || (() => {});
-    this._onSelectedShowRequested = opts.onSelectedShowRequested || (() => {});
-    this._onSelectedHideRequested = opts.onSelectedHideRequested || (() => {});
+    this._onAllVisibilityToggled = opts.onAllVisibilityToggled || (() => {});
+    this._onAllSelectionToggled = opts.onAllSelectionToggled || (() => {});
     this._onSelectionCleared = opts.onSelectionCleared || (() => {});
-    this._onSelectedDeleteRequested = opts.onSelectedDeleteRequested || (() => {});
     this._onMissionDoneEditRequested = opts.onMissionDoneEditRequested || (() => {});
     this._onColorChipClicked = opts.onColorChipClicked || (() => {});
     this._onOverflowClicked = opts.onOverflowClicked || (() => {});
@@ -228,20 +278,47 @@ export class MissionListPanel {
     profilesById = {},
     activeProfileId = '',
     deleteGuardedMissionIds = new Set(),
-    canDeleteSelection = false,
+    sortLabel = '',
   } = {}) {
     const hasSelection = selectedMissionIds.size > 0;
-    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
-          <span class="mission-batch-count">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
-          <button class="mission-batch-btn" type="button" data-batch-action="show"${hasSelection ? '' : ' disabled'}>Show</button>
-          <button class="mission-batch-btn" type="button" data-batch-action="hide"${hasSelection ? '' : ' disabled'}>Hide</button>
-          <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear"${hasSelection ? '' : ' disabled'}>Clear</button>
-          <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete"${canDeleteSelection ? '' : ' disabled'} title="${hasSelection && !canDeleteSelection ? 'Delete disabled while selection includes an armed or executing mission' : 'Delete selected missions'}">Delete</button>
+    const allVisible = missions.length > 0 && missions.every((missionRow) => visibleMissionIds.has(String(missionRow.id || '')));
+    const hideableVisible = missions.some((missionRow) => (
+      visibleMissionIds.has(String(missionRow.id || ''))
+      && String(missionRow.activeRevisionStatus || '') !== 'executing'
+    ));
+    const allSelected = missions.length > 0 && missions.every((missionRow) => selectedMissionIds.has(String(missionRow.id || '')));
+    const someSelected = selectedMissionIds.size > 0 && !allSelected;
+    const visibilityAction = allVisible ? 'hide-all' : 'show-all';
+    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Mission visibility and selection controls">
+          <span class="mission-batch-stripe" aria-hidden="true"></span>
+          <label class="mission-batch-select" title="${allSelected ? 'Unselect all missions' : 'Select all missions'}">
+            <input
+              type="checkbox"
+              class="mission-batch-select-box"
+              data-batch-toggle-select-all
+              ${allSelected ? 'checked' : ''}
+              ${missions.length ? '' : 'disabled'}
+              aria-label="${allSelected ? 'Unselect all missions' : 'Select all missions'}"
+            />
+          </label>
+          <span class="mission-batch-count" aria-live="polite">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
+          <span class="mission-batch-actions" aria-hidden="true"></span>
+          <span class="mission-batch-visibility">
+            ${batchActionButton({
+              action: visibilityAction,
+              label: allVisible ? 'Hide all missions' : 'Show all missions',
+              title: allVisible
+                ? (hideableVisible ? 'Hide all mission overlays except executing missions' : 'No hideable mission overlays are visible')
+                : 'Make all mission overlays visible',
+              disabled: missions.length === 0 || (allVisible && !hideableVisible),
+            })}
+          </span>
         </div>`;
+    const safeSortLabel = escapeHtml(sortLabel);
     const header = `<div class="mission-list-header">
             <div class="mission-list-header-copy">
-              <p class="section-kicker">Missions</p>
-              <h2 class="mission-list-header-title">Routes</h2>
+              <h2 class="mission-list-header-title">Missions</h2>
+              ${safeSortLabel ? `<p class="mission-list-sort-label" title="Active sort order">⇅ ${safeSortLabel}</p>` : ''}
             </div>
             <div class="mission-list-header-actions">
               <button class="mission-list-new-btn" type="button" data-new-mission
@@ -249,8 +326,8 @@ export class MissionListPanel {
                 aria-label="New mission">+ New</button>
               <a class="mission-list-settings-link" href="/settings?tab=mission-lifecycle"
                 title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
-              <button class="mission-list-overflow-btn" type="button" data-overflow-menu
-                title="Mission list options" aria-label="Mission list options">⋯</button>
+              <button class="mission-list-overflow-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
+                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">⋯</button>
             </div>
           </div>`;
     const missionRows = missions.length
@@ -275,6 +352,10 @@ export class MissionListPanel {
     const body = batchBar + missionRows;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
     this._bindMissions();
+    const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
+    if (selectAllBox) {
+      selectAllBox.indeterminate = someSelected;
+    }
   }
 
   _bindMissions() {
@@ -347,6 +428,27 @@ export class MissionListPanel {
         this._onMissionExecuteRequested(button.dataset.executeMissionId || '');
       });
     });
+    this._container.querySelectorAll('[data-pause-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionPauseRequested(button.dataset.pauseMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-resume-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionResumeRequested(button.dataset.resumeMissionId || '');
+      });
+    });
+    this._container.querySelectorAll('[data-stop-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onMissionStopRequested(button.dataset.stopMissionId || '');
+      });
+    });
     // Selection checkboxes: click carries shiftKey for range extension. Bind on
     // click (not change) so the modifier key is available; preventDefault keeps
     // the checkbox visual in sync with the authoritative Selected set on re-render.
@@ -362,12 +464,17 @@ export class MissionListPanel {
         event.preventDefault();
         event.stopPropagation();
         const action = button.dataset.batchAction;
-        if (action === 'show') this._onSelectedShowRequested();
-        else if (action === 'hide') this._onSelectedHideRequested();
-        else if (action === 'clear') this._onSelectionCleared();
-        else if (action === 'delete') this._onSelectedDeleteRequested();
+        this._onAllVisibilityToggled(action === 'show-all');
       });
     });
+    const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
+    if (selectAllBox) {
+      selectAllBox.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onAllSelectionToggled(selectAllBox.checked || selectAllBox.indeterminate);
+      });
+    }
     this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.preventDefault();

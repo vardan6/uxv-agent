@@ -147,7 +147,8 @@ Key frontend modules under `static/map/`:
 | `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
 | `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, five fixed per-row action slots (play/pause, stop, edit, delete, visibility), batch show/hide. Row markup escapes AI-/operator-derived names. See [requirements.md §Mission Row Button Layout](../gcs/requirements.md#mission-row-button-layout) for slot spec. |
 | `layers/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
-| `ui/BasemapPanel.js` | Optional real 2D WGS84 basemap (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; default-off toggle (ADR 0022 Phase 4) |
+| `ui/BasemapPanel.js` | Real 2D WGS84 basemap view (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; owns only basemap rendering plus WGS84 sketch capture for the shared toolbar |
+| `ui/MapAuthoringToolbar.js` | Shared bottom authoring toolbar owned by `MapWidget`; routes add-waypoint, corridor/survey generation, geofence save/clear, and sketch state/status through existing mission handlers |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
 | `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
 | `ui/HintToasts.js` | Gesture hint toasts |
@@ -156,7 +157,7 @@ Key frontend modules under `static/map/`:
 | `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
 | `state/` | Frontend mission state management |
 
-The widget's primary scene view uses `L.CRS.Simple` with local scene metres for overlay coordinates. Under ADR 0022 (GPS-master) WGS84 is the stored truth: overlay payloads now carry `lat/lon/alt` on every feature point plus the Mission `origin` datum, and the optional `BasemapPanel` plots the focused mission (and geofence) by lat/lon on a real EPSG:3857 basemap. The default `CRS.Simple` scene view still derives local metres from the WGS84 truth via the origin datum.
+The widget's primary scene view uses `L.CRS.Simple` with local scene metres for overlay coordinates. Under ADR 0022 (GPS-master) WGS84 is the stored truth: overlay payloads now carry `lat/lon/alt` on every feature point plus the Mission `origin` datum, and `BasemapPanel` plots the focused mission (and geofence) by lat/lon on a real EPSG:3857 basemap. The default `CRS.Simple` scene view still derives local metres from the WGS84 truth via the origin datum. Basemap is a map VIEW, not a separate authoring mode; mission authoring controls belong to the shared bottom authoring toolbar.
 
 For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
@@ -168,7 +169,7 @@ Current status of follow-on map work:
 - the replay page still renders through `static/replay.js`, not through `MapWidget`
 - geofence authoring + validation now have a real backend source: a mission's
   inclusion fence is stored on mission content (`geofence`), authored via the
-  `set_mission_geofence` AI tool or the BasemapPanel `🛡 Fence` draw mode
+  `set_mission_geofence` AI tool or the map authoring toolbar's fence mode
   (`POST /api/ai/missions/{id}/geofence`), enforced early by the executor and
   uploaded to the FC (ADR 0023 Phase 5)
 - the main dashboard still does not have a dedicated live map panel
@@ -225,3 +226,4 @@ Detailed per-topic design content lives in sibling files under [`design/`](./des
 - [`design/api-and-runtime.md`](./design/api-and-runtime.md) — Api And Runtime
 - [`design/llm-capability-matrix.md`](./design/llm-capability-matrix.md) — Llm Capability Matrix
 - [`design/map-widget.md`](./design/map-widget.md) — Map Widget
+- [`design/mission-sidebar-toolbar.md`](./design/mission-sidebar-toolbar.md) — Mission Sidebar Toolbar

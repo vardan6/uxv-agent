@@ -8,36 +8,20 @@ from typing import Any, Callable
 import json
 import re as _re
 
-try:
-    from gcs_server.ai.context_service import AIContextService
-    from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.intent_service import IntentService as _IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService
-    from gcs_server.ai.mission_execution_session import build_mission_executor
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai import mission_patterns
-    from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
-    from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
-    from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
-    from gcs_server.ai.road_graph_service import RoadGraphService
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.spatial_query_service import SpatialQueryService
-    from gcs_server.ai.vehicle_profile import get_active_profile
-except ModuleNotFoundError:
-    from ai.context_service import AIContextService
-    from ai.data_access import build_data_access_manifest
-    from ai.intent_service import IntentService as _IntentService
-    from ai.mission_draft_service import MissionDraftService
-    from ai.mission_execution_session import build_mission_executor
-    from ai.mission_export_service import MissionExportService
-    from ai import mission_patterns
-    from ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
-    from ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
-    from ai.provider_registry import resolve_provider as _resolve_provider
-    from ai.road_graph_service import RoadGraphService
-    from ai.session_store import normalize_source_controls
-    from ai.spatial_query_service import SpatialQueryService
-    from ai.vehicle_profile import get_active_profile
+from gcs_server.ai.context_service import AIContextService
+from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.intent_service import IntentService as _IntentService
+from gcs_server.ai.mission_draft_service import MissionDraftService
+from gcs_server.ai.mission_execution_session import build_mission_executor
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai import mission_patterns
+from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
+from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
+from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
+from gcs_server.ai.road_graph_service import RoadGraphService
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.spatial_query_service import SpatialQueryService
+from gcs_server.ai.vehicle_profile import get_active_profile
 
 
 READ_ONLY = "read_only"
@@ -497,6 +481,39 @@ class ToolRegistry:
                 "Immediately abort the mission currently executing for this session. Cooperatively stops the running behavior tree at the next node-step boundary. Always available regardless of execution mode. Use this as the emergency-stop for AI-driven execution.",
                 EXECUTION,
                 self._abort_execution,
+            ),
+            # ── Mission-keyed pause / resume / stop (B.4) ────────────────────
+            # These work on any active execution regardless of who started it
+            # (operator via sidebar or AI via execute_mission). They do NOT
+            # require a session-owned execution — only a mission_id.
+            tool(
+                "pause_mission",
+                "Pause a running mission by its mission id. Works whether the mission was started by the operator (sidebar) or by AI (execute_mission). The rover parks at the FC level until resumed. Use resolve_mission_reference first if you only have a name or index, not the id.",
+                EXECUTION,
+                self._pause_mission_execution,
+            ),
+            tool(
+                "resume_mission",
+                "Resume a paused mission by its mission id. Use after pause_mission or when the operator asks to continue a mission that was paused. Use resolve_mission_reference first if you only have a name or index.",
+                EXECUTION,
+                self._resume_mission_execution,
+            ),
+            tool(
+                "stop_mission",
+                "Stop (abort) a running or paused mission by its mission id. Cooperatively halts the behavior tree at the next node-step boundary. Works regardless of who started the mission. Use resolve_mission_reference first if you only have a name or index.",
+                EXECUTION,
+                self._stop_mission_execution,
+            ),
+            # ── Session adapter override (Phase E) ────────────────────────────
+            tool(
+                "set_session_adapter",
+                "Override the FC adapter used for mission execution in this chat session only. "
+                "adapter_type must be one of: 'file_sink' (write uploads to data/fc_sink/), "
+                "'json_file' (default dev adapter), 'mavlink' (real FC via MAVLink, uses configured URL), "
+                "'mavsdk' (real FC via MAVSDK, uses configured URL), or 'default' (clear override — revert to global config adapter). "
+                "The override is session-scoped: it reverts automatically when the session ends and never changes the persisted config.",
+                EXECUTION,
+                self._set_session_adapter,
             ),
         ]
         with_contracts = [_with_tool_contract(definition) for definition in definitions]
@@ -1480,8 +1497,9 @@ class ToolRegistry:
         content, error = self._load_mission_content(context, mission_id)
         if error:
             return {"ok": False, "error": error}
+        override_adapter = sessions.get_adapter_override(context.session_id)
         try:
-            executor, root = build_mission_executor(context.runtime, content)
+            executor, root = build_mission_executor(context.runtime, content, adapter=override_adapter)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         try:
@@ -1534,14 +1552,69 @@ class ToolRegistry:
             return sessions.request_abort(context.session_id)
         return sessions.cancel(context.session_id)
 
+    def _set_session_adapter(self, context: ToolInvocationContext, adapter_type: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        clean_type = str(adapter_type or "").strip().lower()
+        if clean_type in ("default", "reset", ""):
+            sessions.clear_adapter_override(context.session_id)
+            return {"ok": True, "adapter": "default", "note": "reverted to global config adapter"}
+        _valid = frozenset({"file_sink", "json_file", "mavlink", "mavsdk"})
+        if clean_type not in _valid:
+            return {"ok": False, "error": f"unsupported adapter_type '{clean_type}'; must be one of {sorted(_valid)} or 'default'"}
+        try:
+            from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
+            from gcs_server.runtime import GCS_DIR
+        except Exception as exc:
+            return {"ok": False, "error": f"could not import adapter factory: {exc}"}
+        config = getattr(context.runtime, "config", None)
+        if config is None:
+            return {"ok": False, "error": "runtime has no config"}
+        # Build a transient config using persisted URL/timeout settings but override the type.
+        logging_cfg = dict(getattr(config, "logging", {}) or {})
+        logging_cfg["controller_mission_adapter"] = clean_type
+
+        def _path_resolver(path: object):
+            from pathlib import Path
+            p = Path(str(path or ""))
+            return p if p.is_absolute() else GCS_DIR / p
+
+        try:
+            adapter = build_controller_mission_adapter(logging_cfg, path_resolver=_path_resolver)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        sessions.set_adapter_override(context.session_id, adapter)
+        return {
+            "ok": True,
+            "adapter": clean_type,
+            "session_id": context.session_id,
+            "note": "active for this session only; reverts when session ends",
+        }
+
+    def _pause_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.pause_for_mission(mission_id)
+
+    def _resume_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.resume_for_mission(mission_id)
+
+    def _stop_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
+        sessions = getattr(context.runtime, "mission_execution_sessions", None)
+        if sessions is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        return sessions.abort_for_mission(mission_id)
+
 
 def _resolve_confirm_timeout_s(runtime: Any) -> int:
     """Confirm-banner timeout from the persisted mission_lifecycle setting,
     clamped to [3, 60] s (ADR 0021 §6); falls back to the default when unset."""
-    try:
-        from gcs_server.ai.execution_mode import normalize_confirm_timeout
-    except ModuleNotFoundError:
-        from ai.execution_mode import normalize_confirm_timeout
+    from gcs_server.ai.execution_mode import normalize_confirm_timeout
     section: Any = None
     try:
         section = runtime.config.mission_lifecycle

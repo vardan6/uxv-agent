@@ -97,6 +97,31 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'get_current_mission_state',
 ]);
 
+const AI_MISSION_ACTION_TOOL_NAMES = new Set([
+  'propose_mission_draft',
+  'set_mission_geofence',
+  'export_mission',
+  'arm_execution',
+  'execute_mission',
+  'cancel_execution',
+  'pause_mission',
+  'resume_mission',
+  'stop_mission',
+]);
+
+function pushAiToolStatusMessage(toolCall) {
+  const name = String(toolCall.name || '');
+  if (!AI_MISSION_ACTION_TOOL_NAMES.has(name)) return;
+  const statusBar = window.__gcsStatusBar;
+  if (!statusBar) return;
+  const result = toolCall.result;
+  const ok = result == null || result.ok !== false;
+  const summary = summarizeAgentToolResult(result);
+  const label = name.replace(/_/g, ' ');
+  const text = summary ? `AI → ${label}: ${summary}` : `AI → ${label}`;
+  statusBar.push(text, ok ? 'info' : 'error');
+}
+
 const AI_OPTIONAL_TOOL_NAMES_BY_SOURCE = {
   replay_reports: new Set([
     'get_current_replay_summary',
@@ -2549,6 +2574,7 @@ function handleAiStreamEvent(sessionId, eventData) {
   } else if (eventData.type === 'agent_tool_result') {
     updatePendingAgentTrace(sessionId, eventData);
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
+    pushAiToolStatusMessage(eventData.tool_call || {});
   } else if (eventData.type === 'graph_retrieval_result') {
     updatePendingRetrievalState(
       sessionId,

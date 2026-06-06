@@ -221,6 +221,12 @@ class ControllerMissionAdapter(Protocol):
     ) -> ControllerMissionInstallResult:
         ...
 
+    def pause_mission(self) -> None:
+        ...
+
+    def stop_mission(self) -> None:
+        ...
+
 
 class ControllerMissionAdapterError(RuntimeError):
     pass
@@ -862,6 +868,14 @@ class MavlinkControllerMissionAdapter:
             raw_result={"uploaded": uploaded},
         )
 
+    def pause_mission(self) -> None:
+        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink
+        pass
+
+    def stop_mission(self) -> None:
+        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink; caller marks mission aborted
+        pass
+
     def _open_client(self) -> Any:
         if self._client_factory is not None:
             return self._client_factory()
@@ -945,6 +959,96 @@ class MavsdkControllerMissionAdapter(MavlinkControllerMissionAdapter):
             heartbeat_timeout_s=self._heartbeat_timeout_s,
             request_timeout_s=self._request_timeout_s,
         )
+
+
+class FileSinkControllerMissionAdapter:
+    """Write-only adapter that archives each mission install as a timestamped JSON
+    file under a configurable sink directory.  No connection required; health is
+    always ok.  Intended for hardware-free testing and as the default for the Phase C
+    adapter-selection UI before a real FC is available.
+    """
+
+    adapter_name = "file_sink"
+
+    def __init__(self, sink_dir: str | Path) -> None:
+        self._sink_dir = Path(sink_dir)
+
+    def get_controller_state(self) -> ControllerMissionAdapterState:
+        return ControllerMissionAdapterState(status="idle")
+
+    def check_health(self) -> ControllerLinkHealth:
+        return ControllerLinkHealth(
+            ok=True,
+            adapter=self.adapter_name,
+            connected=True,
+            detail="file-sink adapter; missions written to disk, no FC required",
+            raw={"sink_dir": str(self._sink_dir)},
+        )
+
+    def install_mission(
+        self,
+        *,
+        pending_snapshot: dict[str, Any],
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        self._sink_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = _snapshot_dict(pending_snapshot)
+        revision_id = str(snapshot.get("revision_id") or "unknown")
+        filename = f"mission_{int(time.time())}_{revision_id}.json"
+        (self._sink_dir / filename).write_text(json.dumps(snapshot, indent=2) + "\n")
+        state = ControllerMissionAdapterState(
+            controller_version=int(snapshot.get("controller_version") or 0),
+            status="executing",
+            operation_id=str(snapshot.get("operation_id") or ""),
+            revision_id=revision_id,
+            draft_id=str(snapshot.get("draft_id") or ""),
+        )
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="executing",
+            controller_state=state,
+            raw_result={"sink_path": str(self._sink_dir / filename)},
+        )
+
+    def clear_mission(
+        self,
+        *,
+        expected_controller_version: int | None = None,
+    ) -> ControllerMissionInstallResult:
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="cleared",
+            controller_state=ControllerMissionAdapterState(status="idle"),
+        )
+
+    def upload_geofence(
+        self,
+        *,
+        geofence: dict[str, Any],
+    ) -> ControllerMissionInstallResult:
+        fence = parse_geofence(geofence)
+        if not fence.is_usable:
+            return ControllerMissionInstallResult(
+                ok=False,
+                status="geofence_unusable",
+                controller_state=self.get_controller_state(),
+                error="inclusion fence has fewer than three vertices; refusing to upload",
+            )
+        self._sink_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"geofence_{int(time.time())}.json"
+        (self._sink_dir / filename).write_text(json.dumps(fence.to_dict(), indent=2) + "\n")
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="geofence_installed",
+            controller_state=self.get_controller_state(),
+            raw_result={"sink_path": str(self._sink_dir / filename)},
+        )
+
+    def pause_mission(self) -> None:
+        pass
+
+    def stop_mission(self) -> None:
+        pass
 
 
 class JsonFileControllerMissionAdapter:
@@ -1137,6 +1241,12 @@ class JsonFileControllerMissionAdapter:
             error="controller mission read-back verification failed",
             raw_result={"verified": False},
         )
+
+    def pause_mission(self) -> None:
+        pass
+
+    def stop_mission(self) -> None:
+        pass
 
     def _load_record(self) -> dict[str, Any]:
         return _load_json_file(self._state_path)

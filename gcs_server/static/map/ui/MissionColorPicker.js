@@ -6,10 +6,12 @@ import { MISSION_COLOR_PALETTE } from '../state/missionColorOverrides.js';
 // onPreview(null) restores the committed colour.
 
 export class MissionColorPicker {
-  constructor(container) {
+  constructor(container, opts = {}) {
     this._container = container;
+    this._scrollEl = opts.scrollEl || container;
     this._popover = null;
     this._dismissHandler = null;
+    this._repositionHandler = null;
     this._opts = null;
   }
 
@@ -84,6 +86,7 @@ export class MissionColorPicker {
     this._popover = pop;
 
     this._positionNear(anchorEl);
+    this._repositionHandler = () => this._positionNear(anchorEl);
 
     this._dismissHandler = (e) => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
@@ -93,6 +96,8 @@ export class MissionColorPicker {
     setTimeout(() => {
       document.addEventListener('mousedown', this._dismissHandler);
       document.addEventListener('keydown', this._dismissHandler);
+      this._scrollEl.addEventListener('scroll', this._repositionHandler, { passive: true });
+      window.addEventListener('resize', this._repositionHandler);
     }, 0);
   }
 
@@ -100,15 +105,24 @@ export class MissionColorPicker {
     if (!anchorEl || !this._popover) return;
     const containerRect = this._container.getBoundingClientRect();
     const anchorRect = anchorEl.getBoundingClientRect();
-    let left = anchorRect.left - containerRect.left;
-    let top = anchorRect.bottom - containerRect.top + 4;
-    const popRect = { width: 200, height: 120 };
-    const maxLeft = this._container.clientWidth - popRect.width - 8;
-    if (left > maxLeft) left = Math.max(8, maxLeft);
-    if (left < 8) left = 8;
-    if (top + popRect.height > this._container.clientHeight) {
-      top = Math.max(8, anchorRect.top - containerRect.top - popRect.height - 4);
+    const popRect = this._popover.getBoundingClientRect();
+    const inset = 8;
+    const scrollLeft = this._container.scrollLeft;
+    const scrollTop = this._container.scrollTop;
+    const visibleMinLeft = scrollLeft + inset;
+    const visibleMaxLeft = scrollLeft + this._container.clientWidth - popRect.width - inset;
+    const visibleMinTop = scrollTop + inset;
+    const visibleMaxTop = scrollTop + this._container.clientHeight - popRect.height - inset;
+    let left = anchorRect.left - containerRect.left + scrollLeft + anchorRect.width + 6;
+    let top = anchorRect.bottom - containerRect.top + scrollTop + 6;
+    if (left > visibleMaxLeft) {
+      left = anchorRect.right - containerRect.left + scrollLeft - popRect.width;
     }
+    left = Math.max(visibleMinLeft, Math.min(left, Math.max(visibleMinLeft, visibleMaxLeft)));
+    if (top > visibleMaxTop) {
+      top = anchorRect.top - containerRect.top + scrollTop - popRect.height - 6;
+    }
+    top = Math.max(visibleMinTop, Math.min(top, Math.max(visibleMinTop, visibleMaxTop)));
     this._popover.style.left = `${left}px`;
     this._popover.style.top = `${top}px`;
   }
@@ -123,7 +137,16 @@ export class MissionColorPicker {
       document.removeEventListener('keydown', this._dismissHandler);
       this._dismissHandler = null;
     }
+    if (this._repositionHandler) {
+      this._scrollEl.removeEventListener('scroll', this._repositionHandler);
+      window.removeEventListener('resize', this._repositionHandler);
+      this._repositionHandler = null;
+    }
     if (this._opts?.onPreview) this._opts.onPreview(null);
     this._opts = null;
+  }
+
+  isOpen() {
+    return Boolean(this._popover);
   }
 }

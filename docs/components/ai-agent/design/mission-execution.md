@@ -110,6 +110,7 @@ cutover is a CRC over the normalized mission items. The default local adapter is
 implementation detail; contract behavior is stable regardless of transport.
 
 The adapter type and connection URL are configurable from `Settings → Mission Lifecycle`.
+The AI chat tool `set_session_adapter` overrides the adapter for the current session only (in-memory, reverts on session end, does not change persisted config).
 For development monitoring, point the mavlink adapter at `mav_sim` (UDP 14550) to see
 all mission traffic in the `mav_sim` web UI (port 9010). See [`docs/mav_sim/design.md`](../../../mav_sim/design.md).
 

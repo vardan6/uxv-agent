@@ -4,12 +4,8 @@ import math
 import re
 from typing import Any
 
-try:
-    from gcs_server.replay_session_resolver import ReplaySessionResolver
-    from gcs_server.replay_store import ReplayStore
-except ModuleNotFoundError:
-    from replay_session_resolver import ReplaySessionResolver
-    from replay_store import ReplayStore
+from gcs_server.replay_session_resolver import ReplaySessionResolver
+from gcs_server.replay_store import ReplayStore
 
 
 SESSION_ID_RE = re.compile(r"\bsession-[a-z0-9]+\b", re.IGNORECASE)

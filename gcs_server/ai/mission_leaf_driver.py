@@ -18,16 +18,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-try:
-    from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
-    from gcs_server.ai.mission_executor import LeafDriver
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai.vehicle_profile import VehicleProfile
-except ModuleNotFoundError:
-    from ai.controller_mission_adapter import ControllerMissionAdapter
-    from ai.mission_executor import LeafDriver
-    from ai.mission_export_service import MissionExportService
-    from ai.vehicle_profile import VehicleProfile
+from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
+from gcs_server.ai.mission_executor import LeafDriver
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai.vehicle_profile import VehicleProfile
 
 
 def make_controller_leaf_driver(

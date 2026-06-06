@@ -84,9 +84,9 @@ mavlink_listener.py
   - push to in-memory queue
     │
     ▼
-app.py (Flask + Flask-SocketIO)
-  - background thread drains queue
-  - broadcasts message events to all connected browser clients via WebSocket
+app.py (FastAPI + uvicorn + native WebSocket)
+  - async drain task pulls from queue, broadcasts to all connected browser clients
+  - transport manager reports active protocol services and owns future multi-protocol startup
   - serves static web UI on port 9010
     │
     ▼
@@ -95,13 +95,18 @@ Browser (port 9010)
   - renders message feed (newest on top)
 ```
 
-### Phase 1 only (monitor, no response)
+### Response behavior (Phases 1–4 implemented)
 
-The listener decodes and displays. It does NOT send `MISSION_ACK` or any response back
-to the GCS. The GCS adapter will time out waiting for an ACK — this is expected in
-monitor-only mode.
+- **Phase 1 — monitor**: listener decodes and displays; no responses.
+- **Phase 3 — handshake**: `mavlink_listener._handle_protocol` responds to `MISSION_COUNT` + `MISSION_ITEM_INT` with `MISSION_REQUEST_INT` per item then `MISSION_ACK(ACCEPTED)`; tracks upload state; `simulate_execution` emits `MISSION_ITEM_REACHED` + `GLOBAL_POSITION_INT` per waypoint.
+- **Phase 4 — telemetry**: `GLOBAL_POSITION_INT` messages are also received by the GCS-side `MavlinkTelemetryBridge` (`gcs_server/mavlink_telemetry.py`) and broadcast as normalized telemetry; `BasemapPanel` renders a live GPS vehicle marker via its own GCS WebSocket subscription.
 
-To use as a drop-in FC substitute (full handshake), Phase 2+ will add response logic.
+### Phase 5 seam (implemented entry point)
+
+- `transport_manager.py` is the protocol-service registry for `mav_sim`.
+- MAVLink UDP remains the only active transport implementation.
+- MAVSDK gRPC is represented by a disabled-by-default stub service with config and status reporting; real protobuf service methods are a follow-on slice.
+- `GET /api/transports` exposes the live transport snapshot for UI/runtime inspection.
 
 ---
 

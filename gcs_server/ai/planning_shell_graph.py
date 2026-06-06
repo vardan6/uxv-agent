@@ -25,9 +25,12 @@ Constraints:
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 try:
     from langchain_core.runnables import RunnableConfig
@@ -44,38 +47,21 @@ try:
 except ImportError:
     _INTERRUPT_AVAILABLE = False
 
-try:
-    from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
-    from gcs_server.ai.data_access import build_data_access_manifest
-    from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
-    from gcs_server.ai.graph_state import PlanningShellGraphState
-    from gcs_server.ai.mission_export_service import MissionExportService
-    from gcs_server.ai.mission_draft_service import validate_draft_payload
-    from gcs_server.ai.provider_registry import resolve_provider
-    from gcs_server.ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from gcs_server.ai.session_store import normalize_source_controls
-    from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
-except ModuleNotFoundError:
-    from ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
-    from ai.data_access import build_data_access_manifest
-    from ai.graph_runtime import PlanningShellGraphRuntime
-    from ai.graph_state import PlanningShellGraphState
-    from ai.mission_export_service import MissionExportService
-    from ai.mission_draft_service import validate_draft_payload
-    from ai.provider_registry import resolve_provider
-    from ai.retrieval import (
-        build_loaded_data_refs,
-        build_retrieval_citations,
-        build_retrieved_sources,
-        normalize_retrieval_request,
-    )
-    from ai.session_store import normalize_source_controls
-    from ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
+from gcs_server.ai.agent_loop import AgentLoopRuntime, AgentInvokeResult
+from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
+from gcs_server.ai.graph_state import PlanningShellGraphState
+from gcs_server.ai.mission_export_service import MissionExportService
+from gcs_server.ai.mission_draft_service import validate_draft_payload
+from gcs_server.ai.provider_registry import resolve_provider
+from gcs_server.ai.retrieval import (
+    build_loaded_data_refs,
+    build_retrieval_citations,
+    build_retrieved_sources,
+    normalize_retrieval_request,
+)
+from gcs_server.ai.session_store import normalize_source_controls
+from gcs_server.ai.tool_registry import allowed_tool_names_for_source_controls, normalize_mission_draft_payload
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -1132,7 +1118,7 @@ def finalize_response(state: PlanningShellGraphState, config: RunnableConfig) ->
                 meta=meta,
             )
         except Exception:
-            pass
+            logger.warning("finalize_response: failed to persist assistant message for session %s", session_id, exc_info=True)
 
     return {
         "node_trace": [_node_entry(
@@ -1167,7 +1153,7 @@ def finalize_error(state: PlanningShellGraphState, config: RunnableConfig) -> di
                 },
             )
         except Exception:
-            pass
+            logger.warning("finalize_error: failed to persist error message for session %s", session_id, exc_info=True)
 
     return {
         "node_trace": [_node_entry("finalize_error", message=message)],
@@ -1444,7 +1430,7 @@ async def prepare_clarification(state: PlanningShellGraphState, config: Runnable
             if full_ctx.get("scene"):
                 refreshed_scene = full_ctx["scene"]
         except Exception:
-            pass
+            logger.debug("prepare_clarification: context refresh failed, using stale state", exc_info=True)
 
         return {
             "clarification_request": clarification_payload,

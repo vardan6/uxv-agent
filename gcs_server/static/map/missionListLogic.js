@@ -1,13 +1,4 @@
-const SET2 = [
-  '#66c2a5',
-  '#fc8d62',
-  '#8da0cb',
-  '#e78ac3',
-  '#a6d854',
-  '#ffd92f',
-  '#e5c494',
-  '#b3b3b3',
-];
+import { MISSION_COLOR_PALETTE } from './state/missionColorOverrides.js';
 
 // Shape flat `missions` rows (GET /api/ai/missions) into display-ready
 // descriptors: one row = one Mission (ADR 0021 §2). Pure; no fetching.
@@ -34,6 +25,7 @@ export function mapMissionsForList(missions = []) {
       missionIndex: index,
       name: name || (index != null ? `Mission ${index}` : 'Untitled mission'),
       vehicleProfileId: String(m.vehicle_profile_id || ''),
+      waypointCount: Math.max(0, Number(m.waypoint_count || 0)),
       origin,
       originBadge: computeOriginBadge(origin, clientVersion),
       originChatId: String(m.origin_chat_id || ''),
@@ -45,6 +37,7 @@ export function mapMissionsForList(missions = []) {
       // affordances. Empty when the Mission has no bridged active revision yet.
       activeRevisionId: String(m.active_revision_id || ''),
       activeRevisionStatus: String(m.active_revision_status || ''),
+      sessionStatus: String(m.session_status || ''),
     };
   });
 }
@@ -63,11 +56,43 @@ export function enforceVisibilityCap(visibleIds, max = 3, alwaysOn = []) {
   return ordered;
 }
 
+function missionPaletteOrder(missions = []) {
+  return [...(Array.isArray(missions) ? missions : [])].sort((a, b) => {
+    const aIndex = Number.isFinite(a?.missionIndex) ? Number(a.missionIndex) : Number.MAX_SAFE_INTEGER;
+    const bIndex = Number.isFinite(b?.missionIndex) ? Number(b.missionIndex) : Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    const aCreated = Number(a?.createdAt || 0);
+    const bCreated = Number(b?.createdAt || 0);
+    if (aCreated !== bCreated) return aCreated - bCreated;
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+  });
+}
+
 // overrides: plain object from missionColorOverrides.getAll(), keyed by mission id string.
-export function assignPaletteColor(visibleIds, overrides = {}) {
+// Auto colours are assigned over the full Mission set, not just the visible
+// subset, so hidden/newly-created rows still get a stable stripe colour.
+export function assignPaletteColor(missions, overrides = {}) {
   const palette = new Map();
-  Array.from(visibleIds || []).forEach((missionId, index) => {
-    palette.set(missionId, overrides[String(missionId)] || SET2[index % SET2.length]);
+  const ordered = missionPaletteOrder(missions);
+  const used = new Set();
+  const pending = [];
+
+  ordered.forEach((mission) => {
+    const missionId = String(mission?.id || '');
+    if (!missionId) return;
+    const override = String(overrides[missionId] || '').trim();
+    if (override) {
+      palette.set(missionId, override);
+      used.add(override.toLowerCase());
+      return;
+    }
+    pending.push(missionId);
+  });
+
+  const available = MISSION_COLOR_PALETTE.filter((color) => !used.has(color.toLowerCase()));
+  pending.forEach((missionId, index) => {
+    const color = available[index] || MISSION_COLOR_PALETTE[index % MISSION_COLOR_PALETTE.length];
+    palette.set(missionId, color);
   });
   return palette;
 }

@@ -28,6 +28,7 @@ between node steps (the ``abort`` / ``cancel_execution`` tools are always bound)
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
@@ -122,10 +123,12 @@ class MissionExecutor:
 
     _armed: bool = field(default=False, init=False)
     _abort: bool = field(default=False, init=False)
+    _pause_event: threading.Event = field(default_factory=threading.Event, init=False)
     events: list[StepEvent] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         self.mode = normalize_mode(self.mode, default=STRICT)
+        self._pause_event.set()  # "set" means running; "clear" means paused
 
     # -- lifecycle / mode gate (ADR 0021 §1, ADR 0023 decision 4) -------------
 
@@ -137,8 +140,19 @@ class MissionExecutor:
 
     def request_abort(self) -> None:
         """Cooperatively stop execution before the next node step. Always
-        honoured regardless of mode (the ``abort`` tool is always bound)."""
+        honoured regardless of mode (the ``abort`` tool is always bound).
+        Also unblocks any active pause so the abort flag is seen promptly."""
         self._abort = True
+        self._pause_event.set()
+
+    def request_pause(self) -> None:
+        """Park execution between node steps. The executor thread blocks at the
+        next inter-node check until :meth:`resume` is called."""
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        """Unpark the executor after a :meth:`request_pause`."""
+        self._pause_event.set()
 
     def _check_runnable(self) -> None:
         if self.mode == STRICT:
@@ -159,6 +173,7 @@ class MissionExecutor:
         self._check_runnable()
         self._preflight_geofence(root)
         self._abort = False
+        self._pause_event.set()
         self.events = []
         status = self._tick(root)
         if self.mode == CONFIRM:
@@ -188,6 +203,10 @@ class MissionExecutor:
         return waypoints
 
     def _tick(self, node: Node) -> NodeStatus:
+        if self._abort:
+            return self._emit(node, NodeStatus.ABORTED, "aborted")
+        # Block here while paused; request_abort() sets the event to unblock.
+        self._pause_event.wait()
         if self._abort:
             return self._emit(node, NodeStatus.ABORTED, "aborted")
 

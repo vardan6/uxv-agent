@@ -54,9 +54,8 @@ from the per-Mission `origin` datum, so a frame can't drift.
 Design rule:
 
 - scene-mode rendering uses `L.CRS.Simple` and consumes `{x, y, z}`
-- the WGS84 basemap mode is a distinct widget mode (`BasemapPanel`, own
-  `L.map` on EPSG:3857) that plots `{lat, lon}` directly — no client-side
-  re-projection
+- the WGS84 basemap is a VIEW option (`BasemapPanel`, own `L.map` on EPSG:3857)
+  that plots `{lat, lon}` directly — no client-side re-projection
 - WGS84 remains the server-side stored truth
 
 ### Flat Mission List
@@ -160,8 +159,8 @@ splitter is hidden and the shell collapses to a single-column stacked layout.
 
 Each Mission row carries:
 
-- a **status stripe** (4 px left edge) coloured by the active revision's status,
-  plus a matching **status label**
+- a **Mission colour stripe** (left edge) driven by the row's per-Mission
+  colour, plus a matching **status label** for the active revision's state
 - a **visibility control** (eye toggle) and a **selection checkbox**
 - a **colour chip** that doubles as a button — clicking it opens the per-Mission
   colour picker (see *Mission Management Affordances*)
@@ -181,7 +180,7 @@ Behavior rules:
   clicks (shift / meta / ctrl) extend the Selected set. Inner controls
   (checkbox, eye, edit, execute, delete, rename) stop propagation so they don't
   double-fire, and inline rename (dblclick) keeps working alongside row-click
-- visible overlays are capped softly to avoid clutter
+- all missions are visible by default; users toggle visibility per-mission via the eye button
 - focus applies fit-to-bounds and dims non-focused visible missions
 - numbered waypoint badges remain visible because color alone is insufficient
 - every operator- or AI-derived value interpolated into row markup is escaped
@@ -195,9 +194,14 @@ Beyond per-row editing, the list offers Mission-management UX:
 - **Per-Mission colour override** — a colour picker (swatch grid + custom hex +
   reset, with live hover-preview that re-renders the map in the candidate
   colour). Resolution order is **override (if set) → automatic palette**
-  (`assignPaletteColor`, keyed on visibility order). Overrides persist client-side
-  (localStorage, keyed by Mission id) and layer above the auto palette without
-  breaking the soft visibility cap.
+  (`assignPaletteColor`, keyed on the full Mission set, not only the visible
+  subset). Overrides persist client-side (localStorage, keyed by Mission id)
+  and layer above the auto palette.
+- **Auto-colour assignment** — Missions without an override receive a stable
+  palette colour chosen against the whole Mission set so hidden rows and newly
+  created rows do not collapse to the same visible stripe colour. Newly created,
+  imported, and basemap-drawn Missions persist that auto-picked colour
+  immediately so later refreshes and other clients see the same row colour.
 - **Sort** — a persisted (localStorage) sort preference over the list: Updated
   newest · Created newest · Status · Label A–Z · Selected first · Visible first.
 - **Overflow `⋯` menu** — a header menu hosting the sort options and **JSON
@@ -211,7 +215,7 @@ Beyond per-row editing, the list offers Mission-management UX:
 Design decisions (the management suite is ported forward from `e4a7c61`
 additively — it predates the current flat-Mission/`escapeHtml` rewrite):
 
-- the control cluster (view-mode, layer toggles, fit buttons, info bar) lives
+- the top control cluster (view-mode, layer toggles, fit buttons, info bar) lives
   **top-right**, clear of the Leaflet zoom ± — the branch's own richer view-mode
   cluster is *relocated* there rather than importing `e4a7c61`'s narrower
   `MapViewToolbar`
@@ -219,10 +223,29 @@ additively — it predates the current flat-Mission/`escapeHtml` rewrite):
   bulk-action bar
 - selection stays in the widget's own selection state; no separate selection
   store is reintroduced
+- the colour picker is mounted on the stable widget shell, not the rerendered
+  list subtree, so poll-driven refreshes and list rerenders do not tear down
+  the popover mid-interaction; background mission refresh is skipped while the
+  picker is open
 - the only backend additions for the parity port were `list_missions`
   surfacing `vehicle_profile_id` from the active revision plus the existing
   per-Mission provenance summary already used for the ✏️ badge; every other
   affordance above is frontend-only
+
+For the planned split between the persistent header bar and the contextual
+selection/focused-item bar above the Mission rows, see
+[mission-sidebar-toolbar.md](./mission-sidebar-toolbar.md). That note is the
+canonical design for replacing the current pseudo-row batch bar.
+
+Top-right control stack order is:
+
+1. layer toggles (`Terrain`, `Roads`, `Objects`, `Grid`)
+2. view-mode selector (`Virtual Terrain`, `CAD / Object View`, `Heightmap`, `Basemap`)
+3. fit buttons (`Scene`, `Mission`, `All`)
+
+The map authoring toolbar is not part of this top-right stack; it is anchored to
+the bottom of the map canvas so it never competes with VIEW/NAV/fit controls or
+Leaflet zoom controls.
 
 ## Map Rendering Rules
 
@@ -308,9 +331,21 @@ The widget supports:
 - waypoint selection and multi-selection
 - waypoint dragging
 - insert-before / insert-after behavior
-- add-waypoint mode
+- add-waypoint mode (`A` key or auto-entered)
 - delete and focus shortcuts
 - explicit help and context actions
+
+Design rules:
+
+- entering edit mode on a mission with ≤ 1 waypoints **automatically activates
+  add mode** — the user can click immediately to place the first waypoints
+  without pressing `A` first; this covers both new missions and existing
+  near-empty ones
+- entering edit mode on a mission with ≥ 2 waypoints shows a one-shot hint
+  toast ("Press A to add waypoints · V for vertex edit") and also surfaces
+  the shortcuts passively in the edit-mode banner (`· A: add  V: vertex`)
+- the hint toast auto-dismisses after 4 s; the banner shortcut label is
+  replaced by the active sub-mode name when a sub-mode is engaged
 
 The exact input affordances may evolve, but they must continue to respect the
 locking and concurrency rules above.
@@ -356,11 +391,12 @@ toggle is local state, reset on load; applied to layers via
 Mission-overlay layers are never toggled from this bar — they are controlled by
 the mission list's Visible state.
 
-**Toolbar placement** — the whole control cluster (layer toggles, view-mode
-selector, fit buttons, basemap toggle, info bar) sits **top-right**, clear of the
-Leaflet zoom ± in the top-left. The first browser smoke (2026-06-02) found the
-original top-left placement collided with the zoom buttons and hid the fit
-buttons; relocating right matches the replay page and resolves both.
+**Toolbar placement** — chrome is split by intent. View/navigation controls
+(layer toggles, view-mode selector, NAV, fit buttons, info bar) sit at the top
+and must stay clear of the Leaflet zoom ± in the top-left. Authoring tools sit
+in one bottom toolbar inside the map canvas. The authoring toolbar must reserve
+space from the bottom info/elevation UI and wrap or collapse before it overlaps
+top controls on short viewports.
 
 Design rules (still applicable to remaining items):
 
@@ -369,14 +405,17 @@ Design rules (still applicable to remaining items):
 (fits the visible-mission union). These reset `_lastFitKey = null` so the next
 `_render` re-fires `_fitBounds`. Disabled when the target bounds are unknown.
 
-**View mode selector** — dropdown with three options: Virtual Terrain (default;
+**View mode selector** — dropdown with four options: Virtual Terrain (default;
 heightmap gradient + objects), CAD/Object View (objects only, solid background),
-Heightmap (raw greyscale elevation). Mode change reconstructs or reconfigures the
-scene layers in place; mission overlays are unaffected. The replay page's
-"GPS/Satellite Debug" mode maps to the existing Basemap toggle (WGS84 OSM panel).
-View mode and the basemap toggle are **independent**: switching to CAD/Object
-View must not tear down the basemap/satellite view (a parity bug found in the
-2026-06-02 smoke).
+Heightmap (raw greyscale elevation), and Basemap (WGS84/OpenStreetMap). VIEW is
+the single owner of the active map surface: scene modes hide the basemap panel;
+Basemap shows it. Mission list focus/visibility, mission overlays, active edit
+state, and the authoring toolbar are not reset by switching VIEW.
+
+**Basemap ownership** — BasemapPanel owns only the EPSG:3857 Leaflet map and
+WGS84 rendering/sketch coordinate capture. It must not own the user-facing
+authoring toolbar. Its old draw controls are a migration source for behavior,
+not the final chrome.
 
 **Cursor/info bar** — fixed bar at the bottom of the map canvas. Left slot: cursor
 scene-metre coordinates (`x: N m, y: N m`), with WGS84 equivalent in parentheses
@@ -384,20 +423,52 @@ when the focused mission has a known origin datum. Right slot: selection detail
 (waypoint index, provenance, altitude) when a waypoint is selected; otherwise
 shows mission/scene summary. Sourced from Leaflet `mousemove` + `editState`.
 
-## Scene-Mode Manual Mission Creation (Phase 7 — planned)
+## Elevation Profile Panel
 
-The `➕ New mission` flow (requirements §Mission CRUD) must work in scene-mode
-(CRS.Simple), not only via the basemap draw tools.
+A horizontal panel below the map area shows the terrain-vs-altitude profile for
+the focused or actively-edited mission.
 
 Design rules:
-- `➕ New mission` creates a blank Mission via backend, promotes it to Active, and
-  enters `editState.editMode = 'add'` — the existing `map click → insertWaypoint`
-  path already handles placement once `add` mode is active
-- this is distinct from the Basemap Corridor/Survey tools: those generate a whole
-  pattern server-side from drawn WGS84 geometry; scene-mode add is click-to-place
-  individual waypoints in local metres
+
+- the panel is **always visible** — shows a placeholder message when no mission
+  is focused or when < 2 waypoints exist; this keeps the layout stable and
+  prevents disruptive shifts while the user is placing waypoints
+- during active edit the panel tracks `editState.waypoints` live; when no edit
+  is active it tracks the focused mission's overlay cache
+- below-terrain and low-clearance thresholds are vehicle-kind-sensitive
+  (`multirotor: 3 m`, `fixed_wing: 5 m`)
+- the panel can be collapsed via a toggle button and supports click-to-highlight
+  on the map
+
+## Map Authoring Toolbar
+
+The shared map authoring toolbar is the visible mission-creation surface across
+views. It sits at the bottom of the map canvas and exposes add-waypoint,
+corridor, survey, geofence, clear sketch, generate, save fence, and clear fence
+actions from one place.
+
+Design rules:
+- `➕ New mission` creates a blank Mission via backend, promotes it to Active,
+  and add mode is entered automatically (new mission has 0 waypoints, so the
+  ≤1-waypoint auto-add rule fires) — the existing `map click → insertWaypoint`
+  path handles placement
+- corridor/survey tools generate a whole pattern server-side from drawn geometry;
+  add-waypoint remains click-to-place individual waypoints
+- tool behavior must route through existing `MapWidget` handlers where possible
+  (`_handleDrawnPattern`, `_handleSetGeofence`, edit/add waypoint insertion) so
+  API contracts do not change
+- current implementation constraint: corridor/survey/geofence sketch capture is
+  still performed only on the WGS84 Basemap VIEW; scene-view sketching is
+  explicitly deferred until the widget has a reliable mission-origin/georef
+  conversion path for shared authoring gestures
+- if a tool is not yet implemented for the active VIEW, the button stays visible
+  but disabled with a tooltip explaining which VIEW currently supports it; do
+  not hide authoring capabilities behind Basemap activation
+- tool-specific numeric fields and save/generate actions appear inside the
+  bottom toolbar only when relevant to the active tool
 - the `➕ New mission` button lives in the `MissionListPanel` header (an empty list
-  already shows a call-to-action area)
+  already shows a call-to-action area), but the bottom toolbar is the primary
+  in-map authoring control surface
 
 ## Deferred Beyond The Current Widget Contract
 

@@ -8,6 +8,7 @@ export class MissionListOverflowMenu {
     this._container = container;
     this._popover = null;
     this._dismissHandler = null;
+    this._repositionHandler = null;
     this._opts = null;
   }
 
@@ -64,32 +65,40 @@ export class MissionListOverflowMenu {
 
     pop.append(sortGroup, ioGroup);
     pop.addEventListener('click', (e) => e.stopPropagation());
-    this._container.appendChild(pop);
+    document.body.appendChild(pop);
     this._popover = pop;
 
     this._positionNear(anchorEl);
+    this._repositionHandler = () => this._positionNear(anchorEl);
 
     this._dismissHandler = (e) => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
       if (e.type === 'mousedown' && pop.contains(e.target)) return;
+      if (e.type === 'mousedown' && anchorEl.contains(e.target)) return;
       this.close();
     };
     setTimeout(() => {
       document.addEventListener('mousedown', this._dismissHandler);
       document.addEventListener('keydown', this._dismissHandler);
+      this._container.addEventListener('scroll', this._repositionHandler, { passive: true });
+      window.addEventListener('resize', this._repositionHandler);
     }, 0);
   }
 
   _positionNear(anchorEl) {
     if (!anchorEl || !this._popover) return;
-    const containerRect = this._container.getBoundingClientRect();
     const anchorRect = anchorEl.getBoundingClientRect();
-    const popWidth = 200;
-    let left = anchorRect.right - containerRect.left - popWidth;
-    let top  = anchorRect.bottom - containerRect.top + 4;
-    if (left < 8) left = 8;
-    const maxLeft = this._container.clientWidth - popWidth - 8;
-    if (left > maxLeft) left = Math.max(8, maxLeft);
+    const popRect = this._popover.getBoundingClientRect();
+    const inset = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchorRect.right - popRect.width;
+    let top = anchorRect.bottom + 6;
+    if (top + popRect.height + inset > vh) {
+      top = anchorRect.top - popRect.height - 6;
+    }
+    left = Math.max(inset, Math.min(left, vw - popRect.width - inset));
+    top = Math.max(inset, Math.min(top, vh - popRect.height - inset));
     this._popover.style.left = `${left}px`;
     this._popover.style.top = `${top}px`;
   }
@@ -103,6 +112,11 @@ export class MissionListOverflowMenu {
       document.removeEventListener('mousedown', this._dismissHandler);
       document.removeEventListener('keydown', this._dismissHandler);
       this._dismissHandler = null;
+    }
+    if (this._repositionHandler) {
+      this._container.removeEventListener('scroll', this._repositionHandler);
+      window.removeEventListener('resize', this._repositionHandler);
+      this._repositionHandler = null;
     }
     this._opts = null;
   }

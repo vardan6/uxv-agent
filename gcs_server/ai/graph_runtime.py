@@ -3,18 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-try:
-    from gcs_server.ai.context_service import AIContextService
-    from gcs_server.ai.intent_service import IntentService
-    from gcs_server.ai.mission_draft_service import MissionDraftService
-    from gcs_server.ai.session_store import AISessionStore
-    from gcs_server.ai.tool_registry import ToolRegistry
-except ModuleNotFoundError:
-    from ai.context_service import AIContextService
-    from ai.intent_service import IntentService
-    from ai.mission_draft_service import MissionDraftService
-    from ai.session_store import AISessionStore
-    from ai.tool_registry import ToolRegistry
+from gcs_server.ai.context_service import AIContextService
+from gcs_server.ai.intent_service import IntentService
+from gcs_server.ai.mission_draft_service import MissionDraftService
+from gcs_server.ai.session_store import AISessionStore
+from gcs_server.ai.tool_registry import ToolRegistry
 
 
 @dataclass(frozen=True)

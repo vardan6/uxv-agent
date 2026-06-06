@@ -4,40 +4,22 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
-    from gcs_server.ai.coordinate_frame import Origin
-    from gcs_server.ai.mission_draft_service import MissionDraftService
-    from gcs_server.ai.mission_execution_service import MissionExecutionService
-    from gcs_server.ai.mission_execution_session import MissionExecutionSessions
-    from gcs_server.ai.mission_store import MissionStore
-    from gcs_server.ai.secret_store import SecretStore
-    from gcs_server.ai.session_store import AISessionStore
-    from gcs_server.config import AppConfig, ROOT_DIR
-    from gcs_server.control import ControlService
-    from gcs_server.mqtt_service import MQTTRuntime
-    from gcs_server.replay_analytics import ReplayAnalyticsService
-    from gcs_server.replay_store import ReplayStore
-    from gcs_server.state import LocalStateBackend
-    from gcs_server.telemetry import normalize_telemetry
-    from gcs_server.ws import WebSocketManager
-except ModuleNotFoundError:
-    from ai.controller_mission_adapter_factory import build_controller_mission_adapter
-    from ai.coordinate_frame import Origin
-    from ai.mission_draft_service import MissionDraftService
-    from ai.mission_execution_service import MissionExecutionService
-    from ai.mission_execution_session import MissionExecutionSessions
-    from ai.mission_store import MissionStore
-    from ai.secret_store import SecretStore
-    from ai.session_store import AISessionStore
-    from config import AppConfig, ROOT_DIR
-    from control import ControlService
-    from mqtt_service import MQTTRuntime
-    from replay_analytics import ReplayAnalyticsService
-    from replay_store import ReplayStore
-    from state import LocalStateBackend
-    from telemetry import normalize_telemetry
-    from ws import WebSocketManager
+from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
+from gcs_server.ai.coordinate_frame import Origin
+from gcs_server.ai.mission_draft_service import MissionDraftService
+from gcs_server.ai.mission_execution_service import MissionExecutionService
+from gcs_server.ai.mission_execution_session import MissionExecutionSessions
+from gcs_server.ai.mission_store import MissionStore
+from gcs_server.ai.secret_store import SecretStore
+from gcs_server.ai.session_store import AISessionStore
+from gcs_server.config import AppConfig, ROOT_DIR
+from gcs_server.control import ControlService
+from gcs_server.mqtt_service import MQTTRuntime
+from gcs_server.replay_analytics import ReplayAnalyticsService
+from gcs_server.replay_store import ReplayStore
+from gcs_server.state import LocalStateBackend
+from gcs_server.telemetry import normalize_telemetry
+from gcs_server.ws import WebSocketManager
 
 
 GCS_DIR = Path(__file__).resolve().parent

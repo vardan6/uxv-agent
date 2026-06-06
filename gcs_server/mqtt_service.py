@@ -9,10 +9,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
-try:
-    from gcs_server.video import decode_mqtt_frame
-except ModuleNotFoundError:
-    from video import decode_mqtt_frame
+from gcs_server.video import decode_mqtt_frame
 
 
 def _topic_join(prefix: str, leaf: str) -> str:

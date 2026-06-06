@@ -47,6 +47,14 @@ const settingsEls = {
   missionLifecyclePill: document.getElementById('mission-lifecycle-pill'),
   missionLifecycleStatus: document.getElementById('mission-lifecycle-status'),
   saveMissionLifecycle: document.getElementById('save-mission-lifecycle'),
+  fcAdapterType: document.getElementById('fc-adapter-type'),
+  fcMavlinkUrlRow: document.getElementById('fc-mavlink-url-row'),
+  fcMavlinkUrl: document.getElementById('fc-mavlink-url'),
+  fcMavsdkUrlRow: document.getElementById('fc-mavsdk-url-row'),
+  fcMavsdkUrl: document.getElementById('fc-mavsdk-url'),
+  fcTimeoutRows: document.getElementById('fc-timeout-rows'),
+  fcHeartbeatTimeout: document.getElementById('fc-heartbeat-timeout'),
+  fcRequestTimeout: document.getElementById('fc-request-timeout'),
   aiTtsEnabled: document.getElementById('ai-tts-enabled'),
   aiTtsAutoRead: document.getElementById('ai-tts-auto-read'),
   aiTtsEngine: document.getElementById('ai-tts-engine'),
@@ -1520,6 +1528,35 @@ function updateMissionLifecyclePill() {
   settingsEls.missionLifecyclePill.className = `pill ${tone === 'pill' ? '' : tone}`.trim();
 }
 
+function updateFcAdapterFields() {
+  if (!settingsEls.fcAdapterType) return;
+  const type = settingsEls.fcAdapterType.value;
+  settingsEls.fcMavlinkUrlRow.hidden = type !== 'mavlink';
+  settingsEls.fcMavsdkUrlRow.hidden = type !== 'mavsdk';
+  settingsEls.fcTimeoutRows.hidden = type !== 'mavlink' && type !== 'mavsdk';
+}
+
+function fillControllerAdapter(adapter = {}) {
+  if (!settingsEls.fcAdapterType) return;
+  settingsEls.fcAdapterType.value = adapter.type || 'json_file';
+  settingsEls.fcMavlinkUrl.value = adapter.mavlink_url || '';
+  settingsEls.fcMavsdkUrl.value = adapter.mavsdk_url || '';
+  settingsEls.fcHeartbeatTimeout.value = String(adapter.heartbeat_timeout_s ?? 5);
+  settingsEls.fcRequestTimeout.value = String(adapter.request_timeout_s ?? 5);
+  updateFcAdapterFields();
+}
+
+function readControllerAdapter() {
+  if (!settingsEls.fcAdapterType) return null;
+  return {
+    type: settingsEls.fcAdapterType.value,
+    mavlink_url: settingsEls.fcMavlinkUrl.value.trim(),
+    mavsdk_url: settingsEls.fcMavsdkUrl.value.trim(),
+    heartbeat_timeout_s: parseFloat(settingsEls.fcHeartbeatTimeout.value) || 5.0,
+    request_timeout_s: parseFloat(settingsEls.fcRequestTimeout.value) || 5.0,
+  };
+}
+
 function fillMissionLifecycle(settings = {}, buildDefault = '') {
   settingsEls.missionExecutionMode.value = settings.execution_mode || buildDefault || 'strict';
   settingsEls.missionConfirmTimeout.value = String(clampNumber(settings.confirm_timeout_s, 10, 3, 60));
@@ -1548,17 +1585,22 @@ async function loadMissionLifecycle() {
   setMissionLifecycleStatus('Loading mission lifecycle settings.');
   const result = await readJson('/api/mission-lifecycle');
   fillMissionLifecycle(result.mission_lifecycle || {}, result.build_default_mode || '');
+  fillControllerAdapter(result.controller_adapter || {});
   setMissionLifecycleStatus('Mission lifecycle settings loaded.');
 }
 
 async function saveMissionLifecycle() {
   setMissionLifecycleStatus('Saving mission lifecycle settings.');
+  const body = { mission_lifecycle: readMissionLifecycle() };
+  const adapter = readControllerAdapter();
+  if (adapter) body.controller_adapter = adapter;
   const result = await readJson('/api/mission-lifecycle', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mission_lifecycle: readMissionLifecycle() }),
+    body: JSON.stringify(body),
   });
   fillMissionLifecycle(result.mission_lifecycle || {}, result.build_default_mode || '');
+  fillControllerAdapter(result.controller_adapter || {});
   setMissionLifecycleStatus('Mission lifecycle settings saved.');
 }
 
@@ -1566,6 +1608,9 @@ function bindMissionLifecycle() {
   if (!settingsEls.missionExecutionMode) return;
   settingsEls.missionConfirmTimeout.addEventListener('input', updateMissionConfirmTimeoutLabel);
   settingsEls.missionExecutionMode.addEventListener('change', updateMissionLifecyclePill);
+  if (settingsEls.fcAdapterType) {
+    settingsEls.fcAdapterType.addEventListener('change', updateFcAdapterFields);
+  }
   settingsEls.saveMissionLifecycle.addEventListener('click', () => {
     saveMissionLifecycle().catch((error) => setMissionLifecycleStatus(error.message));
   });
