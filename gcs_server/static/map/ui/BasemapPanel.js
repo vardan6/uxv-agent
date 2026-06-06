@@ -7,8 +7,9 @@
 // its own `L.map`, so it never disturbs the scene map's CRS or edit flow; the
 // MapWidget just toggles it visible and feeds it the focused overlay.
 //
-// Styling is inline so the panel is self-contained and needs no stylesheet hook;
-// it absolutely fills its (position:relative) parent map wrap when active.
+// The geographic panel still fills its parent map wrap when active, but the
+// authoring toolbar is mounted into a MapWidget-owned dock so layout ownership
+// stays with the outer widget.
 
 const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
@@ -18,6 +19,19 @@ const BASEMAP_ZOOM_OPTIONS = {
   zoomDelta: 0.25,
   wheelPxPerZoomLevel: 160,
 };
+
+function setTooltip(node, enabledTitle, disabledTitle, disabled) {
+  if (!node) return;
+  const title = disabled ? (disabledTitle || '') : (enabledTitle || '');
+  if (title) node.title = title;
+  else node.removeAttribute('title');
+}
+
+function canGenerateFromDrawState(drawMode, drawPoints) {
+  if (drawMode === 'survey') return drawPoints.length === 2;
+  if (drawMode === 'corridor') return drawPoints.length >= 2;
+  return false;
+}
 
 export class BasemapPanel {
   // `onGenerate({ pattern, points, params })` is invoked when the operator
@@ -29,7 +43,7 @@ export class BasemapPanel {
   // fence sketch and clicks Save fence (or clicks Clear fence); `polygon` is the
   // drawn WGS84 inclusion polygon ({lat, lon} vertices, >= 3). The caller fences
   // the focused mission (Phase 5) and reloads.
-  constructor(parent, { onGenerate = null, onSetGeofence = null } = {}) {
+  constructor(parent, { onGenerate = null, onSetGeofence = null, onToggleAddWaypoint = null, toolbarHost = null } = {}) {
     this._el = document.createElement('div');
     this._el.className = 'map-basemap-panel';
     Object.assign(this._el.style, {
@@ -48,34 +62,42 @@ export class BasemapPanel {
     // Operator-draw state (Phase 4 authoring + Phase 5 geofence).
     this._onGenerate = onGenerate;
     this._onSetGeofence = onSetGeofence;
+    this._onToggleAddWaypoint = onToggleAddWaypoint;
     this._drawMode = null; // null | 'corridor' | 'survey' | 'fence'
     this._drawPoints = []; // L.LatLng[] of the in-progress sketch
     this._drawLayer = null;
     this._toolbar = null;
+    this._toolbarHost = toolbarHost || null;
     this._statusEl = null;
+    this._clearBtn = null;
+    this._toolbarState = {
+      addWaypointEnabled: false,
+      addWaypointActive: false,
+      addWaypointReason: 'Select an editable mission revision to add waypoints.',
+      drawToolsEnabled: false,
+      drawToolsReason: 'Switch VIEW to Basemap to use corridor and survey tools.',
+      geofenceEnabled: false,
+      geofenceReason: 'Switch VIEW to Basemap to edit geofences.',
+    };
+    this._drawTitles = {
+      pattern: 'Pattern generator',
+      spacing: 'Waypoint / line spacing (m)',
+      altitude: 'Altitude (m)',
+      passes: 'Passes (corridor)',
+      draw: 'Sketch a corridor or survey pattern on the basemap',
+      generate: 'Generate a mission from the current sketch',
+      clear: 'Clear the current sketch',
+      fence: 'Sketch an inclusion geofence on the basemap',
+      saveFence: 'Save the current geofence sketch onto the focused mission',
+      clearFence: 'Remove the mission geofence',
+    };
     this._buildToolbar();
   }
 
   // ── Draw toolbar (operator-draw, Phase 4) ─────────────────────────────────
   _buildToolbar() {
     const bar = document.createElement('div');
-    bar.className = 'map-basemap-drawbar';
-    Object.assign(bar.style, {
-      position: 'absolute',
-      top: '8px',
-      left: '8px',
-      zIndex: '500',
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '6px',
-      alignItems: 'center',
-      padding: '6px 8px',
-      background: 'rgba(255,255,255,0.92)',
-      border: '1px solid #b9c4d0',
-      borderRadius: '6px',
-      font: '12px/1.4 system-ui, sans-serif',
-      boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-    });
+    bar.className = 'map-authoring-toolbar map-authoring-toolbar--basemap';
 
     const mk = (tag, props = {}, style = {}) => {
       const node = document.createElement(tag);
@@ -84,34 +106,43 @@ export class BasemapPanel {
       return node;
     };
 
-    this._patternSel = mk('select');
+    this._addWaypointBtn = mk('button', { type: 'button', textContent: 'Add waypoint' });
+    this._addWaypointBtn.addEventListener('click', () => {
+      if (this._addWaypointBtn.disabled || typeof this._onToggleAddWaypoint !== 'function') return;
+      this._onToggleAddWaypoint();
+    });
+
+    this._patternSel = mk('select', { title: this._drawTitles.pattern });
     for (const [val, label] of [['corridor', 'Corridor'], ['survey', 'Survey']]) {
       this._patternSel.appendChild(mk('option', { value: val, textContent: label }));
     }
 
-    this._spacingInput = mk('input', { type: 'number', value: '5', min: '0.5', step: '0.5', title: 'Waypoint / line spacing (m)' }, { width: '52px' });
-    this._altInput = mk('input', { type: 'number', value: '0', step: '0.5', title: 'Altitude (m)' }, { width: '52px' });
-    this._passesInput = mk('input', { type: 'number', value: '1', min: '1', step: '1', title: 'Passes (corridor)' }, { width: '44px' });
+    this._spacingInput = mk('input', { type: 'number', value: '5', min: '0.5', step: '0.5', title: this._drawTitles.spacing }, { width: '52px' });
+    this._altInput = mk('input', { type: 'number', value: '0', step: '0.5', title: this._drawTitles.altitude }, { width: '52px' });
+    this._passesInput = mk('input', { type: 'number', value: '1', min: '1', step: '1', title: this._drawTitles.passes }, { width: '44px' });
 
-    this._drawBtn = mk('button', { type: 'button', textContent: '✏️ Draw' });
+    this._drawBtn = mk('button', { type: 'button', textContent: '✏️ Draw', title: this._drawTitles.draw });
     this._drawBtn.addEventListener('click', () => this._toggleDraw());
-    this._genBtn = mk('button', { type: 'button', textContent: 'Generate', disabled: true });
+    this._genBtn = mk('button', { type: 'button', textContent: 'Generate', disabled: true, title: this._drawTitles.generate });
     this._genBtn.addEventListener('click', () => this._generate());
-    const clearBtn = mk('button', { type: 'button', textContent: 'Clear' });
+    const clearBtn = mk('button', { type: 'button', textContent: 'Clear', title: this._drawTitles.clear });
     clearBtn.addEventListener('click', () => this._resetDraw());
+    this._clearBtn = clearBtn;
 
     // Geofence draw (Phase 5): independent of the pattern selector — sketch an
     // inclusion polygon (>= 3 vertices) and save it onto the focused mission.
-    this._fenceBtn = mk('button', { type: 'button', textContent: '🛡 Fence' });
+    this._fenceBtn = mk('button', { type: 'button', textContent: '🛡 Fence', title: this._drawTitles.fence });
     this._fenceBtn.addEventListener('click', () => this._toggleFence());
-    this._saveFenceBtn = mk('button', { type: 'button', textContent: 'Save fence', disabled: true });
+    this._saveFenceBtn = mk('button', { type: 'button', textContent: 'Save fence', disabled: true, title: this._drawTitles.saveFence });
     this._saveFenceBtn.addEventListener('click', () => this._saveFence());
-    this._clearFenceBtn = mk('button', { type: 'button', textContent: 'Clear fence', title: 'Remove the mission geofence' });
+    this._clearFenceBtn = mk('button', { type: 'button', textContent: 'Clear fence', title: this._drawTitles.clearFence });
     this._clearFenceBtn.addEventListener('click', () => this._clearFence());
 
     this._statusEl = mk('span', { textContent: '' }, { color: '#555' });
 
     bar.append(
+      this._addWaypointBtn,
+      mk('span', { textContent: '|' }, { color: '#b9c4d0' }),
       this._patternSel, mk('span', { textContent: 'sp' }), this._spacingInput,
       mk('span', { textContent: 'alt' }), this._altInput,
       mk('span', { textContent: '×' }), this._passesInput,
@@ -120,9 +151,59 @@ export class BasemapPanel {
       this._fenceBtn, this._saveFenceBtn, this._clearFenceBtn,
       this._statusEl,
     );
-    bar.hidden = true;
+    bar.hidden = false;
     this._toolbar = bar;
-    this._el.appendChild(bar);
+    (this._toolbarHost || this._el).appendChild(bar);
+    this.updateToolbarState(this._toolbarState);
+  }
+
+  setToolbarHost(host) {
+    this._toolbarHost = host || null;
+    if (this._toolbar) (this._toolbarHost || this._el).appendChild(this._toolbar);
+  }
+
+  updateToolbarState(nextState = {}) {
+    this._toolbarState = { ...this._toolbarState, ...nextState };
+    const state = this._toolbarState;
+
+    if (this._addWaypointBtn) {
+      this._addWaypointBtn.disabled = !state.addWaypointEnabled;
+      this._addWaypointBtn.classList.toggle('is-active', !!state.addWaypointActive);
+      this._addWaypointBtn.setAttribute('aria-pressed', state.addWaypointActive ? 'true' : 'false');
+      setTooltip(
+        this._addWaypointBtn,
+        state.addWaypointActive ? 'Click the map to place waypoints. Click again to leave add mode.' : 'Append waypoints by clicking the map.',
+        state.addWaypointReason,
+        !state.addWaypointEnabled,
+      );
+    }
+
+    const drawDisabled = !state.drawToolsEnabled;
+    const drawGenerateReady = canGenerateFromDrawState(this._drawMode, this._drawPoints);
+    const drawClearReady = this._drawPoints.length > 0;
+    this._patternSel.disabled = drawDisabled;
+    this._spacingInput.disabled = drawDisabled;
+    this._altInput.disabled = drawDisabled;
+    this._passesInput.disabled = drawDisabled;
+    this._drawBtn.disabled = drawDisabled;
+    this._genBtn.disabled = drawDisabled || !drawGenerateReady;
+    this._clearBtn.disabled = drawDisabled || !drawClearReady;
+    setTooltip(this._patternSel, this._drawTitles.pattern, state.drawToolsReason, drawDisabled);
+    setTooltip(this._spacingInput, this._drawTitles.spacing, state.drawToolsReason, drawDisabled);
+    setTooltip(this._altInput, this._drawTitles.altitude, state.drawToolsReason, drawDisabled);
+    setTooltip(this._passesInput, this._drawTitles.passes, state.drawToolsReason, drawDisabled);
+    setTooltip(this._drawBtn, this._drawTitles.draw, state.drawToolsReason, drawDisabled);
+    setTooltip(this._genBtn, this._drawTitles.generate, state.drawToolsReason, drawDisabled);
+    setTooltip(this._clearBtn, this._drawTitles.clear, state.drawToolsReason, drawDisabled);
+
+    const geofenceDisabled = !state.geofenceEnabled;
+    const saveFenceReady = this._drawMode === 'fence' && this._drawPoints.length >= 3;
+    this._fenceBtn.disabled = geofenceDisabled;
+    this._saveFenceBtn.disabled = geofenceDisabled || !saveFenceReady;
+    this._clearFenceBtn.disabled = geofenceDisabled;
+    setTooltip(this._fenceBtn, this._drawTitles.fence, state.geofenceReason, geofenceDisabled);
+    setTooltip(this._saveFenceBtn, this._drawTitles.saveFence, state.geofenceReason, geofenceDisabled);
+    setTooltip(this._clearFenceBtn, this._drawTitles.clearFence, state.geofenceReason, geofenceDisabled);
   }
 
   _toggleDraw() {
@@ -138,6 +219,7 @@ export class BasemapPanel {
       ? 'Click two opposite corners of the survey area.'
       : 'Click to add corridor vertices.');
     this._refreshDrawLayer();
+    this.updateToolbarState();
   }
 
   _toggleFence() {
@@ -151,6 +233,7 @@ export class BasemapPanel {
     if (this._map) this._map.getContainer().style.cursor = 'crosshair';
     this._setStatus('Click to add fence vertices (3+); then Save fence.');
     this._refreshDrawLayer();
+    this.updateToolbarState();
   }
 
   _resetDraw() {
@@ -163,6 +246,7 @@ export class BasemapPanel {
     if (this._map) this._map.getContainer().style.cursor = '';
     this._refreshDrawLayer();
     this._setStatus('');
+    this.updateToolbarState();
   }
 
   _onMapClick(latlng) {
@@ -181,6 +265,7 @@ export class BasemapPanel {
     }
     this._setStatus(`${this._drawPoints.length} point${this._drawPoints.length === 1 ? '' : 's'}`);
     this._refreshDrawLayer();
+    this.updateToolbarState();
   }
 
   _refreshDrawLayer() {
@@ -278,7 +363,6 @@ export class BasemapPanel {
   show() {
     this._visible = true;
     this._el.hidden = false;
-    if (this._toolbar) this._toolbar.hidden = false;
     this._ensureMap();
     // Leaflet needs a re-measure once the container becomes visible.
     window.requestAnimationFrame(() => this._map?.invalidateSize(false));
@@ -291,7 +375,6 @@ export class BasemapPanel {
   hide() {
     this._visible = false;
     this._el.hidden = true;
-    if (this._toolbar) this._toolbar.hidden = true;
     this._resetDraw();
   }
 
@@ -303,6 +386,7 @@ export class BasemapPanel {
     this._tileLayer = null;
     this._featureLayer = null;
     this._drawLayer = null;
+    this._toolbar?.remove();
     this._el.remove();
   }
 

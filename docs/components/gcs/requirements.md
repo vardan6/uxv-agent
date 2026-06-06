@@ -193,7 +193,8 @@ The map widget must:
 - provide **layer visibility toggles** for the scene-mode layers: terrain heightmap, roads, scene objects, and grid — each independently show/hide-able from a toolbar within the map panel (parity with the replay page layer toolbar)
 - provide **fit-bounds toolbar buttons**: fit to scene (full 3d-env extent), fit to focused mission, fit to visible-mission union — explicit buttons, not only auto-fit on focus change
 - show a **cursor/info bar** at the bottom of the map panel: cursor position in scene metres (and WGS84 when a Mission origin exists), current selection detail — parity with the replay page info bar
-- provide a **view mode selector**: Virtual Terrain (heightmap gradient + objects), CAD/Object View (objects only, flat background), Heightmap (raw elevation colourmap) — affects only the scene-mode render layers, not mission overlays
+- provide a **view mode selector**: Virtual Terrain (heightmap gradient + objects), CAD/Object View (objects only, flat background), Heightmap (raw elevation colourmap), and Basemap (WGS84/OpenStreetMap) — view mode changes the map background/projection surface, not mission-list state or mission overlays
+- provide a shared **map authoring toolbar** at the bottom of the map canvas, clear of top VIEW/NAV/fit controls and Leaflet zoom controls; it owns add-waypoint, corridor/survey pattern draw, geofence draw/save/clear, and sketch clear/generate actions instead of exposing those tools only inside Basemap mode
 - surface, on each mission row: a status stripe + status label, the mission's vehicle/profile icon, a created-at date, an origin badge that distinguishes manual (👤), AI (🤖), and AI-then-operator-edited (✏️), an inline-renamable name (auto-numbered when untitled), and an edit ⇄ done toggle
 - let a click anywhere on a mission row activate that mission (Active+Visible), with shift/meta/ctrl extending the multi-select
 - offer **mission-management affordances** in the list: a per-mission colour override (colour picker with custom hex + reset), a persisted list **sort** (by updated / created / status / label / selection / visibility), and a `⋯` overflow menu carrying sort and **JSON import / export**
@@ -204,7 +205,7 @@ The map widget is the primary mission authoring surface on `/ai`. No separate Mi
 
 Operators must be able to:
 
-- **Create a mission from scratch** using `➕ New mission` — lay down waypoints manually by clicking on the scene-mode map (CRS.Simple, local metres); the basemap Corridor/Survey draw tools are a separate pattern-generation path, not a substitute for this
+- **Create a mission from scratch** using `➕ New mission` or the shared map authoring toolbar — lay down waypoints manually by clicking the active map view; corridor/survey pattern generation and geofence drawing are exposed from the same toolbar, not as controls that appear only after enabling Basemap
 - **Review AI-proposed revisions** — the agent emits a revision; the map renders it immediately
 - **Edit AI-proposed or operator-authored revisions** — drag waypoints, add/delete waypoints, reorder
 - **Execute a mission** (▶) — uploads the mission to the FC and starts execution; available on any mission row with an active revision that is not already executing, paused, or completed

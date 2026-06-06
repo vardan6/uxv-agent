@@ -54,9 +54,8 @@ from the per-Mission `origin` datum, so a frame can't drift.
 Design rule:
 
 - scene-mode rendering uses `L.CRS.Simple` and consumes `{x, y, z}`
-- the WGS84 basemap mode is a distinct widget mode (`BasemapPanel`, own
-  `L.map` on EPSG:3857) that plots `{lat, lon}` directly — no client-side
-  re-projection
+- the WGS84 basemap is a VIEW option (`BasemapPanel`, own `L.map` on EPSG:3857)
+  that plots `{lat, lon}` directly — no client-side re-projection
 - WGS84 remains the server-side stored truth
 
 ### Flat Mission List
@@ -216,7 +215,7 @@ Beyond per-row editing, the list offers Mission-management UX:
 Design decisions (the management suite is ported forward from `e4a7c61`
 additively — it predates the current flat-Mission/`escapeHtml` rewrite):
 
-- the control cluster (view-mode, layer toggles, fit buttons, info bar) lives
+- the top control cluster (view-mode, layer toggles, fit buttons, info bar) lives
   **top-right**, clear of the Leaflet zoom ± — the branch's own richer view-mode
   cluster is *relocated* there rather than importing `e4a7c61`'s narrower
   `MapViewToolbar`
@@ -236,9 +235,12 @@ additively — it predates the current flat-Mission/`escapeHtml` rewrite):
 Top-right control stack order is:
 
 1. layer toggles (`Terrain`, `Roads`, `Objects`, `Grid`)
-2. view-mode selector (`Virtual Terrain`, `CAD / Object View`, `Heightmap`, `GPS / Satellite Debug`)
+2. view-mode selector (`Virtual Terrain`, `CAD / Object View`, `Heightmap`, `Basemap`)
 3. fit buttons (`Scene`, `Mission`, `All`)
-4. `Basemap` as a separate bottom action beneath the main stack
+
+The map authoring toolbar is not part of this top-right stack; it is anchored to
+the bottom of the map canvas so it never competes with VIEW/NAV/fit controls or
+Leaflet zoom controls.
 
 ## Map Rendering Rules
 
@@ -384,11 +386,12 @@ toggle is local state, reset on load; applied to layers via
 Mission-overlay layers are never toggled from this bar — they are controlled by
 the mission list's Visible state.
 
-**Toolbar placement** — the whole control cluster (layer toggles, view-mode
-selector, fit buttons, basemap toggle, info bar) sits **top-right**, clear of the
-Leaflet zoom ± in the top-left. The first browser smoke (2026-06-02) found the
-original top-left placement collided with the zoom buttons and hid the fit
-buttons; relocating right matches the replay page and resolves both.
+**Toolbar placement** — chrome is split by intent. View/navigation controls
+(layer toggles, view-mode selector, NAV, fit buttons, info bar) sit at the top
+and must stay clear of the Leaflet zoom ± in the top-left. Authoring tools sit
+in one bottom toolbar inside the map canvas. The authoring toolbar must reserve
+space from the bottom info/elevation UI and wrap or collapse before it overlaps
+top controls on short viewports.
 
 Design rules (still applicable to remaining items):
 
@@ -397,14 +400,17 @@ Design rules (still applicable to remaining items):
 (fits the visible-mission union). These reset `_lastFitKey = null` so the next
 `_render` re-fires `_fitBounds`. Disabled when the target bounds are unknown.
 
-**View mode selector** — dropdown with three options: Virtual Terrain (default;
+**View mode selector** — dropdown with four options: Virtual Terrain (default;
 heightmap gradient + objects), CAD/Object View (objects only, solid background),
-Heightmap (raw greyscale elevation). Mode change reconstructs or reconfigures the
-scene layers in place; mission overlays are unaffected. The replay page's
-"GPS/Satellite Debug" mode maps to the existing Basemap toggle (WGS84 OSM panel).
-View mode and the basemap toggle are **independent**: switching to CAD/Object
-View must not tear down the basemap/satellite view (a parity bug found in the
-2026-06-02 smoke).
+Heightmap (raw greyscale elevation), and Basemap (WGS84/OpenStreetMap). VIEW is
+the single owner of the active map surface: scene modes hide the basemap panel;
+Basemap shows it. Mission list focus/visibility, mission overlays, active edit
+state, and the authoring toolbar are not reset by switching VIEW.
+
+**Basemap ownership** — BasemapPanel owns only the EPSG:3857 Leaflet map and
+WGS84 rendering/sketch coordinate capture. It must not own the user-facing
+authoring toolbar. Its old draw controls are a migration source for behavior,
+not the final chrome.
 
 **Cursor/info bar** — fixed bar at the bottom of the map canvas. Left slot: cursor
 scene-metre coordinates (`x: N m, y: N m`), with WGS84 equivalent in parentheses
@@ -429,21 +435,31 @@ Design rules:
 - the panel can be collapsed via a toggle button and supports click-to-highlight
   on the map
 
-## Scene-Mode Manual Mission Creation
+## Map Authoring Toolbar
 
-The `➕ New mission` flow (requirements §Mission CRUD) works in scene-mode
-(CRS.Simple), not only via the basemap draw tools.
+The shared map authoring toolbar is the visible mission-creation surface across
+views. It sits at the bottom of the map canvas and exposes add-waypoint,
+corridor, survey, geofence, clear sketch, generate, save fence, and clear fence
+actions from one place.
 
 Design rules:
 - `➕ New mission` creates a blank Mission via backend, promotes it to Active,
   and add mode is entered automatically (new mission has 0 waypoints, so the
   ≤1-waypoint auto-add rule fires) — the existing `map click → insertWaypoint`
   path handles placement
-- this is distinct from the Basemap Corridor/Survey tools: those generate a whole
-  pattern server-side from drawn WGS84 geometry; scene-mode add is click-to-place
-  individual waypoints in local metres
+- corridor/survey tools generate a whole pattern server-side from drawn geometry;
+  add-waypoint remains click-to-place individual waypoints
+- tool behavior must route through existing `MapWidget` handlers where possible
+  (`_handleDrawnPattern`, `_handleSetGeofence`, edit/add waypoint insertion) so
+  API contracts do not change
+- if a tool is not yet implemented for the active VIEW, the button stays visible
+  but disabled with a tooltip explaining which VIEW currently supports it; do
+  not hide authoring capabilities behind Basemap activation
+- tool-specific numeric fields and save/generate actions appear inside the
+  bottom toolbar only when relevant to the active tool
 - the `➕ New mission` button lives in the `MissionListPanel` header (an empty list
-  already shows a call-to-action area)
+  already shows a call-to-action area), but the bottom toolbar is the primary
+  in-map authoring control surface
 
 ## Deferred Beyond The Current Widget Contract
 

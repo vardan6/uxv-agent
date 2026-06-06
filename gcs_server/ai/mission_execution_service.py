@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -431,6 +432,7 @@ class MissionExecutionService:
     ):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._adapter_lock = threading.Lock()
         self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
             self._db_path.parent / "controller_mission_adapter.json"
         )
@@ -448,7 +450,13 @@ class MissionExecutionService:
         """The configured controller link. Exposed so the behavior-tree executor
         (ADR 0023) can build a leaf driver against the same adapter the cutover
         flow uses, rather than spinning up a second connection."""
-        return self._controller_adapter
+        with self._adapter_lock:
+            return self._controller_adapter
+
+    def set_controller_adapter(self, adapter: ControllerMissionAdapter) -> None:
+        """Thread-safe adapter swap — guards against a concurrent executor mid-call."""
+        with self._adapter_lock:
+            self._controller_adapter = adapter
 
     def _resolve_origin(self, operation_id: str | None = None) -> Origin:
         """Coordinate datum for a Mission's WGS84↔local conversions (ADR 0022).
@@ -1684,6 +1692,13 @@ class MissionExecutionService:
             "operation_id": operation_id,
             "revision_id": str(revision.get("id") or ""),
         }
+
+    def delete_operation(self, operation_id: str) -> None:
+        """Delete an operation and all its revisions (compensating action for failed create)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM ai_mission_revisions WHERE operation_id = ?", (operation_id,))
+            conn.execute("DELETE FROM ai_mission_operations WHERE id = ?", (operation_id,))
+            conn.commit()
 
     def _create_rebased_revision_from_controller_state(
         self,

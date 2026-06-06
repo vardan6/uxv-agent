@@ -104,6 +104,7 @@ export class MapWidget {
     this._overlayLayer = null;
     this._errorBanner = null;
     this._errorText = null;
+    this._sessionPillEl = null;
     this._emptyState = null;
     this._mapEl = null;
     this._listEl = null;
@@ -172,10 +173,11 @@ export class MapWidget {
     // Real 2D WGS84 basemap render mode (Phase 4): an additive, read-only second
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
     this._basemapPanel = null;
-    this._basemapToggleBtn = null;
+    this._authoringToolbarDock = null;
     this._layerToolbar = null;
     this._fitBtns = null;
     this._viewModeSelect = null;
+    this._currentViewMode = 'virtual_terrain';
     this._infoBar = null;
     this._infoBarCoords = null;
     this._infoBarGps = null;
@@ -402,6 +404,7 @@ export class MapWidget {
     const nextSessionId = sessionId || '';
     if (nextSessionId !== this._sessionId) {
       this._sessionId = nextSessionId;
+      if (this._sessionPillEl) this._sessionPillEl.textContent = this._sessionId || 'No session';
       this._overlayCacheByMissionId.clear();
       this._missions = [];
       this._missionsById = new Map();
@@ -911,6 +914,7 @@ export class MapWidget {
       this._mapEl.classList.remove('is-edit-mode', 'is-locked');
       this._updateInfoBarSelection(null);
       this._updateElevationProfile();
+      this._syncAuthoringToolbarState();
       return;
     }
 
@@ -956,6 +960,7 @@ export class MapWidget {
       const idx = [...snapshot.selectedIndices][0];
       this._elevationPanel?.highlight(idx);
     }
+    this._syncAuthoringToolbarState();
   }
 
   // --- Keyboard ---
@@ -1178,6 +1183,7 @@ export class MapWidget {
     this._showEmpty(!overlays.length && !editedMissionId && !this._sceneBounds);
     this._updateElevationProfile();
     if (this._basemapPanel?.visible) this._basemapPanel.render(focusedPayload);
+    this._syncAuthoringToolbarState();
   }
 
   _onLayerToggle(key, visible) {
@@ -1190,11 +1196,12 @@ export class MapWidget {
   }
 
   _applyViewMode(mode) {
+    this._currentViewMode = mode || 'virtual_terrain';
     const configs = {
       virtual_terrain:  { terrain: true,  roads: true,  objects: true,  grid: true  },
       cad:              { terrain: false, roads: true,  objects: true,  grid: true  },
       heightmap:        { terrain: true,  roads: false, objects: false, grid: false },
-      'satellite-debug': { terrain: false, roads: false, objects: false, grid: false },
+      basemap:          { terrain: false, roads: false, objects: false, grid: false },
     };
     const cfg = configs[mode] || configs.virtual_terrain;
     this._terrainLayer?.setVisible(cfg.terrain);
@@ -1206,9 +1213,8 @@ export class MapWidget {
         cb.checked = !!cfg[cb.dataset.layer];
       }
     }
-    if (mode === 'satellite-debug' && this._basemapPanel && !this._basemapPanel.visible) {
-      this._toggleBasemap();
-    }
+    this._setBasemapVisible(mode === 'basemap');
+    this._syncAuthoringToolbarState();
   }
 
   _handleFitClick(key) {
@@ -1239,19 +1245,51 @@ export class MapWidget {
     this._fitBtns.all.disabled = !this._sceneBounds && !this._overlayCacheByMissionId.size;
   }
 
-  // Real 2D WGS84 basemap render mode (Phase 4): show/hide the geographic view
-  // and (re)plot the focused mission on it by lat/lon.
-  _toggleBasemap() {
+  // Real 2D WGS84 basemap render mode (Phase 4): the basemap is a VIEW option,
+  // not an independent toggle. Swapping views must not disturb mission focus,
+  // visibility, or edit state.
+  _setBasemapVisible(visible) {
     if (!this._basemapPanel) return;
-    const visible = this._basemapPanel.toggle();
-    this._basemapToggleBtn?.classList.toggle('is-active', visible);
-    this._basemapToggleBtn?.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    if (visible === this._basemapPanel.visible) {
+      if (visible) {
+        const focusedPayload = this._focusedMissionId
+          ? this._overlayCacheByMissionId.get(this._focusedMissionId)
+          : null;
+        this._basemapPanel.render(focusedPayload);
+      }
+      return;
+    }
     if (visible) {
+      this._basemapPanel.show();
       const focusedPayload = this._focusedMissionId
         ? this._overlayCacheByMissionId.get(this._focusedMissionId)
         : null;
       this._basemapPanel.render(focusedPayload);
+      return;
     }
+    this._basemapPanel.hide();
+  }
+
+  _syncAuthoringToolbarState() {
+    if (!this._basemapPanel) return;
+    const onBasemapView = this._currentViewMode === 'basemap';
+    const hasEditableRevision = !!editState.revisionId && editState.isEditable();
+    const geofenceReason = !onBasemapView
+      ? 'Switch VIEW to Basemap to edit geofences.'
+      : this._focusedMissionId
+        ? 'Edit the geofence for the focused mission.'
+        : 'Focus a mission to edit its geofence.';
+    this._basemapPanel.updateToolbarState({
+      addWaypointEnabled: hasEditableRevision,
+      addWaypointActive: editState.editMode === 'add',
+      addWaypointReason: editState.revisionId
+        ? 'The current revision is locked or busy.'
+        : 'Open a mission in edit mode to add waypoints.',
+      drawToolsEnabled: onBasemapView,
+      drawToolsReason: 'Switch VIEW to Basemap to use corridor and survey tools.',
+      geofenceEnabled: onBasemapView && !!this._focusedMissionId,
+      geofenceReason,
+    });
   }
 
   // Persist an operator-drawn pattern (corridor/survey) sketched on the basemap
@@ -1734,6 +1772,16 @@ export class MapWidget {
     this._errorBanner = errorBanner;
     this._errorText = errorText;
 
+    const head = document.createElement('div');
+    head.className = 'map-widget-head';
+    const title = document.createElement('h2');
+    title.textContent = 'Mission Map';
+    const sessionPill = document.createElement('span');
+    sessionPill.className = 'pill warn map-widget-session-pill';
+    sessionPill.textContent = this._sessionId || 'No session';
+    this._sessionPillEl = sessionPill;
+    head.append(title, sessionPill);
+
     const shell = document.createElement('div');
     shell.className = 'map-widget-shell';
     this._shellEl = shell;
@@ -1836,36 +1884,48 @@ export class MapWidget {
       onCancel: () => this._handleCancelExecution(),
     });
 
+    const authoringToolbarDock = document.createElement('div');
+    authoringToolbarDock.className = 'map-authoring-toolbar-dock';
+    authoringToolbarDock.setAttribute('aria-label', 'Map authoring tools');
+    this._authoringToolbarDock = authoringToolbarDock;
+
     // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene
-    // map when active; the toggle stays visible above it.
+    // map when active; the toggle stays visible above it. The toolbar shell is
+    // docked by MapWidget at the bottom of the canvas for layout parity with
+    // the rest of the widget chrome.
     this._basemapPanel = new BasemapPanel(mapWrap, {
       onGenerate: (sketch) => this._handleDrawnPattern(sketch),
       onSetGeofence: (fence) => this._handleSetGeofence(fence),
+      onToggleAddWaypoint: () => {
+        if (editState.isEditable()) editState.setEditMode('add');
+      },
+      toolbarHost: authoringToolbarDock,
     });
-    const basemapToggleBtn = document.createElement('button');
-    basemapToggleBtn.type = 'button';
-    basemapToggleBtn.className = 'map-basemap-toggle';
-    basemapToggleBtn.textContent = '🗺 Basemap';
-    basemapToggleBtn.setAttribute('aria-pressed', 'false');
-    basemapToggleBtn.addEventListener('click', () => this._toggleBasemap());
-    this._basemapToggleBtn = basemapToggleBtn;
 
-    // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons,
-    // with the basemap toggle kept as a separate bottom action.
+    // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons.
     const ctrlRight = document.createElement('div');
     ctrlRight.className = 'map-ctrl-right';
 
     const viewModeToolbar = document.createElement('div');
-    viewModeToolbar.className = 'map-view-mode-toolbar';
+    viewModeToolbar.className = 'map-overlay-card map-overlay-selects map-widget-selects';
     viewModeToolbar.setAttribute('aria-label', 'View mode');
+    const viewLabel = document.createElement('label');
+    viewLabel.title = 'Choose how the generated terrain is rendered on the mission map.';
+    viewLabel.innerHTML = `
+      <span class="map-tool-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false"><path d="M4 7.4 9.6 4l5 2.5L20 4v12.6L14.4 20l-5-2.5L4 20V7.4Zm2 1.1v8l3.2-1.9v-8L6 8.5Zm5.2-1.9v8.1l3.2 1.6V8.2l-3.2-1.6Zm5.2 1.4v8l1.6-1V7l-1.6 1Z"/></svg>
+      </span>
+      <span class="map-tool-label">View</span>
+    `;
     const viewModeSelect = document.createElement('select');
     viewModeSelect.className = 'map-view-mode-select';
     viewModeSelect.setAttribute('aria-label', 'Scene view mode');
+    viewModeSelect.title = 'Map rendering mode';
     for (const [value, label] of [
       ['virtual_terrain',  'Virtual Terrain'],
       ['cad',              'CAD / Object View'],
       ['heightmap',        'Heightmap'],
-      ['satellite-debug',  'GPS / Satellite Debug'],
+      ['basemap',          'Basemap'],
     ]) {
       const opt = document.createElement('option');
       opt.value = value;
@@ -1875,7 +1935,28 @@ export class MapWidget {
     viewModeSelect.value = 'virtual_terrain';
     viewModeSelect.addEventListener('change', () => this._applyViewMode(viewModeSelect.value));
     this._viewModeSelect = viewModeSelect;
-    viewModeToolbar.append(viewModeSelect);
+    viewLabel.append(viewModeSelect);
+    viewModeToolbar.append(viewLabel);
+
+    const navLabel = document.createElement('label');
+    navLabel.title = 'Navigation behavior is fixed to free pan in mission planning.';
+    navLabel.innerHTML = `
+      <span class="map-tool-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3 5 21l7-3 7 3-7-18Zm0 5.6 3.4 8.8-3.4-1.5-3.4 1.5L12 8.6Z"/></svg>
+      </span>
+      <span class="map-tool-label">Nav</span>
+    `;
+    const navModeSelect = document.createElement('select');
+    navModeSelect.className = 'map-nav-mode-select';
+    navModeSelect.setAttribute('aria-label', 'Map navigation behavior');
+    navModeSelect.title = 'Mission map navigation behavior';
+    navModeSelect.disabled = true;
+    const freePanOpt = document.createElement('option');
+    freePanOpt.value = 'free';
+    freePanOpt.textContent = 'Free Pan';
+    navModeSelect.append(freePanOpt);
+    navLabel.append(navModeSelect);
+    viewModeToolbar.append(navLabel);
 
     const layerToolbar = document.createElement('div');
     layerToolbar.className = 'map-layer-toolbar';
@@ -1899,30 +1980,46 @@ export class MapWidget {
     this._layerToolbar = layerToolbar;
 
     const fitToolbar = document.createElement('div');
-    fitToolbar.className = 'map-fit-toolbar';
+    fitToolbar.className = 'map-overlay-card map-fit-actions map-fit-toolbar';
     fitToolbar.setAttribute('aria-label', 'Fit view');
     const fitDefs = [
-      { key: 'scene',   label: 'Scene' },
-      { key: 'mission', label: 'Mission' },
-      { key: 'all',     label: 'All' },
+      {
+        key: 'scene',
+        label: 'terrain',
+        title: 'Fit Terrain: Fit the full generated terrain scene in the map view',
+        icon: '<path d="M5 5h5v2H7v3H5V5Zm9 0h5v5h-2V7h-3V5ZM5 14h2v3h3v2H5v-5Zm12 0h2v5h-5v-2h3v-3Z"/>',
+      },
+      {
+        key: 'mission',
+        label: 'mission',
+        title: 'Fit Mission: Fit the focused mission route in the map view',
+        icon: '<path d="M6.5 6A2.5 2.5 0 1 0 6.5 11 2.5 2.5 0 0 0 6.5 6Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM17.5 13A2.5 2.5 0 1 0 17.5 18 2.5 2.5 0 0 0 17.5 13Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM9.1 9.4l1.2-1.5 5.6 4.7-1.2 1.5-5.6-4.7Z"/>',
+      },
+      {
+        key: 'all',
+        label: 'all visible missions',
+        title: 'Fit All: Fit all visible mission routes in the map view',
+        icon: '<path d="M4 4h7v2H7.4l4.1 4.1-1.4 1.4L6 7.4V11H4V4Zm9 0h7v7h-2V7.4l-4.1 4.1-1.4-1.4L16.6 6H13V4ZM4 13h2v3.6l4.1-4.1 1.4 1.4L7.4 18H11v2H4v-7Zm14 0h2v7h-7v-2h3.6l-4.1-4.1 1.4-1.4 4.1 4.1V13Z"/>',
+      },
     ];
     const fitBtns = {};
-    for (const { key, label } of fitDefs) {
+    for (const { key, label, title, icon } of fitDefs) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'map-fit-btn';
-      btn.textContent = label;
+      btn.className = 'map-tool-button map-fit-btn';
+      btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${icon}</svg>`;
       btn.disabled = true;
-      btn.title = `Fit view to ${label.toLowerCase()} bounds`;
+      btn.title = title;
+      btn.setAttribute('aria-label', `Fit ${label}`);
       btn.addEventListener('click', () => this._handleFitClick(key));
       fitToolbar.append(btn);
       fitBtns[key] = btn;
     }
     this._fitBtns = fitBtns;
 
-    ctrlRight.append(layerToolbar, viewModeToolbar, fitToolbar, basemapToggleBtn);
+    ctrlRight.append(viewModeToolbar, fitToolbar, layerToolbar);
 
-    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar);
+    mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar, authoringToolbarDock);
     shell.append(listEl, listResizer, mapWrap);
 
     // Context menu (absolute-positioned inside container)
@@ -1962,7 +2059,7 @@ export class MapWidget {
     elevationEl.className = 'map-elevation-panel';
     this._elevationEl = elevationEl;
 
-    this._container.append(errorBanner, shell, elevationEl, confirmModal);
+    this._container.append(errorBanner, head, shell, elevationEl, confirmModal);
 
     // Keyboard help overlay (<dialog> appended to container by constructor)
     this._keyboardHelp = new KeyboardHelpOverlay(this._container);
