@@ -12,8 +12,8 @@ will eventually speak multiple protocols:
 | Protocol | Status | Notes |
 |---|---|---|
 | MAVLink UDP | Phase 1 | Raw packets via pymavlink, port 14550 |
-| MAVSDK gRPC | Future | MAVSDK is NOT a thin MAVLink wrapper — it has its own gRPC+protobuf layer (C++ core with language bindings). Requires separate gRPC server implementation. |
-| ROS2 / MAVROS | Future | MAVROS is a MAVLink-to-ROS gateway; still MAVLink underneath. Not a separate wire protocol. |
+| MAVSDK gRPC | Phase 5 | Real `grpc.aio` server (off by default) serving a minimal self-contained proto — NOT the official MAVSDK plugin proto set (that is the large C++ `mavsdk_server` API). MAVSDK is its own gRPC+protobuf layer, not a thin MAVLink wrapper. See Phase 5 section below. |
+| ROS2 / MAVROS | Stub | Registered as a disabled transport only; MAVROS is a MAVLink-to-ROS gateway needing a full ROS2 install, not a separate wire protocol. |
 | MSP | Not planned | MultiWii Serial Protocol — FPV racing only, not relevant here |
 
 MAVLink (ArduPilot + PX4) is the dominant GCS↔FC protocol for both aerial and ground
@@ -101,11 +101,13 @@ Browser (port 9010)
 - **Phase 3 — handshake**: `mavlink_listener._handle_protocol` responds to `MISSION_COUNT` + `MISSION_ITEM_INT` with `MISSION_REQUEST_INT` per item then `MISSION_ACK(ACCEPTED)`; tracks upload state; `simulate_execution` emits `MISSION_ITEM_REACHED` + `GLOBAL_POSITION_INT` per waypoint.
 - **Phase 4 — telemetry**: `GLOBAL_POSITION_INT` messages are also received by the GCS-side `MavlinkTelemetryBridge` (`gcs_server/mavlink_telemetry.py`) and broadcast as normalized telemetry; `BasemapPanel` renders a live GPS vehicle marker via its own GCS WebSocket subscription.
 
-### Phase 5 seam (implemented entry point)
+### Phase 5 — multi-protocol (implemented)
 
-- `transport_manager.py` is the protocol-service registry for `mav_sim`.
-- MAVLink UDP remains the only active transport implementation.
-- MAVSDK gRPC is represented by a disabled-by-default stub service with config and status reporting; real protobuf service methods are a follow-on slice.
+- `transport_manager.py` is the protocol-service registry for `mav_sim`, holding three services: `mavlink_udp` (running), `mavsdk_grpc`, and `ros2_mavros`.
+- MAVLink UDP remains the always-on transport implementation.
+- **MAVSDK gRPC** is now a *real* `grpc.aio` server (`grpc_service.py`), gated by `config.MAVSDK_GRPC_ENABLED` (off by default). When enabled, `MavsdkGrpcService.start()` lazily imports grpc and boots the server on its own asyncio loop in a daemon thread; status flips to `running`/`error` based on liveness. `grpc` is imported lazily so the base monitor runs without grpcio installed.
+- The gRPC surface is **deliberately not** the official MAVSDK plugin proto set (that is the large C++ `mavsdk_server` API). It is a small self-contained service in `proto/mav_sim.proto` (`GetInfo`, `GetMission`, `SubscribeTelemetry`) mirroring the simulator's in-memory state so a client can connect and read/stream real data. Regenerate stubs with `python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/mav_sim.proto`.
+- **ROS2 / MAVROS** is registered as a disabled stub only (`RosBridgeService`, `config.ROS2_BRIDGE_ENABLED`). MAVROS is a MAVLink-to-ROS gateway, not a separate wire protocol, and needs a full ROS2 install; advertised via `/api/transports` but not implemented.
 - `GET /api/transports` exposes the live transport snapshot for UI/runtime inspection.
 
 ---
