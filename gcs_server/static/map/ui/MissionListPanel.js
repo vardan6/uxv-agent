@@ -33,7 +33,7 @@ function statusLabel(status) {
 function formatDate(ts) {
   if (!ts) return '';
   return new Date(ts * 1000).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric',
+    month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
   });
 }
@@ -317,8 +317,7 @@ export class MissionListPanel {
     const safeSortLabel = escapeHtml(sortLabel);
     const header = `<div class="mission-list-header">
             <div class="mission-list-header-copy">
-              <p class="section-kicker">Missions</p>
-              <h2 class="mission-list-header-title">Routes</h2>
+              <h2 class="mission-list-header-title">Missions</h2>
               ${safeSortLabel ? `<p class="mission-list-sort-label" title="Active sort order">⇅ ${safeSortLabel}</p>` : ''}
             </div>
             <div class="mission-list-header-actions">
@@ -473,7 +472,7 @@ export class MissionListPanel {
       selectAllBox.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this._onAllSelectionToggled(!selectAllBox.checked || selectAllBox.indeterminate);
+        this._onAllSelectionToggled(selectAllBox.checked || selectAllBox.indeterminate);
       });
     }
     this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {

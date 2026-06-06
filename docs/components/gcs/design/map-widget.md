@@ -232,6 +232,11 @@ additively — it predates the current flat-Mission/`escapeHtml` rewrite):
   per-Mission provenance summary already used for the ✏️ badge; every other
   affordance above is frontend-only
 
+For the planned split between the persistent header bar and the contextual
+selection/focused-item bar above the Mission rows, see
+[mission-sidebar-toolbar.md](./mission-sidebar-toolbar.md). That note is the
+canonical design for replacing the current pseudo-row batch bar.
+
 Top-right control stack order is:
 
 1. layer toggles (`Terrain`, `Roads`, `Objects`, `Grid`)

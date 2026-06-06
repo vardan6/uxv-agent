@@ -853,10 +853,6 @@ select:focus-visible {
   pointer-events: auto;
 }
 
-.map-ctrl-right .map-layer-toolbar {
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(12px);
-}
 
 .map-authoring-toolbar-dock {
   position: absolute;
@@ -3567,6 +3563,121 @@ code {
   min-height: 2.5rem;
 }
 
+/* ── Status bar ──────────────────────────────────────────────────── */
+
+.gcs-status-bar-panel {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.gcs-status-bar {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.gcs-status-bar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.4;
+}
+
+.gcs-status-bar-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--text);
+}
+
+.gcs-status-bar-label {
+  flex: 1;
+}
+
+.gcs-status-bar-count {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border-radius: 10px;
+  padding: 0 5px;
+  min-width: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.gcs-status-bar-caret {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.gcs-status-bar.is-collapsed .gcs-status-bar-caret {
+  transform: rotate(-90deg);
+}
+
+.gcs-status-bar-log {
+  max-height: 110px;
+  overflow-y: auto;
+  padding: 2px 0;
+  border-top: 1px solid var(--line);
+}
+
+.gcs-status-bar.is-collapsed .gcs-status-bar-log {
+  display: none;
+}
+
+.gcs-status-bar-empty {
+  padding: 5px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.gcs-status-bar-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.gcs-status-bar-row:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.gcs-status-bar-ts {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.gcs-status-bar-msg {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.gcs-status-bar-row.is-warn .gcs-status-bar-msg {
+  color: var(--warn);
+}
+
+.gcs-status-bar-row.is-error .gcs-status-bar-msg {
+  color: var(--danger);
+}
+
 /* ── Map widget ──────────────────────────────────────────────────── */
 
 .ai-map-area {
@@ -3744,7 +3855,7 @@ code {
 .mission-list-sort-label {
   margin: 0;
   font-size: 0.68rem;
-  opacity: 0.5;
+  opacity: 0.65;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4294,35 +4405,48 @@ code {
   padding: 0;
 }
 
-.map-widget-error-banner {
+
+.map-widget-map-col {
   display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.map-layer-bar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 6px 14px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 0.83rem;
+  gap: 4px 6px;
+  padding: 5px 10px;
   flex-shrink: 0;
-  z-index: 1;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
 }
 
-.map-widget-error-text {
-  flex: 1;
-}
-
-.map-widget-refresh-btn {
-  font-size: 0.8rem;
-  padding: 2px 10px;
-  border: 1px solid currentColor;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
+.map-layer-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.76rem;
   cursor: pointer;
-  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent-soft) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  transition: background 0.12s, border-color 0.12s;
 }
 
-.map-widget-refresh-btn:hover {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+.map-layer-bar label:hover {
+  background: color-mix(in srgb, var(--accent-soft) 32%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+}
+
+.map-layer-bar input {
+  width: auto;
+  accent-color: var(--accent);
 }
 
 .map-widget-wrap {
@@ -4621,7 +4745,7 @@ code {
     border-bottom: 1px solid var(--line);
   }
 
-  .map-widget-wrap {
+  .map-widget-map-col {
     min-height: 420px;
   }
 }
@@ -5504,18 +5628,30 @@ code {
 /* Ghost midpoint marker — CSS class applied via circleMarker className */
 .leaflet-interactive.map-wp-ghost { cursor: cell; }
 
-/* Edit button in action strip */
+/* Edit + delete reveal on row hover only; primary actions (play/stop/eye) always visible */
+.mission-row-action-btn.is-edit,
+.mission-row-action-btn.is-delete {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.mission-list-row:hover .mission-row-action-btn.is-edit,
+.mission-list-row:hover .mission-row-action-btn.is-delete,
+.mission-list-row:focus-within .mission-row-action-btn.is-edit,
+.mission-list-row:focus-within .mission-row-action-btn.is-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .mission-row-action-btn.is-delete {
   color: var(--muted);
   border-color: transparent;
-  opacity: 0.5;
-  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
 
 .mission-row-action-btn.is-delete:hover {
   color: #c72e0f;
   border-color: color-mix(in srgb, #c72e0f 40%, transparent);
-  opacity: 1;
   background: color-mix(in srgb, #c72e0f 10%, transparent);
 }
 
@@ -5541,6 +5677,8 @@ code {
 .mission-row-action-btn.is-edit:hover {
   background: color-mix(in srgb, var(--muted) 12%, transparent);
 }
+
+/* is-done (finish-editing checkmark) stays fully visible — it is the active primary action */
 
 .mission-row-action-btn.is-done {
   color: #2ea043;

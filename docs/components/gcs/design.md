@@ -226,3 +226,4 @@ Detailed per-topic design content lives in sibling files under [`design/`](./des
 - [`design/api-and-runtime.md`](./design/api-and-runtime.md) — Api And Runtime
 - [`design/llm-capability-matrix.md`](./design/llm-capability-matrix.md) — Llm Capability Matrix
 - [`design/map-widget.md`](./design/map-widget.md) — Map Widget
+- [`design/mission-sidebar-toolbar.md`](./design/mission-sidebar-toolbar.md) — Mission Sidebar Toolbar
