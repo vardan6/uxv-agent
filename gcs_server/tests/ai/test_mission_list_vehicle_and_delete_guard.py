@@ -174,6 +174,48 @@ def test_list_missions_derives_waypoint_count_from_direct_waypoints_payload() ->
     assert missions[0]["waypoint_count"] == 4
 
 
+def test_list_missions_derives_waypoint_count_from_route_artifact_summary() -> None:
+    store, db_path = _make_store()
+    mission = store.create_mission(user_id="", name="Artifact mission", origin="manual")
+    now = time.time()
+
+    mission_json = {
+        "goal": "summary only route artifact",
+        "route_artifacts": [
+            {"tool": "plan_route_between", "waypoint_count": 5},
+            {"tool": "plan_route_around_group", "waypoint_count": 3},
+        ],
+    }
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_mission_operations (
+              id, session_id, source_message_id, status, active_revision_id, policy_json, created_at, updated_at
+            ) VALUES (?, '', '', 'planning', ?, '{}', ?, ?)
+            """,
+            ("op-4", "rev-4", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_mission_revisions (
+              id, operation_id, draft_id, parent_revision_id, status,
+              mission_json, intent_json, target_resolution_json, validation_json,
+              review_context_json, created_at, updated_at, approved_at, rejected_at
+            ) VALUES (?, ?, '', '', 'proposed', ?, '{}', '{}', '{}', '{}', ?, ?, NULL, NULL)
+            """,
+            ("rev-4", "op-4", json.dumps(mission_json), now, now),
+        )
+        conn.commit()
+
+    store.set_active_operation(str(mission["id"]), operation_id="op-4")
+
+    missions = store.list_missions(user_id="")
+
+    assert missions[0]["id"] == mission["id"]
+    assert missions[0]["waypoint_count"] == 8
+
+
 def test_delete_mission_rejects_armed_execution() -> None:
     store, _ = _make_store()
     mission = store.create_mission(user_id="", name="Protected mission", origin="manual")

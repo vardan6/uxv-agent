@@ -147,7 +147,8 @@ Key frontend modules under `static/map/`:
 | `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
 | `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, five fixed per-row action slots (play/pause, stop, edit, delete, visibility), batch show/hide. Row markup escapes AI-/operator-derived names. See [requirements.md §Mission Row Button Layout](../gcs/requirements.md#mission-row-button-layout) for slot spec. |
 | `layers/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
-| `ui/BasemapPanel.js` | Real 2D WGS84 basemap view (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; also hosts the current shared bottom authoring-toolbar controls while MapWidget owns their placement/state |
+| `ui/BasemapPanel.js` | Real 2D WGS84 basemap view (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; owns only basemap rendering plus WGS84 sketch capture for the shared toolbar |
+| `ui/MapAuthoringToolbar.js` | Shared bottom authoring toolbar owned by `MapWidget`; routes add-waypoint, corridor/survey generation, geofence save/clear, and sketch state/status through existing mission handlers |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
 | `ui/ContextMenu.js` | Right-click/long-press context menu (insert before/after, delete, set as home, detach) |
 | `ui/HintToasts.js` | Gesture hint toasts |

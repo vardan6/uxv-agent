@@ -452,6 +452,10 @@ Design rules:
 - tool behavior must route through existing `MapWidget` handlers where possible
   (`_handleDrawnPattern`, `_handleSetGeofence`, edit/add waypoint insertion) so
   API contracts do not change
+- current implementation constraint: corridor/survey/geofence sketch capture is
+  still performed only on the WGS84 Basemap VIEW; scene-view sketching is
+  explicitly deferred until the widget has a reliable mission-origin/georef
+  conversion path for shared authoring gestures
 - if a tool is not yet implemented for the active VIEW, the button stays visible
   but disabled with a tooltip explaining which VIEW currently supports it; do
   not hide authoring capabilities behind Basemap activation

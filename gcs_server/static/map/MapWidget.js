@@ -21,6 +21,7 @@ import { ElevationProfilePanel } from './ui/ElevationProfilePanel.js';
 import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
 import { ConfirmExecutionBanner } from './ui/ConfirmExecutionBanner.js';
 import { BasemapPanel } from './ui/BasemapPanel.js';
+import { MapAuthoringToolbar } from './ui/MapAuthoringToolbar.js';
 import { editState } from './state/editState.js';
 
 const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
@@ -174,6 +175,7 @@ export class MapWidget {
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
     this._basemapPanel = null;
     this._authoringToolbarDock = null;
+    this._authoringToolbar = null;
     this._layerToolbar = null;
     this._fitBtns = null;
     this._viewModeSelect = null;
@@ -229,10 +231,9 @@ export class MapWidget {
       onMissionRenameRequested: (missionId, name) => this._handleRenameMission(missionId, name),
       onNewMissionRequested: () => this._handleNewMission(),
       onMissionSelectionToggled: (missionId, opts) => this._toggleSelection(missionId, opts),
-      onSelectedShowRequested: () => this._showSelectedMissions(),
-      onSelectedHideRequested: () => this._hideSelectedMissions(),
+      onAllVisibilityToggled: (showAll) => (showAll ? this._showAllMissions() : this._hideAllMissions()),
+      onAllSelectionToggled: (selectAll) => (selectAll ? this._selectAllMissions() : this._clearSelection()),
       onSelectionCleared: () => this._clearSelection(),
-      onSelectedDeleteRequested: () => this._handleDeleteSelectedMissions(),
       onMissionDoneEditRequested: () => {
         editState.clearEdit();
         this._overlayCacheByMissionId.clear();
@@ -366,6 +367,8 @@ export class MapWidget {
     }
     this._confirmBanner?.destroy();
     this._confirmBanner = null;
+    this._authoringToolbar?.destroy();
+    this._authoringToolbar = null;
     this._basemapPanel?.destroy();
     this._basemapPanel = null;
     this._vehicleLayer?.disconnect();
@@ -1107,8 +1110,6 @@ export class MapWidget {
     const editedMissionId = this._editingMissionId;
     const visibleMissionIds = new Set(this._visibleMissionOrder);
     const deleteGuardedMissionIds = this._deleteGuardedMissionIds();
-    const canDeleteSelection = this._selectedMissionIds.size > 0
-      && [...this._selectedMissionIds].every((id) => !this._isMissionDeleteBlocked(id));
     const paletteByMissionId = assignPaletteColor(this._missions, missionColorOverrides.getAll());
     this._paletteByMissionId = paletteByMissionId;
 
@@ -1131,7 +1132,6 @@ export class MapWidget {
       profilesById: this._profilesById,
       activeProfileId: this._activeProfileId,
       deleteGuardedMissionIds,
-      canDeleteSelection,
       sortLabel,
     });
 
@@ -1271,25 +1271,32 @@ export class MapWidget {
   }
 
   _syncAuthoringToolbarState() {
-    if (!this._basemapPanel) return;
+    if (!this._authoringToolbar || !this._basemapPanel) return;
     const onBasemapView = this._currentViewMode === 'basemap';
     const hasEditableRevision = !!editState.revisionId && editState.isEditable();
+    const crossViewDeferredReason = 'Scene views do not yet support shared WGS84 sketch capture from the mission origin; use Basemap VIEW.';
     const geofenceReason = !onBasemapView
-      ? 'Switch VIEW to Basemap to edit geofences.'
+      ? crossViewDeferredReason
       : this._focusedMissionId
         ? 'Edit the geofence for the focused mission.'
         : 'Focus a mission to edit its geofence.';
-    this._basemapPanel.updateToolbarState({
+    this._authoringToolbar.updateState({
       addWaypointEnabled: hasEditableRevision,
       addWaypointActive: editState.editMode === 'add',
       addWaypointReason: editState.revisionId
         ? 'The current revision is locked or busy.'
         : 'Open a mission in edit mode to add waypoints.',
       drawToolsEnabled: onBasemapView,
-      drawToolsReason: 'Switch VIEW to Basemap to use corridor and survey tools.',
+      drawToolsReason: crossViewDeferredReason,
       geofenceEnabled: onBasemapView && !!this._focusedMissionId,
       geofenceReason,
+      ...this._basemapPanel.getSketchState(),
     });
+  }
+
+  _toggleAddWaypointMode() {
+    if (!editState.isEditable()) return;
+    editState.setEditMode('add');
   }
 
   // Persist an operator-drawn pattern (corridor/survey) sketched on the basemap
@@ -1507,6 +1514,20 @@ export class MapWidget {
     this._render();
   }
 
+  async _showAllMissions() {
+    const missionIds = this._missions.map((mission) => String(mission.id || '')).filter(Boolean);
+    for (const id of missionIds) {
+      if (!this._visibleMissionOrder.includes(id)) this._visibleMissionOrder.push(id);
+    }
+    await Promise.all(missionIds.map(async (id) => {
+      if (this._overlayCacheByMissionId.has(id)) return;
+      const payload = await getMissionOverlay(id);
+      if (payload.ok) this._overlayCacheByMissionId.set(id, payload);
+    }));
+    if (!this._focusedMissionId) this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    this._render();
+  }
+
   _hideSelectedMissions() {
     const executingIds = new Set(this._executingMissionIds());
     this._visibleMissionOrder = this._visibleMissionOrder.filter(
@@ -1516,6 +1537,22 @@ export class MapWidget {
       this._focusedMissionId = this._visibleMissionOrder[0] || '';
     }
     this._render();
+  }
+
+  _hideAllMissions() {
+    const executingIds = new Set(this._executingMissionIds());
+    this._visibleMissionOrder = this._visibleMissionOrder.filter((id) => executingIds.has(id));
+    if (this._focusedMissionId && !this._visibleMissionOrder.includes(this._focusedMissionId)) {
+      this._focusedMissionId = this._visibleMissionOrder[0] || '';
+    }
+    this._render();
+  }
+
+  async _selectAllMissions() {
+    const nextSelection = new Set(this._missions.map((mission) => String(mission.id || '')).filter(Boolean));
+    this._selectedMissionIds = nextSelection;
+    this._selectionAnchorId = this._missions.length ? String(this._missions[this._missions.length - 1]?.id || '') : '';
+    await this._showAllMissions();
   }
 
   _pinMissionInView(missionId) {
@@ -1888,6 +1925,15 @@ export class MapWidget {
     authoringToolbarDock.className = 'map-authoring-toolbar-dock';
     authoringToolbarDock.setAttribute('aria-label', 'Map authoring tools');
     this._authoringToolbarDock = authoringToolbarDock;
+    this._authoringToolbar = new MapAuthoringToolbar(authoringToolbarDock, {
+      onToggleAddWaypoint: () => this._toggleAddWaypointMode(),
+      onTogglePatternDraw: (pattern) => this._basemapPanel?.togglePatternDraw(pattern),
+      onToggleFenceDraw: () => this._basemapPanel?.toggleFenceDraw(),
+      onGeneratePattern: (params) => this._basemapPanel?.generatePattern(params),
+      onSaveFence: () => this._basemapPanel?.saveFence(),
+      onClearFence: () => this._basemapPanel?.clearFence(),
+      onClearSketch: () => this._basemapPanel?.clearSketch(),
+    });
 
     // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene
     // map when active; the toggle stays visible above it. The toolbar shell is
@@ -1896,10 +1942,7 @@ export class MapWidget {
     this._basemapPanel = new BasemapPanel(mapWrap, {
       onGenerate: (sketch) => this._handleDrawnPattern(sketch),
       onSetGeofence: (fence) => this._handleSetGeofence(fence),
-      onToggleAddWaypoint: () => {
-        if (editState.isEditable()) editState.setEditMode('add');
-      },
-      toolbarHost: authoringToolbarDock,
+      onSketchStateChange: () => this._syncAuthoringToolbarState(),
     });
 
     // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons.
@@ -1959,7 +2002,7 @@ export class MapWidget {
     viewModeToolbar.append(navLabel);
 
     const layerToolbar = document.createElement('div');
-    layerToolbar.className = 'map-layer-toolbar';
+    layerToolbar.className = 'map-overlay-card map-layer-toolbar';
     layerToolbar.setAttribute('aria-label', 'Map layers');
     const layerDefs = [
       { key: 'terrain',  label: 'Terrain' },

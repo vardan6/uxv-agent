@@ -76,6 +76,8 @@ def _waypoint_count_from_mission_json(value: str | None) -> int:
             artifact_waypoints = artifact.get("waypoints")
             if isinstance(artifact_waypoints, list):
                 route_count += sum(1 for wp in artifact_waypoints if isinstance(wp, dict))
+                continue
+            route_count += max(0, int(artifact.get("waypoint_count") or 0))
         if route_count:
             return route_count
 
@@ -88,6 +90,8 @@ def _waypoint_count_from_mission_json(value: str | None) -> int:
             step_waypoints = step.get("waypoints")
             if isinstance(step_waypoints, list):
                 step_count += sum(1 for wp in step_waypoints if isinstance(wp, dict))
+                continue
+            step_count += max(0, int(step.get("waypoint_count") or 0))
         if step_count:
             return step_count
 

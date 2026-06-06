@@ -44,6 +44,7 @@ from gcs_server.routers import device_config as device_config_router_module
 from gcs_server.routers import mission_lifecycle as mission_lifecycle_router_module
 from gcs_server.routers.ai import AIInflightStreamManager
 from gcs_server.routers.device_config import _rover_availability_policy
+from gcs_server.mavlink_telemetry import MavlinkTelemetryBridge
 from gcs_server.routers.llm import _repair_stored_secret_refs
 
 # Phase 2: LangGraph checkpointer for interrupt/resume approval
@@ -97,9 +98,20 @@ async def lifespan(app: FastAPI):
     )
     await runtime.control_service.start()
     await runtime.mqtt_runtime.start()
+    mavlink_telemetry_url = os.environ.get("MAVLINK_TELEMETRY_URL", "").strip()
+    _mavlink_bridge: MavlinkTelemetryBridge | None = None
+    if mavlink_telemetry_url:
+        _mavlink_bridge = MavlinkTelemetryBridge(
+            mavlink_telemetry_url,
+            asyncio.get_running_loop(),
+            runtime.ws_manager.broadcast,
+        )
+        _mavlink_bridge.start()
     try:
         yield
     finally:
+        if _mavlink_bridge:
+            _mavlink_bridge.stop()
         if runtime.replay_store.current_session_id:
             runtime.replay_store.finish_session(runtime.replay_store.current_session_id, reason="runtime_shutdown")
         await runtime.control_service.stop()

@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>mav_sim — MAVLink Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #d4d4d4;
+      font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 8px 14px;
+      background: #151515;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    header h1 { font-size: 14px; color: #9cdcfe; letter-spacing: 0.04em; }
+
+    #status { font-size: 12px; color: #6a9955; }
+    #status.disconnected { color: #f44747; }
+
+    #mission-status { font-size: 12px; color: #569cd6; padding-left: 6px; border-left: 1px solid #2a2a2a; }
+    #transport-status {
+      font-size: 12px;
+      color: #d7ba7d;
+      padding-left: 6px;
+      border-left: 1px solid #2a2a2a;
+      white-space: nowrap;
+    }
+
+    .hdr-sep { width: 1px; height: 16px; background: #2a2a2a; flex-shrink: 0; }
+    #spacer { flex: 1; }
+
+    .hdr-btn {
+      padding: 3px 10px;
+      background: #1e1e1e;
+      border: 1px solid #3a3a3a;
+      color: #d4d4d4;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .hdr-btn:hover:not(:disabled) { background: #2a2a2a; border-color: #555; }
+    .hdr-btn:disabled { opacity: 0.45; cursor: default; }
+    .hdr-btn.danger { border-color: #6a1e1e; color: #f44747; }
+    .hdr-btn.danger:hover:not(:disabled) { background: #2a1010; }
+    .hdr-btn.accent { border-color: #3a5a3a; color: #4ec94e; }
+    .hdr-btn.accent:hover:not(:disabled) { background: #192519; }
+
+    #sel-all-wrap {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 12px; color: #666; cursor: pointer;
+      user-select: none;
+    }
+    #sel-all { cursor: pointer; accent-color: #569cd6; }
+
+    #sel-count { font-size: 12px; color: #888; white-space: nowrap; }
+
+    #before-wrap { display: flex; align-items: center; gap: 6px; }
+    #before-input {
+      background: #1e1e1e;
+      border: 1px solid #3a3a3a;
+      color: #d4d4d4;
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: inherit;
+      width: 10ch;
+    }
+    #before-input:focus { outline: none; border-color: #555; }
+
+    /* ── feed ── */
+    #feed { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+    .msg-wrap {
+      border-left: 3px solid transparent;
+      transition: background 0.1s;
+    }
+    .msg-wrap:hover { background: #181818; }
+    .msg-wrap.selected { background: #141b27; border-left-color: #569cd6; }
+
+    .msg-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 3px 14px 3px 10px;
+      line-height: 1.5;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* flash only when NOT selected */
+    .msg-wrap.flash:not(.selected) { animation: flash-in 0.9s ease-out forwards; }
+
+    @keyframes flash-in {
+      0%   { background: #1a3a1a; border-left-color: #4ec94e; }
+      60%  { background: #111f11; border-left-color: #2a6a2a; }
+      100% { background: transparent; border-left-color: transparent; }
+    }
+
+    .row-check {
+      flex-shrink: 0;
+      cursor: pointer;
+      accent-color: #569cd6;
+      width: 14px; height: 14px;
+    }
+
+    .expand-arrow {
+      flex-shrink: 0;
+      color: #444;
+      font-size: 9px;
+      width: 10px;
+      transition: transform 0.12s;
+    }
+    .msg-wrap.open .expand-arrow { transform: rotate(90deg); color: #666; }
+
+    .ts      { color: #6a9955; min-width: 12ch; flex-shrink: 0; }
+    .sys     { color: #4a7ab5; min-width: 6ch;  flex-shrink: 0; font-size: 11px; }
+    .mtype   { color: #dcdcaa; min-width: 22ch; flex-shrink: 0; font-weight: bold; }
+    .summary { color: #d4d4d4; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* detail panel */
+    .msg-detail {
+      display: none;
+      padding: 5px 14px 7px 46px;
+      font-size: 11.5px;
+      flex-wrap: wrap;
+      gap: 4px 20px;
+      background: #0f0f0f;
+      border-top: 1px solid #1c1c1c;
+    }
+    .msg-wrap.open .msg-detail { display: flex; }
+
+    .field-kv { white-space: nowrap; }
+    .field-key { color: #7a7a7a; }
+    .field-val { color: #ce9178; }
+
+    #empty {
+      text-align: center;
+      margin-top: 80px;
+      color: #3a3a3a;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>mav_sim</h1>
+  <span id="status" class="disconnected">disconnected</span>
+
+  <div class="hdr-sep"></div>
+  <span id="mission-status">no mission</span>
+  <button id="sim-btn" class="hdr-btn accent" style="display:none">Simulate</button>
+  <span id="transport-status">transports: loading…</span>
+
+  <div id="spacer"></div>
+
+  <span id="sel-count" style="display:none"></span>
+  <button id="del-btn" class="hdr-btn danger" style="display:none">Delete Selected</button>
+
+  <div class="hdr-sep"></div>
+
+  <label id="sel-all-wrap" title="Select all / none">
+    <input type="checkbox" id="sel-all"> all
+  </label>
+
+  <div class="hdr-sep"></div>
+
+  <div id="before-wrap">
+    <input id="before-input" type="text" placeholder="HH:MM:SS" title="Clear rows before this time">
+    <button id="before-btn" class="hdr-btn">Clear Before</button>
+  </div>
+
+  <button id="clear-btn" class="hdr-btn">Clear All</button>
+</header>
+
+<div id="feed">
+  <div id="empty">Waiting for MAVLink packets on UDP :14550 …</div>
+</div>
+
+<script>
+  const feed      = document.getElementById('feed');
+  const empty     = document.getElementById('empty');
+  const statusEl  = document.getElementById('status');
+  const missionEl = document.getElementById('mission-status');
+  const transportEl = document.getElementById('transport-status');
+  const simBtn    = document.getElementById('sim-btn');
+  const selCountEl = document.getElementById('sel-count');
+  const delBtn    = document.getElementById('del-btn');
+  const selAll    = document.getElementById('sel-all');
+
+  // ── selection helpers ────────────────────────────────────────
+  function updateSelUI() {
+    const all      = feed.querySelectorAll('.row-check');
+    const checked  = feed.querySelectorAll('.row-check:checked');
+    const n = checked.length;
+    if (n > 0) {
+      selCountEl.textContent = `${n} selected`;
+      selCountEl.style.display = '';
+      delBtn.style.display = '';
+    } else {
+      selCountEl.style.display = 'none';
+      delBtn.style.display = 'none';
+    }
+    selAll.indeterminate = n > 0 && n < all.length;
+    selAll.checked = all.length > 0 && n === all.length;
+  }
+
+  selAll.addEventListener('change', () => {
+    feed.querySelectorAll('.msg-wrap').forEach(w => {
+      w.querySelector('.row-check').checked = selAll.checked;
+      w.classList.toggle('selected', selAll.checked);
+    });
+    updateSelUI();
+  });
+
+  delBtn.addEventListener('click', () => {
+    feed.querySelectorAll('.msg-wrap').forEach(w => {
+      if (w.querySelector('.row-check').checked) w.remove();
+    });
+    selAll.checked = false;
+    selAll.indeterminate = false;
+    updateSelUI();
+    if (!feed.querySelector('.msg-wrap')) feed.appendChild(empty);
+  });
+
+  // ── clear before ────────────────────────────────────────────
+  document.getElementById('before-btn').addEventListener('click', () => {
+    const raw = document.getElementById('before-input').value.trim();
+    if (!raw) return;
+    // normalise to HH:MM:SS.mmm for string compare
+    const cutoff = raw.replace(/[^0-9:.]/g, '').padEnd(12, '0');
+    let removed = 0;
+    feed.querySelectorAll('.msg-wrap').forEach(w => {
+      if ((w.dataset.ts || '') <= cutoff) { w.remove(); removed++; }
+    });
+    if (removed && !feed.querySelector('.msg-wrap')) feed.appendChild(empty);
+    updateSelUI();
+  });
+
+  // ── clear all ───────────────────────────────────────────────
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    feed.innerHTML = '';
+    feed.appendChild(empty);
+    selAll.checked = false;
+    selAll.indeterminate = false;
+    updateSelUI();
+  });
+
+  // ── mission status (Phase 3) ─────────────────────────────────
+  function refreshMission() {
+    fetch('/api/mission').then(r => r.json()).then(d => {
+      if (d.count > 0) {
+        missionEl.textContent = `mission: ${d.count} wpt${d.count === 1 ? '' : 's'}`;
+        simBtn.style.display = '';
+      } else {
+        missionEl.textContent = 'no mission';
+        simBtn.style.display = 'none';
+      }
+    }).catch(() => {});
+  }
+
+  function refreshTransports() {
+    fetch('/api/transports').then(r => r.json()).then(data => {
+      const services = Array.isArray(data.services) ? data.services : [];
+      if (!services.length) {
+        transportEl.textContent = 'transports: none';
+        return;
+      }
+      transportEl.textContent = `transports: ${services.map(service => {
+        const state = service.enabled ? service.state : 'disabled';
+        return `${service.name}=${state}`;
+      }).join('  ')}`;
+      transportEl.title = services.map(service =>
+        `${service.name}: ${service.summary}`
+      ).join('\n');
+    }).catch(() => {
+      transportEl.textContent = 'transports: unavailable';
+    });
+  }
+
+  simBtn.addEventListener('click', () => {
+    simBtn.disabled = true;
+    simBtn.textContent = 'Running…';
+    fetch('/api/simulate', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        // re-enable after all waypoints would have fired
+        fetch('/api/mission').then(r => r.json()).then(m => {
+          const ms = (m.count + 1) * (d.interval || 2) * 1000;
+          setTimeout(() => { simBtn.disabled = false; simBtn.textContent = 'Simulate'; }, ms);
+        }).catch(() => { setTimeout(() => { simBtn.disabled = false; simBtn.textContent = 'Simulate'; }, 4000); });
+      })
+      .catch(() => { simBtn.disabled = false; simBtn.textContent = 'Simulate'; });
+  });
+
+  // ── row factory ──────────────────────────────────────────────
+  function makeRow(data) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap flash';
+    wrap.dataset.ts = data.ts;
+
+    const row = document.createElement('div');
+    row.className = 'msg-row';
+
+    // checkbox
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'row-check';
+    check.addEventListener('change', e => {
+      e.stopPropagation();
+      wrap.classList.toggle('selected', check.checked);
+      updateSelUI();
+    });
+    check.addEventListener('click', e => e.stopPropagation());
+
+    // expand arrow
+    const arrow = document.createElement('span');
+    arrow.className = 'expand-arrow';
+    arrow.textContent = '▶';
+
+    // columns
+    const ts = document.createElement('span');
+    ts.className = 'ts';
+    ts.textContent = data.ts;
+
+    const sys = document.createElement('span');
+    sys.className = 'sys';
+    sys.textContent = `s${data.sys}c${data.comp}`;
+
+    const mtype = document.createElement('span');
+    mtype.className = 'mtype';
+    mtype.textContent = data.type;
+
+    const summary = document.createElement('span');
+    summary.className = 'summary';
+    summary.textContent = data.summary;
+
+    row.append(check, arrow, ts, sys, mtype, summary);
+
+    // detail panel
+    const detail = document.createElement('div');
+    detail.className = 'msg-detail';
+    if (data.fields && Object.keys(data.fields).length) {
+      for (const [k, v] of Object.entries(data.fields)) {
+        const kv = document.createElement('span');
+        kv.className = 'field-kv';
+        kv.innerHTML =
+          `<span class="field-key">${k}</span><span class="field-val">=${v}</span>`;
+        detail.appendChild(kv);
+      }
+    }
+
+    // click row body to expand/collapse (not the checkbox)
+    row.addEventListener('click', () => {
+      wrap.classList.toggle('open');
+      // stop flash if user interacts before animation ends
+      wrap.classList.remove('flash');
+    });
+
+    wrap.addEventListener('animationend', () => wrap.classList.remove('flash'), { once: true });
+
+    wrap.append(row, detail);
+    return wrap;
+  }
+
+  // ── websocket ────────────────────────────────────────────────
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+
+    ws.onopen = () => {
+      statusEl.textContent = 'connected';
+      statusEl.classList.remove('disconnected');
+      refreshMission();
+      refreshTransports();
+    };
+
+    ws.onclose = () => {
+      statusEl.textContent = 'disconnected';
+      statusEl.classList.add('disconnected');
+      setTimeout(connect, 2000);
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (empty.parentNode) empty.remove();
+
+      const wrap = makeRow(data);
+      feed.insertBefore(wrap, feed.firstChild);
+
+      // refresh mission count after upload-relevant messages
+      if (data.type === 'MISSION_ACK' || data.type === 'MISSION_COUNT') {
+        setTimeout(refreshMission, 300);
+      }
+    };
+  }
+
+  connect();
+  refreshTransports();
+</script>
+</body>
+</html>

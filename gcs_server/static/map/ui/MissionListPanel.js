@@ -43,6 +43,27 @@ function formatWaypointCount(count) {
   return `${total} pt${total === 1 ? '' : 's'}`;
 }
 
+function batchActionIcon(action) {
+  if (action === 'show-all') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3.2"/></svg>';
+  }
+  if (action === 'hide-all') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 3 18 18"/><path d="M10.6 6.2A11.6 11.6 0 0 1 12 6c6.2 0 10 6 10 6a17.3 17.3 0 0 1-4.1 4.5"/><path d="M6.2 8.3A17.5 17.5 0 0 0 2 12s3.8 6 10 6c1.7 0 3.3-.4 4.7-1.1"/><path d="M9.9 9.9A3 3 0 0 0 12 15c.5 0 1-.1 1.4-.3"/></svg>';
+  }
+  return '';
+}
+
+function batchActionButton({ action, label, title, disabled = false }) {
+  return `<button
+    class="mission-batch-icon-btn"
+    type="button"
+    data-batch-action="${escapeHtml(action)}"
+    aria-label="${escapeHtml(label)}"
+    title="${escapeHtml(title)}"
+    ${disabled ? 'disabled' : ''}
+  >${batchActionIcon(action)}</button>`;
+}
+
 // Escape untrusted values before interpolating into the row HTML string. Mission
 // names and origin badges are AI-/operator-derived, so a name like
 // `"><img src=x onerror=...>` would otherwise become executable markup once the
@@ -60,9 +81,8 @@ export function escapeHtml(value) {
 // Up to five button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
 // Edit/play/stop render only when applicable; delete and eye are always present.
 // sessionStatus is the in-memory executor state injected by GET /api/ai/missions.
-function missionRowActionButtons(missionRow, isEditing, {
+function missionRowUtilityActions(missionRow, isEditing, {
   deleteGuarded = false,
-  isVisible = false,
   isExecuting = false,
 } = {}) {
   const status = String(missionRow.activeRevisionStatus || '');
@@ -126,8 +146,13 @@ function missionRowActionButtons(missionRow, isEditing, {
     data-delete-mission-id="${safeId}"
     title="${deleteTitle}" aria-label="Delete mission ${safeName}"${deleteAttr}>🗑</button>`;
 
-  // Slot 5 — visibility 👁
-  const eyeSlot = `<button
+  return editSlot + playPauseSlot + stopSlot + deleteSlot;
+}
+
+function missionRowVisibilityButton(missionId, missionName, { isVisible = false, isExecuting = false } = {}) {
+  const safeId = escapeHtml(missionId);
+  const safeName = escapeHtml(missionName);
+  return `<button
     class="mission-row-eye${isExecuting ? ' is-locked' : ''}"
     type="button"
     data-toggle-mission-id="${safeId}"
@@ -139,8 +164,6 @@ function missionRowActionButtons(missionRow, isEditing, {
     ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`
     : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l12 12"/><path d="M6.7 4.2A7.3 7.3 0 018 4c3.5 0 6 4 6 4a11.6 11.6 0 01-1.9 2.5"/><path d="M4.5 5.9A11.6 11.6 0 002 8s2.5 4 6 4c1.2 0 2.3-.4 3.2-1"/></svg>`
   }</button>`;
-
-  return editSlot + playPauseSlot + stopSlot + deleteSlot + eyeSlot;
 }
 
 // Pure markup for one flat-Mission row (ADR 0021 §2: one row = one Mission).
@@ -210,7 +233,10 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         </span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowActionButtons(missionRow, isEditing, { deleteGuarded, isVisible, isExecuting })}
+        ${missionRowUtilityActions(missionRow, isEditing, { deleteGuarded, isExecuting })}
+      </span>
+      <span class="mission-row-visibility">
+        ${missionRowVisibilityButton(id, missionRow.name, { isVisible, isExecuting })}
       </span>
     </div>
   `;
@@ -234,10 +260,9 @@ export class MissionListPanel {
     // per-row checkbox (shift-click extends a range). Distinct from Visible/Active.
     this._onNewMissionRequested = opts.onNewMissionRequested || (() => {});
     this._onMissionSelectionToggled = opts.onMissionSelectionToggled || (() => {});
-    this._onSelectedShowRequested = opts.onSelectedShowRequested || (() => {});
-    this._onSelectedHideRequested = opts.onSelectedHideRequested || (() => {});
+    this._onAllVisibilityToggled = opts.onAllVisibilityToggled || (() => {});
+    this._onAllSelectionToggled = opts.onAllSelectionToggled || (() => {});
     this._onSelectionCleared = opts.onSelectionCleared || (() => {});
-    this._onSelectedDeleteRequested = opts.onSelectedDeleteRequested || (() => {});
     this._onMissionDoneEditRequested = opts.onMissionDoneEditRequested || (() => {});
     this._onColorChipClicked = opts.onColorChipClicked || (() => {});
     this._onOverflowClicked = opts.onOverflowClicked || (() => {});
@@ -253,16 +278,41 @@ export class MissionListPanel {
     profilesById = {},
     activeProfileId = '',
     deleteGuardedMissionIds = new Set(),
-    canDeleteSelection = false,
     sortLabel = '',
   } = {}) {
     const hasSelection = selectedMissionIds.size > 0;
-    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Batch operations">
-          <span class="mission-batch-count">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
-          <button class="mission-batch-btn" type="button" data-batch-action="show"${hasSelection ? '' : ' disabled'}>Show</button>
-          <button class="mission-batch-btn" type="button" data-batch-action="hide"${hasSelection ? '' : ' disabled'}>Hide</button>
-          <button class="mission-batch-btn is-clear" type="button" data-batch-action="clear"${hasSelection ? '' : ' disabled'}>Clear</button>
-          <button class="mission-batch-btn is-delete" type="button" data-batch-action="delete"${canDeleteSelection ? '' : ' disabled'} title="${hasSelection && !canDeleteSelection ? 'Delete disabled while selection includes an armed or executing mission' : 'Delete selected missions'}">Delete</button>
+    const allVisible = missions.length > 0 && missions.every((missionRow) => visibleMissionIds.has(String(missionRow.id || '')));
+    const hideableVisible = missions.some((missionRow) => (
+      visibleMissionIds.has(String(missionRow.id || ''))
+      && String(missionRow.activeRevisionStatus || '') !== 'executing'
+    ));
+    const allSelected = missions.length > 0 && missions.every((missionRow) => selectedMissionIds.has(String(missionRow.id || '')));
+    const someSelected = selectedMissionIds.size > 0 && !allSelected;
+    const visibilityAction = allVisible ? 'hide-all' : 'show-all';
+    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Mission visibility and selection controls">
+          <span class="mission-batch-stripe" aria-hidden="true"></span>
+          <label class="mission-batch-select" title="${allSelected ? 'Unselect all missions' : 'Select all missions'}">
+            <input
+              type="checkbox"
+              class="mission-batch-select-box"
+              data-batch-toggle-select-all
+              ${allSelected ? 'checked' : ''}
+              ${missions.length ? '' : 'disabled'}
+              aria-label="${allSelected ? 'Unselect all missions' : 'Select all missions'}"
+            />
+          </label>
+          <span class="mission-batch-count" aria-live="polite">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
+          <span class="mission-batch-actions" aria-hidden="true"></span>
+          <span class="mission-batch-visibility">
+            ${batchActionButton({
+              action: visibilityAction,
+              label: allVisible ? 'Hide all missions' : 'Show all missions',
+              title: allVisible
+                ? (hideableVisible ? 'Hide all mission overlays except executing missions' : 'No hideable mission overlays are visible')
+                : 'Make all mission overlays visible',
+              disabled: missions.length === 0 || (allVisible && !hideableVisible),
+            })}
+          </span>
         </div>`;
     const safeSortLabel = escapeHtml(sortLabel);
     const header = `<div class="mission-list-header">
@@ -303,6 +353,10 @@ export class MissionListPanel {
     const body = batchBar + missionRows;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
     this._bindMissions();
+    const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
+    if (selectAllBox) {
+      selectAllBox.indeterminate = someSelected;
+    }
   }
 
   _bindMissions() {
@@ -411,12 +465,17 @@ export class MissionListPanel {
         event.preventDefault();
         event.stopPropagation();
         const action = button.dataset.batchAction;
-        if (action === 'show') this._onSelectedShowRequested();
-        else if (action === 'hide') this._onSelectedHideRequested();
-        else if (action === 'clear') this._onSelectionCleared();
-        else if (action === 'delete') this._onSelectedDeleteRequested();
+        this._onAllVisibilityToggled(action === 'show-all');
       });
     });
+    const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
+    if (selectAllBox) {
+      selectAllBox.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onAllSelectionToggled(!selectAllBox.checked || selectAllBox.indeterminate);
+      });
+    }
     this._container.querySelectorAll('[data-delete-mission-id]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.preventDefault();
