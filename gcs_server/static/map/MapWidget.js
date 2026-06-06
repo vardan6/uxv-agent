@@ -13,6 +13,7 @@ import { missionSortPreference, sortMissions, SORT_OPTIONS } from './state/missi
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { MissionColorPicker } from './ui/MissionColorPicker.js';
 import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
+import { MissionRowMenu } from './ui/MissionRowMenu.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
 import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
 import { ContextMenu } from './ui/ContextMenu.js';
@@ -150,6 +151,7 @@ export class MapWidget {
     this._paletteByMissionId = new Map();
     this._colorPicker = null;
     this._overflowMenu = null;
+    this._rowMenu = null;
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -242,9 +244,12 @@ export class MapWidget {
       },
       onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
       onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
+      onMissionRowMenuRequested: (missionId, anchorEl) => this._openRowMenu(missionId, anchorEl),
+      onMissionDeleteSelectedRequested: () => this._handleDeleteSelectedMissions(),
     });
     this._colorPicker = new MissionColorPicker(this._shellEl, { scrollEl: this._listEl });
     this._overflowMenu = new MissionListOverflowMenu(this._listEl);
+    this._rowMenu = new MissionRowMenu(this._listEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -1736,6 +1741,27 @@ export class MapWidget {
   }
 
   // --- Overflow / sort menu ---
+
+  _openRowMenu(missionId, anchorEl) {
+    const id = String(missionId || '').trim();
+    if (!id) return;
+    const deleteBlocked = this._isMissionDeleteBlocked(id);
+    this._rowMenu.open(anchorEl, {
+      items: [
+        {
+          label: 'Rename',
+          onClick: () => this._listPanel.startRenameById(id),
+        },
+        {
+          label: 'Delete',
+          danger: true,
+          disabled: deleteBlocked,
+          disabledTitle: 'Delete disabled while mission is armed, awaiting confirmation, or executing',
+          onClick: () => this._handleDeleteMission(id),
+        },
+      ],
+    });
+  }
 
   _openOverflowMenu(anchorEl) {
     this._overflowMenu.open(anchorEl, {
