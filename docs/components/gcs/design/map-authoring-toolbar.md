@@ -1,7 +1,7 @@
 # Map Authoring Toolbar
 
-Status: planned (design decisions resolved 2026-06-06; pending operator confirmation)
-Date: 2026-06-06
+Status: Phase 1 shipped 2026-06-07 (browser-smoked); Phase 2–5 planned.
+Date: 2026-06-06 (updated 2026-06-07)
 
 This note is the canonical design for the bottom-of-canvas **map authoring
 toolbar** on `/ai`. It supersedes the analysis in

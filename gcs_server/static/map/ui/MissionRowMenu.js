@@ -24,7 +24,18 @@ export class MissionRowMenu {
       btn.type = 'button';
       btn.className = 'mission-row-menu-item' + (item.danger ? ' is-danger' : '');
       btn.setAttribute('role', 'menuitem');
-      btn.textContent = item.label;
+      if (item.icon) {
+        const iconEl = document.createElement('span');
+        iconEl.className = 'mission-row-menu-item-icon';
+        iconEl.setAttribute('aria-hidden', 'true');
+        iconEl.innerHTML = item.icon;
+        const labelEl = document.createElement('span');
+        labelEl.textContent = item.label;
+        btn.appendChild(iconEl);
+        btn.appendChild(labelEl);
+      } else {
+        btn.textContent = item.label;
+      }
       if (item.disabled) {
         btn.disabled = true;
         if (item.disabledTitle) btn.title = item.disabledTitle;

@@ -1,3 +1,16 @@
+const SVG = {
+  edit:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M9.5 2 12 4.5 5.5 11H3V8.5L9.5 2z"/><line x1="7.8" y1="3.7" x2="10.3" y2="6.2"/></svg>`,
+  run:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><polygon points="4,2 12,7 4,12"/></svg>`,
+  pause:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><rect x="3" y="2" width="3" height="10" rx="1"/><rect x="8" y="2" width="3" height="10" rx="1"/></svg>`,
+  stop:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/></svg>`,
+  done:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><polyline points="2,7.5 5.5,11 12,4"/></svg>`,
+  trash:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V3h4v1"/><rect x="3.5" y="4" width="7" height="8" rx="1"/><line x1="5.5" y1="6.5" x2="5.5" y2="10"/><line x1="8.5" y1="6.5" x2="8.5" y2="10"/></svg>`,
+  clear:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>`,
+  plus:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>`,
+  gear:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" focusable="false" aria-hidden="true"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.9 2.9l1.4 1.4M9.7 9.7l1.4 1.4M2.9 11.1l1.4-1.4M9.7 4.3l1.4-1.4"/></svg>`,
+  dots:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><circle cx="3" cy="7" r="1.5"/><circle cx="7" cy="7" r="1.5"/><circle cx="11" cy="7" r="1.5"/></svg>`,
+};
+
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
 // edit resolves to the Mission's active revision and remains status-gated;
 // execute is available for any idle row with an active revision. executing →
@@ -121,26 +134,26 @@ function contextBarVerbs(target, { isEditing = false } = {}) {
   const isExecuting = status === 'executing';
   const isActive = isRunning || isPaused || isExecuting;
 
-  const verb = (cls, attr, label, title) => `<button class="mission-context-btn ${cls}" type="button"
-    ${attr}="${safeId}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)} ${safeName}">${escapeHtml(label)}</button>`;
+  const verb = (cls, attr, icon, title) => `<button class="mission-context-icon-btn ${cls}" type="button"
+    ${attr}="${safeId}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)} — ${safeName}">${icon}</button>`;
 
   if (isRunning) {
-    return verb('is-pause', 'data-pause-mission-id', 'Pause', 'Pause mission')
-      + verb('is-stop', 'data-stop-mission-id', 'Stop', 'Stop mission');
+    return verb('is-pause', 'data-pause-mission-id', SVG.pause, 'Pause mission')
+      + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
   }
   if (isPaused) {
-    return verb('is-execute', 'data-resume-mission-id', 'Resume', 'Resume mission')
-      + verb('is-stop', 'data-stop-mission-id', 'Stop', 'Stop mission');
+    return verb('is-execute', 'data-resume-mission-id', SVG.run, 'Resume mission')
+      + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
   }
   if (isEditing) {
-    return verb('is-done', 'data-done-edit-mission-id', 'Done', 'Finish editing');
+    return verb('is-done', 'data-done-edit-mission-id', SVG.done, 'Finish editing');
   }
   let out = '';
   if (MISSION_ROW_EDITABLE.has(status) && !isActive) {
-    out += verb('is-edit', 'data-edit-mission-id', 'Edit', 'Edit waypoints for mission');
+    out += verb('is-edit', 'data-edit-mission-id', SVG.edit, 'Edit waypoints');
   }
   if (hasActiveRevision && !isActive) {
-    out += verb('is-execute', 'data-execute-mission-id', 'Run', 'Execute mission');
+    out += verb('is-execute', 'data-execute-mission-id', SVG.run, 'Execute mission');
   }
   return out;
 }
@@ -307,10 +320,10 @@ export class MissionListPanel {
     if (multiSelect) {
       // Multi-select → batch-safe actions only (no Edit/Run). Visibility lives in
       // the right slot; here we offer Delete (a supported bulk flow) and Clear.
-      contextActions = `<button class="mission-context-btn is-delete" type="button"
-            data-delete-selected title="Delete selected missions" aria-label="Delete selected missions">Delete</button>
-          <button class="mission-context-btn is-clear" type="button"
-            data-clear-selection title="Clear selection" aria-label="Clear selection">Clear</button>`;
+      contextActions = `<button class="mission-context-icon-btn is-delete" type="button"
+            data-delete-selected title="Delete selected missions" aria-label="Delete selected missions">${SVG.trash}</button>
+          <button class="mission-context-icon-btn is-clear" type="button"
+            data-clear-selection title="Clear selection" aria-label="Clear selection">${SVG.clear}</button>`;
     } else if (targetMission) {
       contextActions = contextBarVerbs(targetMission, {
         isEditing: String(editingMissionId || '') === String(targetMission.id || ''),
@@ -354,13 +367,13 @@ export class MissionListPanel {
               ${safeSortLabel ? `<p class="mission-list-sort-label" title="Active sort order">⇅ ${safeSortLabel}</p>` : ''}
             </div>
             <div class="mission-list-header-actions">
-              <button class="mission-list-new-btn" type="button" data-new-mission
+              <button class="mission-list-header-icon-btn" type="button" data-new-mission
                 title="New mission — place waypoints by clicking the map"
-                aria-label="New mission">+ New</button>
-              <a class="mission-list-settings-link" href="/settings?tab=mission-lifecycle"
-                title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
-              <button class="mission-list-overflow-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
-                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">⋯</button>
+                aria-label="New mission">${SVG.plus}</button>
+              <a class="mission-list-header-icon-btn" href="/settings?tab=mission-lifecycle"
+                title="Mission lifecycle settings" aria-label="Mission lifecycle settings">${SVG.gear}</a>
+              <button class="mission-list-header-icon-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
+                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">${SVG.dots}</button>
             </div>
           </div>`;
     const missionRows = missions.length

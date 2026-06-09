@@ -23,6 +23,9 @@ import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
 import { ConfirmExecutionBanner } from './ui/ConfirmExecutionBanner.js';
 import { BasemapPanel } from './ui/BasemapPanel.js';
 import { MapAuthoringToolbar } from './ui/MapAuthoringToolbar.js';
+import { MapSketchSession } from './MapSketchSession.js';
+import { ConstraintsPanel } from './ui/ConstraintsPanel.js';
+import { listConstraints, createConstraint, updateConstraint, deleteConstraint } from './data/constraintsApi.js';
 import { editState } from './state/editState.js';
 
 const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
@@ -175,6 +178,8 @@ export class MapWidget {
     this._confirmBanner = null;
     // Real 2D WGS84 basemap render mode (Phase 4): an additive, read-only second
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
+    this._sketchSession = null;
+    this._sketchSessionUnsub = null;
     this._basemapPanel = null;
     this._authoringToolbarDock = null;
     this._authoringToolbar = null;
@@ -377,6 +382,11 @@ export class MapWidget {
     this._authoringToolbar = null;
     this._basemapPanel?.destroy();
     this._basemapPanel = null;
+    if (this._sketchSessionUnsub) {
+      this._sketchSessionUnsub();
+      this._sketchSessionUnsub = null;
+    }
+    this._sketchSession = null;
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
@@ -643,13 +653,18 @@ export class MapWidget {
 
   // --- Mission CRUD ---
 
-  async _handleDeleteMission(missionId) {
+  async _handleDeleteMission(missionId, { skipConfirm = false } = {}) {
     if (this._actionBusy) return;
     const id = String(missionId || '').trim();
     if (!id) return;
     if (this._isMissionDeleteBlocked(id)) {
       this._pushStatus('Mission cannot be deleted while armed, awaiting confirmation, or executing.', 'error');
       return;
+    }
+    if (!skipConfirm) {
+      const mission = this._missions?.find((m) => String(m.id || '') === id);
+      const label = mission?.name ? `"${mission.name}"` : 'this mission';
+      if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     }
     this._actionBusy = true;
     const result = await deleteMission(id);
@@ -676,8 +691,10 @@ export class MapWidget {
       this._pushStatus('Selection includes a mission that is armed, awaiting confirmation, or executing.', 'error');
       return;
     }
+    const count = ids.length;
+    if (!confirm(`Delete ${count} selected mission${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
     for (const id of ids) {
-      await this._handleDeleteMission(id);
+      await this._handleDeleteMission(id, { skipConfirm: true });
     }
   }
 
@@ -1294,13 +1311,17 @@ export class MapWidget {
         ? this._overlayCacheByMissionId.get(this._focusedMissionId)
         : null;
       this._basemapPanel.render(focusedPayload);
+      // Operational constraints are deployment-wide; load and render them
+      // whenever the basemap (their authoring/render surface) opens.
+      this._refreshConstraints().catch(() => {});
       return;
     }
     this._basemapPanel.hide();
+    this._constraintsPanel?.hide();
   }
 
   _syncAuthoringToolbarState() {
-    if (!this._authoringToolbar || !this._basemapPanel) return;
+    if (!this._authoringToolbar || !this._sketchSession) return;
     const onBasemapView = this._currentViewMode === 'basemap';
     const hasEditableRevision = !!editState.revisionId && editState.isEditable();
     const crossViewDeferredReason = 'Scene views do not yet support shared WGS84 sketch capture from the mission origin; use Basemap VIEW.';
@@ -1309,6 +1330,10 @@ export class MapWidget {
       : this._focusedMissionId
         ? 'Edit the geofence for the focused mission.'
         : 'Focus a mission to edit its geofence.';
+    const sketchState = this._sketchSession.getState();
+    // When a draft is active but Basemap is not the current view, the draft is
+    // preserved (Decision B) — surface a notice so the operator knows how to resume.
+    const suspendedDraft = !onBasemapView && sketchState.drawMode !== null;
     this._authoringToolbar.updateState({
       addWaypointEnabled: hasEditableRevision,
       addWaypointActive: editState.editMode === 'add',
@@ -1319,7 +1344,12 @@ export class MapWidget {
       drawToolsReason: crossViewDeferredReason,
       geofenceEnabled: onBasemapView && !!this._focusedMissionId,
       geofenceReason,
-      ...this._basemapPanel.getSketchState(),
+      constraintToolsEnabled: onBasemapView,
+      constraintToolsReason: crossViewDeferredReason,
+      ...sketchState,
+      statusText: suspendedDraft
+        ? 'Draft preserved — switch to Basemap VIEW to continue sketching.'
+        : sketchState.statusText,
     });
   }
 
@@ -1357,6 +1387,74 @@ export class MapWidget {
       await this.refresh().catch(() => {});
     }
     return result;
+  }
+
+  // --- Operational constraints (ADR 0025) -------------------------------------
+
+  // Default operator-visible name for a freshly drawn constraint: "<Kind> N",
+  // where N makes it unique among existing same-kind constraints. The panel can
+  // rename later; the backend only requires a non-empty name.
+  _nextConstraintName() {
+    const kind = this._sketchSession?.getState().constraintKind || 'allowed_corridor';
+    const label = kind === 'blockage' ? 'Blockage' : 'Allowed corridor';
+    const count = this._constraints.filter((c) => c.kind === kind).length;
+    return `${label} ${count + 1}`;
+  }
+
+  async _refreshConstraints() {
+    const res = await listConstraints();
+    if (res.ok) {
+      this._constraints = res.constraints;
+      this._basemapPanel?.renderConstraints(this._constraints);
+      this._constraintsPanel?.update(this._constraints);
+    }
+    return res;
+  }
+
+  async _openConstraintsPanel() {
+    await this._refreshConstraints();
+    this._constraintsPanel?.show(this._constraints);
+  }
+
+  async _handleCreateConstraint({ kind, rule, name, polygon }) {
+    const res = await createConstraint({ kind, rule, name, polygon });
+    if (res.ok) {
+      this._statusBar?.push(`Saved ${kind === 'blockage' ? 'blockage' : 'allowed corridor'} "${res.constraint?.name || name}" (planning).`, 'info');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint save failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleToggleConstraint(constraint) {
+    const res = await updateConstraint(constraint.id, {
+      expectedVersion: constraint.version,
+      enabled: !(constraint.enabled !== false),
+    });
+    if (res.ok) {
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint update failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleDeleteConstraint(constraint) {
+    const res = await deleteConstraint(constraint.id, { expectedVersion: constraint.version });
+    if (res.ok) {
+      this._statusBar?.push(`Deleted constraint "${constraint.name || constraint.kind}".`, 'info');
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint delete failed: ${res.error}`, 'error');
+    }
+    return res;
   }
 
   _focusedOrigin() {
@@ -1746,14 +1844,30 @@ export class MapWidget {
     const id = String(missionId || '').trim();
     if (!id) return;
     const deleteBlocked = this._isMissionDeleteBlocked(id);
+    const editBlocked = !this._missions?.find((m) => {
+      const s = String(m.activeRevisionStatus || '');
+      return String(m.id || '') === id && ['proposed', 'planning', 'exported', 'cutover_pending'].includes(s);
+    });
+    const ICON_EDIT    = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M8.5 2 11 4.5 5 10.5H2.5V8L8.5 2z"/><line x1="7" y1="3.5" x2="9.5" y2="6"/></svg>`;
+    const ICON_RENAME  = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M8.5 2 11 4.5 5 10.5H2.5V8L8.5 2z"/><line x1="1" y1="12.5" x2="12" y2="12.5"/></svg>`;
+    const ICON_TRASH   = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="1.5" y1="4" x2="11.5" y2="4"/><path d="M4.5 4V3h4v1"/><rect x="3" y="4" width="7" height="7.5" rx="1"/></svg>`;
     this._rowMenu.open(anchorEl, {
       items: [
         {
+          label: 'Edit waypoints',
+          icon: ICON_EDIT,
+          disabled: editBlocked,
+          disabledTitle: 'Edit only available for missions in proposed / planning / exported / cutover-pending status',
+          onClick: () => this._onEditRequested(id),
+        },
+        {
           label: 'Rename',
+          icon: ICON_RENAME,
           onClick: () => this._listPanel.startRenameById(id),
         },
         {
           label: 'Delete',
+          icon: ICON_TRASH,
           danger: true,
           disabled: deleteBlocked,
           disabledTitle: 'Delete disabled while mission is armed, awaiting confirmation, or executing',
@@ -1965,6 +2079,11 @@ export class MapWidget {
       onCancel: () => this._handleCancelExecution(),
     });
 
+    // Sketch session lives here (Phase 2): shared between BasemapPanel (Leaflet
+    // adapter) and the toolbar. Owns canonical WGS84 geometry + undo stack.
+    this._sketchSession = new MapSketchSession();
+    this._sketchSessionUnsub = this._sketchSession.onChange(() => this._syncAuthoringToolbarState());
+
     const authoringToolbarDock = document.createElement('div');
     authoringToolbarDock.className = 'map-authoring-toolbar-dock';
     authoringToolbarDock.setAttribute('aria-label', 'Map authoring tools');
@@ -1977,6 +2096,10 @@ export class MapWidget {
       onSaveFence: () => this._basemapPanel?.saveFence(),
       onClearFence: () => this._basemapPanel?.clearFence(),
       onClearSketch: () => this._basemapPanel?.clearSketch(),
+      onToggleConstraintDraw: (kind, rule) => this._basemapPanel?.toggleConstraintDraw(kind, rule),
+      onSaveConstraint: () => this._basemapPanel?.saveConstraint({ name: this._nextConstraintName() }),
+      onOpenConstraints: () => this._openConstraintsPanel(),
+      onUndoVertex: () => this._basemapPanel?.undoVertex(),
     });
 
     // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene
@@ -1986,7 +2109,16 @@ export class MapWidget {
     this._basemapPanel = new BasemapPanel(mapWrap, {
       onGenerate: (sketch) => this._handleDrawnPattern(sketch),
       onSetGeofence: (fence) => this._handleSetGeofence(fence),
-      onSketchStateChange: () => this._syncAuthoringToolbarState(),
+      onCreateConstraint: (constraint) => this._handleCreateConstraint(constraint),
+      session: this._sketchSession,
+    });
+
+    // Operational-constraints list panel (ADR 0025): opened from the toolbar's
+    // Constraints… button, fed the cached list, and re-fed after each mutation.
+    this._constraints = [];
+    this._constraintsPanel = new ConstraintsPanel(mapWrap, {
+      onToggleEnabled: (c) => this._handleToggleConstraint(c),
+      onDelete: (c) => this._handleDeleteConstraint(c),
     });
 
     // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons.

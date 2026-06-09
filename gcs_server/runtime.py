@@ -10,6 +10,7 @@ from gcs_server.ai.mission_draft_service import MissionDraftService
 from gcs_server.ai.mission_execution_service import MissionExecutionService
 from gcs_server.ai.mission_execution_session import MissionExecutionSessions
 from gcs_server.ai.mission_store import MissionStore
+from gcs_server.ai.operational_constraints_store import OperationalConstraintsStore
 from gcs_server.ai.secret_store import SecretStore
 from gcs_server.ai.session_store import AISessionStore
 from gcs_server.config import AppConfig, ROOT_DIR
@@ -54,6 +55,7 @@ class AppRuntime:
     mission_draft_service: MissionDraftService
     mission_execution_service: MissionExecutionService
     mission_store: MissionStore
+    operational_constraints_store: OperationalConstraintsStore
     secret_store: SecretStore
     ai_executor: ThreadPoolExecutor
     mission_execution_sessions: MissionExecutionSessions
@@ -82,6 +84,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
     ai_store = AISessionStore(db_path=ai_sessions_db_path)
     mission_draft_service = MissionDraftService(db_path=ai_sessions_db_path)
     mission_store = MissionStore(db_path=ai_sessions_db_path)
+    operational_constraints_store = OperationalConstraintsStore(db_path=ai_sessions_db_path)
     controller_mission_adapter = build_controller_mission_adapter(
         config.logging,
         path_resolver=_resolve_replay_db_path,
@@ -144,6 +147,7 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         mission_draft_service=mission_draft_service,
         mission_execution_service=mission_execution_service,
         mission_store=mission_store,
+        operational_constraints_store=operational_constraints_store,
         secret_store=secret_store,
         ai_executor=ai_executor,
         mission_execution_sessions=MissionExecutionSessions(),

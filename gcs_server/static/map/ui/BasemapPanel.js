@@ -9,6 +9,10 @@
 //
 // The geographic panel still fills its parent map wrap when active, while the
 // authoring toolbar lives at the MapWidget layer and drives these sketch APIs.
+// Sketch state is owned by MapSketchSession (Phase 2); this panel is a Leaflet
+// view adapter — it renders the canonical state and forwards map clicks.
+
+import { MapSketchSession } from '../MapSketchSession.js';
 
 const OSM_TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
@@ -29,7 +33,10 @@ export class BasemapPanel {
   // fence sketch and clicks Save fence (or clicks Clear fence); `polygon` is the
   // drawn WGS84 inclusion polygon ({lat, lon} vertices, >= 3). The caller fences
   // the focused mission (Phase 5) and reloads.
-  constructor(parent, { onGenerate = null, onSetGeofence = null, onSketchStateChange = null } = {}) {
+  //
+  // `session` is an optional MapSketchSession shared with the owning MapWidget.
+  // If omitted, a local session is created (useful in tests / standalone use).
+  constructor(parent, { onGenerate = null, onSetGeofence = null, onCreateConstraint = null, session = null } = {}) {
     this._el = document.createElement('div');
     this._el.className = 'map-basemap-panel';
     Object.assign(this._el.style, {
@@ -45,137 +52,124 @@ export class BasemapPanel {
     this._featureLayer = null;
     this._visible = false;
 
-    // Operator-draw state (Phase 4 authoring + Phase 5 geofence).
     this._onGenerate = onGenerate;
     this._onSetGeofence = onSetGeofence;
-    this._onSketchStateChange = onSketchStateChange;
-    this._drawMode = null; // null | 'corridor' | 'survey' | 'fence'
-    this._drawPoints = []; // L.LatLng[] of the in-progress sketch
+    this._onCreateConstraint = onCreateConstraint;
+
+    // Sketch state lives in MapSketchSession; this panel is the Leaflet adapter.
+    this._session = session || new MapSketchSession();
+    this._sessionUnsub = this._session.onChange(() => this._onSessionChange());
+
     this._drawLayer = null;
-    this._statusText = '';
+
+    // Operational constraints (ADR 0025): the last persisted list rendered on its own layer.
+    this._constraintLayer = null;
+    this._constraintList = [];
 
     // Live vehicle GPS marker (Phase 4 telemetry simulation).
     this._gpsVehicleMarker = null;
     this._gpsVehicleWs = null;
   }
 
-  _emitSketchState() {
-    this._onSketchStateChange?.(this.getSketchState());
-  }
+  // ── Sketch state (delegates to session) ──────────────────────────────────
 
   getSketchState() {
-    return {
-      drawMode: this._drawMode,
-      drawPointCount: this._drawPoints.length,
-      statusText: this._statusText,
-    };
+    return this._session.getState();
   }
 
+  // ── Sketch control ────────────────────────────────────────────────────────
+
   togglePatternDraw(pattern = 'corridor') {
-    if (this._drawMode) {
-      this._resetDraw();
+    if (this._session.isDirty) {
+      this._session.reset();
       return;
     }
-    this._drawMode = pattern === 'survey' ? 'survey' : 'corridor';
-    this._drawPoints = [];
-    if (this._map) this._map.getContainer().style.cursor = 'crosshair';
-    this._setStatus(this._drawMode === 'survey'
-      ? 'Click two opposite corners of the survey area.'
-      : 'Click to add corridor vertices.');
-    this._refreshDrawLayer();
-    this._emitSketchState();
+    this._session.startTool(pattern === 'survey' ? 'survey' : 'corridor');
   }
 
   toggleFenceDraw() {
-    if (this._drawMode) {
-      this._resetDraw();
+    if (this._session.isDirty) {
+      this._session.reset();
       return;
     }
-    this._drawMode = 'fence';
-    this._drawPoints = [];
-    if (this._map) this._map.getContainer().style.cursor = 'crosshair';
-    this._setStatus('Click to add fence vertices (3+); then Save fence.');
-    this._refreshDrawLayer();
-    this._emitSketchState();
+    this._session.startTool('fence');
+  }
+
+  // Start (or stop) sketching an operational-constraint polygon. `kind` is
+  // 'allowed_corridor' | 'blockage'; `rule` is 'hard' | 'soft'. The pinned
+  // kind/rule travel with the sketch until Save constraint or Cancel.
+  toggleConstraintDraw(kind = 'allowed_corridor', rule = 'hard') {
+    if (this._session.isDirty) {
+      this._session.reset();
+      return;
+    }
+    this._session.startTool('constraint', {
+      kind: kind === 'blockage' ? 'blockage' : 'allowed_corridor',
+      rule: rule === 'soft' ? 'soft' : 'hard',
+    });
   }
 
   clearSketch() {
-    this._resetDraw();
+    this._session.reset();
   }
 
-  _resetDraw() {
-    this._drawMode = null;
-    this._drawPoints = [];
-    if (this._map) this._map.getContainer().style.cursor = '';
-    this._refreshDrawLayer();
-    this._setStatus('');
-    this._emitSketchState();
+  undoVertex() {
+    this._session.undoVertex();
   }
 
-  _onMapClick(latlng) {
-    if (!this._drawMode) return;
-    if (this._drawMode === 'survey' && this._drawPoints.length >= 2) {
-      this._drawPoints = [];
-    }
-    this._drawPoints.push(latlng);
-    this._setStatus(`${this._drawPoints.length} point${this._drawPoints.length === 1 ? '' : 's'}`);
-    this._refreshDrawLayer();
-    this._emitSketchState();
-  }
-
-  _refreshDrawLayer() {
-    if (!this._map) return;
-    if (!this._drawLayer) this._drawLayer = L.layerGroup().addTo(this._map);
-    this._drawLayer.clearLayers();
-    const pts = this._drawPoints;
-    if (!pts.length) return;
-    const fence = this._drawMode === 'fence';
-    const stroke = fence ? '#2e8b57' : '#d9534f';
-    if (this._drawMode === 'survey' && pts.length === 2) {
-      L.rectangle(L.latLngBounds(pts[0], pts[1]), { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
-    } else if (fence && pts.length >= 3) {
-      // Closed inclusion polygon (Phase 5 geofence).
-      L.polygon(pts, { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
-    } else if (pts.length >= 2) {
-      L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._drawLayer);
-    }
-    for (const ll of pts) {
-      L.circleMarker(ll, { radius: 4, color: stroke, fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(this._drawLayer);
-    }
-  }
+  // ── Save operations ───────────────────────────────────────────────────────
 
   saveFence() {
-    if (this._drawMode !== 'fence' || typeof this._onSetGeofence !== 'function') return;
-    const polygon = this._drawPoints.map((ll) => ({ lat: ll.lat, lon: ll.lng }));
+    if (this._session.tool !== 'fence' || typeof this._onSetGeofence !== 'function') return;
+    const polygon = this._session.vertices.map((v) => ({ lat: v.lat, lon: v.lon }));
     if (polygon.length < 3) return;
-    this._setStatus('Saving fence…');
+    this._session.setStatus('Saving geofence…');
     Promise.resolve(this._onSetGeofence({ polygon }))
       .then((res) => {
         if (res && res.ok === false) {
-          this._setStatus(`Error: ${res.error || 'failed'}`);
+          this._session.setStatus(`Error: ${res.error || 'failed'}`);
         } else {
-          this._resetDraw();
-          this._setStatus('Geofence saved.');
+          this._session.reset();
         }
       })
-      .catch((err) => this._setStatus(`Error: ${err?.message || 'failed'}`));
+      .catch((err) => this._session.setStatus(`Error: ${err?.message || 'failed'}`));
   }
 
   clearFence() {
     if (typeof this._onSetGeofence !== 'function') return;
-    this._resetDraw();
-    this._setStatus('Clearing fence…');
+    this._session.reset();
+    this._session.setStatus('Clearing geofence…');
     Promise.resolve(this._onSetGeofence({ clear: true }))
       .then((res) => {
-        if (res && res.ok === false) this._setStatus(`Error: ${res.error || 'failed'}`);
-        else this._setStatus('Geofence cleared.');
+        if (res && res.ok === false) this._session.setStatus(`Error: ${res.error || 'failed'}`);
+        else this._session.setStatus('');
       })
-      .catch((err) => this._setStatus(`Error: ${err?.message || 'failed'}`));
+      .catch((err) => this._session.setStatus(`Error: ${err?.message || 'failed'}`));
+  }
+
+  // Persist the in-progress constraint sketch. `name` is the operator label;
+  // kind/rule come from the pinned constraintMeta. The caller (MapWidget)
+  // POSTs it and refreshes the rendered constraint list.
+  saveConstraint({ name = '' } = {}) {
+    if (this._session.tool !== 'constraint' || typeof this._onCreateConstraint !== 'function') return;
+    const polygon = this._session.vertices.map((v) => ({ lat: v.lat, lon: v.lon }));
+    if (polygon.length < 3) return;
+    const meta = this._session.constraintMeta || { kind: 'allowed_corridor', rule: 'hard' };
+    this._session.setStatus('Saving constraint…');
+    Promise.resolve(this._onCreateConstraint({ kind: meta.kind, rule: meta.rule, name, polygon }))
+      .then((res) => {
+        if (res && res.ok === false) {
+          this._session.setStatus(`Error: ${res.error || 'failed'}`);
+        } else {
+          this._session.reset();
+        }
+      })
+      .catch((err) => this._session.setStatus(`Error: ${err?.message || 'failed'}`));
   }
 
   generatePattern({ pattern = 'corridor', spacing = 5, altitude = 0, passes = 1 } = {}) {
-    if (!this._drawMode || typeof this._onGenerate !== 'function') return;
-    const points = this._drawPoints.map((ll) => ({ lat: ll.lat, lon: ll.lng }));
+    if (!this._session.isDirty || typeof this._onGenerate !== 'function') return;
+    const points = this._session.vertices;
     if (points.length < 2) return;
     const params = {
       altitude_m: Number(altitude) || 0,
@@ -186,23 +180,55 @@ export class BasemapPanel {
     } else {
       params.line_spacing_m = spacing;
     }
-    this._setStatus('Generating…');
+    this._session.setStatus('Generating…');
     Promise.resolve(this._onGenerate({ pattern, points, params }))
       .then((res) => {
         if (res && res.ok === false) {
-          this._setStatus(`Error: ${res.error || 'failed'}`);
+          this._session.setStatus(`Error: ${res.error || 'failed'}`);
         } else {
-          this._resetDraw();
-          this._setStatus('Mission created.');
+          this._session.reset();
         }
       })
-      .catch((err) => this._setStatus(`Error: ${err?.message || 'failed'}`));
+      .catch((err) => this._session.setStatus(`Error: ${err?.message || 'failed'}`));
   }
 
-  _setStatus(text) {
-    this._statusText = text || '';
-    this._emitSketchState();
+  // ── Constraints render ────────────────────────────────────────────────────
+
+  // Render the persisted operational constraints on their own layer (ADR 0025:
+  // both enabled and disabled stay visible). Never distinguishes by colour
+  // alone — hard is solid, soft is dashed, disabled is muted and labelled.
+  renderConstraints(list) {
+    this._constraintList = Array.isArray(list) ? list : [];
+    if (!this._map) return; // re-rendered by _ensureMap once the map exists
+    if (!this._constraintLayer) this._constraintLayer = L.layerGroup().addTo(this._map);
+    this._constraintLayer.clearLayers();
+    for (const c of this._constraintList) {
+      const poly = (Array.isArray(c?.polygon) ? c.polygon : [])
+        .filter((v) => Number.isFinite(v?.lat) && Number.isFinite(v?.lon))
+        .map((v) => [v.lat, v.lon]);
+      if (poly.length < 3) continue;
+      const blockage = c.kind === 'blockage';
+      const enabled = c.enabled !== false;
+      const color = blockage ? '#e67e22' : '#2e8b57';
+      const kindLabel = blockage ? 'Blockage' : 'Allowed corridor';
+      const ruleLabel = c.rule === 'soft' ? 'soft' : 'hard';
+      L.polygon(poly, {
+        color,
+        weight: 2,
+        opacity: enabled ? 0.9 : 0.4,
+        fillColor: color,
+        fillOpacity: enabled ? (blockage ? 0.14 : 0.08) : 0.04,
+        dashArray: c.rule === 'soft' ? '6 4' : null,
+      })
+        .bindTooltip(
+          `${c.name || kindLabel} · ${kindLabel} · ${ruleLabel}${enabled ? '' : ' · disabled'} (planning)`,
+          { direction: 'top', sticky: true },
+        )
+        .addTo(this._constraintLayer);
+    }
   }
+
+  // ── Visibility ────────────────────────────────────────────────────────────
 
   get visible() {
     return this._visible;
@@ -218,7 +244,11 @@ export class BasemapPanel {
     this._visible = true;
     this._el.hidden = false;
     this._ensureMap();
-    // Leaflet needs a re-measure once the container becomes visible.
+    // Restore cursor if a draft was preserved while Basemap was not active.
+    if (this._map) {
+      this._map.getContainer().style.cursor = this._session.isDirty ? 'crosshair' : '';
+    }
+    this._refreshDrawLayer();
     window.requestAnimationFrame(() => this._map?.invalidateSize(false));
   }
 
@@ -229,10 +259,17 @@ export class BasemapPanel {
   hide() {
     this._visible = false;
     this._el.hidden = true;
-    this._resetDraw();
+    // Draft is preserved — the session holds it until the user cancels or saves.
+    // Only reset the Leaflet cursor and clear the (now hidden) draw layer.
+    if (this._map) this._map.getContainer().style.cursor = '';
+    this._drawLayer?.clearLayers();
   }
 
   destroy() {
+    if (this._sessionUnsub) {
+      this._sessionUnsub();
+      this._sessionUnsub = null;
+    }
     if (this._gpsVehicleWs) {
       try { this._gpsVehicleWs.close(); } catch {}
       this._gpsVehicleWs = null;
@@ -243,10 +280,59 @@ export class BasemapPanel {
     }
     this._tileLayer = null;
     this._featureLayer = null;
+    this._constraintLayer = null;
     this._drawLayer = null;
     this._gpsVehicleMarker = null;
     this._el.remove();
   }
+
+  // ── Session adapter ───────────────────────────────────────────────────────
+
+  _onSessionChange() {
+    if (this._map) {
+      this._map.getContainer().style.cursor = this._session.isDirty ? 'crosshair' : '';
+    }
+    this._refreshDrawLayer();
+  }
+
+  _onMapClick(latlng) {
+    if (!this._session.isDirty) return;
+    this._session.addVertex({ lat: latlng.lat, lon: latlng.lng });
+  }
+
+  _refreshDrawLayer() {
+    if (!this._map) return;
+    if (!this._drawLayer) this._drawLayer = L.layerGroup().addTo(this._map);
+    this._drawLayer.clearLayers();
+
+    const tool = this._session.tool;
+    const vertices = this._session.vertices; // {lat, lon}[]
+    const constraintMeta = this._session.constraintMeta;
+
+    if (!tool || vertices.length === 0) return;
+
+    // Convert canonical {lat, lon} to Leaflet LatLng for this view.
+    const pts = vertices.map((v) => L.latLng(v.lat, v.lon));
+
+    const fence = tool === 'fence';
+    const constraint = tool === 'constraint';
+    const stroke = constraint
+      ? (constraintMeta?.kind === 'blockage' ? '#e67e22' : '#2e8b57')
+      : (fence ? '#2e8b57' : '#d9534f');
+
+    if (tool === 'survey' && pts.length === 2) {
+      L.rectangle(L.latLngBounds(pts[0], pts[1]), { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
+    } else if ((fence || constraint) && pts.length >= 3) {
+      L.polygon(pts, { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
+    } else if (pts.length >= 2) {
+      L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._drawLayer);
+    }
+    for (const ll of pts) {
+      L.circleMarker(ll, { radius: 4, color: stroke, fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(this._drawLayer);
+    }
+  }
+
+  // ── Map bootstrap ─────────────────────────────────────────────────────────
 
   _ensureMap() {
     if (this._map || typeof L === 'undefined') return;
@@ -257,11 +343,17 @@ export class BasemapPanel {
     }).addTo(this._map);
     this._featureLayer = L.layerGroup().addTo(this._map);
     this._fenceLayer = L.layerGroup().addTo(this._map);
+    this._constraintLayer = L.layerGroup().addTo(this._map);
     this._drawLayer = L.layerGroup().addTo(this._map);
     this._map.on('click', (e) => this._onMapClick(e.latlng));
     this._map.setView([0, 0], 2);
     this._connectGpsVehicle();
+    // Re-draw any constraints or in-progress draft handed over before the map existed.
+    if (this._constraintList.length) this.renderConstraints(this._constraintList);
+    if (this._session.isDirty) this._refreshDrawLayer();
   }
+
+  // ── GPS vehicle marker ────────────────────────────────────────────────────
 
   _connectGpsVehicle() {
     if (this._gpsVehicleWs) return;
@@ -316,6 +408,8 @@ export class BasemapPanel {
       iconAnchor: [12, 12],
     });
   }
+
+  // ── Mission overlay render ────────────────────────────────────────────────
 
   // Render one overlay payload (the focused mission) by its WGS84 coordinates.
   // `payload` is the same overlay shape the scene map consumes; here we read the
