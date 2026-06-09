@@ -38,6 +38,7 @@ export class MapAuthoringToolbar {
     this._onParamsChange = onParamsChange;
 
     this._collapsed = false;
+    this._prevHasActiveTool = false;
 
     this._state = {
       addWaypointEnabled: false,
@@ -59,9 +60,26 @@ export class MapAuthoringToolbar {
 
     this._el = document.createElement('div');
     this._el.className = 'map-authoring-toolbar';
+    this._el.addEventListener('keydown', (e) => this._handleKeyDown(e));
     parent.appendChild(this._el);
     this._build();
     this.updateState();
+  }
+
+  // ── Keyboard contract ─────────────────────────────────────────────────────
+
+  _handleKeyDown(e) {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    const { drawMode, addWaypointActive } = this._state;
+    const hasActiveTool = drawMode != null || addWaypointActive;
+    if (hasActiveTool) {
+      // Cancel the active sketch/tool; calling code will updateState() to idle
+      if (addWaypointActive) this._onToggleAddWaypoint?.();
+      else this._onClearSketch?.();
+    } else if (!this._collapsed) {
+      this._setCollapsed(true);
+    }
   }
 
   // ── Section: Collapsed launcher ──────────────────────────────────────────
@@ -73,6 +91,7 @@ export class MapAuthoringToolbar {
     this._launcherBtn = mk('button', { type: 'button', className: 'mat-launcher-btn' });
     this._launcherBtn.setAttribute('aria-label', 'Open map authoring tools');
     this._launcherBtn.setAttribute('aria-expanded', 'false');
+    this._launcherBtn.setAttribute('aria-controls', 'mat-expanded-region');
     this._launcherBtn.innerHTML = '✏ Authoring';
 
     this._draftDotEl = mk('span', { className: 'mat-draft-dot', title: 'Unsaved draft in progress' });
@@ -89,6 +108,9 @@ export class MapAuthoringToolbar {
   _buildIdle() {
     const el = document.createElement('div');
     el.className = 'mat-section mat-idle';
+    el.setAttribute('role', 'toolbar');
+    el.setAttribute('aria-label', 'Map authoring tools');
+    el.id = 'mat-expanded-region';
 
     const sep = () => {
       const s = mk('span', { className: 'mat-sep' });
@@ -148,6 +170,8 @@ export class MapAuthoringToolbar {
 
     this._toolNameEl = mk('span', { className: 'mat-tool-name' });
     this._statusEl = mk('span', { className: 'mat-status-text' });
+    this._statusEl.setAttribute('aria-live', 'polite');
+    this._statusEl.setAttribute('aria-atomic', 'true');
 
     // Pattern geometry fields (corridor + survey)
     this._patternFieldsEl = mk('span', { className: 'mat-pattern-fields' });
@@ -242,6 +266,18 @@ export class MapAuthoringToolbar {
   _setCollapsed(collapsed) {
     this._collapsed = collapsed;
     this.updateState();
+    // Move focus: expanding → first idle button; collapsing → launcher
+    if (collapsed) {
+      this._launcherBtn.focus();
+    } else {
+      this._focusFirstIdleBtn();
+    }
+  }
+
+  _focusFirstIdleBtn() {
+    const btns = [this._waypointBtn, this._corridorBtn, this._surveyBtn, this._geofenceBtn];
+    const target = btns.find(b => !b.disabled && !b.hidden) ?? this._idleCollapseBtn;
+    target?.focus();
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -252,6 +288,8 @@ export class MapAuthoringToolbar {
 
     const hasActiveTool = s.drawMode != null || s.addWaypointActive;
     const hasDraft = s.drawPointCount > 0;
+    const toolTransitioned = hasActiveTool !== this._prevHasActiveTool;
+    this._prevHasActiveTool = hasActiveTool;
 
     // Which section is visible?
     this._launcherEl.hidden = !this._collapsed;
@@ -348,6 +386,18 @@ export class MapAuthoringToolbar {
       this._undoBtn.hidden = isWaypointMode;
       this._undoBtn.disabled = s.drawPointCount === 0;
       this._waypointDoneBtn.hidden = !isWaypointMode;
+    }
+
+    // Focus management on tool activate/deactivate transitions
+    if (toolTransitioned && !this._collapsed) {
+      if (hasActiveTool) {
+        // Tool just activated — move focus into the active bar
+        const focusTarget = s.addWaypointActive ? this._waypointDoneBtn : this._cancelBtn;
+        focusTarget?.focus();
+      } else {
+        // Tool just exited — return focus to idle bar
+        this._focusFirstIdleBtn();
+      }
     }
   }
 

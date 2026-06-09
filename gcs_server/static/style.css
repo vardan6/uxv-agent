@@ -1317,6 +1317,36 @@ select:focus-visible {
   }
 }
 
+/* Phase 5 — bottom-sheet layout + touch targets on narrow screens */
+@media (max-width: 640px) {
+  .map-authoring-toolbar-dock {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    justify-content: stretch;
+    align-items: stretch;
+  }
+
+  .map-authoring-toolbar {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 12px 12px 0 0;
+    border-bottom-color: transparent;
+    padding: 10px 14px 14px;
+    gap: 8px;
+  }
+
+  .map-authoring-toolbar input,
+  .map-authoring-toolbar select,
+  .map-authoring-toolbar button {
+    min-height: 44px;
+  }
+
+  .mat-section {
+    gap: 8px;
+  }
+}
+
 .replay-map {
   flex: 1 1 auto;
   position: relative;
