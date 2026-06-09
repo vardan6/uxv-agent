@@ -139,12 +139,10 @@ export class MapAuthoringToolbar {
       if (!this._geofenceBtn.disabled) this._onToggleFenceDraw?.();
     });
 
-    // Constraints menu: disabled until ADR 0025 planner consumption is complete.
     this._constraintsMenuBtn = mk('button', {
       type: 'button',
       textContent: 'Constraints ▾',
-      disabled: true,
-      title: 'Operational planning constraints (ADR 0025 — planner integration pending)',
+      title: 'Draw operational planning constraints (allowed corridors and blockages)',
     });
 
     this._idleCollapseBtn = mk('button', { type: 'button', textContent: '▾' });

@@ -19,8 +19,71 @@ from .controller_mission_adapter import (
 )
 from .coordinate_frame import Origin, load_scene_origin, local_to_wgs84, wgs84_to_local
 from .migrations import apply_ai_store_migrations
-from . import mission_patterns
+from . import mission_patterns, mission_tree
 from .mission_safety import parse_geofence
+
+
+def _point_in_polygon(lat: float, lon: float, polygon: list[dict[str, float]]) -> bool:
+    """Ray-casting point-in-polygon test. Polygon is an open list of {lat, lon} dicts."""
+    inside = False
+    n = len(polygon)
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]["lon"], polygon[i]["lat"]
+        xj, yj = polygon[j]["lon"], polygon[j]["lat"]
+        if ((yi > lat) != (yj > lat)) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _collect_nav_waypoints_wgs84(
+    node: "mission_tree.Node", origin: Origin
+) -> list[tuple[float, float]]:
+    """Walk a mission tree node, return (lat, lon) for every nav_leaf waypoint."""
+    if node.type == mission_tree.NAV_LEAF:
+        result = []
+        for wp in node.waypoints:
+            lat, lon, _ = local_to_wgs84(
+                float(wp.get("x", 0)), float(wp.get("y", 0)), float(wp.get("z", 0)), origin
+            )
+            result.append((lat, lon))
+        return result
+    pts: list[tuple[float, float]] = []
+    for child in node.children:
+        pts.extend(_collect_nav_waypoints_wgs84(child, origin))
+    return pts
+
+
+def _check_hard_constraints(
+    node: "mission_tree.Node", origin: Origin, constraints_store: Any
+) -> str | None:
+    """Return an error string if the route violates any hard enabled constraint, else None.
+
+    Hard allowed corridors: every waypoint must be inside the union of enabled ones.
+    Hard blockages: every waypoint must be outside all enabled ones.
+    """
+    constraints = constraints_store.list_constraints()
+    hard_corridors = [
+        c for c in constraints
+        if c["kind"] == "allowed_corridor" and c["rule"] == "hard" and c["enabled"]
+    ]
+    hard_blockages = [
+        c for c in constraints
+        if c["kind"] == "blockage" and c["rule"] == "hard" and c["enabled"]
+    ]
+    if not hard_corridors and not hard_blockages:
+        return None
+
+    waypoints = _collect_nav_waypoints_wgs84(node, origin)
+    for lat, lon in waypoints:
+        if hard_corridors:
+            if not any(_point_in_polygon(lat, lon, c["polygon"]) for c in hard_corridors):
+                return "Route leaves the hard allowed corridor area and was rejected"
+        for blockage in hard_blockages:
+            if _point_in_polygon(lat, lon, blockage["polygon"]):
+                return f"Route enters hard blockage '{blockage.get('name', blockage['id'])}' and was rejected"
+    return None
 
 
 MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
@@ -605,6 +668,7 @@ class MissionExecutionService:
         points: list[dict[str, Any]],
         params: dict[str, Any] | None = None,
         name: str = "",
+        constraints_store: Any = None,
     ) -> dict[str, Any]:
         """Build a new Mission from an operator-drawn pattern (Phase 4 authoring).
 
@@ -681,6 +745,11 @@ class MissionExecutionService:
                 )
         except (ValueError, TypeError) as exc:
             return {"ok": False, "error": f"invalid {kind} params: {exc}"}
+
+        if constraints_store is not None:
+            violation = _check_hard_constraints(node, origin, constraints_store)
+            if violation:
+                return {"ok": False, "error": violation}
 
         mission_name = str(name or "").strip() or f"{kind.capitalize()} pattern"
         draft_id = f"draft-draw-{uuid.uuid4().hex[:12]}"

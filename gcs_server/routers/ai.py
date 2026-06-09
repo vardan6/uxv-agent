@@ -842,6 +842,7 @@ async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
         points=payload.get("points") if isinstance(payload.get("points"), list) else [],
         params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
         name=str(payload.get("name", "") or ""),
+        constraints_store=getattr(runtime, "operational_constraints_store", None),
     )
     if not result.get("ok"):
         return JSONResponse(result, status_code=400)
