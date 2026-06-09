@@ -11,6 +11,7 @@ export class MapSketchSession {
     this._undoStack = [];        // {lat,lon}[][] for vertex-level undo
     this._statusText = '';       // override for async op messages (Saving…/Error…)
     this._listeners = [];        // multiple subscribers allowed (MapWidget + view adapters)
+    this._surveyHeading = 0;     // CCW from east (backend convention); 0 = lines run east
   }
 
   // ── Accessors ─────────────────────────────────────────────────────────────
@@ -21,6 +22,7 @@ export class MapSketchSession {
   // Defensive copy so callers cannot mutate internal state.
   get vertices() { return this._vertices.slice(); }
   get constraintMeta() { return this._constraintMeta ? { ...this._constraintMeta } : null; }
+  get surveyHeading() { return this._surveyHeading; }
 
   // State snapshot consumed by MapAuthoringToolbar.updateState().
   getState() {
@@ -30,6 +32,7 @@ export class MapSketchSession {
       statusText: this._statusText,
       constraintKind: this._constraintMeta?.kind ?? null,
       constraintRule: this._constraintMeta?.rule ?? null,
+      surveyHeading: this._surveyHeading,
     };
   }
 
@@ -50,6 +53,13 @@ export class MapSketchSession {
     this._vertices = [];
     this._undoStack = [];
     this._statusText = '';
+    this._surveyHeading = 0;
+    this._notify();
+  }
+
+  // `deg` is CCW from east (backend convention). Clamps to [0, 360).
+  setSurveyHeading(deg) {
+    this._surveyHeading = ((Number(deg) % 360) + 360) % 360;
     this._notify();
   }
 
@@ -74,6 +84,14 @@ export class MapSketchSession {
     this._notify();
   }
 
+  // Reposition one vertex in-place (vertex drag from the Leaflet view adapter).
+  moveVertex(index, { lat, lon }) {
+    if (!this._tool || index < 0 || index >= this._vertices.length) return;
+    this._pushUndo();
+    this._vertices[index] = { lat, lon };
+    this._notify();
+  }
+
   // Set async op text (Saving…/Error…/Saved.) without changing draw state.
   setStatus(text) {
     this._statusText = text || '';
@@ -86,6 +104,7 @@ export class MapSketchSession {
     this._constraintMeta = null;
     this._undoStack = [];
     this._statusText = '';
+    this._surveyHeading = 0;
     this._notify();
   }
 

@@ -74,6 +74,19 @@ export class BasemapPanel {
     // Live vehicle GPS marker (Phase 4 telemetry simulation).
     this._gpsVehicleMarker = null;
     this._gpsVehicleWs = null;
+
+    // Draggable orientation handle for oriented survey rectangle (Phase 3).
+    this._surveyHandleMarker = null;
+    this._surveyHandleDragging = false;
+
+    // Vertex drag state (Phase 3): flag blocks session-driven layer rebuilds during
+    // an active drag so the dragging marker is not torn down mid-gesture.
+    this._vertexDragging = false;
+    this._dragPolyRef = null; // primary line/polygon layer; updated live during drag
+
+    // Vertex snapping (Phase 3): nearest existing sketch vertex within SNAP_PX pixels.
+    this._snapTarget = null;   // {lat, lon} | null — vertex the next click will land on
+    this._snapIndicator = null; // L.circleMarker ring shown near the snap target
   }
 
   // ── Sketch state (delegates to session) ──────────────────────────────────
@@ -196,6 +209,7 @@ export class BasemapPanel {
       params.passes = Math.max(1, parseInt(passes, 10) || 1);
     } else {
       params.line_spacing_m = spacing;
+      params.heading_deg = this._session.surveyHeading;
     }
     this._session.setStatus('Generating…');
     Promise.resolve(this._onGenerate({ pattern, points, params }))
@@ -280,6 +294,8 @@ export class BasemapPanel {
     // Only reset the Leaflet cursor and clear the (now hidden) draw layer.
     if (this._map) this._map.getContainer().style.cursor = '';
     this._drawLayer?.clearLayers();
+    this._removeSurveyHandle();
+    this._clearSnapTarget();
   }
 
   destroy() {
@@ -291,6 +307,8 @@ export class BasemapPanel {
       try { this._gpsVehicleWs.close(); } catch {}
       this._gpsVehicleWs = null;
     }
+    this._removeSurveyHandle();
+    this._clearSnapTarget();
     if (this._map) {
       this._map.remove();
       this._map = null;
@@ -309,24 +327,74 @@ export class BasemapPanel {
     if (this._map) {
       this._map.getContainer().style.cursor = this._session.isDirty ? 'crosshair' : '';
     }
+    if (!this._session.isDirty) this._clearSnapTarget();
+    // Skip full rebuild while a vertex drag is in progress — the drag handler
+    // updates the preview directly so tearing down the active marker is avoided.
+    if (this._vertexDragging) return;
     this._refreshDrawLayer();
   }
 
   _onMapClick(latlng) {
     if (!this._session.isDirty) return;
-    this._session.addVertex({ lat: latlng.lat, lon: latlng.lng });
+    // Snap to the nearest existing vertex if the cursor is within the threshold.
+    const target = this._snapTarget
+      ? { lat: this._snapTarget.lat, lon: this._snapTarget.lon }
+      : { lat: latlng.lat, lon: latlng.lng };
+    this._session.addVertex(target);
+  }
+
+  // Screen-space proximity snap: highlight the nearest existing sketch vertex
+  // when the cursor is within SNAP_PX pixels, and record it as _snapTarget so
+  // the next click lands exactly on that vertex.
+  _onMapMouseMove(latlng) {
+    if (!this._session.isDirty || !this._map) { this._clearSnapTarget(); return; }
+    const vertices = this._session.vertices;
+    if (vertices.length === 0) { this._clearSnapTarget(); return; }
+
+    const SNAP_PX = 15;
+    const mousePoint = this._map.latLngToContainerPoint(latlng);
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const v of vertices) {
+      const pt = this._map.latLngToContainerPoint(L.latLng(v.lat, v.lon));
+      const d = Math.hypot(mousePoint.x - pt.x, mousePoint.y - pt.y);
+      if (d < SNAP_PX && d < nearestDist) { nearestDist = d; nearest = v; }
+    }
+
+    if (nearest) {
+      this._snapTarget = nearest;
+      const ll = L.latLng(nearest.lat, nearest.lon);
+      if (!this._snapIndicator) {
+        this._snapIndicator = L.circleMarker(ll, {
+          radius: 9, color: '#f0ad4e', weight: 2.5, fillOpacity: 0, interactive: false,
+        }).addTo(this._map);
+      } else {
+        this._snapIndicator.setLatLng(ll);
+      }
+    } else {
+      this._clearSnapTarget();
+    }
+  }
+
+  _clearSnapTarget() {
+    this._snapTarget = null;
+    if (this._snapIndicator) { this._snapIndicator.remove(); this._snapIndicator = null; }
   }
 
   _refreshDrawLayer() {
     if (!this._map) return;
     if (!this._drawLayer) this._drawLayer = L.layerGroup().addTo(this._map);
     this._drawLayer.clearLayers();
+    this._dragPolyRef = null;
 
     const tool = this._session.tool;
     const vertices = this._session.vertices; // {lat, lon}[]
     const constraintMeta = this._session.constraintMeta;
 
-    if (!tool || vertices.length === 0) return;
+    if (!tool || vertices.length === 0) {
+      this._removeSurveyHandle();
+      return;
+    }
 
     // Convert canonical {lat, lon} to Leaflet LatLng for this view.
     const pts = vertices.map((v) => L.latLng(v.lat, v.lon));
@@ -352,15 +420,72 @@ export class BasemapPanel {
     }
 
     if (tool === 'survey' && pts.length === 2) {
-      L.rectangle(L.latLngBounds(pts[0], pts[1]), { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
+      const ring = this._rotatedSurveyPoly(vertices[0], vertices[1], this._session.surveyHeading);
+      this._dragPolyRef = L.polygon(ring, { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
+      const routeWpts = this._surveyRoutePreview(
+        vertices[0], vertices[1], this._session.surveyHeading, this._sketchParams.spacing,
+      );
+      if (routeWpts.length >= 2) {
+        L.polyline(routeWpts, { color: stroke, weight: 1.5, opacity: 0.65, dashArray: '4 3' }).addTo(this._drawLayer);
+      }
+      this._updateSurveyHandle(vertices[0], vertices[1]);
     } else if ((fence || constraint) && pts.length >= 3) {
-      L.polygon(pts, { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
+      this._removeSurveyHandle();
+      this._dragPolyRef = L.polygon(pts, { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
     } else if (pts.length >= 2) {
-      L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._drawLayer);
+      this._removeSurveyHandle();
+      this._dragPolyRef = L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._drawLayer);
+    } else {
+      this._removeSurveyHandle();
     }
-    for (const ll of pts) {
-      L.circleMarker(ll, { radius: 4, color: stroke, fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(this._drawLayer);
-    }
+
+    // Draggable vertex markers. Drag events update the preview directly
+    // (via _dragPolyRef) without triggering a full layer rebuild, which would
+    // destroy the active marker. Session.moveVertex is called only on dragend.
+    vertices.forEach((v, i) => {
+      const marker = L.marker([v.lat, v.lon], {
+        icon: L.divIcon({
+          className: 'map-vertex-handle',
+          html: '<div class="map-vertex-handle-icon"></div>',
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        }),
+        draggable: true,
+        zIndexOffset: 500,
+      }).addTo(this._drawLayer);
+
+      marker.on('dragstart', () => {
+        this._vertexDragging = true;
+        if (this._map) this._map.getContainer().style.cursor = 'grabbing';
+      });
+      marker.on('drag', (e) => {
+        if (!this._dragPolyRef) return;
+        const ll = e.latlng;
+        const livePts = this._session.vertices.map((sv, j) =>
+          j === i ? ll : L.latLng(sv.lat, sv.lon),
+        );
+        if (tool === 'survey' && livePts.length === 2) {
+          const ring = this._rotatedSurveyPoly(
+            { lat: livePts[0].lat, lon: livePts[0].lng },
+            { lat: livePts[1].lat, lon: livePts[1].lng },
+            this._session.surveyHeading,
+          );
+          this._dragPolyRef.setLatLngs(ring);
+          this._updateSurveyHandle(
+            { lat: livePts[0].lat, lon: livePts[0].lng },
+            { lat: livePts[1].lat, lon: livePts[1].lng },
+          );
+        } else {
+          this._dragPolyRef.setLatLngs(livePts);
+        }
+      });
+      marker.on('dragend', (e) => {
+        this._vertexDragging = false;
+        const ll = e.target.getLatLng();
+        if (this._map) this._map.getContainer().style.cursor = 'crosshair';
+        this._session.moveVertex(i, { lat: ll.lat, lon: ll.lng });
+      });
+    });
   }
 
   // Offset a {lat,lon}[] centreline by ±halfWidth metres and return a closed
@@ -405,6 +530,145 @@ export class BasemapPanel {
     return left.concat(right.reverse());
   }
 
+  // ── Oriented survey rectangle helpers (Phase 3) ───────────────────────────
+
+  // Returns {mPerDegLat, mPerDegLon} at the given latitude.
+  _mPerDeg(clat) {
+    const latRad = (clat * Math.PI) / 180;
+    const mPerDegLat = 111320;
+    const mPerDegLon = 111320 * Math.cos(latRad) || 1e-6;
+    return { mPerDegLat, mPerDegLon };
+  }
+
+  // Returns a closed 4-corner ring [[lat,lon]] for the oriented survey rectangle
+  // defined by two diagonal corners v1/v2 and a heading angle in CCW-from-east
+  // degrees (matching the backend survey_pattern convention).
+  _rotatedSurveyPoly(v1, v2, headingDeg) {
+    const clat = (v1.lat + v2.lat) / 2;
+    const clon = (v1.lon + v2.lon) / 2;
+    const { mPerDegLat, mPerDegLon } = this._mPerDeg(clat);
+    const hw = Math.abs(v2.lon - v1.lon) * mPerDegLon / 2;
+    const hh = Math.abs(v2.lat - v1.lat) * mPerDegLat / 2;
+    const theta = (headingDeg * Math.PI) / 180;
+    const cos_t = Math.cos(theta);
+    const sin_t = Math.sin(theta);
+    // Rotate 4 axis-aligned corners by heading (CCW in ENU space).
+    return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([ex, ny]) => [
+      clat + (ex * sin_t + ny * cos_t) / mPerDegLat,
+      clon + (ex * cos_t - ny * sin_t) / mPerDegLon,
+    ]);
+  }
+
+  // Returns the lawnmower waypoints [[lat,lon],…] for a survey sketch, mirroring
+  // the backend survey_pattern generator. Rotates about the rectangle centre so
+  // lines stay inside the visual polygon at any heading. Capped at 200 lines.
+  _surveyRoutePreview(v1, v2, headingDeg, spacingM) {
+    const { mPerDegLat, mPerDegLon } = this._mPerDeg((v1.lat + v2.lat) / 2);
+    const clat = (v1.lat + v2.lat) / 2;
+    const clon = (v1.lon + v2.lon) / 2;
+    const hw = Math.abs(v2.lon - v1.lon) * mPerDegLon / 2;
+    const hh = Math.abs(v2.lat - v1.lat) * mPerDegLat / 2;
+    const width_m = hw * 2;
+    const height_m = hh * 2;
+    if (width_m <= 0 || height_m <= 0) return [];
+
+    const spacing = Math.max(0.5, Number(spacingM) || 5);
+    const lineCount = Math.min(200, Math.max(1, Math.ceil(height_m / spacing)) + 1);
+    const theta = (headingDeg * Math.PI) / 180;
+    const cos_t = Math.cos(theta);
+    const sin_t = Math.sin(theta);
+
+    // Centre-relative ENU offset → [lat, lon]
+    const place = (lx, ly) => {
+      const dx = lx - hw;
+      const dy = ly - hh;
+      const east = dx * cos_t - dy * sin_t;
+      const north = dx * sin_t + dy * cos_t;
+      return [clat + north / mPerDegLat, clon + east / mPerDegLon];
+    };
+
+    const waypoints = [];
+    for (let i = 0; i < lineCount; i++) {
+      const ly = Math.min(i * spacing, height_m);
+      if (i % 2 === 0) {
+        waypoints.push(place(0, ly));
+        waypoints.push(place(width_m, ly));
+      } else {
+        waypoints.push(place(width_m, ly));
+        waypoints.push(place(0, ly));
+      }
+    }
+    return waypoints;
+  }
+
+  // Creates or repositions the draggable orientation handle for a survey sketch.
+  // The handle sits beyond the right edge of the oriented rectangle; dragging it
+  // updates surveyHeading — the handle points in the direction survey lines run.
+  _updateSurveyHandle(v1, v2) {
+    if (!this._map) return;
+    const clat = (v1.lat + v2.lat) / 2;
+    const clon = (v1.lon + v2.lon) / 2;
+    const { mPerDegLat, mPerDegLon } = this._mPerDeg(clat);
+    const hw = Math.abs(v2.lon - v1.lon) * mPerDegLon / 2;
+
+    const hh = Math.abs(v2.lat - v1.lat) * mPerDegLat / 2;
+    const headingDeg = this._session.surveyHeading;
+    const theta = (headingDeg * Math.PI) / 180;
+    // Line direction in ENU: (cos_t = east, sin_t = north).
+    // Use the half-diagonal as reference so the handle is always outside the rect.
+    const dist = Math.hypot(hw, hh) * 1.25;
+    const handleLat = clat + (Math.sin(theta) * dist) / mPerDegLat;
+    const handleLon = clon + (Math.cos(theta) * dist) / mPerDegLon;
+
+    if (!this._surveyHandleMarker) {
+      this._surveyHandleMarker = L.marker([handleLat, handleLon], {
+        icon: L.divIcon({
+          className: 'map-survey-handle',
+          html: '<div class="map-survey-handle-icon" title="Drag to rotate survey"></div>',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        }),
+        draggable: true,
+        zIndexOffset: 600,
+        interactive: true,
+      }).addTo(this._map);
+
+      this._surveyHandleMarker.on('dragstart', () => {
+        this._surveyHandleDragging = true;
+      });
+      this._surveyHandleMarker.on('drag', (e) => {
+        const ll = e.latlng;
+        const v = this._session.vertices;
+        if (v.length < 2) return;
+        const cx = (v[0].lat + v[1].lat) / 2;
+        const cy = (v[0].lon + v[1].lon) / 2;
+        const { mPerDegLat: mLat, mPerDegLon: mLon } = this._mPerDeg(cx);
+        // Line bearing = CW from north; handle points in line direction.
+        const ex = (ll.lng - cy) * mLon;
+        const ny = (ll.lat - cx) * mLat;
+        const lineBearingDeg = (Math.atan2(ex, ny) * 180) / Math.PI;
+        // Convert geo bearing (CW from north) to CCW from east (backend convention).
+        const newHeading = ((90 - lineBearingDeg) % 360 + 360) % 360;
+        this._session.setSurveyHeading(newHeading);
+      });
+      this._surveyHandleMarker.on('dragend', () => {
+        this._surveyHandleDragging = false;
+        // Snap handle to computed position after releasing.
+        this._refreshDrawLayer();
+      });
+    } else if (!this._surveyHandleDragging) {
+      this._surveyHandleMarker.setLatLng([handleLat, handleLon]);
+    }
+  }
+
+  _removeSurveyHandle() {
+    if (this._surveyHandleMarker) {
+      this._surveyHandleMarker.remove();
+      this._surveyHandleMarker = null;
+      this._surveyHandleDragging = false;
+    }
+  }
+
   // ── Map bootstrap ─────────────────────────────────────────────────────────
 
   _ensureMap() {
@@ -419,6 +683,7 @@ export class BasemapPanel {
     this._constraintLayer = L.layerGroup().addTo(this._map);
     this._drawLayer = L.layerGroup().addTo(this._map);
     this._map.on('click', (e) => this._onMapClick(e.latlng));
+    this._map.on('mousemove', (e) => this._onMapMouseMove(e.latlng));
     this._map.setView([0, 0], 2);
     this._connectGpsVehicle();
     // Re-draw any constraints or in-progress draft handed over before the map existed.

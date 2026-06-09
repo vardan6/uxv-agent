@@ -993,6 +993,41 @@ select:focus-visible {
   background: color-mix(in srgb, var(--accent) 38%, var(--panel-strong)) !important;
 }
 
+/* Survey orientation handle (Phase 3). A draggable Leaflet marker that lets
+   operators set the survey-line direction before committing. */
+.map-survey-handle {
+  cursor: grab;
+}
+.map-survey-handle-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #d9534f;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+  cursor: grab;
+}
+.map-survey-handle-icon:active {
+  cursor: grabbing;
+}
+
+/* Draggable vertex handle for sketch tools (Phase 3). */
+.map-vertex-handle {
+  cursor: grab;
+}
+.map-vertex-handle-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid currentColor;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  cursor: grab;
+}
+.map-vertex-handle-icon:active {
+  cursor: grabbing;
+}
+
 /* Operational-constraints list panel (ADR 0025). Floats above the basemap; the
    toolbar's Constraints… button toggles it. */
 .map-constraints-panel {

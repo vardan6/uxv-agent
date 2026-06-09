@@ -54,6 +54,7 @@ export class MapAuthoringToolbar {
       statusText: '',
       constraintKind: null,
       constraintRule: null,
+      surveyHeading: 0,
     };
 
     this._el = document.createElement('div');
@@ -308,8 +309,15 @@ export class MapAuthoringToolbar {
         this._statusEl.textContent = s.statusText ||
           (ready ? `${s.drawPointCount} vertices · ready to finish` : `${s.drawPointCount} vertices · need ≥ 2`);
       } else if (survey) {
-        this._statusEl.textContent = s.statusText ||
-          (s.drawPointCount >= 2 ? '2 corners · ready to finish' : `${s.drawPointCount}/2 corners`);
+        if (s.statusText) {
+          this._statusEl.textContent = s.statusText;
+        } else if (s.drawPointCount >= 2) {
+          const hdg = Math.round(s.surveyHeading);
+          const hdgText = hdg !== 0 ? ` · ${hdg}°` : '';
+          this._statusEl.textContent = `2 corners${hdgText} · drag handle to rotate · ready to finish`;
+        } else {
+          this._statusEl.textContent = `${s.drawPointCount}/2 corners`;
+        }
       } else if (fence) {
         const ready = s.drawPointCount >= 3;
         this._statusEl.textContent = s.statusText ||
