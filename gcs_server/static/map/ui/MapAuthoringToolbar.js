@@ -22,6 +22,7 @@ export class MapAuthoringToolbar {
     onSaveConstraint = null,
     onOpenConstraints = null,
     onUndoVertex = null,
+    onParamsChange = null,
   } = {}) {
     this._onToggleAddWaypoint = onToggleAddWaypoint;
     this._onTogglePatternDraw = onTogglePatternDraw;
@@ -34,6 +35,7 @@ export class MapAuthoringToolbar {
     this._onSaveConstraint = onSaveConstraint;
     this._onOpenConstraints = onOpenConstraints;
     this._onUndoVertex = onUndoVertex;
+    this._onParamsChange = onParamsChange;
 
     this._collapsed = false;
 
@@ -156,6 +158,12 @@ export class MapAuthoringToolbar {
     this._passesInput = mk('input', { type: 'number', value: '1', min: '1', step: '1', title: 'Passes (corridor)' });
     this._passesInput.style.width = '44px';
 
+    // Live footprint preview: push Spacing/Passes edits to the adapter while a
+    // corridor/survey sketch is open (Phase 3), before commit.
+    const emitParams = () => this._emitParamsChange();
+    this._spacingInput.addEventListener('input', emitParams);
+    this._passesInput.addEventListener('input', emitParams);
+
     const spacingLbl = mk('label', { title: 'Waypoint / line spacing' });
     spacingLbl.append(document.createTextNode('Spacing '), this._spacingInput, document.createTextNode(' m'));
     this._passesLbl = mk('label', { title: 'Number of parallel passes' });
@@ -193,6 +201,16 @@ export class MapAuthoringToolbar {
       this._activeCollapseBtn,
     );
     return el;
+  }
+
+  _emitParamsChange() {
+    const { drawMode } = this._state;
+    if (drawMode !== 'corridor' && drawMode !== 'survey') return;
+    this._onParamsChange?.({
+      pattern: drawMode,
+      spacing: Number(this._spacingInput.value) || 0,
+      passes: Math.max(1, parseInt(this._passesInput.value, 10) || 1),
+    });
   }
 
   _handleFinish() {

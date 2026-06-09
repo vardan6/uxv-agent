@@ -2100,6 +2100,7 @@ export class MapWidget {
       onSaveConstraint: () => this._basemapPanel?.saveConstraint({ name: this._nextConstraintName() }),
       onOpenConstraints: () => this._openConstraintsPanel(),
       onUndoVertex: () => this._basemapPanel?.undoVertex(),
+      onParamsChange: (params) => this._basemapPanel?.setSketchParams(params),
     });
 
     // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene

@@ -62,6 +62,11 @@ export class BasemapPanel {
 
     this._drawLayer = null;
 
+    // Live pattern params mirrored from the toolbar (Spacing/Passes) so the
+    // corridor footprint preview can resize before commit (Phase 3). These are
+    // render-only hints — canonical geometry stays in the session.
+    this._sketchParams = { spacing: 5, passes: 1 };
+
     // Operational constraints (ADR 0025): the last persisted list rendered on its own layer.
     this._constraintLayer = null;
     this._constraintList = [];
@@ -78,6 +83,18 @@ export class BasemapPanel {
   }
 
   // ── Sketch control ────────────────────────────────────────────────────────
+
+  // Mirror the toolbar's live Spacing/Passes so the corridor footprint preview
+  // tracks edits before commit. Re-renders the draw layer when a sketch is open.
+  setSketchParams({ spacing, passes } = {}) {
+    const next = {
+      spacing: Number.isFinite(Number(spacing)) ? Number(spacing) : this._sketchParams.spacing,
+      passes: Math.max(1, parseInt(passes, 10) || this._sketchParams.passes),
+    };
+    if (next.spacing === this._sketchParams.spacing && next.passes === this._sketchParams.passes) return;
+    this._sketchParams = next;
+    if (this._session.isDirty) this._refreshDrawLayer();
+  }
 
   togglePatternDraw(pattern = 'corridor') {
     if (this._session.isDirty) {
@@ -320,6 +337,20 @@ export class BasemapPanel {
       ? (constraintMeta?.kind === 'blockage' ? '#e67e22' : '#2e8b57')
       : (fence ? '#2e8b57' : '#d9534f');
 
+    // Corridor footprint preview: with >1 pass the swath spans
+    // spacing × (passes − 1), centred on the drawn centreline (Phase 3). A
+    // single pass has zero width, so only the centreline shows.
+    if (tool === 'corridor' && pts.length >= 2) {
+      const { spacing, passes } = this._sketchParams;
+      const halfWidth = (Number(spacing) || 0) * Math.max(0, passes - 1) / 2;
+      if (halfWidth > 0) {
+        const band = this._corridorBand(vertices, halfWidth);
+        if (band.length >= 3) {
+          L.polygon(band, { color: stroke, weight: 1, opacity: 0.5, fillColor: stroke, fillOpacity: 0.12, dashArray: '4 4' }).addTo(this._drawLayer);
+        }
+      }
+    }
+
     if (tool === 'survey' && pts.length === 2) {
       L.rectangle(L.latLngBounds(pts[0], pts[1]), { color: stroke, weight: 2, fillOpacity: 0.1 }).addTo(this._drawLayer);
     } else if ((fence || constraint) && pts.length >= 3) {
@@ -330,6 +361,48 @@ export class BasemapPanel {
     for (const ll of pts) {
       L.circleMarker(ll, { radius: 4, color: stroke, fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(this._drawLayer);
     }
+  }
+
+  // Offset a {lat,lon}[] centreline by ±halfWidth metres and return a closed
+  // ring ([lat,lon][]) tracing the left side forward then the right side back.
+  // Offsets use a local equirectangular approximation (fine at preview scale);
+  // each vertex normal averages its adjacent segment normals.
+  _corridorBand(centerline, halfWidth) {
+    const n = centerline.length;
+    if (n < 2 || !(halfWidth > 0)) return [];
+    const latRad = (centerline[0].lat * Math.PI) / 180;
+    const mPerDegLat = 111320;
+    const mPerDegLon = 111320 * Math.cos(latRad) || 1e-6;
+    // Per-segment left-normal unit vectors in metres-space.
+    const segNormals = [];
+    for (let i = 0; i < n - 1; i += 1) {
+      const dx = (centerline[i + 1].lon - centerline[i].lon) * mPerDegLon;
+      const dy = (centerline[i + 1].lat - centerline[i].lat) * mPerDegLat;
+      const len = Math.hypot(dx, dy) || 1;
+      segNormals.push({ x: -dy / len, y: dx / len }); // rotate +90°
+    }
+    const vertexNormal = (i) => {
+      const a = segNormals[i - 1];
+      const b = segNormals[i];
+      const nx = (a ? a.x : 0) + (b ? b.x : 0);
+      const ny = (a ? a.y : 0) + (b ? b.y : 0);
+      const len = Math.hypot(nx, ny) || 1;
+      return { x: nx / len, y: ny / len };
+    };
+    const offset = (i, sign) => {
+      const v = vertexNormal(i);
+      return [
+        centerline[i].lat + (sign * halfWidth * v.y) / mPerDegLat,
+        centerline[i].lon + (sign * halfWidth * v.x) / mPerDegLon,
+      ];
+    };
+    const left = [];
+    const right = [];
+    for (let i = 0; i < n; i += 1) {
+      left.push(offset(i, 1));
+      right.push(offset(i, -1));
+    }
+    return left.concat(right.reverse());
   }
 
   // ── Map bootstrap ─────────────────────────────────────────────────────────
