@@ -180,6 +180,7 @@ export class MapWidget {
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
     this._sketchSession = null;
     this._sketchSessionUnsub = null;
+    this._sceneSketchLayer = null;
     this._basemapPanel = null;
     this._authoringToolbarDock = null;
     this._authoringToolbar = null;
@@ -214,10 +215,22 @@ export class MapWidget {
     this._map.getPane('missionPane').style.zIndex = 470;
     this._map.setView([0, 0], 1);
     this._overlayLayer = new MissionOverlayLayer(this._map);
+    this._sceneSketchLayer = L.layerGroup().addTo(this._map);
 
     // Dismiss context menu on map click; in add mode, append a waypoint at the clicked position
     this._map.on('click', (e) => {
       this._contextMenu.close();
+      // Sketch capture on scene views: convert CRS.Simple metres → WGS84 via mission origin.
+      if (this._sketchSession?.isDirty && this._currentViewMode !== 'basemap') {
+        const origin = this._focusedOrigin();
+        if (origin) {
+          const METRES_PER_DEG = 111320.0;
+          const lat = origin.lat + e.latlng.lat / METRES_PER_DEG;
+          const lon = origin.lon + e.latlng.lng / (METRES_PER_DEG * Math.cos(origin.lat * Math.PI / 180));
+          this._sketchSession.addVertex({ lat, lon });
+          return;
+        }
+      }
       if (editState.editMode === 'add' && editState.isEditable()) {
         const ll = e.latlng;
         this._handleGhostClick(editState.waypoints.length, { x: ll.lng, y: ll.lat, z: 0 });
@@ -387,6 +400,8 @@ export class MapWidget {
       this._sketchSessionUnsub = null;
     }
     this._sketchSession = null;
+    this._sceneSketchLayer?.remove();
+    this._sceneSketchLayer = null;
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
@@ -1324,33 +1339,69 @@ export class MapWidget {
     if (!this._authoringToolbar || !this._sketchSession) return;
     const onBasemapView = this._currentViewMode === 'basemap';
     const hasEditableRevision = !!editState.revisionId && editState.isEditable();
-    const crossViewDeferredReason = 'Scene views do not yet support shared WGS84 sketch capture from the mission origin; use Basemap VIEW.';
-    const geofenceReason = !onBasemapView
-      ? crossViewDeferredReason
-      : this._focusedMissionId
-        ? 'Edit the geofence for the focused mission.'
-        : 'Focus a mission to edit its geofence.';
+    const hasOrigin = !!this._focusedOrigin();
+    const canDraw = onBasemapView || hasOrigin;
+    const noOriginReason = 'Focus a mission to enable GPS-based drawing on this view.';
+    const geofenceReason = canDraw
+      ? (this._focusedMissionId ? 'Edit the geofence for the focused mission.' : 'Focus a mission to edit its geofence.')
+      : noOriginReason;
     const sketchState = this._sketchSession.getState();
-    // When a draft is active but Basemap is not the current view, the draft is
-    // preserved (Decision B) — surface a notice so the operator knows how to resume.
-    const suspendedDraft = !onBasemapView && sketchState.drawMode !== null;
     this._authoringToolbar.updateState({
       addWaypointEnabled: hasEditableRevision,
       addWaypointActive: editState.editMode === 'add',
       addWaypointReason: editState.revisionId
         ? 'The current revision is locked or busy.'
         : 'Open a mission in edit mode to add waypoints.',
-      drawToolsEnabled: onBasemapView,
-      drawToolsReason: crossViewDeferredReason,
-      geofenceEnabled: onBasemapView && !!this._focusedMissionId,
+      drawToolsEnabled: canDraw,
+      drawToolsReason: noOriginReason,
+      geofenceEnabled: canDraw && !!this._focusedMissionId,
       geofenceReason,
-      constraintToolsEnabled: onBasemapView,
-      constraintToolsReason: crossViewDeferredReason,
+      constraintToolsEnabled: canDraw,
+      constraintToolsReason: noOriginReason,
       ...sketchState,
-      statusText: suspendedDraft
-        ? 'Draft preserved — switch to Basemap VIEW to continue sketching.'
-        : sketchState.statusText,
     });
+    if (!onBasemapView) {
+      this._map.getContainer().style.cursor = sketchState.drawMode ? 'crosshair' : '';
+    }
+    this._refreshSceneSketch();
+  }
+
+  _refreshSceneSketch() {
+    if (!this._sceneSketchLayer) return;
+    this._sceneSketchLayer.clearLayers();
+    if (this._currentViewMode === 'basemap') return;
+    const origin = this._focusedOrigin();
+    if (!origin || !this._sketchSession?.isDirty) return;
+
+    const METRES_PER_DEG = 111320.0;
+    const cosLat = Math.cos(origin.lat * Math.PI / 180);
+    const toScene = ({ lat, lon }) => L.latLng(
+      (lat - origin.lat) * METRES_PER_DEG,
+      (lon - origin.lon) * METRES_PER_DEG * cosLat,
+    );
+
+    const tool = this._sketchSession.tool;
+    const vertices = this._sketchSession.vertices;
+    if (!tool || vertices.length === 0) return;
+
+    const pts = vertices.map(toScene);
+    const isFence = tool === 'fence';
+    const isConstraint = tool === 'constraint';
+    const stroke = isConstraint
+      ? (this._sketchSession.constraintMeta?.kind === 'blockage' ? '#e67e22' : '#2e8b57')
+      : (isFence ? '#2e8b57' : '#d9534f');
+
+    if ((isFence || isConstraint) && pts.length >= 2) {
+      L.polygon(pts, { color: stroke, weight: 2, dashArray: '6 4', fillOpacity: 0.1 }).addTo(this._sceneSketchLayer);
+    } else if (pts.length >= 2) {
+      L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._sceneSketchLayer);
+    }
+
+    for (const v of vertices) {
+      L.circleMarker(toScene(v), {
+        radius: 5, color: stroke, fillColor: stroke, fillOpacity: 0.85, weight: 2, interactive: false,
+      }).addTo(this._sceneSketchLayer);
+    }
   }
 
   _toggleAddWaypointMode() {

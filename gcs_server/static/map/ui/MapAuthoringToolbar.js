@@ -45,11 +45,11 @@ export class MapAuthoringToolbar {
       addWaypointActive: false,
       addWaypointReason: 'Select an editable mission revision to add waypoints.',
       drawToolsEnabled: false,
-      drawToolsReason: 'Scene views do not yet support shared WGS84 sketch capture; use Basemap VIEW for corridor and survey tools.',
+      drawToolsReason: 'Focus a mission to enable GPS-based drawing on this view.',
       geofenceEnabled: false,
-      geofenceReason: 'Scene views do not yet support shared WGS84 sketch capture; use Basemap VIEW to edit geofences.',
+      geofenceReason: 'Focus a mission to enable GPS-based drawing on this view.',
       constraintToolsEnabled: false,
-      constraintToolsReason: 'Scene views do not yet support shared WGS84 sketch capture; use Basemap VIEW to draw planning constraints.',
+      constraintToolsReason: 'Focus a mission to enable GPS-based drawing on this view.',
       drawMode: null,
       drawPointCount: 0,
       statusText: '',
@@ -303,13 +303,13 @@ export class MapAuthoringToolbar {
       setTooltip(this._waypointBtn, 'Append waypoints by clicking the map.', s.addWaypointReason, !s.addWaypointEnabled);
 
       this._corridorBtn.disabled = !s.drawToolsEnabled;
-      setTooltip(this._corridorBtn, 'Draw a corridor pattern on the basemap.', s.drawToolsReason, !s.drawToolsEnabled);
+      setTooltip(this._corridorBtn, 'Draw a corridor pattern on the map.', s.drawToolsReason, !s.drawToolsEnabled);
 
       this._surveyBtn.disabled = !s.drawToolsEnabled;
-      setTooltip(this._surveyBtn, 'Draw a survey area on the basemap.', s.drawToolsReason, !s.drawToolsEnabled);
+      setTooltip(this._surveyBtn, 'Draw a survey area on the map.', s.drawToolsReason, !s.drawToolsEnabled);
 
       this._geofenceBtn.disabled = !s.geofenceEnabled;
-      setTooltip(this._geofenceBtn, 'Draw a mission inclusion geofence on the basemap.', s.geofenceReason, !s.geofenceEnabled);
+      setTooltip(this._geofenceBtn, 'Draw a mission inclusion geofence on the map.', s.geofenceReason, !s.geofenceEnabled);
     }
 
     // Active section
