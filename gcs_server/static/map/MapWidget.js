@@ -181,6 +181,7 @@ export class MapWidget {
     this._sketchSession = null;
     this._sketchSessionUnsub = null;
     this._sceneSketchLayer = null;
+    this._scenePlanningLayer = null;
     this._basemapPanel = null;
     this._authoringToolbarDock = null;
     this._authoringToolbar = null;
@@ -216,6 +217,7 @@ export class MapWidget {
     this._map.setView([0, 0], 1);
     this._overlayLayer = new MissionOverlayLayer(this._map);
     this._sceneSketchLayer = L.layerGroup().addTo(this._map);
+    this._scenePlanningLayer = L.layerGroup().addTo(this._map);
 
     // Dismiss context menu on map click; in add mode, append a waypoint at the clicked position
     this._map.on('click', (e) => {
@@ -402,6 +404,8 @@ export class MapWidget {
     this._sketchSession = null;
     this._sceneSketchLayer?.remove();
     this._sceneSketchLayer = null;
+    this._scenePlanningLayer?.remove();
+    this._scenePlanningLayer = null;
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
@@ -1211,6 +1215,13 @@ export class MapWidget {
 
     this._overlayLayer.renderMany(overlays);
     const focusedPayload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
+    // Render persisted geofence + constraints on scene views; basemap mode has its own layers.
+    if (this._currentViewMode !== 'basemap') {
+      this._overlayLayer.renderGeofence(focusedPayload?.geofence ?? null, focusedPayload?.origin ?? null);
+      this._renderSceneConstraints();
+    } else {
+      this._scenePlanningLayer?.clearLayers();
+    }
     const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
     // Only refit when the logical target changes; skip on every poll tick so the
     // user can freely pan/zoom without the view snapping back every 5 seconds.
@@ -1276,6 +1287,9 @@ export class MapWidget {
     }
     this._setBasemapVisible(mode === 'basemap');
     this._syncAuthoringToolbarState();
+    // Load constraints whenever entering a scene view so the planning layer renders
+    // without waiting for the user to open the Constraints panel or the basemap.
+    if (mode !== 'basemap') this._refreshConstraints().catch(() => {});
   }
 
   _handleFitClick(key) {
@@ -1458,8 +1472,54 @@ export class MapWidget {
       this._constraints = res.constraints;
       this._basemapPanel?.renderConstraints(this._constraints);
       this._constraintsPanel?.update(this._constraints);
+      if (this._currentViewMode !== 'basemap') this._renderSceneConstraints();
     }
     return res;
+  }
+
+  _renderSceneConstraints() {
+    if (!this._scenePlanningLayer) return;
+    this._scenePlanningLayer.clearLayers();
+    const constraints = this._constraints || [];
+    if (!constraints.length) return;
+    // Use focused mission's origin; fall back to any cached overlay origin.
+    let origin = this._focusedOrigin();
+    if (!origin) {
+      for (const payload of this._overlayCacheByMissionId.values()) {
+        if (payload?.origin) { origin = payload.origin; break; }
+      }
+    }
+    if (!origin) return;
+    const METRES_PER_DEG = 111320.0;
+    const cosLat = Math.cos(origin.lat * Math.PI / 180);
+    const toScene = ({ lat, lon }) => L.latLng(
+      (lat - origin.lat) * METRES_PER_DEG,
+      (lon - origin.lon) * METRES_PER_DEG * cosLat,
+    );
+    for (const c of constraints) {
+      const poly = (Array.isArray(c?.polygon) ? c.polygon : [])
+        .filter((v) => Number.isFinite(v?.lat) && Number.isFinite(v?.lon));
+      if (poly.length < 3) continue;
+      const blockage = c.kind === 'blockage';
+      const enabled = c.enabled !== false;
+      const color = blockage ? '#e67e22' : '#2e8b57';
+      const kindLabel = blockage ? 'Blockage' : 'Allowed corridor';
+      const ruleLabel = c.rule === 'soft' ? 'soft' : 'hard';
+      L.polygon(poly.map(toScene), {
+        color,
+        weight: 2,
+        opacity: enabled ? 0.9 : 0.4,
+        fillColor: color,
+        fillOpacity: enabled ? (blockage ? 0.14 : 0.08) : 0.04,
+        dashArray: c.rule === 'soft' ? '6 4' : null,
+        pane: 'missionPane',
+      })
+        .bindTooltip(
+          `${c.name || kindLabel} · ${kindLabel} · ${ruleLabel}${enabled ? '' : ' · disabled'} (planning)`,
+          { direction: 'top', sticky: true },
+        )
+        .addTo(this._scenePlanningLayer);
+    }
   }
 
   async _openConstraintsPanel() {
@@ -1484,6 +1544,24 @@ export class MapWidget {
       enabled: !(constraint.enabled !== false),
     });
     if (res.ok) {
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint update failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleEditConstraint(constraint, patch = {}) {
+    const res = await updateConstraint(constraint.id, {
+      expectedVersion: constraint.version,
+      ...patch,
+    });
+    if (res.ok) {
+      const what = patch.name !== undefined ? 'renamed' : `set ${patch.rule}`;
+      this._statusBar?.push(`Constraint "${res.constraint?.name || constraint.name || constraint.kind}" ${what}.`, 'info');
       await this._refreshConstraints();
     } else if (res.status === 409) {
       this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
@@ -2170,6 +2248,7 @@ export class MapWidget {
     this._constraints = [];
     this._constraintsPanel = new ConstraintsPanel(mapWrap, {
       onToggleEnabled: (c) => this._handleToggleConstraint(c),
+      onEdit: (c, patch) => this._handleEditConstraint(c, patch),
       onDelete: (c) => this._handleDeleteConstraint(c),
     });
 

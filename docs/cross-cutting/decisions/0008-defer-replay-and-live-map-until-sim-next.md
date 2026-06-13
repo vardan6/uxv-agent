@@ -1,7 +1,7 @@
 # 0008. Defer Replay, Live-Map Sync, And Synchronized Video Until `rover-sim-next`
 
 Date: 2026-05-20
-Status: Accepted
+Status: Superseded by [0026](./0026-replay-session-logging-ships-scrubbing-replay-deferred.md)
 
 ## Context
 

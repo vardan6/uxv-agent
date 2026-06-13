@@ -1086,7 +1086,8 @@ select:focus-visible {
 .map-constraints-panel__row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   padding: 6px 6px;
   border-radius: 8px;
 }
@@ -4008,7 +4009,9 @@ code {
 .map-widget-head h2 {
   margin: 0;
   color: var(--text);
-  font-size: 1.05rem;
+  font-size: 1.3rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   line-height: 1.2;
 }
 
@@ -4062,7 +4065,9 @@ code {
 .map-widget-list {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   position: relative; /* anchor for colour-picker and overflow-menu popovers */
   background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
   border-right: 1px solid var(--line);
@@ -4071,8 +4076,10 @@ code {
 .mission-list-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   gap: 10px;
-  padding: 12px;
+  padding: 12px 12px 0;
   /* Shared sidebar column geometry (mission-sidebar-toolbar.md → Alignment
      Contract). The context bar and every row consume the same tracks so the
      select checkbox and eye/visibility control line up vertically. The context
@@ -4081,6 +4088,16 @@ code {
   --mission-list-leading-gap: 7.5px;
   --mission-list-select-col: 26px;
   --mission-list-visibility-col: 34px;
+}
+
+.mission-list-rows {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
 }
 
 .mission-list-header {
@@ -4098,7 +4115,11 @@ code {
 
 .mission-list-header-title {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
   line-height: 1.2;
 }
 
@@ -4114,7 +4135,7 @@ code {
 .mission-list-header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin-left: auto;
 }
 
@@ -4152,12 +4173,13 @@ code {
 .mission-list-header-icon-btn.has-active-sort::after {
   content: '';
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 5px;
-  height: 5px;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent, #4a90d9);
+  box-shadow: 0 0 0 2px var(--panel-strong);
 }
 
 /* --- Colour picker popover --- */
@@ -4265,23 +4287,25 @@ code {
   background: var(--panel-strong, #1a1a2e);
   border: 1px solid var(--line, #333);
   border-radius: 10px;
-  padding: 8px 0;
+  padding: 6px 0;
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
-  width: 200px;
+  width: 196px;
 }
 
 .mission-overflow-group {
-  padding: 4px 12px 6px;
+  padding: 4px 6px;
 }
 
 .mission-overflow-group + .mission-overflow-group {
   border-top: 1px solid var(--line, #333);
+  margin-top: 4px;
   padding-top: 8px;
 }
 
 .mission-overflow-group-label {
-  margin: 0 0 4px;
-  font-size: 0.7rem;
+  margin: 0 0 9px;
+  padding: 0 6px;
+  font-size: 0.68rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4291,44 +4315,41 @@ code {
 .mission-overflow-sort-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
-.mission-overflow-sort-row {
+.mission-overflow-sort-row,
+.mission-overflow-action-btn {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 4px;
+  width: 100%;
+  min-height: 17px;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--fg);
   border-radius: 6px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
-  font-size: 0.82rem;
   transition: background 0.1s ease;
 }
 
-.mission-overflow-sort-row:hover {
+.mission-overflow-sort-row:hover,
+.mission-overflow-action-btn:hover {
   background: color-mix(in srgb, var(--accent-soft, #2a3a5a) 60%, transparent);
 }
 
 .mission-overflow-sort-row input[type="radio"] {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
   accent-color: var(--accent, #4a90d9);
   cursor: pointer;
-}
-
-.mission-overflow-action-btn {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  background: none;
-  color: var(--fg);
-  font-size: 0.85rem;
-  text-align: left;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.mission-overflow-action-btn:hover {
-  background: var(--hover-bg, rgba(255,255,255,0.08));
 }
 
 .mission-list-empty {

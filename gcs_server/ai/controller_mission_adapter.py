@@ -21,6 +21,12 @@ from .mission_safety import (
 _MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION = 5001
 _MAV_CMD_NAV_RALLY_POINT = 5100
 _MAV_FRAME_GLOBAL = 0
+_MAV_PARAM_ID_LEN = 16
+_MAV_PARAM_EPSILON = 1e-6
+_RESUME_POLICY_PARAMETERS: tuple[tuple[str, float], ...] = (
+    ("MIS_RESTART", 0.0),
+    ("AUTO_RESUME", 1.0),
+)
 
 
 def _mission_item_int(
@@ -106,6 +112,21 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _encode_param_id(name: str) -> bytes:
+    encoded = str(name or "").strip().encode("ascii", errors="ignore")[:_MAV_PARAM_ID_LEN]
+    return encoded.ljust(_MAV_PARAM_ID_LEN, b"\x00")
+
+
+def _decode_param_id(value: Any) -> str:
+    if isinstance(value, bytes):
+        raw = value
+    elif isinstance(value, str):
+        raw = value.encode("ascii", errors="ignore")
+    else:
+        raw = bytes(value or b"")
+    return raw.split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip().upper()
 
 
 @dataclass(slots=True)
@@ -225,6 +246,9 @@ class ControllerMissionAdapter(Protocol):
         ...
 
     def stop_mission(self) -> None:
+        ...
+
+    def resume_mission(self) -> None:
         ...
 
 
@@ -362,6 +386,55 @@ class PymavlinkMissionClient:
             raise ControllerMissionAdapterError(f"timed out waiting for MAVLink message: {types}")
         return msg
 
+    def read_parameter(self, param_name: str) -> tuple[float, int]:
+        encoded_name = _encode_param_id(param_name)
+        normalized_name = _decode_param_id(encoded_name)
+        self._connection.mav.param_request_read_send(
+            self._connection.target_system,
+            self._connection.target_component,
+            encoded_name,
+            -1,
+        )
+        deadline = time.monotonic() + self._request_timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ControllerMissionAdapterError(f"timed out waiting for parameter {normalized_name}")
+            msg = self._recv(["PARAM_VALUE"], timeout_s=remaining)
+            observed_name = _decode_param_id(getattr(msg, "param_id", ""))
+            if observed_name != normalized_name:
+                continue
+            return (
+                float(getattr(msg, "param_value", 0.0) or 0.0),
+                int(getattr(msg, "param_type", self._mavutil.mavlink.MAV_PARAM_TYPE_REAL32) or 0),
+            )
+
+    def set_parameter(self, param_name: str, value: float, *, param_type: int) -> None:
+        encoded_name = _encode_param_id(param_name)
+        normalized_name = _decode_param_id(encoded_name)
+        self._connection.mav.param_set_send(
+            self._connection.target_system,
+            self._connection.target_component,
+            encoded_name,
+            float(value),
+            int(param_type),
+        )
+        deadline = time.monotonic() + self._request_timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ControllerMissionAdapterError(f"timed out confirming parameter {normalized_name}")
+            msg = self._recv(["PARAM_VALUE"], timeout_s=remaining)
+            observed_name = _decode_param_id(getattr(msg, "param_id", ""))
+            if observed_name != normalized_name:
+                continue
+            observed_value = float(getattr(msg, "param_value", 0.0) or 0.0)
+            if abs(observed_value - float(value)) > _MAV_PARAM_EPSILON:
+                raise ControllerMissionAdapterError(
+                    f"parameter {normalized_name} rejected requested value {value} (observed {observed_value})"
+                )
+            return
+
     def download_mission_items(self, *, mission_type: int = 0) -> list[dict[str, Any]]:
         self._connection.mav.mission_request_list_send(
             self._connection.target_system,
@@ -445,6 +518,38 @@ class PymavlinkMissionClient:
         ack_type = int(getattr(ack_msg, "type", self._mavutil.mavlink.MAV_MISSION_ACCEPTED))
         if ack_type != self._mavutil.mavlink.MAV_MISSION_ACCEPTED:
             raise ControllerMissionAdapterError(f"mission clear rejected with MAV_MISSION type={ack_type}")
+
+    def set_mode(self, mode_name: str) -> None:
+        custom_mode = self._mode_id(mode_name)
+        self._connection.mav.set_mode_send(
+            self._connection.target_system,
+            self._mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            custom_mode,
+        )
+
+    def wait_for_mode(self, mode_name: str, *, timeout_s: float | None = None) -> None:
+        expected_mode = self._mode_id(mode_name)
+        deadline = time.monotonic() + float(timeout_s if timeout_s is not None else self._request_timeout_s)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ControllerMissionAdapterError(f"timed out waiting for MAVLink mode {mode_name}")
+            msg = self._recv(["HEARTBEAT"], timeout_s=remaining)
+            observed_mode = getattr(msg, "custom_mode", None)
+            if observed_mode is not None and int(observed_mode) == expected_mode:
+                return
+
+    def _mode_id(self, mode_name: str) -> int:
+        mapping = getattr(self._connection, "mode_mapping", None)
+        resolved_mapping = mapping() if callable(mapping) else None
+        if not isinstance(resolved_mapping, dict) or not resolved_mapping:
+            raise ControllerMissionAdapterError("MAVLink connection does not expose a mode mapping")
+        normalized = str(mode_name or "").strip().upper()
+        for name, mode_id in resolved_mapping.items():
+            if str(name or "").strip().upper() == normalized:
+                return int(mode_id)
+        available = ", ".join(sorted(str(name) for name in resolved_mapping.keys()))
+        raise ControllerMissionAdapterError(f"mode {mode_name!r} is unavailable on this MAVLink connection ({available})")
 
 
 class MavsdkMissionClient:
@@ -869,22 +974,53 @@ class MavlinkControllerMissionAdapter:
         )
 
     def pause_mission(self) -> None:
-        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink
-        pass
+        self._switch_mode("HOLD")
 
     def stop_mission(self) -> None:
-        # TODO (ADR 0024): SET_MODE → HOLD via pymavlink; caller marks mission aborted
-        pass
+        self._switch_mode("HOLD")
+
+    def resume_mission(self) -> None:
+        self._switch_mode("AUTO")
 
     def _open_client(self) -> Any:
         if self._client_factory is not None:
-            return self._client_factory()
-        return PymavlinkMissionClient(
-            self._connection_url,
-            heartbeat_timeout_s=self._heartbeat_timeout_s,
-            request_timeout_s=self._request_timeout_s,
-            source_system=self._source_system,
-            source_component=self._source_component,
+            client = self._client_factory()
+        else:
+            client = PymavlinkMissionClient(
+                self._connection_url,
+                heartbeat_timeout_s=self._heartbeat_timeout_s,
+                request_timeout_s=self._request_timeout_s,
+                source_system=self._source_system,
+                source_component=self._source_component,
+            )
+        try:
+            self._assert_resume_policy(client)
+        except Exception:
+            self._close_client(client)
+            raise
+        return client
+
+    def _assert_resume_policy(self, client: Any) -> None:
+        read_parameter = getattr(client, "read_parameter", None)
+        set_parameter = getattr(client, "set_parameter", None)
+        if not callable(read_parameter) or not callable(set_parameter):
+            raise ControllerMissionAdapterError("controller client does not support resume-policy parameter checks")
+        found_any = False
+        for param_name, expected_value in _RESUME_POLICY_PARAMETERS:
+            try:
+                observed_value, param_type = read_parameter(param_name)
+            except ControllerMissionAdapterError as exc:
+                if "timed out waiting for parameter" in str(exc):
+                    continue
+                raise
+            found_any = True
+            if abs(float(observed_value) - expected_value) <= _MAV_PARAM_EPSILON:
+                continue
+            set_parameter(param_name, expected_value, param_type=int(param_type))
+        if found_any:
+            return
+        raise ControllerMissionAdapterError(
+            "controller does not expose MIS_RESTART or AUTO_RESUME; cannot guarantee no-rewind resume"
         )
 
     def _close_client(self, client: Any) -> None:
@@ -940,6 +1076,20 @@ class MavlinkControllerMissionAdapter:
             return {"status": "rolled_back", "state": self._state_for_items(restored)}
         return {"status": "cutover_failed", "state": self._state_for_items(restored)}
 
+    def _switch_mode(self, mode_name: str) -> None:
+        client = self._open_client()
+        try:
+            set_mode = getattr(client, "set_mode", None)
+            wait_for_mode = getattr(client, "wait_for_mode", None)
+            if not callable(set_mode) or not callable(wait_for_mode):
+                raise ControllerMissionAdapterError(
+                    f"controller client does not support mode switching required for {mode_name}"
+                )
+            set_mode(mode_name)
+            wait_for_mode(mode_name, timeout_s=self._request_timeout_s)
+        finally:
+            self._close_client(client)
+
 
 class MavsdkControllerMissionAdapter(MavlinkControllerMissionAdapter):
     """MAVSDK-backed controller link.
@@ -959,6 +1109,15 @@ class MavsdkControllerMissionAdapter(MavlinkControllerMissionAdapter):
             heartbeat_timeout_s=self._heartbeat_timeout_s,
             request_timeout_s=self._request_timeout_s,
         )
+
+    def pause_mission(self) -> None:
+        pass
+
+    def stop_mission(self) -> None:
+        pass
+
+    def resume_mission(self) -> None:
+        pass
 
 
 class FileSinkControllerMissionAdapter:
@@ -1048,6 +1207,9 @@ class FileSinkControllerMissionAdapter:
         pass
 
     def stop_mission(self) -> None:
+        pass
+
+    def resume_mission(self) -> None:
         pass
 
 
@@ -1246,6 +1408,9 @@ class JsonFileControllerMissionAdapter:
         pass
 
     def stop_mission(self) -> None:
+        pass
+
+    def resume_mission(self) -> None:
         pass
 
     def _load_record(self) -> dict[str, Any]:

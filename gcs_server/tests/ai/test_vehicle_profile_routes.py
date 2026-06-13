@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from starlette.requests import Request
 
-from app import get_active_vehicle_profile, list_vehicle_profiles
+from routers.ai import get_active_vehicle_profile, list_vehicle_profiles
 
 
 def _request(path: str) -> Request:

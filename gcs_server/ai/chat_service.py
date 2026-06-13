@@ -264,7 +264,12 @@ class AIChatService:
             if agent_result is not None:
                 content_out = agent_result.content.strip()
                 if content_out:
-                    yield _json_line({"type": "assistant_delta", "delta": content_out})
+                    # The agent loop has already streamed this answer to the client as
+                    # assistant_delta events while generating it; re-emitting the full
+                    # content here would duplicate it (the client appends deltas). Any
+                    # post-loop fallback content (e.g. repeated-tool-failure messages)
+                    # still reaches the client via the assistant_message event below,
+                    # which replaces the pending bubble wholesale.
                     assistant_message = self._store.add_message(
                         session_id,
                         role="assistant",

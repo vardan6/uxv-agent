@@ -18,7 +18,7 @@ Pessimistic locking (server-held edit locks) is heavy and breaks down when a cli
 Two optimistic concurrency controls protect mission state:
 
 1. **`client_version` guards revision mutation.** Each revision carries a monotonically incremented version that bumps on every waypoint mutation. Mutation requests must target the latest known `client_version`; stale requests are rejected and the client is expected to refresh and retry against fresh state.
-2. **`controller_version` guards execution cutover.** Execution checks the expected live controller mission version before install and read-back. A mismatch rejects the cutover; the system creates a rebased `awaiting_approval` revision against the latest verified controller state so the operator can re-review.
+2. **`controller_version` guards execution cutover.** Execution checks the expected live controller mission version before install and read-back. A mismatch rejects the cutover; the system creates a rebased `proposed` revision against the latest verified controller state so the operator can re-review. (The `awaiting_approval` term used at authoring time was superseded by ADR 0021's flat mission lifecycle; `proposed` is the current equivalent.)
 
 ## Consequences
 

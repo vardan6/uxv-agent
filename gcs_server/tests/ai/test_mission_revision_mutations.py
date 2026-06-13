@@ -52,7 +52,7 @@ def _make_proposal(svc: MissionExecutionService, *, n_waypoints: int = 3) -> dic
         target_resolution={},
         draft_payload=draft_payload,
         validation={},
-        draft_status="awaiting_approval",
+        draft_status="proposed",
     )
 
 
@@ -81,7 +81,7 @@ def test_create_client_revision_happy_path() -> None:
 
     assert result["ok"] is True
     rev = result["revision"]
-    assert rev["status"] == "awaiting_approval"
+    assert rev["status"] == "proposed"
     assert rev["mission"]["goal"] == "hand-crafted"
     assert len(rev["mission"]["waypoints"]) == 2
 
@@ -190,33 +190,23 @@ def test_update_waypoint_out_of_range() -> None:
     assert result["status"] == "invalid_index"
 
 
-def test_update_waypoint_locked_on_approved_revision() -> None:
+def test_update_waypoint_locked_on_exported_revision() -> None:
     svc, _ = _make_service()
-    _make_proposal(svc)
-    svc.approve_revision_for_draft("draft-1")
-    rev = svc.get_revision_by_draft_id("draft-1")
+    proposal = _make_proposal(svc)
+    svc.mark_revision_exported_by_revision_id(
+        proposal["id"],
+        export_result={"file_path": "/tmp/test.plan", "waypoint_count": 3, "vehicle_type": 10},
+    )
 
-    result = svc.update_waypoint(rev["id"], 1, point={"x": 0.0, "y": 0.0, "z": 0.0}, expected_version=0)
+    result = svc.update_waypoint(proposal["id"], 1, point={"x": 0.0, "y": 0.0, "z": 0.0}, expected_version=0)
 
     assert result["ok"] is False
     assert result["status"] == "revision_locked"
 
 
-def test_approve_revision_by_revision_id() -> None:
-    svc, _ = _make_service()
-    proposal = _make_proposal(svc)
-
-    approved = svc.approve_revision(proposal["id"], note="ship it")
-
-    assert approved is not None
-    assert approved["status"] == "approved"
-    assert approved["review_context"]["approval_note"] == "ship it"
-
-
 def test_mark_revision_exported_by_revision_id() -> None:
     svc, _ = _make_service()
     proposal = _make_proposal(svc)
-    svc.approve_revision(proposal["id"], note="ship it")
 
     updated = svc.mark_revision_exported_by_revision_id(
         proposal["id"],
@@ -231,9 +221,8 @@ def test_mark_revision_exported_by_revision_id() -> None:
 def test_export_service_accepts_revision_payload() -> None:
     svc, tmp_path = _make_service()
     proposal = _make_proposal(svc)
-    approved = svc.approve_revision(proposal["id"], note="ship it")
 
-    result = MissionExportService(missions_dir=tmp_path.parent).export(approved)
+    result = MissionExportService(missions_dir=tmp_path.parent).export(proposal)
 
     assert result["ok"] is True
     assert result["draft_id"] == proposal["id"]
@@ -368,8 +357,7 @@ def test_execute_revision_creates_rebased_revision_on_stale_controller_version()
     )
     svc, db_path = _make_service(adapter=adapter)
     proposal = _make_proposal(svc, n_waypoints=2)
-    approved = svc.approve_revision(proposal["id"], note="ship it")
-    export_result = MissionExportService(missions_dir=db_path.parent).export(approved)
+    export_result = MissionExportService(missions_dir=db_path.parent).export(proposal)
     assert export_result["ok"] is True
     exported = svc.mark_revision_exported_by_revision_id(proposal["id"], export_result=export_result)
 
@@ -379,12 +367,74 @@ def test_execute_revision_creates_rebased_revision_on_stale_controller_version()
     assert result["status"] == "stale_controller_version"
     rebased = result["rebased_revision"]
     assert rebased["id"] != exported["id"]
-    assert rebased["status"] == "awaiting_approval"
+    assert rebased["status"] == "proposed"
     assert rebased["operation_id"] != exported["operation_id"]
     assert "mission_export" not in rebased["mission"]
     assert rebased["review_context"]["rebase"]["base_controller_version"] == 7
     assert rebased["review_context"]["rebase"]["rebased_from_revision_id"] == exported["id"]
     assert rebased["review_context"]["rebase"]["base_revision_id"] == "mission-rev-live123"
+
+
+# --- ADR 0019 backend provenance guard ---
+
+def test_create_proposal_blocks_edit_in_place_over_operator_waypoints() -> None:
+    # Simulate: AI proposal → operator edits a waypoint (ai+edited) → AI tries
+    # edit_in_place without operator confirmation → backend must block it.
+    svc, _ = _make_service()
+    proposal = _make_proposal(svc, n_waypoints=2)
+    operation_id = proposal["operation_id"]
+    rev_id = proposal["id"]
+
+    # Operator edits a waypoint → provenance becomes "ai+edited"
+    svc.update_waypoint(rev_id, 1, point={"x": 5.0, "y": 5.0, "z": 0.0}, expected_version=0)
+
+    draft_payload = {
+        "goal": "ai replacement",
+        "waypoints": [{"x": 1.0, "y": 1.0, "z": 0.0}],
+        "steps": [], "constraints": [], "assumptions": [],
+    }
+    with pytest.raises(ValueError, match="provenance_conflict"):
+        svc.create_proposal(
+            session_id="sess-1",
+            source_message_id="msg-2",
+            draft_id="draft-2",
+            intent={},
+            target_resolution={},
+            draft_payload=draft_payload,
+            validation={},
+            draft_status="proposed",
+            parent_operation_id=operation_id,
+        )
+
+
+def test_create_proposal_allows_edit_in_place_with_override() -> None:
+    # Same setup, but with allow_provenance_override=True (operator confirmed).
+    svc, _ = _make_service()
+    proposal = _make_proposal(svc, n_waypoints=2)
+    operation_id = proposal["operation_id"]
+    rev_id = proposal["id"]
+
+    svc.update_waypoint(rev_id, 1, point={"x": 5.0, "y": 5.0, "z": 0.0}, expected_version=0)
+
+    draft_payload = {
+        "goal": "confirmed ai replacement",
+        "waypoints": [{"x": 1.0, "y": 1.0, "z": 0.0}],
+        "steps": [], "constraints": [], "assumptions": [],
+    }
+    result = svc.create_proposal(
+        session_id="sess-1",
+        source_message_id="msg-2",
+        draft_id="draft-2",
+        intent={},
+        target_resolution={},
+        draft_payload=draft_payload,
+        validation={},
+        draft_status="proposed",
+        parent_operation_id=operation_id,
+        allow_provenance_override=True,
+    )
+    assert result.get("id") is not None
+    assert result.get("operation_id") == operation_id
 
 
 # --- helpers ---

@@ -6,9 +6,9 @@ const SVG = {
   done:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><polyline points="2,7.5 5.5,11 12,4"/></svg>`,
   trash:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V3h4v1"/><rect x="3.5" y="4" width="7" height="8" rx="1"/><line x1="5.5" y1="6.5" x2="5.5" y2="10"/><line x1="8.5" y1="6.5" x2="8.5" y2="10"/></svg>`,
   clear:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>`,
-  plus:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>`,
-  gear:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" focusable="false" aria-hidden="true"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.9 2.9l1.4 1.4M9.7 9.7l1.4 1.4M2.9 11.1l1.4-1.4M9.7 4.3l1.4-1.4"/></svg>`,
-  dots:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><circle cx="3" cy="7" r="1.5"/><circle cx="7" cy="7" r="1.5"/><circle cx="11" cy="7" r="1.5"/></svg>`,
+  plus:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  gear:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  dots:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" focusable="false" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
 };
 
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
@@ -122,7 +122,7 @@ function missionRowTrailingActions(missionRow) {
 // Budget ≤2 verbs (mission-sidebar-toolbar.md → Icon Budget). Reuses the same
 // data-* attributes as the old row buttons so MapWidget's existing handlers fire
 // unchanged. While the target is being edited, Edit becomes a Done affordance.
-function contextBarVerbs(target, { isEditing = false } = {}) {
+export function contextBarVerbs(target, { isEditing = false } = {}) {
   if (!target) return '';
   const status = String(target.activeRevisionStatus || '');
   const sessionStatus = String(target.sessionStatus || '');
@@ -331,20 +331,18 @@ export class MissionListPanel {
     }
 
     const countText = multiSelect
-      ? `${selectedMissionIds.size} missions selected`
-      : (targetMission
-        ? escapeHtml(targetMission.name)
-        : (hasSelection ? '1 mission selected' : 'No missions selected'));
+      ? `${selectedMissionIds.size} selected`
+      : (hasSelection ? `${selectedMissionIds.size} selected` : 'None selected');
 
     const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Mission selection and contextual actions">
-          <label class="mission-batch-select" title="${allSelected ? 'Unselect all missions' : 'Select all missions'}">
+          <label class="mission-batch-select" title="${allSelected ? 'Deselect all' : 'Select all'}">
             <input
               type="checkbox"
               class="mission-batch-select-box"
               data-batch-toggle-select-all
               ${allSelected ? 'checked' : ''}
               ${missions.length ? '' : 'disabled'}
-              aria-label="${allSelected ? 'Unselect all missions' : 'Select all missions'}"
+              aria-label="${allSelected ? 'Deselect all' : 'Select all'}"
             />
           </label>
           <span class="mission-batch-count" aria-live="polite">${countText}</span>
@@ -395,8 +393,11 @@ export class MissionListPanel {
               ↑ Go to chat
             </button>
           </div>`;
-    const body = batchBar + missionRows;
+    const savedScroll = this._container.querySelector('.mission-list-rows')?.scrollTop ?? 0;
+    const body = batchBar + `<div class="mission-list-rows">${missionRows}</div>`;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
+    const rowsEl = this._container.querySelector('.mission-list-rows');
+    if (rowsEl && savedScroll > 0) rowsEl.scrollTop = savedScroll;
     this._bindMissions();
     const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
     if (selectAllBox) {

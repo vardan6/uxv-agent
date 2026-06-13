@@ -14,6 +14,7 @@ enable/disable lifecycle, deployment-wide scope, and an optimistic-concurrency
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 import uuid
@@ -21,6 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import polygon_geometry
 from .migrations import apply_ai_store_migrations
 
 
@@ -41,12 +43,18 @@ class ConstraintNotFound(Exception):
 
 
 def _normalize_polygon(value: Any) -> list[dict[str, float]]:
-    """Validate and normalize a WGS84 polygon: >= 3 distinct finite vertices in
-    valid lat/lon ranges. Stored open (not auto-closed); the planner closes it."""
+    """Validate and normalize a WGS84 polygon (ADR 0025 §Required validation).
+
+    The ring is stored *open* — the V1 object in ADR 0025 lists three vertices
+    without repeating the first, and the planner joins last→first itself. The
+    "normalized closed polygon at the backend boundary" requirement is met by
+    normalizing away a redundant closing vertex here rather than by persisting a
+    duplicate. Rejects non-finite coordinates, out-of-range coordinates, stray
+    duplicate vertices, fewer than three distinct vertices, degenerate
+    (zero-area / collinear) rings, and self-intersecting rings."""
     if not isinstance(value, list):
         raise ConstraintValidationError("polygon must be a list of {lat, lon} vertices")
-    out: list[dict[str, float]] = []
-    seen: set[tuple[float, float]] = set()
+    raw: list[dict[str, float]] = []
     for vertex in value:
         if not isinstance(vertex, dict):
             raise ConstraintValidationError("each polygon vertex must be an object")
@@ -55,16 +63,35 @@ def _normalize_polygon(value: Any) -> list[dict[str, float]]:
             lon = float(vertex.get("lon"))
         except (TypeError, ValueError):
             raise ConstraintValidationError("polygon vertices need numeric lat/lon")
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            raise ConstraintValidationError("polygon vertices must be finite")
         if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
             raise ConstraintValidationError("polygon vertices out of WGS84 range")
-        key = (round(lat, 9), round(lon, 9))
-        if key in seen:
-            continue  # drop exact duplicates (e.g. a closing repeat of the first vertex)
-        seen.add(key)
-        out.append({"lat": lat, "lon": lon})
-    if len(out) < 3:
+        raw.append({"lat": lat, "lon": lon})
+
+    def _key(v: dict[str, float]) -> tuple[float, float]:
+        return (round(v["lat"], 9), round(v["lon"], 9))
+
+    # Normalize a single redundant closing vertex (last == first). Only the
+    # closing repeat is dropped — any *other* duplicate is treated as malformed
+    # input and rejected, never silently removed (which would alter the shape).
+    if len(raw) >= 2 and _key(raw[0]) == _key(raw[-1]):
+        raw.pop()
+    if len(raw) < 3:
         raise ConstraintValidationError("polygon needs at least 3 distinct vertices")
-    return out
+    seen: set[tuple[float, float]] = set()
+    for v in raw:
+        key = _key(v)
+        if key in seen:
+            raise ConstraintValidationError("polygon has duplicate vertices")
+        seen.add(key)
+
+    ring = [(v["lon"], v["lat"]) for v in raw]
+    if polygon_geometry.is_degenerate(ring):
+        raise ConstraintValidationError("polygon is degenerate (zero area / collinear vertices)")
+    if polygon_geometry.self_intersects(ring):
+        raise ConstraintValidationError("polygon edges must not self-intersect")
+    return raw
 
 
 def _normalize_kind(value: Any) -> str:

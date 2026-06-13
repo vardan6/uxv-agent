@@ -107,14 +107,14 @@ acting target, actions for that Mission.
 - middle actions slot: contextual actions
 - right slot: visibility controls for the list or selection
 
-Suggested text:
+Count text (center slot):
 
-- `No missions selected`
-- `1 mission selected`
-- `N missions selected`
+- `None selected` — zero selections, no focused mission
+- `N selected` — one or more selected
 
-Prefer `No missions selected` over `None selected`; it reads as state text, not
-as a placeholder row title.
+The count text never shows a mission name; the context action slot already
+identifies the targeted mission. Checkbox title/aria-label: `Select all` /
+`Deselect all` (type-neutral — the checkbox operates across all missions).
 
 ## Alignment Contract
 

@@ -55,26 +55,20 @@ Why — three constraints make a plugin the wrong fit:
 Consequence: drag-vertex / midpoint-insert / snapping are genuinely later work
 (Phase 3), not a free plugin feature.
 
-### Decision B — cross-view is architected in phases
+### Decision B — cross-view sketch capture (shipped 2026-06-09)
 
-Cross-view capability is required, but full scene-view sketch capture needs the
-per-mission origin/georef conversion path (ADR 0022 gives the origin datum;
-`map-widget.md` still marks scene sketching deferred).
+All drawing tools work on every view, not Basemap-only. The original phased
+deferral was removed once it became clear the conversion already existed.
 
-**Decision:**
-- Phase 1 delivered the **toolbar shell only** — collapse/expand, one-active-tool
-  state machine, contextual fields, explicit commit/cancel labels. No new sketch
-  session abstraction. Basemap-only capture preserved.
-- Phase 2 introduced `MapSketchSession` holding **canonical** geometry, with the
-  **Basemap adapter only** — preserving behavior, no regression.
-- The scene-view adapter is gated on a focused mission with a known origin datum.
-- A draft is **preserved across VIEW switches**. If the target VIEW has no adapter
-  yet, the draft is **suspended and shown read-only** with a "switch to Basemap to
-  continue this sketch" notice — never silently discarded.
-
-This honors "don't lose work" without requiring every adapter at once. The
-review's AC "draft fully editable across any view mid-sketch" is downgraded to
-"draft survives the switch; editing resumes where an adapter exists."
+**Current behaviour:**
+- All scene views: draw tools are enabled whenever the focused mission provides a
+  GPS origin datum (ADR 0022). `MapWidget._map.on('click')` converts CRS.Simple
+  metres → WGS84 and calls `session.addVertex()`; `_refreshSceneSketch()` renders
+  the draft as a dashed overlay on the scene map.
+- Basemap view: unchanged — `BasemapPanel` remains the Leaflet adapter for WGS84
+  maps with full vertex drag, snap, survey handle, and constraint rendering.
+- If no focused mission (no origin): draw tools show "Focus a mission to enable
+  GPS-based drawing on this view." — same gate that already guarded geofence.
 
 ## Resolved terminology (adopted from the review)
 
@@ -125,11 +119,15 @@ create, survey area create, geofence save/removal. No regression found.
   ```
   [Corridor pattern]  Draw path: 3 vertices · ready to finish
   Spacing [5 m]  Passes [1]  Altitude [0 m]
-  [Undo] [Create Mission] [Cancel sketch] [Collapse]
+  [Undo] [Generate corridor] [Cancel sketch] [Collapse]
   ```
 
-Commit labels are explicit and distinct: `Create Mission`, `Save geofence`,
-`Save constraint`, `Cancel sketch`. Never `Finish` alone for a backend action.
+Commit labels are explicit and distinct per tool:
+- Corridor sketch → `Generate corridor`
+- Survey sketch → `Generate survey`
+- Geofence sketch → `Save geofence`
+- Constraint sketch → `Save constraint`
+- Always paired with `Cancel sketch`. Never `Finish` alone for a backend action.
 
 **Transaction model (every tool, standardized)**
 

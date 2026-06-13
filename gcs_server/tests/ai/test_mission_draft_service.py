@@ -153,11 +153,11 @@ class TestDraftStatusFromValidation:
     def test_needs_clarification_maps_correctly(self):
         assert _draft_status_from_validation({"status": "needs_clarification"}) == "needs_clarification"
 
-    def test_warning_maps_to_awaiting_approval(self):
-        assert _draft_status_from_validation({"status": "warning"}) == "awaiting_approval"
+    def test_warning_maps_to_proposed(self):
+        assert _draft_status_from_validation({"status": "warning"}) == "proposed"
 
-    def test_valid_maps_to_awaiting_approval(self):
-        assert _draft_status_from_validation({"status": "valid"}) == "awaiting_approval"
+    def test_valid_maps_to_proposed(self):
+        assert _draft_status_from_validation({"status": "valid"}) == "proposed"
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +196,9 @@ class TestMissionDraftService:
         draft = self._make_draft()
         assert draft["draft"]["execution_allowed"] is False
 
-    def test_clean_draft_status_awaiting_approval(self):
+    def test_clean_draft_status_proposed(self):
         draft = self._make_draft()
-        assert draft["status"] == "awaiting_approval"
+        assert draft["status"] == "proposed"
 
     def test_intent_and_validation_stored(self):
         draft = self._make_draft()
@@ -223,23 +223,9 @@ class TestMissionDraftService:
 
     def test_list_drafts_status_filter(self):
         self._make_draft()
-        drafts = self.svc.list_drafts(status_filter="awaiting_approval")
-        assert all(d["status"] == "awaiting_approval" for d in drafts)
-
-    def test_approve_draft(self):
-        draft = self._make_draft()
-        assert draft["status"] == "awaiting_approval"
-        approved = self.svc.approve_draft(draft["id"], note="looks good")
-        assert approved is not None
-        assert approved["status"] == "approved"
-        assert approved["approved_at"] is not None
-        assert approved["approval_note"] == "looks good"
-
-    def test_approve_non_awaiting_draft_returns_none(self):
-        draft = self._make_draft()
-        self.svc.approve_draft(draft["id"])
-        result = self.svc.approve_draft(draft["id"])
-        assert result is None
+        drafts = self.svc.list_drafts(status_filter="proposed")
+        assert len(drafts) == 1
+        assert all(d["status"] == "proposed" for d in drafts)
 
     def test_reject_draft(self):
         draft = self._make_draft()
@@ -249,9 +235,9 @@ class TestMissionDraftService:
         assert rejected["rejected_at"] is not None
         assert rejected["approval_note"] == "not safe"
 
-    def test_reject_already_approved_returns_none(self):
+    def test_reject_already_rejected_returns_none(self):
         draft = self._make_draft()
-        self.svc.approve_draft(draft["id"])
+        self.svc.reject_draft(draft["id"])
         result = self.svc.reject_draft(draft["id"])
         assert result is None
 
@@ -261,9 +247,9 @@ class TestMissionDraftService:
         updated = self.svc.get_draft(draft["id"])
         assert updated["status"] == "superseded"
 
-    def test_supersede_approved_draft_returns_false(self):
+    def test_supersede_rejected_draft_returns_false(self):
         draft = self._make_draft()
-        self.svc.approve_draft(draft["id"])
+        self.svc.reject_draft(draft["id"])
         assert self.svc.supersede_draft(draft["id"]) is False
 
     def test_source_message_id_stored(self):

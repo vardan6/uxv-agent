@@ -7,8 +7,9 @@
 const KIND_LABEL = { allowed_corridor: 'Allowed corridor', blockage: 'Blockage' };
 
 export class ConstraintsPanel {
-  constructor(parent, { onToggleEnabled = null, onDelete = null, onClose = null } = {}) {
+  constructor(parent, { onToggleEnabled = null, onEdit = null, onDelete = null, onClose = null } = {}) {
     this._onToggleEnabled = onToggleEnabled;
+    this._onEdit = onEdit;
     this._onDelete = onDelete;
     this._onClose = onClose;
     this._list = [];
@@ -86,6 +87,32 @@ export class ConstraintsPanel {
       const ruleLabel = c.rule === 'soft' ? 'soft' : 'hard';
       label.textContent = `${c.name || kindLabel} · ${kindLabel} · ${ruleLabel}${c.enabled === false ? ' · disabled' : ''}`;
 
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.textContent = 'Rename';
+      renameBtn.title = 'Rename this constraint';
+      renameBtn.addEventListener('click', () => {
+        const next = window.prompt('Constraint name:', c.name || kindLabel);
+        if (next === null) return;
+        const name = next.trim();
+        if (!name || name === (c.name || '')) return;
+        renameBtn.disabled = true;
+        Promise.resolve(this._onEdit?.(c, { name })).finally(() => { renameBtn.disabled = false; });
+      });
+
+      const isSoft = c.rule === 'soft';
+      const ruleBtn = document.createElement('button');
+      ruleBtn.type = 'button';
+      ruleBtn.textContent = isSoft ? 'Make hard' : 'Make soft';
+      ruleBtn.title = isSoft
+        ? 'Hard rules reject violating routes'
+        : 'Soft rules penalise but do not reject routes';
+      ruleBtn.addEventListener('click', () => {
+        ruleBtn.disabled = true;
+        Promise.resolve(this._onEdit?.(c, { rule: isSoft ? 'hard' : 'soft' }))
+          .finally(() => { ruleBtn.disabled = false; });
+      });
+
       const enableBtn = document.createElement('button');
       enableBtn.type = 'button';
       enableBtn.textContent = c.enabled === false ? 'Enable' : 'Disable';
@@ -106,7 +133,7 @@ export class ConstraintsPanel {
         Promise.resolve(this._onDelete?.(c)).finally(() => { deleteBtn.disabled = false; });
       });
 
-      row.append(swatch, label, enableBtn, deleteBtn);
+      row.append(swatch, label, renameBtn, ruleBtn, enableBtn, deleteBtn);
       this._listEl.appendChild(row);
     }
   }

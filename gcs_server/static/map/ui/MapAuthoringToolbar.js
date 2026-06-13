@@ -144,6 +144,7 @@ export class MapAuthoringToolbar {
       textContent: 'Constraints ▾',
       title: 'Draw operational planning constraints (allowed corridors and blockages)',
     });
+    this._constraintsMenuBtn.addEventListener('click', () => this._onOpenConstraints?.());
 
     this._idleCollapseBtn = mk('button', { type: 'button', textContent: '▾' });
     this._idleCollapseBtn.setAttribute('aria-label', 'Collapse authoring toolbar');
@@ -372,8 +373,8 @@ export class MapAuthoringToolbar {
       const isWaypointMode = waypoint;
       let finishLabel = 'Finish';
       let finishEnabled = false;
-      if (corridor) { finishLabel = 'Create mission'; finishEnabled = s.drawPointCount >= 2; }
-      else if (survey) { finishLabel = 'Create mission'; finishEnabled = s.drawPointCount === 2; }
+      if (corridor) { finishLabel = 'Generate corridor'; finishEnabled = s.drawPointCount >= 2; }
+      else if (survey) { finishLabel = 'Generate survey'; finishEnabled = s.drawPointCount === 2; }
       else if (fence) { finishLabel = 'Save geofence'; finishEnabled = s.drawPointCount >= 3; }
       else if (constraint) { finishLabel = 'Save constraint'; finishEnabled = s.drawPointCount >= 3; }
 

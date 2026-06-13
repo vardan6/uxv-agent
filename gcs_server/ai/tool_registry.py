@@ -1596,19 +1596,56 @@ class ToolRegistry:
         sessions = getattr(context.runtime, "mission_execution_sessions", None)
         if sessions is None:
             return {"ok": False, "error": "execution sessions are not available"}
-        return sessions.pause_for_mission(mission_id)
+        result = sessions.pause_for_mission(mission_id)
+        if result.get("ok"):
+            svc = getattr(context.runtime, "mission_execution_service", None)
+            op_id = _operation_id_for_mission(context.runtime, mission_id)
+            if svc is not None and op_id:
+                svc_result = svc.pause_mission(op_id)
+                if not svc_result.get("ok"):
+                    sessions.resume_for_mission(mission_id)
+                    result = svc_result
+        return result
 
     def _resume_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
         sessions = getattr(context.runtime, "mission_execution_sessions", None)
         if sessions is None:
             return {"ok": False, "error": "execution sessions are not available"}
-        return sessions.resume_for_mission(mission_id)
+        result = sessions.resume_for_mission(mission_id)
+        if result.get("ok"):
+            svc = getattr(context.runtime, "mission_execution_service", None)
+            op_id = _operation_id_for_mission(context.runtime, mission_id)
+            if svc is not None and op_id:
+                svc_result = svc.resume_mission(op_id)
+                if not svc_result.get("ok"):
+                    sessions.pause_for_mission(mission_id)
+                    result = svc_result
+        return result
 
     def _stop_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
         sessions = getattr(context.runtime, "mission_execution_sessions", None)
         if sessions is None:
             return {"ok": False, "error": "execution sessions are not available"}
-        return sessions.abort_for_mission(mission_id)
+        result = sessions.abort_for_mission(mission_id)
+        if result.get("ok"):
+            svc = getattr(context.runtime, "mission_execution_service", None)
+            op_id = _operation_id_for_mission(context.runtime, mission_id)
+            if svc is not None and op_id:
+                svc_result = svc.abort_mission(op_id)
+                if not svc_result.get("ok"):
+                    result = svc_result
+        return result
+
+
+def _operation_id_for_mission(runtime: Any, mission_id: str) -> str:
+    """Return the active_operation_id for a flat Mission, or '' if unavailable."""
+    store = getattr(runtime, "mission_store", None)
+    if store is None:
+        return ""
+    mission = store.get_mission(str(mission_id or "").strip())
+    if not isinstance(mission, dict):
+        return ""
+    return str(mission.get("active_operation_id") or "").strip()
 
 
 def _resolve_confirm_timeout_s(runtime: Any) -> int:
