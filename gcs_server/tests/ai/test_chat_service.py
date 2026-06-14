@@ -37,7 +37,11 @@ class _FakeDefinition:
 
 
 class _FakeRegistry:
+    def __init__(self):
+        self.context_snapshots: list[dict] = []
+
     def build_langchain_tools(self, runtime, context_snapshot, *, timezone_name="", permissions=None):
+        self.context_snapshots.append(context_snapshot)
         return [_FakeTool("query_objects_in_front")]
 
     def definitions(self):
@@ -105,7 +109,8 @@ def _fake_langchain_messages():
 
 
 def test_agent_tool_binding_disables_strict_mode_for_optional_tool_args() -> None:
-    service = AIChatService(store=None, tool_registry=_FakeRegistry())
+    registry = _FakeRegistry()
+    service = AIChatService(store=None, tool_registry=registry)
     model = _FakeModel()
     with _fake_langchain_messages():
         runtime = service._prepare_agent_tool_runtime(
@@ -120,6 +125,7 @@ def test_agent_tool_binding_disables_strict_mode_for_optional_tool_args() -> Non
     assert len(model.bind_calls) == 1
     assert model.bind_calls[0]["kwargs"] == {"strict": False}
     assert [tool.name for tool in model.bind_calls[0]["tools"]] == ["query_objects_in_front"]
+    assert registry.context_snapshots[0]["__agent_run_mode"] == "agent"
 
 
 def test_empty_agent_result_falls_back_to_plain_streaming() -> None:

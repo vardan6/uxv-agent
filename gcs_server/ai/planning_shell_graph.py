@@ -402,7 +402,12 @@ def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShell
     targets_active = bool(active_mission_id) and source_mission_id == active_mission_id
     if not draft or edit_mode != "edit_in_place" or not targets_active:
         return {}
-    if not mission.get("has_operator_edits"):
+    # ADR 0019 §Enforcement: both operator-edited ("ai+edited") and fully
+    # operator-authored ("user") waypoints are protected — either must trigger
+    # the confirmation gate before an AI edit-in-place can replace them.
+    has_operator_edits = bool(mission.get("has_operator_edits"))
+    has_operator_authored = int(mission.get("provenance_user") or 0) > 0
+    if not (has_operator_edits or has_operator_authored):
         return {}
     answer = str((state.get("clarification_response") or {}).get("answer") or "")
     if _is_explicit_replace_confirmation(answer):
@@ -417,6 +422,8 @@ def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShell
 
     provenance = current_revision.get("provenance") if isinstance(current_revision.get("provenance"), dict) else {}
     current_waypoints = _collect_waypoints(current_revision.get("mission") or {})
+    # Protected = operator-edited AI waypoints OR fully operator-authored ones.
+    _PROTECTED_PROVENANCE = ("ai+edited", "user")
     edited_waypoints = [
         {
             "id": str(point.get("id") or f"mission-wp-{index}"),
@@ -424,7 +431,7 @@ def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShell
             "index": index,
         }
         for index, point in enumerate(current_waypoints, start=1)
-        if provenance.get(str(point.get("id") or f"mission-wp-{index}")) == "ai+edited"
+        if provenance.get(str(point.get("id") or f"mission-wp-{index}")) in _PROTECTED_PROVENANCE
     ]
     if not edited_waypoints:
         return {}
@@ -434,14 +441,15 @@ def _build_provenance_conflict(state: PlanningShellGraphState, rt: PlanningShell
         return {}
 
     summary = (
-        f"The active mission revision has {len(edited_waypoints)} operator-edited waypoint(s). "
-        "Creating a new AI proposal linked to this mission would supersede those edits."
+        f"The active mission revision has {len(edited_waypoints)} operator-owned waypoint(s) "
+        "(operator-authored or edited). "
+        "Creating a new AI proposal linked to this mission would supersede that work."
     )
     edited_labels = ", ".join(item["label"] for item in edited_waypoints[:3])
     if len(edited_waypoints) > 3:
         edited_labels = f"{edited_labels}, and {len(edited_waypoints) - 3} more"
     question = (
-        "Reply with 'replace' if you want the AI to supersede those edited waypoints, "
+        "Reply with 'replace' if you want the AI to supersede those operator-owned waypoints, "
         "or describe how the mission should preserve or extend them instead."
     )
     return {
@@ -924,6 +932,13 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             "node_trace": [_node_entry("store_draft", ok=False, reason="mission_execution_unavailable")],
         }
 
+    # If the operator explicitly confirmed replacement during a provenance-conflict
+    # clarification round, pass the override so the backend guard (ADR 0019) allows
+    # the edit_in_place write without re-raising.
+    clarification_response = state.get("clarification_response") or {}
+    provenance_confirmed = _is_explicit_replace_confirmation(
+        str(clarification_response.get("answer") or "")
+    )
     try:
         revision = mission_execution.create_proposal(
             session_id=state.get("session_id", ""),
@@ -940,6 +955,7 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
                 "approval_scope": "planning_artifact_only",
             },
             parent_operation_id=parent_operation_id,
+            allow_provenance_override=provenance_confirmed,
         )
         mission_operation_id = str(revision.get("operation_id") or "")
         mission_revision_id = str(revision.get("id") or "")
@@ -972,7 +988,7 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             else:
                 created = mission_store.create_mission(
                     user_id=str(state.get("user_id") or ""),
-                    name=str(draft.get("goal") or "").strip(),
+                    name=str(draft.get("goal") or "").strip() or "AI mission",
                     origin="ai_chat",
                     origin_chat_id=str(state.get("session_id") or ""),
                 )

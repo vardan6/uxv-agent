@@ -17,7 +17,8 @@ A component is "fully documented" when both tiers exist.
 
 Tier is **not** stated inside the file. The folder path conveys it. Don't restate the obvious.
 
-A third `internals/` tier existed until 2026-05-26 — its content (≥80% design-shaped after the Pass-1 + Pass-2 trim) has been folded into `design.md`. See ADR 0010 for the supersession note.
+A third `internals/` tier existed until 2026-05-26. Its durable content was
+folded into `design.md`; Git history retains the retired structure.
 
 ## Folder Layout
 
@@ -111,7 +112,7 @@ Soft targets. Split a file by topic when it grows past the cap.
 | Design (single topic file under `design/`) | 100-500 | 800 |
 | Folder README | ≤ 80 | 150 |
 
-Each component has a top-level `design.md` (overview + cross-topic contracts + index) and an optional sibling `design/` directory holding per-topic files. The `design/` directory is **topic organization within the design tier**, not a separate tier — every file there carries the same stability rules as `design.md` itself (changes need discussion + approval). This differs from the historical `internals/` tier, which had relaxed stability rules and was eliminated 2026-05-26 (see ADR 0010).
+Each component has a top-level `design.md` (overview + cross-topic contracts + index) and an optional sibling `design/` directory holding per-topic files. The `design/` directory is **topic organization within the design tier**, not a separate tier — every file there carries the same stability rules as `design.md` itself (changes need discussion + approval). This differs from the retired `internals/` tier, which had relaxed stability rules.
 
 When a topic file would exceed its hard cap, split it by sub-topic into sibling files in the same `design/` directory rather than nesting further.
 
@@ -196,7 +197,16 @@ What does this enable, prevent, or require? What follow-ups exist?
 What else was on the table and why was it rejected?
 ```
 
-When superseding an ADR, change its status to "Superseded by <link>" and add a new ADR. Do not delete or edit the original decision.
+When a new ADR replaces an older decision:
+
+- make the new ADR self-contained
+- remove the superseded ADR from the active decision set
+- do not reuse or renumber its identifier
+- update every live backlink in the same change
+- rely on Git history for the removed record
+
+Keep a superseded record only when current code still depends on a non-obvious
+part of its rationale that cannot be stated clearly in the replacing ADR.
 
 ## Plans Are Living, Not Permanent
 

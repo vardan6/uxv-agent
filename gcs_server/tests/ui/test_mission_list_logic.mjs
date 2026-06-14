@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { assignPaletteColor } from '../../static/map/missionListLogic.js';
-import { missionRowMarkup } from '../../static/map/ui/MissionListPanel.js';
+import { missionRowMarkup, contextBarVerbs } from '../../static/map/ui/MissionListPanel.js';
 import { sortMissions } from '../../static/map/state/missionSortPreference.js';
 
 test('assignPaletteColor keeps existing auto colours stable and gives a new mission a new colour', () => {
@@ -35,7 +35,7 @@ test('assignPaletteColor skips overridden colours when auto-assigning the rest',
   assert.notEqual(palette.get('mission-3'), '#66c2a5');
 });
 
-test('missionRowMarkup shows execute for idle missions with an active revision even in proposed status', () => {
+test('missionRowMarkup row has no execute button — execute lives in the context bar', () => {
   const html = missionRowMarkup({
     id: 'mission-1',
     missionIndex: 1,
@@ -48,8 +48,20 @@ test('missionRowMarkup shows execute for idle missions with an active revision e
     sessionStatus: '',
   });
 
-  assert.match(html, /data-execute-mission-id="mission-1"/);
+  assert.doesNotMatch(html, /data-execute-mission-id/);
   assert.match(html, /#1 · 3 pts/);
+});
+
+test('contextBarVerbs renders execute for an idle mission with an active revision', () => {
+  const html = contextBarVerbs({
+    id: 'mission-1',
+    name: 'Test mission',
+    activeRevisionId: 'rev-1',
+    activeRevisionStatus: 'proposed',
+    sessionStatus: '',
+  });
+
+  assert.match(html, /data-execute-mission-id="mission-1"/);
 });
 
 test('sortMissions orders rows by waypoint count descending', () => {

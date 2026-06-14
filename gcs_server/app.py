@@ -42,6 +42,7 @@ from gcs_server.routers import llm as llm_router_module
 from gcs_server.routers import ai as ai_router_module
 from gcs_server.routers import device_config as device_config_router_module
 from gcs_server.routers import mission_lifecycle as mission_lifecycle_router_module
+from gcs_server.routers import operational_constraints as operational_constraints_router_module
 from gcs_server.routers.ai import AIInflightStreamManager
 from gcs_server.routers.device_config import _rover_availability_policy
 from gcs_server.mavlink_telemetry import MavlinkTelemetryBridge
@@ -127,6 +128,7 @@ app.include_router(llm_router_module.router)
 app.include_router(ai_router_module.router)
 app.include_router(device_config_router_module.router)
 app.include_router(mission_lifecycle_router_module.router)
+app.include_router(operational_constraints_router_module.router)
 
 
 @app.middleware("http")

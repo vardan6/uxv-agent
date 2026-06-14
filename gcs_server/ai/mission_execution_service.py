@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -19,8 +20,177 @@ from .controller_mission_adapter import (
 )
 from .coordinate_frame import Origin, load_scene_origin, local_to_wgs84, wgs84_to_local
 from .migrations import apply_ai_store_migrations
-from . import mission_patterns
+from . import mission_patterns, mission_tree, polygon_geometry
+from .mission_export_service import MissionExportService
 from .mission_safety import parse_geofence
+from .vehicle_profile import get_active_profile
+
+
+def _constraint_ring(constraint: dict[str, Any]) -> list[polygon_geometry.Point]:
+    """Constraint polygon ({lat, lon} dicts) → planar ``(lon, lat)`` ring."""
+    return [(float(p["lon"]), float(p["lat"])) for p in constraint["polygon"]]
+
+
+def _constraint_ring_local(
+    constraint: dict[str, Any], origin: Origin
+) -> list[polygon_geometry.Point]:
+    """Constraint polygon ({lat, lon} dicts) → local-metre ``(x, y)`` ring."""
+    ring: list[polygon_geometry.Point] = []
+    for point in constraint["polygon"]:
+        x, y, _z = wgs84_to_local(float(point["lat"]), float(point["lon"]), 0.0, origin)
+        ring.append((x, y))
+    return ring
+
+
+def _collect_nav_waypoints_local(node: "mission_tree.Node") -> list[tuple[float, float]]:
+    """Walk a mission tree node, return local-metre ``(x, y)`` nav waypoints in order."""
+    if node.type == mission_tree.NAV_LEAF:
+        return [
+            (float(wp.get("x", 0.0) or 0.0), float(wp.get("y", 0.0) or 0.0))
+            for wp in node.waypoints
+        ]
+    pts: list[tuple[float, float]] = []
+    for child in node.children:
+        pts.extend(_collect_nav_waypoints_local(child))
+    return pts
+
+
+def _collect_nav_waypoints_wgs84(
+    node: "mission_tree.Node", origin: Origin
+) -> list[tuple[float, float]]:
+    """Walk a mission tree node, return (lat, lon) for every nav_leaf waypoint."""
+    if node.type == mission_tree.NAV_LEAF:
+        result = []
+        for wp in node.waypoints:
+            lat, lon, _ = local_to_wgs84(
+                float(wp.get("x", 0)), float(wp.get("y", 0)), float(wp.get("z", 0)), origin
+            )
+            result.append((lat, lon))
+        return result
+    pts: list[tuple[float, float]] = []
+    for child in node.children:
+        pts.extend(_collect_nav_waypoints_wgs84(child, origin))
+    return pts
+
+
+def _check_hard_constraints(
+    node: "mission_tree.Node", origin: Origin, constraints_store: Any
+) -> str | None:
+    """Return an error string if the route violates any hard enabled constraint, else None.
+
+    Hard allowed corridors: every waypoint *and every route segment between
+    consecutive waypoints* must stay inside the union of enabled ones.
+    Hard blockages: no waypoint or route segment may enter an enabled one.
+
+    Checking segments — not just waypoints — is required by ADR 0025 §Hard: a leg
+    between two valid waypoints can still cut across a blockage or briefly leave
+    the corridor union while both endpoints pass.
+    """
+    constraints = constraints_store.list_constraints()
+    hard_corridors = [
+        c for c in constraints
+        if c["kind"] == "allowed_corridor" and c["rule"] == "hard" and c["enabled"]
+    ]
+    hard_blockages = [
+        c for c in constraints
+        if c["kind"] == "blockage" and c["rule"] == "hard" and c["enabled"]
+    ]
+    if not hard_corridors and not hard_blockages:
+        return None
+
+    corridor_rings = [_constraint_ring(c) for c in hard_corridors]
+    blockage_rings = [(c, _constraint_ring(c)) for c in hard_blockages]
+
+    def _blockage_name(c: dict[str, Any]) -> str:
+        return c.get("name") or c["id"]
+
+    # Waypoints are (lat, lon); the geometry module works in planar (x, y) = (lon, lat).
+    points = [(lon, lat) for lat, lon in _collect_nav_waypoints_wgs84(node, origin)]
+
+    # Per-waypoint containment first — fast, and gives the clearest message.
+    for point in points:
+        if corridor_rings and not any(polygon_geometry.point_in_ring(point, r) for r in corridor_rings):
+            return "Route leaves the hard allowed corridor area and was rejected"
+        for constraint, ring in blockage_rings:
+            if polygon_geometry.point_in_ring(point, ring):
+                return f"Route enters hard blockage '{_blockage_name(constraint)}' and was rejected"
+
+    # Per-segment containment — catches legs that cut a corner across a constraint.
+    for start, end in zip(points, points[1:]):
+        if corridor_rings and not polygon_geometry.segment_within_union(start, end, corridor_rings):
+            return "Route leaves the hard allowed corridor area between waypoints and was rejected"
+        for constraint, ring in blockage_rings:
+            if polygon_geometry.segment_enters_polygon(start, end, ring):
+                return f"Route crosses hard blockage '{_blockage_name(constraint)}' between waypoints and was rejected"
+    return None
+
+
+SOFT_BLOCKAGE_PENALTY_PER_M = 5.0
+SOFT_CORRIDOR_PENALTY_PER_M = 5.0
+
+
+def _route_length_m(points: list[tuple[float, float]]) -> float:
+    return sum(math.hypot(x1 - x0, y1 - y0) for (x0, y0), (x1, y1) in zip(points, points[1:]))
+
+
+def _soft_cost_metadata(
+    node: "mission_tree.Node",
+    *,
+    origin: Origin,
+    constraints_store: Any,
+    chosen_heading_deg: float | None,
+    candidate_count: int,
+) -> dict[str, Any]:
+    constraints = constraints_store.list_constraints() if constraints_store is not None else []
+    soft_corridors = [
+        c for c in constraints
+        if c["kind"] == "allowed_corridor" and c["rule"] == "soft" and c["enabled"]
+    ]
+    soft_blockages = [
+        c for c in constraints
+        if c["kind"] == "blockage" and c["rule"] == "soft" and c["enabled"]
+    ]
+    points = _collect_nav_waypoints_local(node)
+    base_length_m = _route_length_m(points)
+    soft_blockage_m = 0.0
+    soft_corridor_outside_m = 0.0
+
+    if len(points) >= 2 and (soft_corridors or soft_blockages):
+        corridor_rings = [_constraint_ring_local(c, origin) for c in soft_corridors]
+        blockage_rings = [_constraint_ring_local(c, origin) for c in soft_blockages]
+        for start, end in zip(points, points[1:]):
+            for ring in blockage_rings:
+                soft_blockage_m += polygon_geometry.segment_length_inside_ring(start, end, ring)
+            if corridor_rings:
+                soft_corridor_outside_m += polygon_geometry.segment_length_outside_union(start, end, corridor_rings)
+
+    soft_penalty = (
+        soft_blockage_m * SOFT_BLOCKAGE_PENALTY_PER_M
+        + soft_corridor_outside_m * SOFT_CORRIDOR_PENALTY_PER_M
+    )
+    metadata = {
+        "base_length_m": base_length_m,
+        "soft_penalty": soft_penalty,
+        "total_cost": base_length_m + soft_penalty,
+        "breakdown": {
+            "soft_blockage_m": soft_blockage_m,
+            "soft_corridor_outside_m": soft_corridor_outside_m,
+        },
+        "candidate_count": candidate_count,
+    }
+    if chosen_heading_deg is not None:
+        metadata["chosen_heading_deg"] = chosen_heading_deg
+    return metadata
+
+
+def _reverse_nav_node(node: "mission_tree.Node", *, name: str | None = None) -> "mission_tree.Node":
+    if node.type != mission_tree.NAV_LEAF:
+        raise ValueError("survey soft-cost reversal expects a nav_leaf node")
+    return mission_tree.Node(
+        type=mission_tree.NAV_LEAF,
+        name=name if name is not None else node.name,
+        waypoints=[dict(wp) for wp in reversed(node.waypoints)],
+    )
 
 
 MISSION_OPERATION_ACTIVE_STATUSES = frozenset({
@@ -394,6 +564,19 @@ def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> 
     }
 
 
+def _sanitize_floats(obj: Any) -> Any:
+    """Recursively replace non-finite floats (nan, inf) with None so the result
+    is safe to pass to Starlette's JSONResponse (which uses allow_nan=False).
+    MAVLink plan items legitimately carry NaN for unspecified fields."""
+    if isinstance(obj, float):
+        return None if not math.isfinite(obj) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 def _controller_snapshot_to_public(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict) or not snapshot:
         return {}
@@ -436,6 +619,7 @@ class MissionExecutionService:
         self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
             self._db_path.parent / "controller_mission_adapter.json"
         )
+        self._exporter = MissionExportService(missions_dir=self._db_path.parent)
         # ADR 0022: per-Mission coordinate datum. The resolver maps an internal
         # operation id to its Mission's Origin (runtime composes
         # MissionStore.get_by_operation_id → get_origin_datum); a None id or None
@@ -484,6 +668,7 @@ class MissionExecutionService:
         review_context: dict[str, Any] | None = None,
         parent_operation_id: str = "",
         origin_override: Origin | None = None,
+        allow_provenance_override: bool = False,
     ) -> dict[str, Any]:
         now = time.time()
         revision_id = f"mission-rev-{uuid.uuid4().hex[:12]}"
@@ -525,6 +710,27 @@ class MissionExecutionService:
                 parent_revision_id = str(
                     (parent_op_row["active_revision_id"] if parent_op_row else "") or ""
                 )
+                # ADR 0019 §Enforcement — backend-independent guard: block AI
+                # edit_in_place over operator-authored or operator-edited waypoints
+                # unless the operator has explicitly confirmed the replacement.
+                if parent_revision_id and not allow_provenance_override:
+                    prov_row = conn.execute(
+                        "SELECT provenance_json FROM ai_mission_revisions WHERE id = ?",
+                        (parent_revision_id,),
+                    ).fetchone()
+                    if prov_row:
+                        try:
+                            prov: dict[str, str] = json.loads(prov_row["provenance_json"] or "{}")
+                        except (json.JSONDecodeError, TypeError):
+                            prov = {}
+                        _OPERATOR_PROV = {"user", "ai+edited"}
+                        if any(v in _OPERATOR_PROV for v in prov.values()):
+                            raise ValueError(
+                                "provenance_conflict: the active revision contains "
+                                "operator-authored or operator-edited waypoints; "
+                                "explicit operator confirmation is required before an "
+                                "AI proposal can replace them"
+                            )
                 conn.execute(
                     """
                     INSERT INTO ai_mission_revisions (
@@ -605,6 +811,7 @@ class MissionExecutionService:
         points: list[dict[str, Any]],
         params: dict[str, Any] | None = None,
         name: str = "",
+        constraints_store: Any = None,
     ) -> dict[str, Any]:
         """Build a new Mission from an operator-drawn pattern (Phase 4 authoring).
 
@@ -663,6 +870,13 @@ class MissionExecutionService:
                     altitude_m=altitude_m,
                     passes=int(params.get("passes", 1)),
                 )
+                soft_cost = _soft_cost_metadata(
+                    node,
+                    origin=origin,
+                    constraints_store=constraints_store,
+                    chosen_heading_deg=None,
+                    candidate_count=1,
+                )
             else:
                 # The operator drags a rectangle; we take the bounding box of the
                 # drawn points as the survey area (axis-aligned in the local frame).
@@ -671,16 +885,71 @@ class MissionExecutionService:
                 ox, oy = min(xs), min(ys)
                 width_m = max(xs) - ox
                 height_m = max(ys) - oy
-                node = mission_patterns.survey_pattern(
-                    width_m=width_m,
-                    height_m=height_m,
-                    line_spacing_m=_num("line_spacing_m", 10.0),
-                    altitude_m=altitude_m,
-                    origin_xy=(ox, oy),
-                    heading_deg=float(params.get("heading_deg", 0.0)),
-                )
+                unique_candidates = [
+                    (
+                        0.0,
+                        mission_patterns.survey_pattern(
+                            width_m=width_m,
+                            height_m=height_m,
+                            line_spacing_m=_num("line_spacing_m", 10.0),
+                            altitude_m=altitude_m,
+                            origin_xy=(ox, oy),
+                            heading_deg=0.0,
+                            name="survey",
+                        ),
+                    ),
+                    (
+                        90.0,
+                        mission_patterns.survey_pattern(
+                            width_m=height_m,
+                            height_m=width_m,
+                            line_spacing_m=_num("line_spacing_m", 10.0),
+                            altitude_m=altitude_m,
+                            origin_xy=(ox + width_m, oy),
+                            heading_deg=90.0,
+                            name="survey",
+                        ),
+                    ),
+                ]
+                candidates = [
+                    (0.0, unique_candidates[0][1], 0),
+                    (90.0, unique_candidates[1][1], 1),
+                    (180.0, _reverse_nav_node(unique_candidates[0][1], name="survey"), 2),
+                    (270.0, _reverse_nav_node(unique_candidates[1][1], name="survey"), 3),
+                ]
+                valid_candidates: list[tuple[tuple[float, float, float, int], mission_tree.Node, dict[str, Any]]] = []
+                first_violation: str | None = None
+                for heading_deg, candidate_node, order_index in candidates:
+                    if constraints_store is not None:
+                        violation = _check_hard_constraints(candidate_node, origin, constraints_store)
+                        if violation:
+                            if first_violation is None:
+                                first_violation = violation
+                            continue
+                    candidate_soft_cost = _soft_cost_metadata(
+                        candidate_node,
+                        origin=origin,
+                        constraints_store=constraints_store,
+                        chosen_heading_deg=heading_deg,
+                        candidate_count=len(candidates),
+                    )
+                    sort_key = (
+                        float(candidate_soft_cost["total_cost"]),
+                        float(candidate_soft_cost["soft_penalty"]),
+                        float(candidate_soft_cost["base_length_m"]),
+                        order_index,
+                    )
+                    valid_candidates.append((sort_key, candidate_node, candidate_soft_cost))
+                if not valid_candidates:
+                    return {"ok": False, "error": first_violation or "survey pattern has no valid candidate"}
+                _sort_key, node, soft_cost = min(valid_candidates, key=lambda item: item[0])
         except (ValueError, TypeError) as exc:
             return {"ok": False, "error": f"invalid {kind} params: {exc}"}
+
+        if constraints_store is not None and kind == "corridor":
+            violation = _check_hard_constraints(node, origin, constraints_store)
+            if violation:
+                return {"ok": False, "error": violation}
 
         mission_name = str(name or "").strip() or f"{kind.capitalize()} pattern"
         draft_id = f"draft-draw-{uuid.uuid4().hex[:12]}"
@@ -705,6 +974,7 @@ class MissionExecutionService:
             "revision": revision,
             "operation_id": str(revision.get("operation_id") or ""),
             "origin_datum": origin.as_dict(),
+            "soft_cost": soft_cost,
         }
 
     def set_operation_geofence(
@@ -929,7 +1199,7 @@ class MissionExecutionService:
             }
 
         status = str(revision.get("status") or "")
-        if status not in MISSION_EXECUTION_READY_STATUSES:
+        if status not in MISSION_EXECUTION_READY_STATUSES and status not in {"proposed", "planning"}:
             return {
                 "ok": False,
                 "status": "revision_not_ready",
@@ -937,25 +1207,20 @@ class MissionExecutionService:
                 "revision": revision,
             }
 
+        export_ready = self._ensure_revision_exported_for_execution(revision)
+        if not export_ready.get("ok"):
+            return {
+                "ok": False,
+                "status": str(export_ready.get("status") or "mission_export_failed"),
+                "error": str(export_ready.get("error") or "mission export failed"),
+                "revision": revision,
+            }
+        revision = export_ready["revision"]
+
         mission = dict(revision.get("mission") or {})
         mission_export = mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {}
         export_path = str(mission_export.get("file_path") or "").strip()
-        if not export_path:
-            return {
-                "ok": False,
-                "status": "mission_export_missing",
-                "error": "mission revision is missing an exported controller-ready plan",
-                "revision": revision,
-            }
         plan_file = Path(export_path)
-        if not plan_file.exists():
-            return {
-                "ok": False,
-                "status": "mission_export_missing",
-                "error": f"mission export file does not exist: {export_path}",
-                "revision": revision,
-            }
-
         plan = _load_json_file(export_path)
         if not isinstance(plan, dict) or not plan:
             return {
@@ -1046,10 +1311,11 @@ class MissionExecutionService:
                     error_text="expected controller mission version does not match the latest verified version",
                     now=now,
                 )
+                updated_controller_row = self._ensure_controller_state_row(conn)
                 rebased_revision = self._create_rebased_revision_from_controller_state(
                     revision,
                     conn=conn,
-                    controller_state=self._controller_state_from_row(controller_row),
+                    controller_state=self._controller_state_from_row(updated_controller_row),
                     observed_controller_version=observed_version,
                     expected_controller_version=expected_controller_version,
                 )
@@ -1364,6 +1630,29 @@ class MissionExecutionService:
             )
             conn.commit()
         return {"ok": True, "status": "aborted", "operation_id": op_id}
+
+    def resume_mission(self, operation_id: str) -> dict[str, Any]:
+        """Send AUTO to the FC adapter and mark the operation running in the DB.
+
+        Called by the API layer after ``MissionExecutionSessions.resume_for_mission()``
+        has resumed the executor thread.  Adapter errors are returned rather than
+        raised so the caller can decide whether to roll back the in-memory resume.
+        """
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
+        try:
+            self._controller_adapter.resume_mission()
+        except Exception as exc:
+            return {"ok": False, "status": "adapter_error", "error": str(exc), "operation_id": op_id}
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ai_mission_operations SET status = 'running', updated_at = ? WHERE id = ?",
+                (now, op_id),
+            )
+            conn.commit()
+        return {"ok": True, "status": "running", "operation_id": op_id}
 
     def get_controller_state(self) -> dict[str, Any]:
         with self._connect() as conn:
@@ -2036,9 +2325,38 @@ class MissionExecutionService:
                 WHERE id = ?
                 """,
                 (status, now, revision["operation_id"]),
-            )
+                )
             conn.commit()
         return self.get_revision(revision["id"])
+
+    def _ensure_revision_exported_for_execution(self, revision: dict[str, Any]) -> dict[str, Any]:
+        status = str(revision.get("status") or "")
+        mission = dict(revision.get("mission") or {})
+        mission_export = mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {}
+        export_path = str(mission_export.get("file_path") or "").strip()
+        needs_export = status in {"proposed", "planning"} or not export_path or not Path(export_path).exists()
+        if not needs_export:
+            return {"ok": True, "revision": revision}
+
+        export_result = self._exporter.export(revision, profile=get_active_profile())
+        if not export_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "mission_export_failed",
+                "error": str(export_result.get("error") or "failed to export mission"),
+            }
+
+        updated = self.mark_revision_exported_by_revision_id(
+            str(revision.get("id") or "").strip(),
+            export_result=export_result,
+        )
+        if updated is None:
+            return {
+                "ok": False,
+                "status": "mission_export_failed",
+                "error": "failed to persist exported mission state",
+            }
+        return {"ok": True, "revision": updated}
 
     def _ensure_controller_state_row(self, conn: sqlite3.Connection) -> sqlite3.Row:
         now = time.time()
@@ -2087,7 +2405,7 @@ class MissionExecutionService:
             summary = f"{summary} Version: {version}."
         if active_revision_id:
             summary = f"{summary} Active revision: {active_revision_id}."
-        return {
+        return _sanitize_floats({
             "available": True,
             "controller_id": str(row["controller_id"] or MISSION_CONTROLLER_ID),
             "controller_version": version,
@@ -2105,7 +2423,7 @@ class MissionExecutionService:
             "verified_at": row["verified_at"],
             "updated_at": row["updated_at"],
             "adapter": self._controller_adapter.adapter_name,
-        }
+        })
 
     def _project_controller_state(
         self,

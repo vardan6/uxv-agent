@@ -384,7 +384,7 @@ The new simulator should support headless or minimally interactive execution ear
 
 ## Topic-Level Design Files
 
-Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier.
 
 - [`design/rover-physics-tuning.md`](./design/rover-physics-tuning.md) — Rover Physics Tuning
 - [`design/rover-sim-next-phase-1.md`](./design/rover-sim-next-phase-1.md) — Rover Sim Next Phase 1

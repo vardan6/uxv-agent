@@ -1,3 +1,16 @@
+const SVG = {
+  edit:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M9.5 2 12 4.5 5.5 11H3V8.5L9.5 2z"/><line x1="7.8" y1="3.7" x2="10.3" y2="6.2"/></svg>`,
+  run:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><polygon points="4,2 12,7 4,12"/></svg>`,
+  pause:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><rect x="3" y="2" width="3" height="10" rx="1"/><rect x="8" y="2" width="3" height="10" rx="1"/></svg>`,
+  stop:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/></svg>`,
+  done:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><polyline points="2,7.5 5.5,11 12,4"/></svg>`,
+  trash:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V3h4v1"/><rect x="3.5" y="4" width="7" height="8" rx="1"/><line x1="5.5" y1="6.5" x2="5.5" y2="10"/><line x1="8.5" y1="6.5" x2="8.5" y2="10"/></svg>`,
+  clear:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/></svg>`,
+  plus:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  gear:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  dots:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" focusable="false" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+};
+
 // Flat-Mission row affordances (ADR 0021 §4 "Sidebar-row affordances"):
 // edit resolves to the Mission's active revision and remains status-gated;
 // execute is available for any idle row with an active revision. executing →
@@ -78,75 +91,73 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-// Up to five button slots per row (B.3): ✏️ ▶/⏸ ⏹ 🗑 👁.
-// Edit/play/stop render only when applicable; delete and eye are always present.
+// Row trailing actions (mission-sidebar-toolbar.md → Row Simplification).
+// Default rows carry zero inline verbs: just the ⋯ overflow menu (rename/delete).
+// The single carve-out is the inline Stop ⏹ on a Running/Paused row — Stop is the
+// urgent execution action and must not sit one click deep. Edit/Run/Pause/Resume
+// migrate to the context bar, targeting the focus-first acting Mission.
 // sessionStatus is the in-memory executor state injected by GET /api/ai/missions.
-function missionRowUtilityActions(missionRow, isEditing, {
-  deleteGuarded = false,
-  isExecuting = false,
-} = {}) {
-  const status = String(missionRow.activeRevisionStatus || '');
+function missionRowTrailingActions(missionRow) {
   const sessionStatus = String(missionRow.sessionStatus || '');
-  const hasActiveRevision = Boolean(String(missionRow.activeRevisionId || '').trim());
   const safeId = escapeHtml(missionRow.id);
   const safeName = escapeHtml(missionRow.name);
-
   const isSessionRunning = sessionStatus === 'running';
   const isSessionPaused = sessionStatus === 'paused';
-  const isActive = isSessionRunning || isSessionPaused || isExecuting;
 
-  // Slot 1 — edit ✏️
-  const canEdit = MISSION_ROW_EDITABLE.has(status) && !isActive;
-  let editSlot;
-  if (canEdit && isEditing) {
-    editSlot = `<button class="mission-row-action-btn is-done" type="button"
-      data-done-edit-mission-id="${safeId}"
-      title="Finish editing" aria-label="Finish editing">
-      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12l5 5L20 7"/></svg>
-    </button>`;
-  } else if (canEdit) {
-    editSlot = `<button class="mission-row-action-btn is-edit" type="button"
-      data-edit-mission-id="${safeId}"
-      title="Edit waypoints" aria-label="Edit waypoints for mission ${safeName}">
-      <svg class="mission-row-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-    </button>`;
-  } else {
-    editSlot = '';
-  }
-
-  // Slot 2 — play ▶ or pause ⏸
-  let playPauseSlot;
-  if (isSessionRunning) {
-    playPauseSlot = `<button class="mission-row-action-btn is-pause" type="button"
-      data-pause-mission-id="${safeId}"
-      title="Pause mission" aria-label="Pause mission ${safeName}">⏸</button>`;
-  } else if (isSessionPaused || (hasActiveRevision && !isActive)) {
-    const isResume = isSessionPaused;
-    const attr = isResume ? `data-resume-mission-id="${safeId}"` : `data-execute-mission-id="${safeId}"`;
-    const title = isResume ? 'Resume mission' : 'Execute mission';
-    playPauseSlot = `<button class="mission-row-action-btn is-execute" type="button"
-      ${attr}
-      title="${title}" aria-label="${title} ${safeName}">▶</button>`;
-  } else {
-    playPauseSlot = '';
-  }
-
-  // Slot 3 — stop ⏹ (only shown when a session is active)
   const stopSlot = (isSessionRunning || isSessionPaused)
     ? `<button class="mission-row-action-btn is-stop" type="button"
         data-stop-mission-id="${safeId}"
         title="Stop mission" aria-label="Stop mission ${safeName}">⏹</button>`
     : '';
 
-  // Slot 4 — delete 🗑
-  const deleteDisabled = deleteGuarded || isActive;
-  const deleteTitle = deleteDisabled ? 'Delete disabled while mission is active' : 'Delete mission';
-  const deleteAttr = deleteDisabled ? ' disabled aria-disabled="true"' : '';
-  const deleteSlot = `<button class="mission-row-action-btn is-delete" type="button"
-    data-delete-mission-id="${safeId}"
-    title="${deleteTitle}" aria-label="Delete mission ${safeName}"${deleteAttr}>🗑</button>`;
+  const menuSlot = `<button class="mission-row-menu-btn" type="button"
+    data-row-menu-mission-id="${safeId}"
+    title="More actions" aria-label="More actions for mission ${safeName}"
+    aria-haspopup="menu">⋯</button>`;
 
-  return editSlot + playPauseSlot + stopSlot + deleteSlot;
+  return stopSlot + menuSlot;
+}
+
+// Context-bar contextual verbs for the single acting (focus-first) Mission.
+// Budget ≤2 verbs (mission-sidebar-toolbar.md → Icon Budget). Reuses the same
+// data-* attributes as the old row buttons so MapWidget's existing handlers fire
+// unchanged. While the target is being edited, Edit becomes a Done affordance.
+export function contextBarVerbs(target, { isEditing = false } = {}) {
+  if (!target) return '';
+  const status = String(target.activeRevisionStatus || '');
+  const sessionStatus = String(target.sessionStatus || '');
+  const hasActiveRevision = Boolean(String(target.activeRevisionId || '').trim());
+  const safeId = escapeHtml(target.id);
+  const safeName = escapeHtml(target.name);
+  const isRunning = sessionStatus === 'running';
+  const isPaused = sessionStatus === 'paused';
+  const isExecuting = status === 'executing';
+  // Gate Edit/Execute on live session only — DB status can be stuck at 'executing'
+  // after a failed upload (HTTP 500 kills the session without updating the revision).
+  const isActive = isRunning || isPaused;
+
+  const verb = (cls, attr, icon, title) => `<button class="mission-context-icon-btn ${cls}" type="button"
+    ${attr}="${safeId}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)} — ${safeName}">${icon}</button>`;
+
+  if (isRunning) {
+    return verb('is-pause', 'data-pause-mission-id', SVG.pause, 'Pause mission')
+      + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
+  }
+  if (isPaused) {
+    return verb('is-execute', 'data-resume-mission-id', SVG.run, 'Resume plan upload')
+      + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
+  }
+  if (isEditing) {
+    return verb('is-done', 'data-done-edit-mission-id', SVG.done, 'Finish editing');
+  }
+  let out = '';
+  if (MISSION_ROW_EDITABLE.has(status) && !isActive) {
+    out += verb('is-edit', 'data-edit-mission-id', SVG.edit, 'Edit waypoints');
+  }
+  if (hasActiveRevision && !isActive) {
+    out += verb('is-execute', 'data-execute-mission-id', SVG.run, 'Upload plan to controller');
+  }
+  return out;
 }
 
 function missionRowVisibilityButton(missionId, missionName, { isVisible = false, isExecuting = false } = {}) {
@@ -199,7 +210,6 @@ export function missionRowMarkup(missionRow, ctx = {}) {
     || 'ground'
   );
   const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
-  const deleteGuarded = deleteGuardedMissionIds.has(id);
   const waypointLabel = formatWaypointCount(missionRow.waypointCount);
   const metaParts = [escapeHtml(indexLabel), escapeHtml(waypointLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
@@ -233,7 +243,7 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         </span>
       </button>
       <span class="mission-row-actions">
-        ${missionRowUtilityActions(missionRow, isEditing, { deleteGuarded, isExecuting })}
+        ${missionRowTrailingActions(missionRow)}
       </span>
       <span class="mission-row-visibility">
         ${missionRowVisibilityButton(id, missionRow.name, { isVisible, isExecuting })}
@@ -266,6 +276,8 @@ export class MissionListPanel {
     this._onMissionDoneEditRequested = opts.onMissionDoneEditRequested || (() => {});
     this._onColorChipClicked = opts.onColorChipClicked || (() => {});
     this._onOverflowClicked = opts.onOverflowClicked || (() => {});
+    this._onRowMenuRequested = opts.onMissionRowMenuRequested || (() => {});
+    this._onDeleteSelectedRequested = opts.onMissionDeleteSelectedRequested || (() => {});
   }
 
   renderMissions({
@@ -289,20 +301,54 @@ export class MissionListPanel {
     const allSelected = missions.length > 0 && missions.every((missionRow) => selectedMissionIds.has(String(missionRow.id || '')));
     const someSelected = selectedMissionIds.size > 0 && !allSelected;
     const visibilityAction = allVisible ? 'hide-all' : 'show-all';
-    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Mission visibility and selection controls">
-          <span class="mission-batch-stripe" aria-hidden="true"></span>
-          <label class="mission-batch-select" title="${allSelected ? 'Unselect all missions' : 'Select all missions'}">
+
+    // Context-bar acting target resolves focus-first (mission-sidebar-toolbar.md →
+    // Resolved placement): an Active (focused) Mission wins; else the single
+    // Selected Mission when exactly one is selected; else no single-item verbs.
+    const focusedPresent = focusedMissionId
+      && missions.some((m) => String(m.id || '') === String(focusedMissionId));
+    let targetId = '';
+    if (focusedPresent) {
+      targetId = String(focusedMissionId);
+    } else if (selectedMissionIds.size === 1) {
+      targetId = String([...selectedMissionIds][0]);
+    }
+    const multiSelect = selectedMissionIds.size > 1;
+    const targetMission = (!multiSelect && targetId)
+      ? missions.find((m) => String(m.id || '') === targetId)
+      : null;
+
+    let contextActions = '';
+    if (multiSelect) {
+      // Multi-select → batch-safe actions only (no Edit/Run). Visibility lives in
+      // the right slot; here we offer Delete (a supported bulk flow) and Clear.
+      contextActions = `<button class="mission-context-icon-btn is-delete" type="button"
+            data-delete-selected title="Delete selected missions" aria-label="Delete selected missions">${SVG.trash}</button>
+          <button class="mission-context-icon-btn is-clear" type="button"
+            data-clear-selection title="Clear selection" aria-label="Clear selection">${SVG.clear}</button>`;
+    } else if (targetMission) {
+      contextActions = contextBarVerbs(targetMission, {
+        isEditing: String(editingMissionId || '') === String(targetMission.id || ''),
+      });
+    }
+
+    const countText = multiSelect
+      ? `${selectedMissionIds.size} selected`
+      : (hasSelection ? `${selectedMissionIds.size} selected` : 'None selected');
+
+    const batchBar = `<div class="mission-batch-bar" role="toolbar" aria-label="Mission selection and contextual actions">
+          <label class="mission-batch-select" title="${allSelected ? 'Deselect all' : 'Select all'}">
             <input
               type="checkbox"
               class="mission-batch-select-box"
               data-batch-toggle-select-all
               ${allSelected ? 'checked' : ''}
               ${missions.length ? '' : 'disabled'}
-              aria-label="${allSelected ? 'Unselect all missions' : 'Select all missions'}"
+              aria-label="${allSelected ? 'Deselect all' : 'Select all'}"
             />
           </label>
-          <span class="mission-batch-count" aria-live="polite">${hasSelection ? `${selectedMissionIds.size} selected` : 'None selected'}</span>
-          <span class="mission-batch-actions" aria-hidden="true"></span>
+          <span class="mission-batch-count" aria-live="polite">${countText}</span>
+          <span class="mission-batch-actions">${contextActions}</span>
           <span class="mission-batch-visibility">
             ${batchActionButton({
               action: visibilityAction,
@@ -321,13 +367,13 @@ export class MissionListPanel {
               ${safeSortLabel ? `<p class="mission-list-sort-label" title="Active sort order">⇅ ${safeSortLabel}</p>` : ''}
             </div>
             <div class="mission-list-header-actions">
-              <button class="mission-list-new-btn" type="button" data-new-mission
+              <button class="mission-list-header-icon-btn" type="button" data-new-mission
                 title="New mission — place waypoints by clicking the map"
-                aria-label="New mission">+ New</button>
-              <a class="mission-list-settings-link" href="/settings?tab=mission-lifecycle"
-                title="Mission lifecycle settings" aria-label="Mission lifecycle settings">⚙</a>
-              <button class="mission-list-overflow-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
-                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">⋯</button>
+                aria-label="New mission">${SVG.plus}</button>
+              <a class="mission-list-header-icon-btn" href="/settings?tab=mission-lifecycle"
+                title="Mission lifecycle settings" aria-label="Mission lifecycle settings">${SVG.gear}</a>
+              <button class="mission-list-header-icon-btn${safeSortLabel ? ' has-active-sort' : ''}" type="button" data-overflow-menu
+                title="Mission list options${safeSortLabel ? ` — sorted by ${sortLabel}` : ''}" aria-label="Mission list options">${SVG.dots}</button>
             </div>
           </div>`;
     const missionRows = missions.length
@@ -349,8 +395,11 @@ export class MissionListPanel {
               ↑ Go to chat
             </button>
           </div>`;
-    const body = batchBar + missionRows;
+    const savedScroll = this._container.querySelector('.mission-list-rows')?.scrollTop ?? 0;
+    const body = batchBar + `<div class="mission-list-rows">${missionRows}</div>`;
     this._container.innerHTML = `<div class="mission-list-panel">${header}${body}</div>`;
+    const rowsEl = this._container.querySelector('.mission-list-rows');
+    if (rowsEl && savedScroll > 0) rowsEl.scrollTop = savedScroll;
     this._bindMissions();
     const selectAllBox = this._container.querySelector('[data-batch-toggle-select-all]');
     if (selectAllBox) {
@@ -482,35 +531,72 @@ export class MissionListPanel {
         this._onMissionDeleteRequested(button.dataset.deleteMissionId || '');
       });
     });
+    this._container.querySelectorAll('[data-delete-selected]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onDeleteSelectedRequested();
+      });
+    });
+    this._container.querySelectorAll('[data-clear-selection]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onSelectionCleared();
+      });
+    });
+    // Row overflow menu (⋯): MapWidget owns the popover (rename/delete) so it can
+    // apply delete guards and reuse the existing rename input flow.
+    this._container.querySelectorAll('[data-row-menu-mission-id]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._onRowMenuRequested(button.dataset.rowMenuMissionId || '', button);
+      });
+    });
     // Inline rename: double-click the title span → replace with input, commit on Enter/blur.
     this._container.querySelectorAll('[data-rename-mission-id]').forEach((span) => {
       span.addEventListener('dblclick', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const missionId = span.dataset.renameMissionId || '';
-        const currentName = span.dataset.currentName || span.textContent.trim();
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'mission-row-title-input';
-        input.value = currentName;
-        span.replaceWith(input);
-        input.focus();
-        input.select();
-        const commit = () => {
-          const newName = input.value.trim();
-          if (newName && newName !== currentName) {
-            this._onMissionRenameRequested(missionId, newName);
-          } else {
-            // Restore the original span without saving
-            input.replaceWith(span);
-          }
-        };
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(); }
-          if (e.key === 'Escape') { e.preventDefault(); input.replaceWith(span); }
-        });
-        input.addEventListener('blur', commit, { once: true });
+        this._startRename(span);
       });
     });
+  }
+
+  // Begin inline rename on a title span: swap it for an input, commit on
+  // Enter/blur, cancel on Escape. Shared by the row dblclick and the row ⋯ menu.
+  _startRename(span) {
+    if (!span) return;
+    const missionId = span.dataset.renameMissionId || '';
+    const currentName = span.dataset.currentName || span.textContent.trim();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'mission-row-title-input';
+    input.value = currentName;
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = () => {
+      const newName = input.value.trim();
+      if (newName && newName !== currentName) {
+        this._onMissionRenameRequested(missionId, newName);
+      } else {
+        // Restore the original span without saving
+        input.replaceWith(span);
+      }
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      if (e.key === 'Escape') { e.preventDefault(); input.replaceWith(span); }
+    });
+    input.addEventListener('blur', commit, { once: true });
+  }
+
+  // Public entry for the row ⋯ menu's Rename action.
+  startRenameById(missionId) {
+    const id = String(missionId || '');
+    const span = this._container.querySelector(`[data-rename-mission-id="${id}"]`);
+    if (span) this._startRename(span);
   }
 }

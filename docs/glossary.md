@@ -269,9 +269,9 @@ Historical term. Originally the boundary that separated draft approval
 ("publish these commands to the rover"). Superseded by the
 configurable **Mission Lifecycle Modes** (Strict / Confirm / Autonomous);
 see [decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md).
-The original two-approval behaviour is preserved as Strict mode — the
-shipped default for real-rover builds. The original ADR is
-[decisions/0002-two-approval-model.md](./cross-cutting/decisions/0002-two-approval-model.md).
+Strict mode preserves separate operator authorization for execution and is the
+shipped default for real-rover builds. See
+[ADR 0021](./cross-cutting/decisions/0021-mission-lifecycle.md).
 
 The three canonical operator verbs are:
 - **Approve draft** — locks the revision; does not execute.

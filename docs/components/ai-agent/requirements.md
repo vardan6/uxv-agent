@@ -181,7 +181,7 @@ Required properties:
 - Approval must refer to a real stored revision, never to transient stream output.
 - The effective policy must be recorded on each mission operation so later review shows which rules were active at creation and approval time.
 
-The bullets above describe the **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) supersedes [ADR 0002](../../cross-cutting/decisions/0002-two-approval-model.md) and introduces additional Confirm and Autonomous modes (sim-build default = Autonomous). See ADR 0021 for the full lifecycle.
+The bullets above describe the **Strict mode** behaviour — the shipped default for real-rover builds. [ADR 0021](../../cross-cutting/decisions/0021-mission-lifecycle.md) also defines Confirm and Autonomous modes (sim-build default = Autonomous). See ADR 0021 for the full lifecycle.
 
 ## Mission Execution Requirement
 
@@ -192,6 +192,8 @@ Mission-affecting rover requests must not end at "the agent proposed a draft." T
 - Mission-style rover requests remain draft-first for this phase. The agent does not directly initiate rover execution.
 - A valid mission proposal must be persisted immediately as a real mission revision before it is shown for review.
 - Spatial mission proposals must appear immediately on the map as operator-visible overlays rendered from the durable stored revision (not transient stream content).
+- The same turn must also retain a normal human-readable assistant response in chat. Mission creation produces both the text response and the durable Mission object; neither substitutes for the other.
+- Explicit operator-supplied waypoint coordinates are valid mission input. The agent must structure and validate them through a mission-creation tool and persist them through the same lifecycle as planner-generated routes; it must not reject them merely because they were pasted into chat.
 - Mission revisions are append-only and lineage-aware. A new revision references its parent through explicit lineage metadata. When a child revision is created, the parent becomes non-actionable for future approval unless explicitly re-selected.
 - Local supersession does not change rover behavior by itself. The currently executing mission remains in effect until a replacement revision is approved and cutover succeeds.
 
@@ -372,7 +374,7 @@ From the operator's point of view, the product should feel like a single AI term
 
 ### The `/ai` page
 
-The `/ai` page is the operator's AI terminal for asking questions about the rover, the map, recorded sessions, and mission goals. It is read-only with respect to rover motion today: no AI path can directly move the rover.
+The `/ai` page is the operator's AI terminal for asking questions about the rover, the map, recorded sessions, and mission goals. Agent mode may create and edit durable Mission planning artifacts through tools. Rover motion remains separately governed by the configured execution mode, approval policy, and execution-tool availability.
 
 Layout requirement:
 

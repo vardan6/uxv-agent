@@ -4,14 +4,34 @@ import json
 import tempfile
 from pathlib import Path
 
-from ai.controller_mission_adapter import MavlinkControllerMissionAdapter, _controller_version_for_items
+from ai.controller_mission_adapter import (
+    ControllerMissionAdapterError,
+    MavlinkControllerMissionAdapter,
+    _controller_version_for_items,
+)
 
 
 class _FakeMissionClient:
-    def __init__(self, downloaded_sequences: list[list[dict]], upload_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        downloaded_sequences: list[list[dict]],
+        upload_error: Exception | None = None,
+        mode_error: Exception | None = None,
+        parameters: dict[str, tuple[float, int]] | None = None,
+    ) -> None:
         self._downloaded_sequences = [list(items) for items in downloaded_sequences]
         self._upload_error = upload_error
+        self._mode_error = mode_error
+        raw_parameters = {"MIS_RESTART": (0.0, 6)} if parameters is None else parameters
+        self._parameters = {
+            str(name).upper(): (float(value), int(param_type))
+            for name, (value, param_type) in raw_parameters.items()
+        }
         self.uploaded_items: list[list[dict]] = []
+        self.mode_commands: list[str] = []
+        self.mode_confirmations: list[tuple[str, float | None]] = []
+        self.parameter_reads: list[str] = []
+        self.parameter_sets: list[tuple[str, float, int]] = []
         self.download_calls = 0
         self.closed = False
 
@@ -24,6 +44,28 @@ class _FakeMissionClient:
         self.uploaded_items.append([dict(item) for item in items])
         if self._upload_error is not None:
             raise self._upload_error
+
+    def set_mode(self, mode_name: str) -> None:
+        self.mode_commands.append(mode_name)
+        if self._mode_error is not None:
+            raise self._mode_error
+
+    def wait_for_mode(self, mode_name: str, *, timeout_s: float | None = None) -> None:
+        self.mode_confirmations.append((mode_name, timeout_s))
+        if self._mode_error is not None:
+            raise self._mode_error
+
+    def read_parameter(self, param_name: str) -> tuple[float, int]:
+        normalized = str(param_name).upper()
+        self.parameter_reads.append(normalized)
+        if normalized not in self._parameters:
+            raise ControllerMissionAdapterError(f"timed out waiting for parameter {normalized}")
+        return self._parameters[normalized]
+
+    def set_parameter(self, param_name: str, value: float, *, param_type: int) -> None:
+        normalized = str(param_name).upper()
+        self.parameter_sets.append((normalized, float(value), int(param_type)))
+        self._parameters[normalized] = (float(value), int(param_type))
 
     def close(self) -> None:
         self.closed = True
@@ -134,4 +176,115 @@ def test_mavlink_adapter_rejects_stale_expected_controller_version() -> None:
     assert result.ok is False
     assert result.status == "stale_controller_version"
     assert client.uploaded_items == []
+    assert client.closed is True
+
+
+def test_mavlink_adapter_pause_switches_to_hold_and_confirms() -> None:
+    client = _FakeMissionClient([[]])
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    adapter.pause_mission()
+
+    assert client.mode_commands == ["HOLD"]
+    assert client.mode_confirmations == [("HOLD", 5.0)]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_stop_switches_to_hold_and_confirms() -> None:
+    client = _FakeMissionClient([[]])
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    adapter.stop_mission()
+
+    assert client.mode_commands == ["HOLD"]
+    assert client.mode_confirmations == [("HOLD", 5.0)]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_resume_switches_to_auto_and_confirms() -> None:
+    client = _FakeMissionClient([[]])
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    adapter.resume_mission()
+
+    assert client.mode_commands == ["AUTO"]
+    assert client.mode_confirmations == [("AUTO", 5.0)]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_mode_switch_propagates_confirmation_error() -> None:
+    client = _FakeMissionClient([[]], mode_error=RuntimeError("mode confirm failed"))
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    try:
+        adapter.pause_mission()
+        assert False, "pause_mission should raise when mode confirmation fails"
+    except RuntimeError as exc:
+        assert str(exc) == "mode confirm failed"
+    assert client.mode_commands == ["HOLD"]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_asserts_mis_restart_resume_policy_before_mode_switch() -> None:
+    client = _FakeMissionClient([[]], parameters={"MIS_RESTART": (1.0, 6)})
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    adapter.resume_mission()
+
+    assert client.parameter_reads == ["MIS_RESTART", "AUTO_RESUME"]
+    assert client.parameter_sets == [("MIS_RESTART", 0.0, 6)]
+    assert client.mode_commands == ["AUTO"]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_asserts_auto_resume_policy_when_present() -> None:
+    client = _FakeMissionClient([[]], parameters={"AUTO_RESUME": (0.0, 6)})
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    adapter.pause_mission()
+
+    assert client.parameter_reads == ["MIS_RESTART", "AUTO_RESUME"]
+    assert client.parameter_sets == [("AUTO_RESUME", 1.0, 6)]
+    assert client.mode_commands == ["HOLD"]
+    assert client.closed is True
+
+
+def test_mavlink_adapter_fails_closed_when_resume_policy_params_are_unavailable() -> None:
+    client = _FakeMissionClient([[]], parameters={})
+    adapter = MavlinkControllerMissionAdapter(
+        connection_url="udp:127.0.0.1:14550",
+        state_path=_temp_state_path(),
+        client_factory=lambda: client,
+    )
+
+    try:
+        adapter.pause_mission()
+        assert False, "pause_mission should fail when resume-policy parameters are unavailable"
+    except ControllerMissionAdapterError as exc:
+        assert "MIS_RESTART or AUTO_RESUME" in str(exc)
+    assert client.mode_commands == []
     assert client.closed is True

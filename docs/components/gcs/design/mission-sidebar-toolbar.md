@@ -1,10 +1,35 @@
 # Mission Sidebar Toolbar
 
-Status: planned
+Status: implemented (browser smoke pending) — design decisions resolved 2026-06-07
 Date: 2026-06-06
 
 This note defines the intended layout and behavior for the mission-sidebar
 header and the control bar immediately above the Mission rows on `/ai`.
+
+> Branch context: the committed baseline lives on `master`; this work happens on
+> `feat/mission-sidebar-toolbar-redesign`, so behavioral experiments are allowed and
+> reviewable after implementation. Each behavioral departure below is tagged
+> **[behavioral]**; naming/contract decisions are tagged **[contract]**.
+
+## Vocabulary (term-collision fix)
+
+ADR 0021 §4 already binds **Active** to the *focused* Mission — the single-gesture
+target (click a row or a map waypoint). An earlier draft of this note reused
+"Active" for an *executing* Mission, which is a true collision. Resolved
+**[contract]**:
+
+| Term | Meaning | Source of truth |
+|------|---------|-----------------|
+| **Active** | the focused Mission (0 or 1); target of single-item gestures | ADR 0021 §4 (unchanged) |
+| **Selected** | the batch set (0..N); checkbox / shift-click | ADR 0021 §4 (unchanged) |
+| **Visible** | renders on the map (0..N); eye toggle | ADR 0021 §4 (unchanged) |
+| **Running** / **Paused** | executor session state | matches existing `sessionStatus` (`running`/`paused`) in `missionRowUtilityActions` |
+| **Executing** | the revision-status value that locks edit/eye | ADR 0021 §3; `activeRevisionStatus === 'executing'` |
+
+Rationale for **Running**: the code already calls the live executor session
+`running`/`paused` (`sessionStatus`), so this name needs no code or ADR churn —
+only this note adopts it. Use **Running**, never "Active", for execution state in
+all toolbar copy, labels, and comments.
 
 It exists because the current "None selected" bar is visually too close to a
 Mission row, which makes the control strip read like content instead of chrome.
@@ -82,14 +107,14 @@ acting target, actions for that Mission.
 - middle actions slot: contextual actions
 - right slot: visibility controls for the list or selection
 
-Suggested text:
+Count text (center slot):
 
-- `No missions selected`
-- `1 mission selected`
-- `N missions selected`
+- `None selected` — zero selections, no focused mission
+- `N selected` — one or more selected
 
-Prefer `No missions selected` over `None selected`; it reads as state text, not
-as a placeholder row title.
+The count text never shows a mission name; the context action slot already
+identifies the targeted mission. Checkbox title/aria-label: `Select all` /
+`Deselect all` (type-neutral — the checkbox operates across all missions).
 
 ## Alignment Contract
 
@@ -112,14 +137,23 @@ full row template.
 
 Mission actions split by scope:
 
-### Keep in the header/context bars
+### Bar ownership [contract]
+
+The **context bar owns both** selection and visibility controls in every state;
+the header bar stays pure collection chrome. Concretely:
+
+Header bar:
 
 - `New mission`
 - sort
 - filter
 - import/export
-- show all / hide all
-- select all / clear selection
+- overflow `⋯`
+
+Context bar:
+
+- select all / clear selection (left slot)
+- show all / hide all (right slot)
 - batch delete if retained
 
 ### Keep discoverable at row or focused-item level
@@ -130,15 +164,20 @@ Mission actions split by scope:
 - `Resume`
 - `Stop`
 
-### Preferred compromise
+### Resolved placement
 
 Move `Edit` and `Run` out of the repeated row chrome and into the **context
-bar when exactly one Mission is the acting target**, but keep one clear path for
-discoverability:
+bar**, targeting the single acting Mission. The acting target resolves
+**focus-first [behavioral]**:
 
-- either keep a single inline primary action on each row
-- or make the focused-row state visually strong enough that the context-bar
-  action target is obvious
+1. if a Mission is **Active** (focused), verbs target it;
+2. else if **exactly one** Mission is Selected, verbs target that one;
+3. else (no focus, zero or multiple selected) single-item verbs are hidden.
+
+This honors ADR 0021 §4 (single-item gestures target Active/focus) and keeps
+**Selected** purely a batch concept — selecting a checkbox does not silently
+become the target of a single-item verb. Make the focused-row state visually
+strong so the context-bar action target is unambiguous.
 
 Do **not** move all Mission actions into the persistent header bar. Those
 actions are item-scoped, not list-scoped.
@@ -157,22 +196,21 @@ Hide:
 
 - Mission-specific verbs
 
-### One selected or one focused Mission
+### One focused (Active) or one selected Mission
 
 Show contextual actions:
 
 - `Edit`
 - `Run` or `Resume`
-- `Pause` when active
-- `Stop` when active
+- `Pause` when Running
+- `Stop` when Running or Paused
 - `Hide` / `Show`
 
-Targeting rule:
+Targeting rule (focus-first, see "Resolved placement"):
 
-- if there is exactly one selected Mission, actions target that Mission
-- otherwise, if there is no selection and one Mission is Active, actions target
-  the Active Mission
-- if multiple Missions are selected, switch to batch actions only
+- if a Mission is **Active** (focused), actions target it;
+- else if **exactly one** Mission is Selected, actions target that one;
+- if multiple Missions are Selected, switch to batch actions only.
 
 This keeps the bar useful without forcing selection before every single-item
 action.
@@ -190,25 +228,67 @@ Do not show `Edit` or `Run` in a multi-select state.
 
 ## Row Simplification
 
-Once the context bar owns focused-item actions, rows should become lighter.
+Once the context bar owns focused-item actions, rows become lighter. Resolved
+row structure **[behavioral]**:
 
-Preferred row structure:
-
-- colour/status rail
+- colour/status rail — **clickable; opens the colour picker** (keeps today's
+  `mission-row-status` affordance). The rail also carries the status tint.
 - checkbox
 - title/meta
-- eye toggle
-- overflow menu for secondary row actions
+- eye toggle (never collapses)
+- overflow menu `⋯` for secondary row actions (never collapses)
 
-Good candidates for row overflow:
+Default rows carry **zero inline verbs**. The one exception **[behavioral]**: a
+**Running** or **Paused** row promotes **`Stop` ⏹ inline** (in the action slot
+next to the eye), because Stop is the urgent action during execution and must
+not sit one click deep in overflow. This is a deliberate safety carve-out.
+
+Row overflow candidates:
 
 - rename
 - delete
-- colour
 - duplicate, if added later
 
-If a row keeps one inline primary action, cap it at **one**. The narrow sidebar
-should not try to expose the whole Mission lifecycle inline on every row.
+Note: **colour is NOT an overflow entry** — recolouring stays on the leading
+rail, so there is exactly one path to it (no duplication).
+
+## Icon Budget & Collapse Priority [contract]
+
+The sidebar is narrow and gains controls over time. To stop icon placement from
+being a per-PR judgment call, each bar has a fixed budget and a deterministic
+collapse order. When a bar exceeds its budget at the current width, items move
+into the nearest overflow `⋯` in priority order (lowest priority collapses
+first).
+
+**Never-collapse (pinned):** `eye`, `New mission`, `Stop` (on a Running/Paused
+row). These are always directly reachable.
+
+**Row budget:** trailing slots = `eye` + `⋯` only (plus the inline `Stop`
+carve-out). Everything else lives behind `⋯`.
+
+**Context bar budget:** `select` · `count` · **at most 2 contextual verbs** ·
+`visibility`. A third+ verb collapses into a context-bar `⋯`.
+
+**Collapse order (first to go → last):**
+
+```
+import/export → sort → filter → duplicate → rename → colour → delete
+```
+
+(`colour` and `delete` rank last because they are common/destructive enough that
+hiding them early hurts; `import/export` ranks first as the rarest.)
+
+### Context bar density degradation [behavioral]
+
+When width is tight, the context bar degrades in this order:
+
+1. **drop the center count text first** (keep it announced via `aria-live` for
+   screen readers) — it is the most expendable pixel;
+2. then collapse contextual verbs into the context-bar `⋯`;
+3. the `select` checkbox and the `visibility` control never collapse.
+
+This prevents the context bar from re-creating the very crowding this redesign
+removes.
 
 ## Accessibility
 
@@ -229,7 +309,10 @@ Expected frontend touch points:
   - optionally remove repeated row buttons
 - `gcs_server/static/map/MapWidget.js`
   - keep ownership of action handlers
-  - resolve context-bar target from `Selected` first, then `Active`
+  - resolve context-bar target **focus-first**: `Active` first, then the single
+    `Selected` Mission when exactly one is selected (see "Resolved placement")
+  - distinguish executor session state via `sessionStatus` (`running`/`paused`),
+    labelled **Running**/**Paused** — never "Active"
   - preserve ADR 0021 state model: `Visible`, `Selected`, `Active`
 - `gcs_server/static/style.css`
   - replace the pseudo-row batch bar styles

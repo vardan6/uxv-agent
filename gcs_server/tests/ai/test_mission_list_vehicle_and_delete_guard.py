@@ -12,7 +12,7 @@ from starlette.requests import Request
 
 from ai.migrations import apply_ai_store_migrations
 from ai.mission_store import MissionStore
-from app import delete_mission
+from routers.ai import delete_mission
 
 
 def _make_store() -> tuple[MissionStore, Path]:

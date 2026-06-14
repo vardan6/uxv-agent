@@ -467,6 +467,36 @@ def _migration_018_add_mission_color(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE missions ADD COLUMN color TEXT NOT NULL DEFAULT ''")
 
 
+def _migration_020_create_operational_constraints(conn: sqlite3.Connection) -> None:
+    # ADR 0025 (V2 contract): operational planning constraints — allowed
+    # corridors (stay-inside) and blockages (stay-outside). Backend-owned
+    # planning data, deliberately isolated from mission revisions and the
+    # per-mission geofence. V1 is a small contract: WGS84 polygon geometry only,
+    # hard|soft rule, enable/disable lifecycle, deployment-wide scope (no
+    # project/scene identity exists yet), optimistic-concurrency `version`.
+    # Speculative fields (cost_multiplier, effective windows, vehicle profiles,
+    # coordinate_frame, creator identity) are intentionally absent — a schema
+    # migration is cheaper than freezing meanings the product cannot yet honor.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operational_constraints (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          polygon_json TEXT NOT NULL DEFAULT '[]',
+          rule TEXT NOT NULL DEFAULT 'hard',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operational_constraints_kind ON operational_constraints(kind, updated_at DESC)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
@@ -481,6 +511,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (17, "reconcile_missions_schema", _migration_017_reconcile_missions_schema),
     (18, "add_mission_color", _migration_018_add_mission_color),
     (19, "normalize_awaiting_approval_status", _migration_019_normalize_awaiting_approval_status),
+    (20, "create_operational_constraints", _migration_020_create_operational_constraints),
 )
 
 

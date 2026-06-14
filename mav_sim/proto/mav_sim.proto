@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+// Minimal gRPC surface for the mav_sim simulator side-path.
+//
+// This is intentionally NOT the official MAVSDK protobuf API (see
+// docs/mav_sim/design.md: MAVSDK has its own large plugin proto set served by
+// the C++ mavsdk_server). It is a small, self-contained service that mirrors
+// the simulator's in-memory state over a real gRPC transport so that the
+// MAVSDK gRPC seam reports an actually-running server and a client can connect.
+//
+// Regenerate stubs after editing:
+//   python -m grpc_tools.protoc -I proto \
+//     --python_out=. --grpc_python_out=. proto/mav_sim.proto
+
+package mav_sim;
+
+service MavSim {
+  // Static identity/build info for the simulated vehicle.
+  rpc GetInfo(InfoRequest) returns (InfoResponse);
+
+  // Latest uploaded mission (the same view as GET /api/mission).
+  rpc GetMission(MissionRequest) returns (MissionResponse);
+
+  // Server-streamed telemetry: one PositionUpdate per simulated waypoint.
+  rpc SubscribeTelemetry(TelemetryRequest) returns (stream PositionUpdate);
+}
+
+message InfoRequest {}
+
+message InfoResponse {
+  string vehicle = 1;     // e.g. "mav_sim"
+  string version = 2;     // simulator version string
+  string dialect = 3;     // active MAVLink dialect
+  uint32 system_id = 4;   // simulated MAVLink system id
+}
+
+message MissionRequest {}
+
+message MissionItem {
+  uint32 seq = 1;
+  uint32 command = 2;     // MAV_CMD enum value
+  double latitude = 3;    // WGS84 degrees
+  double longitude = 4;   // WGS84 degrees
+  double altitude = 5;    // metres
+}
+
+message MissionResponse {
+  uint32 count = 1;
+  repeated MissionItem items = 2;
+}
+
+message TelemetryRequest {
+  double interval_seconds = 1;  // delay between waypoint updates (0 => default)
+}
+
+message PositionUpdate {
+  uint32 seq = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double altitude = 4;
+  bool reached = 5;       // true once the waypoint is marked reached
+}

@@ -46,12 +46,16 @@ function provenanceSuffix(provenance) {
   return '';
 }
 
+const METRES_PER_DEG = 111320.0;
+
 export class MissionOverlayLayer {
   constructor(map) {
     this._map = map;
     this._group = L.layerGroup().addTo(map);
     // Edit group is separate so renderMany does not clobber it.
     this._editGroup = L.layerGroup().addTo(map);
+    // Geofence group is separate so renderMany does not clobber it.
+    this._geofenceGroup = L.layerGroup().addTo(map);
   }
 
   render(payload, { color = DEFAULT_COLOR, opacity = null } = {}) {
@@ -246,6 +250,29 @@ export class MissionOverlayLayer {
     }
   }
 
+  renderGeofence(geofence, origin) {
+    this._geofenceGroup.clearLayers();
+    const polygon = geofence?.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 3 || !origin) return;
+    const cosLat = Math.cos(origin.lat * Math.PI / 180);
+    const pts = polygon
+      .filter((v) => Number.isFinite(v?.lat) && Number.isFinite(v?.lon))
+      .map((v) => L.latLng(
+        (v.lat - origin.lat) * METRES_PER_DEG,
+        (v.lon - origin.lon) * METRES_PER_DEG * cosLat,
+      ));
+    if (pts.length < 3) return;
+    L.polygon(pts, {
+      color: '#8e44ad',
+      weight: 2,
+      fillColor: '#8e44ad',
+      fillOpacity: 0.08,
+      dashArray: '6 4',
+      pane: 'missionPane',
+    }).bindTooltip('Inclusion geofence', { direction: 'top', sticky: true })
+      .addTo(this._geofenceGroup);
+  }
+
   clearEditable() {
     this._editGroup.clearLayers();
     if (this._map) this._map.getContainer().style.cursor = '';
@@ -258,5 +285,6 @@ export class MissionOverlayLayer {
   remove() {
     this._map.removeLayer(this._group);
     this._map.removeLayer(this._editGroup);
+    this._map.removeLayer(this._geofenceGroup);
   }
 }

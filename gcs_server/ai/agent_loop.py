@@ -331,13 +331,23 @@ class AgentLoopRuntime:
             iterations = iteration
             self._append_trace_event(trace_id, trace_events, {"type": "agent_iteration_start", "iteration": iteration})
             yield trace_events[-1]
+            final_response = None
             try:
-                final_response = runtime.bound_model.invoke(runtime.langchain_messages)
+                for turn_event in self._stream_model_turn(runtime):
+                    if turn_event.get("type") == "_turn_response":
+                        final_response = turn_event.get("response")
+                        continue
+                    yield turn_event
             except Exception as exc:
                 if self._tool_calling_unsupported(exc):
                     yield {"type": "_agent_result", "result": None}
                     return
                 raise
+            if final_response is None:
+                # No chunks produced (or no stream support fell back to an empty
+                # invoke); let the caller drop to plain non-tool generation.
+                yield {"type": "_agent_result", "result": None}
+                return
             runtime.langchain_messages.append(final_response)
             response_tool_calls = getattr(final_response, "tool_calls", None) or []
             if not response_tool_calls:
@@ -465,6 +475,32 @@ class AgentLoopRuntime:
             ),
         }
 
+    def _stream_model_turn(self, runtime: AgentToolRuntime) -> Iterator[dict[str, Any]]:
+        """Stream one bound-model turn, surfacing text deltas as they arrive.
+
+        Yields ``{"type": "assistant_delta", "delta": text}`` for each text chunk so the
+        agent's final answer reaches the client token-by-token instead of being buffered
+        until the whole turn (and any tool round-trips) complete. The accumulated chunk —
+        which still carries ``tool_calls`` and response/usage metadata — is returned via a
+        final ``{"type": "_turn_response", "response": ...}`` event so the loop can decide
+        whether more tool calls are needed, exactly as the blocking path did.
+
+        Only the streaming entry path uses this; ``invoke_with_tools`` keeps using a plain
+        blocking ``.invoke`` so a provider that streams tool calls poorly cannot regress the
+        non-streaming path.
+        """
+        stream = getattr(runtime.bound_model, "stream", None)
+        if not callable(stream):
+            yield {"type": "_turn_response", "response": runtime.bound_model.invoke(runtime.langchain_messages)}
+            return
+        gathered: Any = None
+        for chunk in stream(runtime.langchain_messages):
+            gathered = chunk if gathered is None else gathered + chunk
+            delta = self._response_content(chunk)
+            if delta:
+                yield {"type": "assistant_delta", "delta": delta}
+        yield {"type": "_turn_response", "response": gathered}
+
     def prepare_tool_runtime(
         self,
         model: Any,
@@ -494,9 +530,11 @@ class AgentLoopRuntime:
         # empty arm/execute set) is what actually decides which execution tools the
         # model sees. COMMAND_STAGING stays disabled in the registry.
         permissions = frozenset(DEFAULT_PERMISSIONS | {EXECUTION})
+        tool_context_snapshot = dict(context_snapshot or {})
+        tool_context_snapshot["__agent_run_mode"] = run_mode
         tools = self._tool_registry.build_langchain_tools(
             runtime,
-            context_snapshot or {},
+            tool_context_snapshot,
             timezone_name=timezone_name,
             permissions=set(permissions),
         )
@@ -609,6 +647,8 @@ class AgentLoopRuntime:
             content = _repeated_tool_failure_message(executed_tool_calls)
         if stop_reason == POLICY_DENIED_STOP_REASON and not content.strip():
             content = _policy_denied_message(executed_tool_calls, terminal_tool_error)
+        if stop_reason == "draft_proposed" and not content.strip():
+            content = _draft_proposed_message(executed_tool_calls)
         return AgentInvokeResult(
             content=content,
             tool_calls=executed_tool_calls,
@@ -690,3 +730,37 @@ def _policy_denied_message(executed_tool_calls: list[dict[str, Any]], terminal_t
     if tool_name:
         return f"I stopped because policy blocked tool `{tool_name}`."
     return "I stopped because a tool call was blocked by policy."
+
+
+def _draft_proposed_message(executed_tool_calls: list[dict[str, Any]]) -> str:
+    for call in reversed(executed_tool_calls):
+        if call.get("name") not in {
+            "propose_mission_draft",
+            "create_mission_from_waypoints",
+        }:
+            continue
+        result = call.get("result")
+        if not isinstance(result, dict):
+            break
+        if result.get("ok") is False:
+            return f"I could not create the mission: {result.get('error') or 'the proposal failed'}."
+        draft = result.get("draft") if isinstance(result.get("draft"), dict) else {}
+        mission = result.get("mission") if isinstance(result.get("mission"), dict) else {}
+        name = str(mission.get("name") or draft.get("goal") or "AI mission")
+        mission_index = mission.get("mission_index")
+        mission_label = f" #{mission_index}" if mission_index is not None else ""
+        waypoint_count = len(draft.get("waypoints") or [])
+        if not waypoint_count:
+            waypoint_count = sum(
+                len(artifact.get("waypoints") or [])
+                for artifact in (draft.get("route_artifacts") or [])
+                if isinstance(artifact, dict)
+            )
+        waypoint_text = f" with {waypoint_count} waypoints" if waypoint_count else ""
+        if result.get("mission_id"):
+            return (
+                f"Created mission{mission_label} \"{name}\"{waypoint_text}. "
+                "It is now available on the map and in the mission sidebar for review."
+            )
+        return f"Created the mission draft \"{name}\"{waypoint_text} for review."
+    return "Created the mission draft for review."

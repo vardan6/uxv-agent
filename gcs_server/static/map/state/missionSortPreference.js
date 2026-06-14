@@ -6,8 +6,8 @@ const STORAGE_KEY = 'gcs-map-widget-mission-sort';
 export const SORT_OPTIONS = [
   { id: 'updated_desc',   label: 'Updated newest' },
   { id: 'created_desc',   label: 'Created newest' },
-  { id: 'waypoints_desc', label: 'Waypoint count high-low' },
-  { id: 'waypoints_asc',  label: 'Waypoint count low-high' },
+  { id: 'waypoints_desc', label: 'Most waypoints' },
+  { id: 'waypoints_asc',  label: 'Fewest waypoints' },
   { id: 'status',         label: 'Status' },
   { id: 'label_asc',      label: 'Label A–Z' },
   { id: 'selected_first', label: 'Selected first' },

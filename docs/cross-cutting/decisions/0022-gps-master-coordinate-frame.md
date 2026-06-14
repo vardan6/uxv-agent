@@ -3,20 +3,17 @@
 Date: 2026-05-30
 Status: Accepted
 
-Supersedes [ADR 0011](./0011-mission-coordinate-frame-split.md).
-
 ## Context
 
-ADR 0011 made local scene metres (`{x, y, z}`, `L.CRS.Simple`) the authoritative
-internal frame for all mission coordinates, with WGS84 lat/lon produced only at
-`.plan` export via a flat-earth projection off **a single georeference owned by
-the simulator's terrain scene manifest**.
+The initial coordinate model made local scene metres (`{x, y, z}`,
+`L.CRS.Simple`) authoritative, with WGS84 produced only at `.plan` export via a
+flat-earth projection from one georeference owned by the simulator scene.
 
 Two pressures broke that model once real-rover work became a planned target
 (roadmap direction "(C)": make decisions now so real hardware is not a rewrite):
 
 1. **No scene, no origin.** A real rover in a field has no terrain-scene manifest
-   to borrow an origin from. Under ADR 0011 a real-world mission literally cannot
+   to borrow an origin from. Under that model a real-world mission cannot
    be represented — there is nowhere for the georeference to come from.
 2. **GPS is the real truth on hardware.** On a real rover the autopilot, home
    point, and telemetry are all WGS84. Treating lat/lon as a last-second
@@ -26,7 +23,7 @@ The operator also wants both representations visible simultaneously (real GPS
 *and* local metres). GPS and local metres are two views of one physical point,
 losslessly inter-convertible given the origin; "show both" is a rendering choice
 and does not require storing both as independent truth (storing both
-independently is the unit-drift bug ADR 0011 rightly feared).
+independently creates a cross-layer unit-drift bug).
 
 ## Decision
 
@@ -45,10 +42,10 @@ independently is the unit-drift bug ADR 0011 rightly feared).
    UI surfaces both numbers.
 
 4. **Do not persist both representations as independent fields.** Persist WGS84 +
-   origin; compute metres on demand. This keeps ADR 0011's anti-drift guarantee.
+   origin; compute metres on demand. This preserves the anti-drift guarantee.
 
 5. **`.plan` export consumes the stored WGS84 directly** instead of projecting at
-   the boundary; the export-time flat-earth projection of ADR 0011 is removed.
+   the boundary; export-time projection is removed.
 
 ## Consequences
 
@@ -62,18 +59,17 @@ independently is the unit-drift bug ADR 0011 rightly feared).
 - Touch points: revision/mission storage, route planner output, AI tool results,
   map-widget overlay load, and `MissionExportService`. This is a real change to
   the storage truth, scheduled as soft/incremental per roadmap direction (C).
-- ADR 0011 is superseded; its "WGS84 is a distinct widget mode, not the internal
-  frame" rule is replaced — WGS84 is now the internal frame.
+- WGS84 is the internal frame, not a distinct export-only widget mode.
 
 ## Alternatives Considered
 
-- **Keep ADR 0011 (metres master, origin from the sim scene).** Rejected: cannot
+- **Keep metres as master with origin from the sim scene.** Rejected: cannot
   represent a real-rover mission; origin has no source off-scene.
 - **Metres master, but move the origin onto each Mission (Design 1).** Viable and
   cheaper, but inverts what is authoritative on hardware and keeps GPS as a
   derived value; rejected in favour of matching the field reality now under (C).
 - **Store both WGS84 and metres as independent fields.** Rejected: reintroduces
-  the cross-layer unit-drift bug ADR 0011 existed to prevent.
+  cross-layer unit drift.
 
 ## Open Questions
 
@@ -86,7 +82,6 @@ independently is the unit-drift bug ADR 0011 rightly feared).
 
 ## Follow-Ups
 
-- ADR 0011 → status set to *Superseded by ADR 0022*; content preserved.
 - `docs/components/ai-agent/design.md` § "Coordinate frame split" and
   `docs/components/gcs/design.md` § "Coordinate System" to be updated as the
   storage change lands.

@@ -28,16 +28,16 @@ Recommended reading order:
 - [GCS Requirements](./docs/components/gcs/requirements.md)
 - [AI Agent Requirements](./docs/components/ai-agent/requirements.md)
 - [AI Agent Design](./docs/components/ai-agent/design.md)
-- [AI Agent Graph Spec](./docs/components/ai-agent/internals/graph-spec.md)
-- [AI Current Context Layer](./docs/components/ai-agent/internals/context-layer.md)
-- [AI Spatial Tools](./docs/components/ai-agent/internals/spatial-tools.md)
+- [AI Agent Graph Spec](./docs/components/ai-agent/design/graph-spec.md)
+- [AI Current Context Layer](./docs/components/ai-agent/design/context-layer.md)
+- [AI Spatial Tools](./docs/components/ai-agent/design/spatial-tools.md)
 - [Simulator Design](./docs/components/simulator/design.md)
 - [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
 
 Subproject documentation:
 - [Simulator Docs](./docs/components/simulator/README.md)
 - [GCS Docs](./docs/components/gcs/README.md)
-- [Terrain Scene Manifest](./docs/components/simulator/internals/terrain-scene.md)
+- [Terrain Scene Manifest](./docs/components/simulator/design/terrain-scene.md)
 
 ## Repository Layout
 

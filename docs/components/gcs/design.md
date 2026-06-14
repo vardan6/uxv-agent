@@ -159,6 +159,8 @@ Key frontend modules under `static/map/`:
 
 The widget's primary scene view uses `L.CRS.Simple` with local scene metres for overlay coordinates. Under ADR 0022 (GPS-master) WGS84 is the stored truth: overlay payloads now carry `lat/lon/alt` on every feature point plus the Mission `origin` datum, and `BasemapPanel` plots the focused mission (and geofence) by lat/lon on a real EPSG:3857 basemap. The default `CRS.Simple` scene view still derives local metres from the WGS84 truth via the origin datum. Basemap is a map VIEW, not a separate authoring mode; mission authoring controls belong to the shared bottom authoring toolbar.
 
+The bottom map info bar shows live cursor `x/y` in local scene metres, sampled terrain ground `z` at the cursor, WGS84 when a Mission origin exists, and single-waypoint selection detail. Ground `z` is sampled from the same scene heightmap used by the terrain render so the operator can author or inspect routes against the current terrain surface without switching views.
+
 For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
 For AI context, intent parsing, and planning-shell wiring, see [design.md](./design.md).
@@ -221,7 +223,7 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 
 ## Topic-Level Design Files
 
-Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier.
 
 - [`design/api-and-runtime.md`](./design/api-and-runtime.md) — Api And Runtime
 - [`design/llm-capability-matrix.md`](./design/llm-capability-matrix.md) — Llm Capability Matrix

@@ -13,6 +13,7 @@ import { missionSortPreference, sortMissions, SORT_OPTIONS } from './state/missi
 import { MissionListPanel } from './ui/MissionListPanel.js';
 import { MissionColorPicker } from './ui/MissionColorPicker.js';
 import { MissionListOverflowMenu } from './ui/MissionListOverflowMenu.js';
+import { MissionRowMenu } from './ui/MissionRowMenu.js';
 import { SelectionPanel } from './ui/SelectionPanel.js';
 import { KeyboardHelpOverlay } from './ui/KeyboardHelpOverlay.js';
 import { ContextMenu } from './ui/ContextMenu.js';
@@ -22,6 +23,9 @@ import { BulkEditActionBar } from './ui/BulkEditActionBar.js';
 import { ConfirmExecutionBanner } from './ui/ConfirmExecutionBanner.js';
 import { BasemapPanel } from './ui/BasemapPanel.js';
 import { MapAuthoringToolbar } from './ui/MapAuthoringToolbar.js';
+import { MapSketchSession } from './MapSketchSession.js';
+import { ConstraintsPanel } from './ui/ConstraintsPanel.js';
+import { listConstraints, createConstraint, updateConstraint, deleteConstraint } from './data/constraintsApi.js';
 import { editState } from './state/editState.js';
 
 const LOCKED_STATUSES = new Set(['exported', 'cutover_pending', 'executing', 'completed', 'superseded', 'rejected', 'validation_failed']);
@@ -150,6 +154,7 @@ export class MapWidget {
     this._paletteByMissionId = new Map();
     this._colorPicker = null;
     this._overflowMenu = null;
+    this._rowMenu = null;
     this._editStateSubscriber = null;
     this._keydownHandler = null;
     this._marqueeEl = null;
@@ -173,6 +178,11 @@ export class MapWidget {
     this._confirmBanner = null;
     // Real 2D WGS84 basemap render mode (Phase 4): an additive, read-only second
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
+    this._sketchSession = null;
+    this._sketchSessionUnsub = null;
+    this._editingConstraint = null;
+    this._sceneSketchLayer = null;
+    this._scenePlanningLayer = null;
     this._basemapPanel = null;
     this._authoringToolbarDock = null;
     this._authoringToolbar = null;
@@ -182,6 +192,7 @@ export class MapWidget {
     this._currentViewMode = 'virtual_terrain';
     this._infoBar = null;
     this._infoBarCoords = null;
+    this._infoBarGround = null;
     this._infoBarGps = null;
     this._infoBarSel = null;
     this._statusBar = opts.statusBar || null;
@@ -207,10 +218,23 @@ export class MapWidget {
     this._map.getPane('missionPane').style.zIndex = 470;
     this._map.setView([0, 0], 1);
     this._overlayLayer = new MissionOverlayLayer(this._map);
+    this._sceneSketchLayer = L.layerGroup().addTo(this._map);
+    this._scenePlanningLayer = L.layerGroup().addTo(this._map);
 
     // Dismiss context menu on map click; in add mode, append a waypoint at the clicked position
     this._map.on('click', (e) => {
       this._contextMenu.close();
+      // Sketch capture on scene views: convert CRS.Simple metres → WGS84 via mission origin.
+      if (this._sketchSession?.isDirty && this._currentViewMode !== 'basemap') {
+        const origin = this._focusedOrigin();
+        if (origin) {
+          const METRES_PER_DEG = 111320.0;
+          const lat = origin.lat + e.latlng.lat / METRES_PER_DEG;
+          const lon = origin.lon + e.latlng.lng / (METRES_PER_DEG * Math.cos(origin.lat * Math.PI / 180));
+          this._sketchSession.addVertex({ lat, lon });
+          return;
+        }
+      }
       if (editState.editMode === 'add' && editState.isEditable()) {
         const ll = e.latlng;
         this._handleGhostClick(editState.waypoints.length, { x: ll.lng, y: ll.lat, z: 0 });
@@ -242,9 +266,12 @@ export class MapWidget {
       },
       onColorChipClicked: (missionId, anchorEl) => this._openColorPicker(missionId, anchorEl),
       onOverflowClicked: (anchorEl) => this._openOverflowMenu(anchorEl),
+      onMissionRowMenuRequested: (missionId, anchorEl) => this._openRowMenu(missionId, anchorEl),
+      onMissionDeleteSelectedRequested: () => this._handleDeleteSelectedMissions(),
     });
     this._colorPicker = new MissionColorPicker(this._shellEl, { scrollEl: this._listEl });
     this._overflowMenu = new MissionListOverflowMenu(this._listEl);
+    this._rowMenu = new MissionRowMenu(this._listEl);
     this._vehicleLayer = new LiveVehicleLayer(this._map);
     this._vehicleLayer.connect();
 
@@ -372,6 +399,15 @@ export class MapWidget {
     this._authoringToolbar = null;
     this._basemapPanel?.destroy();
     this._basemapPanel = null;
+    if (this._sketchSessionUnsub) {
+      this._sketchSessionUnsub();
+      this._sketchSessionUnsub = null;
+    }
+    this._sketchSession = null;
+    this._sceneSketchLayer?.remove();
+    this._sceneSketchLayer = null;
+    this._scenePlanningLayer?.remove();
+    this._scenePlanningLayer = null;
     this._vehicleLayer?.disconnect();
     this._vehicleLayer = null;
     this._terrainLayer?.remove();
@@ -638,13 +674,18 @@ export class MapWidget {
 
   // --- Mission CRUD ---
 
-  async _handleDeleteMission(missionId) {
+  async _handleDeleteMission(missionId, { skipConfirm = false } = {}) {
     if (this._actionBusy) return;
     const id = String(missionId || '').trim();
     if (!id) return;
     if (this._isMissionDeleteBlocked(id)) {
       this._pushStatus('Mission cannot be deleted while armed, awaiting confirmation, or executing.', 'error');
       return;
+    }
+    if (!skipConfirm) {
+      const mission = this._missions?.find((m) => String(m.id || '') === id);
+      const label = mission?.name ? `"${mission.name}"` : 'this mission';
+      if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     }
     this._actionBusy = true;
     const result = await deleteMission(id);
@@ -671,8 +712,10 @@ export class MapWidget {
       this._pushStatus('Selection includes a mission that is armed, awaiting confirmation, or executing.', 'error');
       return;
     }
+    const count = ids.length;
+    if (!confirm(`Delete ${count} selected mission${count === 1 ? '' : 's'}? This cannot be undone.`)) return;
     for (const id of ids) {
-      await this._handleDeleteMission(id);
+      await this._handleDeleteMission(id, { skipConfirm: true });
     }
   }
 
@@ -1174,6 +1217,13 @@ export class MapWidget {
 
     this._overlayLayer.renderMany(overlays);
     const focusedPayload = this._focusedMissionId ? this._overlayCacheByMissionId.get(this._focusedMissionId) : null;
+    // Render persisted geofence + constraints on scene views; basemap mode has its own layers.
+    if (this._currentViewMode !== 'basemap') {
+      this._overlayLayer.renderGeofence(focusedPayload?.geofence ?? null, focusedPayload?.origin ?? null);
+      this._renderSceneConstraints();
+    } else {
+      this._scenePlanningLayer?.clearLayers();
+    }
     const unionBounds = boundsUnion(overlays.map((entry) => entry.payload.bounds));
     // Only refit when the logical target changes; skip on every poll tick so the
     // user can freely pan/zoom without the view snapping back every 5 seconds.
@@ -1239,6 +1289,9 @@ export class MapWidget {
     }
     this._setBasemapVisible(mode === 'basemap');
     this._syncAuthoringToolbarState();
+    // Load constraints whenever entering a scene view so the planning layer renders
+    // without waiting for the user to open the Constraints panel or the basemap.
+    if (mode !== 'basemap') this._refreshConstraints().catch(() => {});
   }
 
   _handleFitClick(key) {
@@ -1289,33 +1342,82 @@ export class MapWidget {
         ? this._overlayCacheByMissionId.get(this._focusedMissionId)
         : null;
       this._basemapPanel.render(focusedPayload);
+      // Operational constraints are deployment-wide; load and render them
+      // whenever the basemap (their authoring/render surface) opens.
+      this._refreshConstraints().catch(() => {});
       return;
     }
     this._basemapPanel.hide();
+    this._constraintsPanel?.hide();
   }
 
   _syncAuthoringToolbarState() {
-    if (!this._authoringToolbar || !this._basemapPanel) return;
+    if (!this._authoringToolbar || !this._sketchSession) return;
     const onBasemapView = this._currentViewMode === 'basemap';
     const hasEditableRevision = !!editState.revisionId && editState.isEditable();
-    const crossViewDeferredReason = 'Scene views do not yet support shared WGS84 sketch capture from the mission origin; use Basemap VIEW.';
-    const geofenceReason = !onBasemapView
-      ? crossViewDeferredReason
-      : this._focusedMissionId
-        ? 'Edit the geofence for the focused mission.'
-        : 'Focus a mission to edit its geofence.';
+    const hasOrigin = !!this._focusedOrigin();
+    const canDraw = onBasemapView || hasOrigin;
+    const noOriginReason = 'Focus a mission to enable GPS-based drawing on this view.';
+    const geofenceReason = canDraw
+      ? (this._focusedMissionId ? 'Edit the geofence for the focused mission.' : 'Focus a mission to edit its geofence.')
+      : noOriginReason;
+    const sketchState = this._sketchSession.getState();
     this._authoringToolbar.updateState({
       addWaypointEnabled: hasEditableRevision,
       addWaypointActive: editState.editMode === 'add',
       addWaypointReason: editState.revisionId
         ? 'The current revision is locked or busy.'
         : 'Open a mission in edit mode to add waypoints.',
-      drawToolsEnabled: onBasemapView,
-      drawToolsReason: crossViewDeferredReason,
-      geofenceEnabled: onBasemapView && !!this._focusedMissionId,
+      drawToolsEnabled: canDraw,
+      drawToolsReason: noOriginReason,
+      geofenceEnabled: canDraw && !!this._focusedMissionId,
       geofenceReason,
-      ...this._basemapPanel.getSketchState(),
+      constraintToolsEnabled: canDraw,
+      constraintToolsReason: noOriginReason,
+      ...sketchState,
     });
+    if (!onBasemapView) {
+      this._map.getContainer().style.cursor = sketchState.drawMode ? 'crosshair' : '';
+    }
+    this._refreshSceneSketch();
+  }
+
+  _refreshSceneSketch() {
+    if (!this._sceneSketchLayer) return;
+    this._sceneSketchLayer.clearLayers();
+    if (this._currentViewMode === 'basemap') return;
+    const origin = this._focusedOrigin();
+    if (!origin || !this._sketchSession?.isDirty) return;
+
+    const METRES_PER_DEG = 111320.0;
+    const cosLat = Math.cos(origin.lat * Math.PI / 180);
+    const toScene = ({ lat, lon }) => L.latLng(
+      (lat - origin.lat) * METRES_PER_DEG,
+      (lon - origin.lon) * METRES_PER_DEG * cosLat,
+    );
+
+    const tool = this._sketchSession.tool;
+    const vertices = this._sketchSession.vertices;
+    if (!tool || vertices.length === 0) return;
+
+    const pts = vertices.map(toScene);
+    const isFence = tool === 'fence';
+    const isConstraint = tool === 'constraint';
+    const stroke = isConstraint
+      ? (this._sketchSession.constraintMeta?.kind === 'blockage' ? '#e67e22' : '#2e8b57')
+      : (isFence ? '#2e8b57' : '#d9534f');
+
+    if ((isFence || isConstraint) && pts.length >= 2) {
+      L.polygon(pts, { color: stroke, weight: 2, dashArray: '6 4', fillOpacity: 0.1 }).addTo(this._sceneSketchLayer);
+    } else if (pts.length >= 2) {
+      L.polyline(pts, { color: stroke, weight: 3, dashArray: '6 4' }).addTo(this._sceneSketchLayer);
+    }
+
+    for (const v of vertices) {
+      L.circleMarker(toScene(v), {
+        radius: 5, color: stroke, fillColor: stroke, fillOpacity: 0.85, weight: 2, interactive: false,
+      }).addTo(this._sceneSketchLayer);
+    }
   }
 
   _toggleAddWaypointMode() {
@@ -1354,6 +1456,153 @@ export class MapWidget {
     return result;
   }
 
+  // --- Operational constraints (ADR 0025) -------------------------------------
+
+  // Default operator-visible name for a freshly drawn constraint: "<Kind> N",
+  // where N makes it unique among existing same-kind constraints. The panel can
+  // rename later; the backend only requires a non-empty name.
+  _nextConstraintName() {
+    const kind = this._sketchSession?.getState().constraintKind || 'allowed_corridor';
+    const label = kind === 'blockage' ? 'Blockage' : 'Allowed corridor';
+    const count = this._constraints.filter((c) => c.kind === kind).length;
+    return `${label} ${count + 1}`;
+  }
+
+  async _refreshConstraints() {
+    const res = await listConstraints();
+    if (res.ok) {
+      this._constraints = res.constraints;
+      this._basemapPanel?.renderConstraints(this._constraints);
+      this._constraintsPanel?.update(this._constraints);
+      if (this._currentViewMode !== 'basemap') this._renderSceneConstraints();
+    }
+    return res;
+  }
+
+  _renderSceneConstraints() {
+    if (!this._scenePlanningLayer) return;
+    this._scenePlanningLayer.clearLayers();
+    const constraints = this._constraints || [];
+    if (!constraints.length) return;
+    // Use focused mission's origin; fall back to any cached overlay origin.
+    let origin = this._focusedOrigin();
+    if (!origin) {
+      for (const payload of this._overlayCacheByMissionId.values()) {
+        if (payload?.origin) { origin = payload.origin; break; }
+      }
+    }
+    if (!origin) return;
+    const METRES_PER_DEG = 111320.0;
+    const cosLat = Math.cos(origin.lat * Math.PI / 180);
+    const toScene = ({ lat, lon }) => L.latLng(
+      (lat - origin.lat) * METRES_PER_DEG,
+      (lon - origin.lon) * METRES_PER_DEG * cosLat,
+    );
+    for (const c of constraints) {
+      const poly = (Array.isArray(c?.polygon) ? c.polygon : [])
+        .filter((v) => Number.isFinite(v?.lat) && Number.isFinite(v?.lon));
+      if (poly.length < 3) continue;
+      const blockage = c.kind === 'blockage';
+      const enabled = c.enabled !== false;
+      const color = blockage ? '#e67e22' : '#2e8b57';
+      const kindLabel = blockage ? 'Blockage' : 'Allowed corridor';
+      const ruleLabel = c.rule === 'soft' ? 'soft' : 'hard';
+      L.polygon(poly.map(toScene), {
+        color,
+        weight: 2,
+        opacity: enabled ? 0.9 : 0.4,
+        fillColor: color,
+        fillOpacity: enabled ? (blockage ? 0.14 : 0.08) : 0.04,
+        dashArray: c.rule === 'soft' ? '6 4' : null,
+        pane: 'missionPane',
+      })
+        .bindTooltip(
+          `${c.name || kindLabel} · ${kindLabel} · ${ruleLabel}${enabled ? '' : ' · disabled'} (planning)`,
+          { direction: 'top', sticky: true },
+        )
+        .addTo(this._scenePlanningLayer);
+    }
+  }
+
+  async _openConstraintsPanel() {
+    await this._refreshConstraints();
+    this._constraintsPanel?.show(this._constraints);
+  }
+
+  async _handleCreateConstraint({ kind, rule, name, polygon }) {
+    const res = await createConstraint({ kind, rule, name, polygon });
+    if (res.ok) {
+      this._statusBar?.push(`Saved ${kind === 'blockage' ? 'blockage' : 'allowed corridor'} "${res.constraint?.name || name}" (planning).`, 'info');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint save failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleToggleConstraint(constraint) {
+    const res = await updateConstraint(constraint.id, {
+      expectedVersion: constraint.version,
+      enabled: !(constraint.enabled !== false),
+    });
+    if (res.ok) {
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint update failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleEditConstraint(constraint, patch = {}) {
+    const res = await updateConstraint(constraint.id, {
+      expectedVersion: constraint.version,
+      ...patch,
+    });
+    if (res.ok) {
+      const what = patch.name !== undefined ? 'renamed' : `set ${patch.rule}`;
+      this._statusBar?.push(`Constraint "${res.constraint?.name || constraint.name || constraint.kind}" ${what}.`, 'info');
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint update failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  async _handleDeleteConstraint(constraint) {
+    const res = await deleteConstraint(constraint.id, { expectedVersion: constraint.version });
+    if (res.ok) {
+      this._statusBar?.push(`Deleted constraint "${constraint.name || constraint.kind}".`, 'info');
+      await this._refreshConstraints();
+    } else if (res.status === 409) {
+      this._statusBar?.push('Constraint changed elsewhere; refreshed.', 'warn');
+      await this._refreshConstraints();
+    } else {
+      this._statusBar?.push(`Constraint delete failed: ${res.error}`, 'error');
+    }
+    return res;
+  }
+
+  _startConstraintShapeEdit(constraint) {
+    const polygon = Array.isArray(constraint.polygon) ? constraint.polygon : [];
+    if (polygon.length < 3) {
+      this._statusBar?.push(`Constraint "${constraint.name || constraint.kind}" has no editable polygon.`, 'warn');
+      return;
+    }
+    this._editingConstraint = constraint;
+    this._constraintsPanel?.hide();
+    this._sketchSession.startToolWithVertices(
+      'constraint',
+      { kind: constraint.kind, rule: constraint.rule },
+      polygon,
+    );
+  }
+
   _focusedOrigin() {
     if (!this._focusedMissionId) return null;
     return this._overlayCacheByMissionId.get(this._focusedMissionId)?.origin || null;
@@ -1366,6 +1615,10 @@ export class MapWidget {
     const xSign = x >= 0 ? '+' : '';
     const ySign = y >= 0 ? '+' : '';
     this._infoBarCoords.textContent = `x ${xSign}${x.toFixed(2)} m  y ${ySign}${y.toFixed(2)} m`;
+    if (this._infoBarGround) {
+      const groundZ = Number(this._sampleHeight?.(x, y));
+      this._infoBarGround.textContent = Number.isFinite(groundZ) ? `ground z ${groundZ.toFixed(2)} m` : '';
+    }
     if (this._infoBarGps) {
       const origin = this._focusedOrigin();
       if (origin) {
@@ -1737,6 +1990,43 @@ export class MapWidget {
 
   // --- Overflow / sort menu ---
 
+  _openRowMenu(missionId, anchorEl) {
+    const id = String(missionId || '').trim();
+    if (!id) return;
+    const deleteBlocked = this._isMissionDeleteBlocked(id);
+    const editBlocked = !this._missions?.find((m) => {
+      const s = String(m.activeRevisionStatus || '');
+      return String(m.id || '') === id && ['proposed', 'planning', 'exported', 'cutover_pending'].includes(s);
+    });
+    const ICON_EDIT    = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M8.5 2 11 4.5 5 10.5H2.5V8L8.5 2z"/><line x1="7" y1="3.5" x2="9.5" y2="6"/></svg>`;
+    const ICON_RENAME  = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M8.5 2 11 4.5 5 10.5H2.5V8L8.5 2z"/><line x1="1" y1="12.5" x2="12" y2="12.5"/></svg>`;
+    const ICON_TRASH   = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" focusable="false" aria-hidden="true"><line x1="1.5" y1="4" x2="11.5" y2="4"/><path d="M4.5 4V3h4v1"/><rect x="3" y="4" width="7" height="7.5" rx="1"/></svg>`;
+    this._rowMenu.open(anchorEl, {
+      items: [
+        {
+          label: 'Edit waypoints',
+          icon: ICON_EDIT,
+          disabled: editBlocked,
+          disabledTitle: 'Edit only available for missions in proposed / planning / exported / cutover-pending status',
+          onClick: () => this._onEditRequested(id),
+        },
+        {
+          label: 'Rename',
+          icon: ICON_RENAME,
+          onClick: () => this._listPanel.startRenameById(id),
+        },
+        {
+          label: 'Delete',
+          icon: ICON_TRASH,
+          danger: true,
+          disabled: deleteBlocked,
+          disabledTitle: 'Delete disabled while mission is armed, awaiting confirmation, or executing',
+          onClick: () => this._handleDeleteMission(id),
+        },
+      ],
+    });
+  }
+
   _openOverflowMenu(anchorEl) {
     this._overflowMenu.open(anchorEl, {
       currentSort: missionSortPreference.get(),
@@ -1922,11 +2212,13 @@ export class MapWidget {
     infoBar.setAttribute('aria-hidden', 'true');
     const infoCoords = document.createElement('span');
     infoCoords.textContent = '—';
+    const infoGround = document.createElement('span');
     const infoGps = document.createElement('span');
     const infoSel = document.createElement('span');
-    infoBar.append(infoCoords, infoGps, infoSel);
+    infoBar.append(infoCoords, infoGround, infoGps, infoSel);
     this._infoBar = infoBar;
     this._infoBarCoords = infoCoords;
+    this._infoBarGround = infoGround;
     this._infoBarGps = infoGps;
     this._infoBarSel = infoSel;
 
@@ -1939,6 +2231,11 @@ export class MapWidget {
       onCancel: () => this._handleCancelExecution(),
     });
 
+    // Sketch session lives here (Phase 2): shared between BasemapPanel (Leaflet
+    // adapter) and the toolbar. Owns canonical WGS84 geometry + undo stack.
+    this._sketchSession = new MapSketchSession();
+    this._sketchSessionUnsub = this._sketchSession.onChange(() => this._syncAuthoringToolbarState());
+
     const authoringToolbarDock = document.createElement('div');
     authoringToolbarDock.className = 'map-authoring-toolbar-dock';
     authoringToolbarDock.setAttribute('aria-label', 'Map authoring tools');
@@ -1950,7 +2247,53 @@ export class MapWidget {
       onGeneratePattern: (params) => this._basemapPanel?.generatePattern(params),
       onSaveFence: () => this._basemapPanel?.saveFence(),
       onClearFence: () => this._basemapPanel?.clearFence(),
-      onClearSketch: () => this._basemapPanel?.clearSketch(),
+      onClearSketch: () => {
+        const wasEditingConstraint = !!this._editingConstraint;
+        this._editingConstraint = null;
+        this._sketchSession.reset();
+        this._basemapPanel?.clearSketch();
+        if (wasEditingConstraint) {
+          this._constraintsPanel?.show(this._constraints);
+        }
+      },
+      onToggleConstraintDraw: (kind, rule) => this._basemapPanel?.toggleConstraintDraw(kind, rule),
+      onSaveConstraint: async () => {
+        if (this._editingConstraint) {
+          const constraint = this._editingConstraint;
+          const polygon = this._sketchSession.vertices;
+          if (polygon.length < 3) {
+            this._statusBar?.push('At least 3 vertices required to save.', 'error');
+            return;
+          }
+          this._sketchSession.setStatus('Saving…');
+          const res = await updateConstraint(constraint.id, {
+            expectedVersion: constraint.version,
+            polygon,
+          });
+          if (res.ok) {
+            this._statusBar?.push(`Constraint "${res.constraint?.name || constraint.name || constraint.kind}" shape updated.`, 'info');
+            this._editingConstraint = null;
+            this._sketchSession.reset();
+            await this._refreshConstraints();
+            this._constraintsPanel?.show(this._constraints);
+          } else if (res.status === 409) {
+            this._sketchSession.setStatus('Conflict — another client changed this constraint. Re-save to apply your shape, or cancel to discard.');
+            this._statusBar?.push('Constraint changed elsewhere — draft preserved. Re-save to overwrite, or cancel.', 'warn');
+            // Fetch the current server version so the next re-save uses the right expectedVersion.
+            const listed = await listConstraints();
+            const fresh = listed.ok && listed.constraints.find((c) => c.id === constraint.id);
+            if (fresh) this._editingConstraint = { ...this._editingConstraint, version: fresh.version };
+          } else {
+            this._sketchSession.setStatus(`Save failed: ${res.error || 'unknown error'}`);
+            this._statusBar?.push(`Constraint save failed: ${res.error || 'unknown error'}`, 'error');
+          }
+          return;
+        }
+        this._basemapPanel?.saveConstraint({ name: this._nextConstraintName() });
+      },
+      onOpenConstraints: () => this._openConstraintsPanel(),
+      onUndoVertex: () => this._basemapPanel?.undoVertex(),
+      onParamsChange: (params) => this._basemapPanel?.setSketchParams(params),
     });
 
     // Real 2D WGS84 basemap render mode (Phase 4). The panel covers the scene
@@ -1960,7 +2303,18 @@ export class MapWidget {
     this._basemapPanel = new BasemapPanel(mapWrap, {
       onGenerate: (sketch) => this._handleDrawnPattern(sketch),
       onSetGeofence: (fence) => this._handleSetGeofence(fence),
-      onSketchStateChange: () => this._syncAuthoringToolbarState(),
+      onCreateConstraint: (constraint) => this._handleCreateConstraint(constraint),
+      session: this._sketchSession,
+    });
+
+    // Operational-constraints list panel (ADR 0025): opened from the toolbar's
+    // Constraints… button, fed the cached list, and re-fed after each mutation.
+    this._constraints = [];
+    this._constraintsPanel = new ConstraintsPanel(mapWrap, {
+      onToggleEnabled: (c) => this._handleToggleConstraint(c),
+      onEdit: (c, patch) => this._handleEditConstraint(c, patch),
+      onEditShape: (c) => this._startConstraintShapeEdit(c),
+      onDelete: (c) => this._handleDeleteConstraint(c),
     });
 
     // Top-right overlay column: layer toggles + view mode preset + fit-bounds buttons.

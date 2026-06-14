@@ -10,7 +10,7 @@ vehicle position, stream telemetry back to GCS).
 |---|---|---|
 | MAVLink UDP listener | 14550 | UDP (standard FC port) |
 | Web UI | 9010 | HTTP + WebSocket |
-| MAVSDK gRPC seam | 50051 | gRPC placeholder, disabled by default |
+| MAVSDK gRPC server | 50051 | gRPC (`grpc.aio`), disabled by default |
 
 Point the GCS adapter at `udp:127.0.0.1:14550` to route mission uploads here instead
 of (or alongside) a real FC.
@@ -46,12 +46,18 @@ Future phases will turn `mav_sim` into a full MAVLink node that:
 - Adds MAVSDK gRPC interface alongside raw MAVLink
 - Potentially adds ROS2/MAVROS bridge
 
-## Phase 5 transport seam
+## Phase 5 transports (multi-protocol)
 
-- `GET /api/transports` returns the active transport snapshot
-- Raw MAVLink UDP is reported as the running transport
-- MAVSDK gRPC is represented as a disabled-by-default stub service
-- Set `MAVSDK_GRPC_ENABLED = True` in `config.py` to exercise the stubbed startup path
+- `GET /api/transports` returns the live snapshot of all registered transports.
+- Raw MAVLink UDP is the always-on transport.
+- **MAVSDK gRPC** is a real `grpc.aio` server (`grpc_service.py`), **off by default**.
+  Set `MAVSDK_GRPC_ENABLED = True` in `config.py` and install `grpcio` to boot it
+  on port 50051. It serves the small `proto/mav_sim.proto` surface (`GetInfo`,
+  `GetMission`, `SubscribeTelemetry`) — not the full MAVSDK plugin API. Regenerate
+  stubs with:
+  `python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/mav_sim.proto`
+- **ROS2 / MAVROS** is a disabled stub (`ROS2_BRIDGE_ENABLED`); MAVROS needs a full
+  ROS2 install and is advertised but not implemented.
 
 See [`docs/mav_sim/design.md`](../docs/mav_sim/design.md) for protocol and architecture decisions.
 
@@ -62,7 +68,11 @@ mav_sim/
 ├── app.py          — FastAPI app + native WebSocket server (port 9010)
 ├── config.py       — port config, MAVLink settings
 ├── mavlink_listener.py  — UDP listener, packet decoder (pymavlink)
-├── transport_manager.py — protocol-service registry and Phase 5 MAVSDK seam
+├── transport_manager.py — protocol-service registry (UDP / gRPC / ROS2)
+├── grpc_service.py  — real grpc.aio server for the MAVSDK seam (Phase 5)
+├── proto/
+│   └── mav_sim.proto    — gRPC service definition
+├── mav_sim_pb2.py / mav_sim_pb2_grpc.py — generated stubs (committed)
 ├── requirements.txt
 ├── run.sh
 └── docs/

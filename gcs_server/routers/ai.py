@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import threading
 import uuid
@@ -32,6 +33,21 @@ from gcs_server.routers.llm import _redact_secret_text
 from gcs_server.runtime import AppRuntime
 
 router = APIRouter()
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively replace nan/inf float values with None so JSONResponse doesn't crash.
+
+    MAVLink mission items use nan for unused params (e.g. yaw on a ground rover).
+    Python's json.dumps allows nan by default but Starlette's JSONResponse does not.
+    """
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
 
 _AI_SOURCE_CONTROL_LABELS = {
     "project_docs": "Project docs",
@@ -842,6 +858,7 @@ async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
         points=payload.get("points") if isinstance(payload.get("points"), list) else [],
         params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
         name=str(payload.get("name", "") or ""),
+        constraints_store=getattr(runtime, "operational_constraints_store", None),
     )
     if not result.get("ok"):
         return JSONResponse(result, status_code=400)
@@ -1766,7 +1783,7 @@ async def clear_controller_mission(request: Request) -> JSONResponse:
             "expected_controller_version": expected_controller_version,
         },
     )
-    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+    return JSONResponse(_sanitize_for_json(result), status_code=200 if result.get("ok") else 409)
 
 
 @router.get("/api/ai/execution/state")
@@ -1829,6 +1846,18 @@ async def cancel_execution_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
+def _active_operation_id_for_mission(runtime: Any, mission_id: str) -> str:
+    """Look up the active_operation_id for a flat Mission so sidebar pause/resume/stop
+    can call the service (FC adapter + DB) as well as parking the executor thread."""
+    store = getattr(runtime, "mission_store", None)
+    if store is None:
+        return ""
+    mission = store.get_mission(str(mission_id or "").strip())
+    if not isinstance(mission, dict):
+        return ""
+    return str(mission.get("active_operation_id") or "").strip()
+
+
 @router.post("/api/ai/missions/{mission_id}/pause")
 async def pause_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
@@ -1839,6 +1868,14 @@ async def pause_mission_endpoint(mission_id: str, request: Request) -> JSONRespo
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
     result = sessions.pause_for_mission(mid)
+    if result.get("ok"):
+        svc = getattr(runtime, "mission_execution_service", None)
+        op_id = _active_operation_id_for_mission(runtime, mid)
+        if svc is not None and op_id:
+            svc_result = svc.pause_mission(op_id)
+            if not svc_result.get("ok"):
+                sessions.resume_for_mission(mid)
+                result = svc_result
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
@@ -1852,6 +1889,14 @@ async def resume_mission_endpoint(mission_id: str, request: Request) -> JSONResp
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
     result = sessions.resume_for_mission(mid)
+    if result.get("ok"):
+        svc = getattr(runtime, "mission_execution_service", None)
+        op_id = _active_operation_id_for_mission(runtime, mid)
+        if svc is not None and op_id:
+            svc_result = svc.resume_mission(op_id)
+            if not svc_result.get("ok"):
+                sessions.pause_for_mission(mid)
+                result = svc_result
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
@@ -1865,6 +1910,13 @@ async def stop_mission_endpoint(mission_id: str, request: Request) -> JSONRespon
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
     result = sessions.abort_for_mission(mid)
+    if result.get("ok"):
+        svc = getattr(runtime, "mission_execution_service", None)
+        op_id = _active_operation_id_for_mission(runtime, mid)
+        if svc is not None and op_id:
+            svc_result = svc.abort_mission(op_id)
+            if not svc_result.get("ok"):
+                result = svc_result
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
@@ -1899,7 +1951,7 @@ async def execute_mission_revision(revision_id: str, request: Request) -> JSONRe
             "expected_controller_version": expected_controller_version,
         },
     )
-    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+    return JSONResponse(_sanitize_for_json(result), status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/api/ai/mission-revisions/{revision_id}/reject")
