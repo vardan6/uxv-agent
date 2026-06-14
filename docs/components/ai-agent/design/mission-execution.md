@@ -43,7 +43,7 @@ Used by the execution service and adapter pipeline. Not shown in the sidebar UI.
 - `needs_clarification`
 
 **Removed:** `awaiting_approval` and `approved` — dropped per ADR 0021. The
-two-approval model (ADR 0002) is superseded. The `approved_at` DB column is retained
+`approved_at` DB column is retained
 as a dead no-op (SQLite full-table rebuild not justified). No new code should reference
 these statuses.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -11,7 +12,7 @@ import re as _re
 from gcs_server.ai.context_service import AIContextService
 from gcs_server.ai.data_access import build_data_access_manifest
 from gcs_server.ai.intent_service import IntentService as _IntentService
-from gcs_server.ai.mission_draft_service import MissionDraftService
+from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
 from gcs_server.ai.mission_execution_session import build_mission_executor
 from gcs_server.ai.mission_export_service import MissionExportService
 from gcs_server.ai import mission_patterns
@@ -144,6 +145,7 @@ class ToolInvocationContext:
     source_controls: dict[str, bool]
     session_id: str
     user_id: str
+    run_mode: str = ""
 
 
 _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
@@ -163,6 +165,10 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "generate_pattern_subtree",
     "set_mission_geofence",
     "export_mission",
+    "parse_rover_intent",
+    "create_mission_from_waypoints",
+    "propose_mission_draft",
+    "resolve_mission_reference",
 })
 
 _OPTIONAL_TOOL_NAMES_BY_SOURCE = {
@@ -440,8 +446,15 @@ class ToolRegistry:
                 is_terminal=True,
             ),
             tool(
+                "create_mission_from_waypoints",
+                "Create an operator-visible Mission directly from supplied local-coordinate waypoints. Use this when the operator provides an explicit route in any text or structured format. Extract the route into a waypoints array of {x, y, z} objects and pass optional route metadata such as waypoint_count, path_length_m, or route_hash. The tool validates the structured data and persists the same durable Mission revision used by the map and mission sidebar. This is a terminal planning action; it does not execute or export the mission.",
+                PLANNING,
+                self._create_mission_from_waypoints,
+                is_terminal=True,
+            ),
+            tool(
                 "propose_mission_draft",
-                "Submit the final mission draft. Terminal planning action — call after parse_rover_intent and optional route-planning tools. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
+                "Submit the final mission draft and create the operator-visible Mission. Terminal planning action — call after parse_rover_intent and optional route-planning tools. In Agent chat, success persists a durable Mission revision and flat Mission row, returning mission_id; the Mission then appears on the map and in the mission sidebar. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
                 PLANNING,
                 self._propose_mission_draft,
                 is_terminal=True,
@@ -535,6 +548,7 @@ class ToolRegistry:
             source_controls=_snapshot_source_controls(context_snapshot),
             session_id=_snapshot_session_id(context_snapshot),
             user_id=_snapshot_user_id(context_snapshot),
+            run_mode=_snapshot_run_mode(context_snapshot),
         )
 
     def _callable_for(self, definition: ToolDefinition, invocation_context: ToolInvocationContext) -> Callable[..., Any]:
@@ -1034,7 +1048,10 @@ class ToolRegistry:
         goal_target: dict[str, Any] | str,
         start_target: dict[str, Any] | str | None = None,
     ) -> dict[str, Any]:
-        scene = self._scene_payload(context)
+        try:
+            scene = self._scene_payload(context)
+        except Exception:
+            scene = None
         rover = self._rover_snapshot(context)
 
         if start_target is None or str(start_target or "").strip() in ("", "rover_pose"):
@@ -1045,21 +1062,29 @@ class ToolRegistry:
             except (TypeError, ValueError):
                 return {"ok": False, "error": "rover position unavailable for start_target=None; provide explicit start_target"}
         else:
-            resolved = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(start_target))
-            selected = resolved.get("selected")
-            if not selected:
-                return {"ok": False, "error": "start_target could not be resolved on the scene map"}
-            p = selected.get("position") or {}
-            sx, sy = float(p.get("x") or 0.0), float(p.get("y") or 0.0)
+            start_point = _normalize_scene_point(start_target, scene=scene)
+            if start_point is not None:
+                sx, sy = start_point["x"], start_point["y"]
+            else:
+                resolved = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(start_target))
+                selected = resolved.get("selected")
+                if not selected:
+                    return {"ok": False, "error": "start_target could not be resolved on the scene map"}
+                p = selected.get("position") or {}
+                sx, sy = float(p.get("x") or 0.0), float(p.get("y") or 0.0)
 
         if not goal_target:
             return {"ok": False, "error": "goal_target is required"}
-        resolved_goal = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(goal_target))
-        selected_goal = resolved_goal.get("selected")
-        if not selected_goal:
-            return {"ok": False, "error": "goal_target could not be resolved on the scene map"}
-        gp = selected_goal.get("position") or {}
-        gx, gy = float(gp.get("x") or 0.0), float(gp.get("y") or 0.0)
+        goal_point = _normalize_scene_point(goal_target, scene=scene)
+        if goal_point is not None:
+            gx, gy = goal_point["x"], goal_point["y"]
+        else:
+            resolved_goal = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(goal_target))
+            selected_goal = resolved_goal.get("selected")
+            if not selected_goal:
+                return {"ok": False, "error": "goal_target could not be resolved on the scene map"}
+            gp = selected_goal.get("position") or {}
+            gx, gy = float(gp.get("x") or 0.0), float(gp.get("y") or 0.0)
 
         result = self._road_graph.route_between(sx, sy, gx, gy)
         if result.get("ok"):
@@ -1359,6 +1384,71 @@ class ToolRegistry:
             },
         }
 
+    def _create_mission_from_waypoints(
+        self,
+        context: ToolInvocationContext,
+        waypoints: list,
+        goal: str = "",
+        route_metadata: dict | None = None,
+    ) -> dict[str, Any]:
+        try:
+            scene = self._scene_payload(context)
+        except Exception:
+            scene = None
+        clean_waypoints: list[dict[str, float]] = []
+        for index, waypoint in enumerate(waypoints or [], start=1):
+            point = _normalize_scene_point(waypoint, scene=scene)
+            if point is None:
+                return {
+                    "ok": False,
+                    "error": f"waypoint {index} requires numeric x and y coordinates; z is optional and defaults to terrain ground",
+                }
+            clean_waypoints.append(point)
+        if not clean_waypoints:
+            return {"ok": False, "error": "at least one waypoint is required"}
+
+        metadata = dict(route_metadata or {})
+        declared_count = metadata.get("waypoint_count")
+        if declared_count is not None:
+            try:
+                declared_count = int(declared_count)
+            except (TypeError, ValueError):
+                return {
+                    "ok": False,
+                    "error": "route_metadata.waypoint_count must be an integer",
+                }
+        if declared_count is not None and declared_count != len(clean_waypoints):
+            return {
+                "ok": False,
+                "error": (
+                    f"declared waypoint count is {declared_count}, but "
+                    f"{len(clean_waypoints)} waypoints were supplied"
+                ),
+                "declared_waypoint_count": declared_count,
+                "supplied_waypoint_count": len(clean_waypoints),
+            }
+        metadata["waypoint_count"] = len(clean_waypoints)
+        metadata.setdefault("source", "operator_supplied_waypoints")
+
+        mission_goal = str(goal or "").strip() or "AI mission"
+        return self._propose_mission_draft(
+            context,
+            intent={
+                "intent_type": "navigate",
+                "requires_rover_motion": True,
+                "requested_actions": ["follow supplied waypoint route"],
+            },
+            draft={
+                "goal": mission_goal,
+                "waypoints": clean_waypoints,
+                "route_metadata": metadata,
+                "steps": [],
+                "constraints": [],
+                "assumptions": ["Coordinates are local scene metres (x=east, y=north, z=up)."],
+                "risks": [],
+            },
+        )
+
     def _propose_mission_draft(
         self,
         context: ToolInvocationContext,
@@ -1384,7 +1474,7 @@ class ToolRegistry:
             normalized, repairs = normalize_mission_draft_payload(draft)
             if route_artifacts and isinstance(route_artifacts, list):
                 normalized["route_artifacts"] = list(route_artifacts)
-            return {
+            result = {
                 "ok": True,
                 "draft": normalized,
                 "repairs": repairs,
@@ -1393,6 +1483,13 @@ class ToolRegistry:
                 "mission_edit_mode": edit_mode,
                 "source_mission_id": source_mission,
             }
+            return self._persist_agent_mission_proposal(
+                context,
+                result=result,
+                intent=intent,
+                target_resolution=target_resolution or {},
+                rover_position=rover_position or {},
+            )
 
         # LLM generation mode: second model generates draft from intent summary.
         secret_resolver = getattr(getattr(context.runtime, "secret_store", None), "get_secret", None)
@@ -1427,7 +1524,152 @@ class ToolRegistry:
         normalized, repairs = normalize_mission_draft_payload(raw_draft)
         if route_artifacts and isinstance(route_artifacts, list):
             normalized["route_artifacts"] = list(route_artifacts)
-        return {"ok": True, "draft": normalized, "repairs": repairs, "source": "llm_generated", "parent_operation_id": parent_op, "mission_edit_mode": edit_mode, "source_mission_id": source_mission}
+        result = {
+            "ok": True,
+            "draft": normalized,
+            "repairs": repairs,
+            "source": "llm_generated",
+            "parent_operation_id": parent_op,
+            "mission_edit_mode": edit_mode,
+            "source_mission_id": source_mission,
+        }
+        return self._persist_agent_mission_proposal(
+            context,
+            result=result,
+            intent=intent,
+            target_resolution=target_resolution or {},
+            rover_position=rover_position or {},
+        )
+
+    def _persist_agent_mission_proposal(
+        self,
+        context: ToolInvocationContext,
+        *,
+        result: dict[str, Any],
+        intent: dict[str, Any],
+        target_resolution: dict[str, Any],
+        rover_position: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist terminal Agent-chat proposals as real Mission objects."""
+        if context.run_mode != "agent":
+            return result
+
+        mission_execution = getattr(context.runtime, "mission_execution_service", None)
+        mission_store = getattr(context.runtime, "mission_store", None)
+        if mission_execution is None or mission_store is None:
+            return {
+                **result,
+                "ok": False,
+                "error": "mission persistence services are unavailable",
+            }
+
+        draft = result["draft"]
+        validation = validate_draft_payload(
+            intent,
+            target_resolution,
+            draft,
+            rover_position or None,
+        )
+        if validation.get("status") in {"blocked", "unsafe", "needs_clarification"}:
+            return {
+                **result,
+                "ok": False,
+                "error": "mission draft did not pass validation",
+                "validation": validation,
+            }
+
+        edit_mode = str(result.get("mission_edit_mode") or "create")
+        source_mission_id = str(result.get("source_mission_id") or "")
+        parent_operation_id = str(result.get("parent_operation_id") or "")
+        if edit_mode == "edit_in_place" and source_mission_id:
+            source = mission_store.get_mission(source_mission_id)
+            parent_operation_id = str((source or {}).get("active_operation_id") or parent_operation_id)
+        elif edit_mode in {"create", "clone_and_edit"}:
+            parent_operation_id = ""
+
+        draft_id = f"ai-draft-{uuid.uuid4().hex[:12]}"
+        try:
+            revision = mission_execution.create_proposal(
+                session_id=context.session_id,
+                source_message_id="",
+                draft_id=draft_id,
+                intent=intent,
+                target_resolution=target_resolution,
+                draft_payload=draft,
+                validation=validation,
+                draft_status="awaiting_approval",
+                review_context={
+                    "goal": draft.get("goal", ""),
+                    "risks": draft.get("risks") or [],
+                    "approval_scope": "planning_artifact_only",
+                },
+                parent_operation_id=parent_operation_id,
+            )
+            operation_id = str(revision.get("operation_id") or "")
+            existing = mission_store.get_by_operation_id(operation_id)
+            if existing is not None:
+                mission_id = str(existing.get("id") or "")
+                mission = mission_store.bump_client_version(mission_id) or existing
+            else:
+                mission = mission_store.create_mission(
+                    user_id=context.user_id,
+                    name=str(draft.get("goal") or "").strip() or "AI mission",
+                    origin="ai_chat",
+                    origin_chat_id=context.session_id,
+                )
+                mission_id = str(mission.get("id") or "")
+                if not mission_id:
+                    raise RuntimeError("failed to create Mission row")
+                mission = mission_store.set_active_operation(
+                    mission_id,
+                    operation_id=operation_id,
+                ) or mission
+        except Exception as exc:
+            return {
+                **result,
+                "ok": False,
+                "error": str(exc) or "failed to persist mission",
+                "validation": validation,
+            }
+
+        revision_id = str(revision.get("id") or "")
+        export_error: str = ""
+        try:
+            rover = self._rover_snapshot(context)
+            gps = rover.get("gps") or {}
+            home: dict[str, float] | None = None
+            if gps.get("lat") and gps.get("lon"):
+                home = {
+                    "latitude": float(gps["lat"]),
+                    "longitude": float(gps["lon"]),
+                    "altitude": float(gps.get("alt") or 0.0),
+                }
+            export_result = self._exporter.export(
+                {"id": draft_id, "draft": draft},
+                profile=get_active_profile(),
+                home_position=home,
+            )
+            if export_result.get("ok"):
+                mission_execution.mark_revision_exported_by_revision_id(
+                    revision_id, export_result=export_result
+                )
+            else:
+                export_error = str(export_result.get("error") or "export failed")
+        except Exception as exc:
+            export_error = str(exc)
+
+        out: dict[str, Any] = {
+            **result,
+            "draft_id": draft_id,
+            "mission_id": mission_id,
+            "mission_operation_id": operation_id,
+            "mission_revision_id": revision_id,
+            "mission": _compact_mission_reference(mission),
+            "validation": validation,
+        }
+        if export_error:
+            out["export_warning"] = export_error
+        return out
 
     def _resolve_mission_reference(
         self,
@@ -1763,6 +2005,12 @@ def _snapshot_user_id(context_snapshot: dict[str, Any] | None) -> str:
     return str(meta.get("user_id") or "").strip()
 
 
+def _snapshot_run_mode(context_snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(context_snapshot, dict):
+        return ""
+    return str(context_snapshot.get("__agent_run_mode") or "").strip().lower()
+
+
 def _has_pose_and_heading(rover: dict[str, Any]) -> bool:
     if not _has_position(rover):
         return False
@@ -1846,6 +2094,102 @@ def _normalize_position_override(value: dict[str, Any] | list[Any] | str | None)
             return None
         return {"x": x, "y": y, "z": z}
     return None
+
+
+def _sample_scene_ground_height(scene: dict[str, Any] | None, x: float, y: float) -> float | None:
+    if not isinstance(scene, dict):
+        return None
+    heightmap = scene.get("heightmap")
+    height_range = scene.get("height_range") or {}
+    bounds = scene.get("bounds") or {}
+    if not isinstance(heightmap, list) or len(heightmap) < 2:
+        return None
+    try:
+        min_h = float(height_range["min"])
+        max_h = float(height_range["max"])
+        min_x = float(bounds["min_x"])
+        max_x = float(bounds["max_x"])
+        min_y = float(bounds["min_y"])
+        max_y = float(bounds["max_y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    gs = int(scene.get("grid_size") or len(heightmap))
+    if gs < 2 or max_x == min_x or max_y == min_y:
+        return None
+    try:
+        col = ((float(x) - min_x) / (max_x - min_x)) * (gs - 1)
+        row = ((float(y) - min_y) / (max_y - min_y)) * (gs - 1)
+        c0 = max(0, min(gs - 2, int(col)))
+        c1 = c0 + 1
+        r0 = max(0, min(gs - 2, int(row)))
+        r1 = r0 + 1
+        tc = col - c0
+        tr = row - r0
+        n = (
+            float(heightmap[r0][c0]) * (1 - tc) * (1 - tr)
+            + float(heightmap[r0][c1]) * tc * (1 - tr)
+            + float(heightmap[r1][c0]) * (1 - tc) * tr
+            + float(heightmap[r1][c1]) * tc * tr
+        )
+    except (IndexError, TypeError, ValueError):
+        return None
+    span = max_h - min_h
+    if abs(span) < 1e-9:
+        return min_h
+    return min_h + (n / 255.0) * span
+
+
+def _normalize_scene_point(
+    value: dict[str, Any] | list[Any] | str | None,
+    *,
+    scene: dict[str, Any] | None = None,
+) -> dict[str, float] | None:
+    raw: dict[str, Any] | list[Any] | str | None = value
+    if isinstance(value, dict):
+        if value.get("position") is not None:
+            raw = value.get("position")
+        elif value.get("coordinates") is not None:
+            raw = value.get("coordinates")
+
+    if isinstance(raw, dict):
+        try:
+            x = float(raw.get("x"))
+            y = float(raw.get("y"))
+        except (TypeError, ValueError):
+            return None
+        z_raw = raw.get("z")
+    elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+        try:
+            x = float(raw[0])
+            y = float(raw[1])
+        except (TypeError, ValueError):
+            return None
+        z_raw = raw[2] if len(raw) >= 3 else None
+    elif isinstance(raw, str):
+        numbers = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", raw)
+        if len(numbers) < 2:
+            return None
+        try:
+            x = float(numbers[0])
+            y = float(numbers[1])
+        except ValueError:
+            return None
+        z_raw = numbers[2] if len(numbers) >= 3 else None
+    else:
+        return None
+
+    if z_raw in (None, ""):
+        z = _sample_scene_ground_height(scene, x, y)
+        if z is None:
+            z = 0.0
+    else:
+        try:
+            z = float(z_raw)
+        except (TypeError, ValueError):
+            z = _sample_scene_ground_height(scene, x, y)
+            if z is None:
+                return None
+    return {"x": x, "y": y, "z": z}
 
 
 def _compact_text(value: Any, *, limit: int) -> str:
@@ -2193,6 +2537,22 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "returns": {"ok": "boolean", "handoff": "object{type,questions,intent_summary}"},
         "next_tools": [],
     },
+    "create_mission_from_waypoints": {
+        "inputs": {
+            "waypoints": "object[] — ordered local-coordinate points with numeric x, y, z",
+            "goal": "string — concise Mission name/goal (optional)",
+            "route_metadata": "object — optional waypoint_count, path_length_m, route_hash, or source metadata",
+        },
+        "required_inputs": ["waypoints"],
+        "upstream_from_tools": ["operator-supplied route", "plan_route_around_group", "plan_route_between"],
+        "returns": {
+            "ok": "boolean",
+            "draft": "mission_draft",
+            "mission_id": "string — durable flat Mission id in Agent mode",
+            "mission_revision_id": "string — persisted revision id in Agent mode",
+        },
+        "next_tools": [],
+    },
     "propose_mission_draft": {
         "inputs": {
             "intent": "object — from parse_rover_intent.intent",
@@ -2200,10 +2560,20 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "rover_position": "object — rover position override (optional)",
             "draft": "object — complete draft to submit directly; preferred when route-planning was done (optional)",
             "route_artifacts": "object[] — route artifacts from plan_route_* tools (optional)",
+            "parent_operation_id": "string — internal parent operation for an explicit in-place edit (optional)",
+            "mission_edit_mode": "create | clone_and_edit | edit_in_place",
+            "source_mission_id": "string — existing flat Mission id for clone/edit operations (optional)",
         },
         "required_inputs": ["intent"],
         "upstream_from_tools": ["parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"],
-        "returns": {"ok": "boolean", "draft": "mission_draft", "repairs": "string[]", "source": "planner_submitted|llm_generated"},
+        "returns": {
+            "ok": "boolean",
+            "draft": "mission_draft",
+            "repairs": "string[]",
+            "source": "planner_submitted|llm_generated",
+            "mission_id": "string — durable flat Mission id in Agent mode",
+            "mission_revision_id": "string — persisted revision id in Agent mode",
+        },
         "next_tools": [],
     },
 }

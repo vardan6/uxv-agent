@@ -57,6 +57,19 @@ export class MapSketchSession {
     this._notify();
   }
 
+  // Load an existing polygon as the initial draft (e.g. constraint shape edit).
+  // Vertices must be {lat, lon}[]. Undo stack starts empty so the first undo
+  // action returns to the pre-edit state (all vertices removed).
+  startToolWithVertices(tool, meta, vertices) {
+    this._tool = tool;
+    this._constraintMeta = meta ? { ...meta } : null;
+    this._vertices = vertices.map((v) => ({ lat: v.lat, lon: v.lon }));
+    this._undoStack = [];
+    this._statusText = '';
+    this._surveyHeading = 0;
+    this._notify();
+  }
+
   // `deg` is CCW from east (backend convention). Clamps to [0, 360).
   setSurveyHeading(deg) {
     this._surveyHeading = ((Number(deg) % 360) + 360) % 360;

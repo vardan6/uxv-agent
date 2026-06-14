@@ -21,7 +21,9 @@ from .controller_mission_adapter import (
 from .coordinate_frame import Origin, load_scene_origin, local_to_wgs84, wgs84_to_local
 from .migrations import apply_ai_store_migrations
 from . import mission_patterns, mission_tree, polygon_geometry
+from .mission_export_service import MissionExportService
 from .mission_safety import parse_geofence
+from .vehicle_profile import get_active_profile
 
 
 def _constraint_ring(constraint: dict[str, Any]) -> list[polygon_geometry.Point]:
@@ -562,6 +564,19 @@ def _build_mission_overlay_payload(revision: dict[str, Any], origin: Origin) -> 
     }
 
 
+def _sanitize_floats(obj: Any) -> Any:
+    """Recursively replace non-finite floats (nan, inf) with None so the result
+    is safe to pass to Starlette's JSONResponse (which uses allow_nan=False).
+    MAVLink plan items legitimately carry NaN for unspecified fields."""
+    if isinstance(obj, float):
+        return None if not math.isfinite(obj) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 def _controller_snapshot_to_public(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict) or not snapshot:
         return {}
@@ -604,6 +619,7 @@ class MissionExecutionService:
         self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
             self._db_path.parent / "controller_mission_adapter.json"
         )
+        self._exporter = MissionExportService(missions_dir=self._db_path.parent)
         # ADR 0022: per-Mission coordinate datum. The resolver maps an internal
         # operation id to its Mission's Origin (runtime composes
         # MissionStore.get_by_operation_id → get_origin_datum); a None id or None
@@ -1183,7 +1199,7 @@ class MissionExecutionService:
             }
 
         status = str(revision.get("status") or "")
-        if status not in MISSION_EXECUTION_READY_STATUSES:
+        if status not in MISSION_EXECUTION_READY_STATUSES and status not in {"proposed", "planning"}:
             return {
                 "ok": False,
                 "status": "revision_not_ready",
@@ -1191,25 +1207,20 @@ class MissionExecutionService:
                 "revision": revision,
             }
 
+        export_ready = self._ensure_revision_exported_for_execution(revision)
+        if not export_ready.get("ok"):
+            return {
+                "ok": False,
+                "status": str(export_ready.get("status") or "mission_export_failed"),
+                "error": str(export_ready.get("error") or "mission export failed"),
+                "revision": revision,
+            }
+        revision = export_ready["revision"]
+
         mission = dict(revision.get("mission") or {})
         mission_export = mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {}
         export_path = str(mission_export.get("file_path") or "").strip()
-        if not export_path:
-            return {
-                "ok": False,
-                "status": "mission_export_missing",
-                "error": "mission revision is missing an exported controller-ready plan",
-                "revision": revision,
-            }
         plan_file = Path(export_path)
-        if not plan_file.exists():
-            return {
-                "ok": False,
-                "status": "mission_export_missing",
-                "error": f"mission export file does not exist: {export_path}",
-                "revision": revision,
-            }
-
         plan = _load_json_file(export_path)
         if not isinstance(plan, dict) or not plan:
             return {
@@ -2314,9 +2325,38 @@ class MissionExecutionService:
                 WHERE id = ?
                 """,
                 (status, now, revision["operation_id"]),
-            )
+                )
             conn.commit()
         return self.get_revision(revision["id"])
+
+    def _ensure_revision_exported_for_execution(self, revision: dict[str, Any]) -> dict[str, Any]:
+        status = str(revision.get("status") or "")
+        mission = dict(revision.get("mission") or {})
+        mission_export = mission.get("mission_export") if isinstance(mission.get("mission_export"), dict) else {}
+        export_path = str(mission_export.get("file_path") or "").strip()
+        needs_export = status in {"proposed", "planning"} or not export_path or not Path(export_path).exists()
+        if not needs_export:
+            return {"ok": True, "revision": revision}
+
+        export_result = self._exporter.export(revision, profile=get_active_profile())
+        if not export_result.get("ok"):
+            return {
+                "ok": False,
+                "status": "mission_export_failed",
+                "error": str(export_result.get("error") or "failed to export mission"),
+            }
+
+        updated = self.mark_revision_exported_by_revision_id(
+            str(revision.get("id") or "").strip(),
+            export_result=export_result,
+        )
+        if updated is None:
+            return {
+                "ok": False,
+                "status": "mission_export_failed",
+                "error": "failed to persist exported mission state",
+            }
+        return {"ok": True, "revision": updated}
 
     def _ensure_controller_state_row(self, conn: sqlite3.Connection) -> sqlite3.Row:
         now = time.time()
@@ -2365,7 +2405,7 @@ class MissionExecutionService:
             summary = f"{summary} Version: {version}."
         if active_revision_id:
             summary = f"{summary} Active revision: {active_revision_id}."
-        return {
+        return _sanitize_floats({
             "available": True,
             "controller_id": str(row["controller_id"] or MISSION_CONTROLLER_ID),
             "controller_version": version,
@@ -2383,7 +2423,7 @@ class MissionExecutionService:
             "verified_at": row["verified_at"],
             "updated_at": row["updated_at"],
             "adapter": self._controller_adapter.adapter_name,
-        }
+        })
 
     def _project_controller_state(
         self,

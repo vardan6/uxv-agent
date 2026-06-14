@@ -4,11 +4,9 @@ Status: All phases (1–5) shipped; operational constraints (Phase 4) implemente
 Date: 2026-06-06 (updated 2026-06-09)
 
 This note is the canonical design for the bottom-of-canvas **map authoring
-toolbar** on `/ai`. It supersedes the analysis in
-[`docs/archive/2026-06-06-map-authoring-toolbar-review.md`](../../../archive/2026-06-06-map-authoring-toolbar-review.md),
-which remains the input record. Where this note and the review disagree, this
-note wins; where the review's findings are good (taxonomy, terminology,
-one-active-tool, transaction model), they are adopted verbatim below.
+toolbar** on `/ai`. It incorporates the accepted taxonomy, terminology,
+one-active-tool model, transaction model, cross-view architecture, and phased
+delivery decisions from the completed design review.
 
 Sibling design: [map-widget.md](./map-widget.md) (toolbar placement, VIEW model,
 coordinate frames) and [mission-sidebar-toolbar.md](./mission-sidebar-toolbar.md)

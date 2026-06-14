@@ -180,6 +180,7 @@ export class MapWidget {
     // view plotting the focused mission on an OSM map by lat/lon. Default off.
     this._sketchSession = null;
     this._sketchSessionUnsub = null;
+    this._editingConstraint = null;
     this._sceneSketchLayer = null;
     this._scenePlanningLayer = null;
     this._basemapPanel = null;
@@ -191,6 +192,7 @@ export class MapWidget {
     this._currentViewMode = 'virtual_terrain';
     this._infoBar = null;
     this._infoBarCoords = null;
+    this._infoBarGround = null;
     this._infoBarGps = null;
     this._infoBarSel = null;
     this._statusBar = opts.statusBar || null;
@@ -1586,6 +1588,21 @@ export class MapWidget {
     return res;
   }
 
+  _startConstraintShapeEdit(constraint) {
+    const polygon = Array.isArray(constraint.polygon) ? constraint.polygon : [];
+    if (polygon.length < 3) {
+      this._statusBar?.push(`Constraint "${constraint.name || constraint.kind}" has no editable polygon.`, 'warn');
+      return;
+    }
+    this._editingConstraint = constraint;
+    this._constraintsPanel?.hide();
+    this._sketchSession.startToolWithVertices(
+      'constraint',
+      { kind: constraint.kind, rule: constraint.rule },
+      polygon,
+    );
+  }
+
   _focusedOrigin() {
     if (!this._focusedMissionId) return null;
     return this._overlayCacheByMissionId.get(this._focusedMissionId)?.origin || null;
@@ -1598,6 +1615,10 @@ export class MapWidget {
     const xSign = x >= 0 ? '+' : '';
     const ySign = y >= 0 ? '+' : '';
     this._infoBarCoords.textContent = `x ${xSign}${x.toFixed(2)} m  y ${ySign}${y.toFixed(2)} m`;
+    if (this._infoBarGround) {
+      const groundZ = Number(this._sampleHeight?.(x, y));
+      this._infoBarGround.textContent = Number.isFinite(groundZ) ? `ground z ${groundZ.toFixed(2)} m` : '';
+    }
     if (this._infoBarGps) {
       const origin = this._focusedOrigin();
       if (origin) {
@@ -2191,11 +2212,13 @@ export class MapWidget {
     infoBar.setAttribute('aria-hidden', 'true');
     const infoCoords = document.createElement('span');
     infoCoords.textContent = '—';
+    const infoGround = document.createElement('span');
     const infoGps = document.createElement('span');
     const infoSel = document.createElement('span');
-    infoBar.append(infoCoords, infoGps, infoSel);
+    infoBar.append(infoCoords, infoGround, infoGps, infoSel);
     this._infoBar = infoBar;
     this._infoBarCoords = infoCoords;
+    this._infoBarGround = infoGround;
     this._infoBarGps = infoGps;
     this._infoBarSel = infoSel;
 
@@ -2224,9 +2247,50 @@ export class MapWidget {
       onGeneratePattern: (params) => this._basemapPanel?.generatePattern(params),
       onSaveFence: () => this._basemapPanel?.saveFence(),
       onClearFence: () => this._basemapPanel?.clearFence(),
-      onClearSketch: () => this._basemapPanel?.clearSketch(),
+      onClearSketch: () => {
+        const wasEditingConstraint = !!this._editingConstraint;
+        this._editingConstraint = null;
+        this._sketchSession.reset();
+        this._basemapPanel?.clearSketch();
+        if (wasEditingConstraint) {
+          this._constraintsPanel?.show(this._constraints);
+        }
+      },
       onToggleConstraintDraw: (kind, rule) => this._basemapPanel?.toggleConstraintDraw(kind, rule),
-      onSaveConstraint: () => this._basemapPanel?.saveConstraint({ name: this._nextConstraintName() }),
+      onSaveConstraint: async () => {
+        if (this._editingConstraint) {
+          const constraint = this._editingConstraint;
+          const polygon = this._sketchSession.vertices;
+          if (polygon.length < 3) {
+            this._statusBar?.push('At least 3 vertices required to save.', 'error');
+            return;
+          }
+          this._sketchSession.setStatus('Saving…');
+          const res = await updateConstraint(constraint.id, {
+            expectedVersion: constraint.version,
+            polygon,
+          });
+          if (res.ok) {
+            this._statusBar?.push(`Constraint "${res.constraint?.name || constraint.name || constraint.kind}" shape updated.`, 'info');
+            this._editingConstraint = null;
+            this._sketchSession.reset();
+            await this._refreshConstraints();
+            this._constraintsPanel?.show(this._constraints);
+          } else if (res.status === 409) {
+            this._sketchSession.setStatus('Conflict — another client changed this constraint. Re-save to apply your shape, or cancel to discard.');
+            this._statusBar?.push('Constraint changed elsewhere — draft preserved. Re-save to overwrite, or cancel.', 'warn');
+            // Fetch the current server version so the next re-save uses the right expectedVersion.
+            const listed = await listConstraints();
+            const fresh = listed.ok && listed.constraints.find((c) => c.id === constraint.id);
+            if (fresh) this._editingConstraint = { ...this._editingConstraint, version: fresh.version };
+          } else {
+            this._sketchSession.setStatus(`Save failed: ${res.error || 'unknown error'}`);
+            this._statusBar?.push(`Constraint save failed: ${res.error || 'unknown error'}`, 'error');
+          }
+          return;
+        }
+        this._basemapPanel?.saveConstraint({ name: this._nextConstraintName() });
+      },
       onOpenConstraints: () => this._openConstraintsPanel(),
       onUndoVertex: () => this._basemapPanel?.undoVertex(),
       onParamsChange: (params) => this._basemapPanel?.setSketchParams(params),
@@ -2249,6 +2313,7 @@ export class MapWidget {
     this._constraintsPanel = new ConstraintsPanel(mapWrap, {
       onToggleEnabled: (c) => this._handleToggleConstraint(c),
       onEdit: (c, patch) => this._handleEditConstraint(c, patch),
+      onEditShape: (c) => this._startConstraintShapeEdit(c),
       onDelete: (c) => this._handleDeleteConstraint(c),
     });
 

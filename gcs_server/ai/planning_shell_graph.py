@@ -988,7 +988,7 @@ def store_draft(state: PlanningShellGraphState, config: RunnableConfig) -> dict:
             else:
                 created = mission_store.create_mission(
                     user_id=str(state.get("user_id") or ""),
-                    name=str(draft.get("goal") or "").strip(),
+                    name=str(draft.get("goal") or "").strip() or "AI mission",
                     origin="ai_chat",
                     origin_chat_id=str(state.get("session_id") or ""),
                 )

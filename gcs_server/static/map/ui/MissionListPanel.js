@@ -132,7 +132,9 @@ export function contextBarVerbs(target, { isEditing = false } = {}) {
   const isRunning = sessionStatus === 'running';
   const isPaused = sessionStatus === 'paused';
   const isExecuting = status === 'executing';
-  const isActive = isRunning || isPaused || isExecuting;
+  // Gate Edit/Execute on live session only — DB status can be stuck at 'executing'
+  // after a failed upload (HTTP 500 kills the session without updating the revision).
+  const isActive = isRunning || isPaused;
 
   const verb = (cls, attr, icon, title) => `<button class="mission-context-icon-btn ${cls}" type="button"
     ${attr}="${safeId}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)} — ${safeName}">${icon}</button>`;
@@ -142,7 +144,7 @@ export function contextBarVerbs(target, { isEditing = false } = {}) {
       + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
   }
   if (isPaused) {
-    return verb('is-execute', 'data-resume-mission-id', SVG.run, 'Resume mission')
+    return verb('is-execute', 'data-resume-mission-id', SVG.run, 'Resume plan upload')
       + verb('is-stop', 'data-stop-mission-id', SVG.stop, 'Stop mission');
   }
   if (isEditing) {
@@ -153,7 +155,7 @@ export function contextBarVerbs(target, { isEditing = false } = {}) {
     out += verb('is-edit', 'data-edit-mission-id', SVG.edit, 'Edit waypoints');
   }
   if (hasActiveRevision && !isActive) {
-    out += verb('is-execute', 'data-execute-mission-id', SVG.run, 'Execute mission');
+    out += verb('is-execute', 'data-execute-mission-id', SVG.run, 'Upload plan to controller');
   }
   return out;
 }

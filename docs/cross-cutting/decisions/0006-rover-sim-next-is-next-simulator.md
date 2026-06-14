@@ -30,4 +30,5 @@ Work on `rover-sim-next` is sequenced after the current high-priority AI agent a
 ## Follow-Ups
 
 - A cutover ADR will be written when `rover-sim-next` reaches parity and replaces `3d-env`.
-- Defer-list of features that wait for `rover-sim-next`: see [0008](./0008-defer-replay-and-live-map-until-sim-next.md).
+- Features that still wait for `rover-sim-next`: see
+  [ADR 0026](./0026-replay-session-logging-ships-scrubbing-replay-deferred.md).

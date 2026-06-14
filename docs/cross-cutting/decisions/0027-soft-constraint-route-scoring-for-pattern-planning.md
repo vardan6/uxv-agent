@@ -1,7 +1,7 @@
 # 0027. Soft-Constraint Route Scoring For Operator-Drawn Pattern Planning
 
 Date: 2026-06-13
-Status: Proposed
+Status: Accepted
 
 Builds on [ADR 0025](./0025-operational-constraints-schema-and-scope.md)
 (operational constraints semantics) and the current operator-drawn pattern flow
@@ -10,20 +10,16 @@ in `gcs_server/ai/mission_execution_service.py:create_drawn_pattern_mission`.
 ## Context
 
 ADR 0025 already defines the operator-visible meaning of `soft` constraints:
-they affect planner cost but never make a route impossible. The shipped code
-only enforces the `hard` half of that contract. `create_drawn_pattern_mission`
-generates one corridor or survey route and either accepts it or rejects it
-against hard constraints; no cost model exists, so soft corridors and soft
-blockages are currently ignored.
+they affect planner cost but never make a route impossible. Pattern planning
+therefore needs a deterministic candidate set, cost model, and tie-break order
+that preserve hard rejection while making soft preferences observable.
 
-The next implementation slice needs an explicit contract for:
+This ADR defines:
 
 - which candidate routes the draw-pattern planner may compare
 - how soft penalties are computed from those routes
 - how hard rejection and soft preference interact
 - what metadata the UI and tests can rely on
-
-Without that contract, any scoring code would be guesswork.
 
 ## Decision
 
@@ -128,7 +124,7 @@ This keeps route choice deterministic when two candidates are effectively equal.
 
 ## Runtime Surface
 
-The draw-pattern planner should return scoring metadata alongside the chosen
+The draw-pattern planner returns scoring metadata alongside the chosen
 revision so tests and the UI can explain why one survey layout won:
 
 ```json
@@ -157,7 +153,7 @@ V1 uses two planner-configured constants:
 - `soft_blockage_penalty_per_m`
 - `soft_corridor_penalty_per_m`
 
-They may initially live as module-level defaults inside the planner code. A
+They currently live as module-level defaults inside the planner code. A
 user-editable settings surface is deferred until there is real tuning pressure.
 
 The penalties should be chosen so that:
@@ -180,13 +176,13 @@ Those are separate work items with different geometry and UX implications.
 
 ## Consequences
 
-- ADR 0025's `soft` meaning becomes implementable without widening the public
-  CRUD schema.
+- ADR 0025's `soft` meaning is implemented without widening the public CRUD
+  schema.
 - Survey authoring gains a real preference mechanism with deterministic tests.
 - Corridor authoring remains stable and predictable instead of shipping an
   under-specified auto-offset feature.
-- The next code slice can be small: score finite survey candidates, choose one,
-  and expose the scoring metadata.
+- The implementation scores finite survey candidates, chooses one, and exposes
+  scoring metadata; corridor routes retain their drawn geometry and report cost.
 
 ## Alternatives Considered
 

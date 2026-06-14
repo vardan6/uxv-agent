@@ -1,13 +1,13 @@
 # AI Agent — Design
 
-Status date: 2026-06-01.
+Status date: 2026-06-14.
 
 **How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [design.md](./design.md) wins on diagrams only.
 
 Status note (implementation reality):
 
 - `AgentLoopRuntime` is implemented and powers Agent chat.
-- The visible `/ai` product surface is still Chat plus read-only Agent, with the planning shell entered explicitly through `/plan`.
+- The visible `/ai` Agent can inspect state and author durable Missions through the shared planning tools. A successful terminal proposal persists the canonical revision plus flat Mission row before the assistant response completes, so the normal chat text and map/sidebar object are produced by the same turn.
 - The planning shell wraps the planning flow.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
 - `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
@@ -1270,7 +1270,7 @@ Paired so reviewers can decide together. Product-level questions live in [requir
 
 ## Topic-Level Design Files
 
-Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier. See ADR 0010 for history of the prior `internals/` split and its supersession.
+Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier.
 
 - [`design/context-layer.md`](./design/context-layer.md) — Context Layer
 - [`design/graph-spec.md`](./design/graph-spec.md) — Graph Spec

@@ -530,9 +530,11 @@ class AgentLoopRuntime:
         # empty arm/execute set) is what actually decides which execution tools the
         # model sees. COMMAND_STAGING stays disabled in the registry.
         permissions = frozenset(DEFAULT_PERMISSIONS | {EXECUTION})
+        tool_context_snapshot = dict(context_snapshot or {})
+        tool_context_snapshot["__agent_run_mode"] = run_mode
         tools = self._tool_registry.build_langchain_tools(
             runtime,
-            context_snapshot or {},
+            tool_context_snapshot,
             timezone_name=timezone_name,
             permissions=set(permissions),
         )
@@ -645,6 +647,8 @@ class AgentLoopRuntime:
             content = _repeated_tool_failure_message(executed_tool_calls)
         if stop_reason == POLICY_DENIED_STOP_REASON and not content.strip():
             content = _policy_denied_message(executed_tool_calls, terminal_tool_error)
+        if stop_reason == "draft_proposed" and not content.strip():
+            content = _draft_proposed_message(executed_tool_calls)
         return AgentInvokeResult(
             content=content,
             tool_calls=executed_tool_calls,
@@ -726,3 +730,37 @@ def _policy_denied_message(executed_tool_calls: list[dict[str, Any]], terminal_t
     if tool_name:
         return f"I stopped because policy blocked tool `{tool_name}`."
     return "I stopped because a tool call was blocked by policy."
+
+
+def _draft_proposed_message(executed_tool_calls: list[dict[str, Any]]) -> str:
+    for call in reversed(executed_tool_calls):
+        if call.get("name") not in {
+            "propose_mission_draft",
+            "create_mission_from_waypoints",
+        }:
+            continue
+        result = call.get("result")
+        if not isinstance(result, dict):
+            break
+        if result.get("ok") is False:
+            return f"I could not create the mission: {result.get('error') or 'the proposal failed'}."
+        draft = result.get("draft") if isinstance(result.get("draft"), dict) else {}
+        mission = result.get("mission") if isinstance(result.get("mission"), dict) else {}
+        name = str(mission.get("name") or draft.get("goal") or "AI mission")
+        mission_index = mission.get("mission_index")
+        mission_label = f" #{mission_index}" if mission_index is not None else ""
+        waypoint_count = len(draft.get("waypoints") or [])
+        if not waypoint_count:
+            waypoint_count = sum(
+                len(artifact.get("waypoints") or [])
+                for artifact in (draft.get("route_artifacts") or [])
+                if isinstance(artifact, dict)
+            )
+        waypoint_text = f" with {waypoint_count} waypoints" if waypoint_count else ""
+        if result.get("mission_id"):
+            return (
+                f"Created mission{mission_label} \"{name}\"{waypoint_text}. "
+                "It is now available on the map and in the mission sidebar for review."
+            )
+        return f"Created the mission draft \"{name}\"{waypoint_text} for review."
+    return "Created the mission draft for review."

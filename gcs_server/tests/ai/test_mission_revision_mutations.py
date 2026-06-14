@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ai.controller_mission_adapter import ControllerMissionAdapterState
+from ai.controller_mission_adapter import ControllerMissionAdapterState, ControllerMissionInstallResult
 from ai.migrations import apply_ai_store_migrations
 from ai.mission_export_service import MissionExportService
 from ai.mission_execution_service import MissionExecutionService
@@ -23,6 +23,36 @@ class _FixedControllerStateAdapter:
 
     def install_mission(self, *, pending_snapshot: dict, expected_controller_version: int | None = None):
         raise AssertionError("install_mission should not be called for stale-version rejection tests")
+
+
+class _SuccessfulInstallAdapter:
+    adapter_name = "successful_install"
+
+    def __init__(self) -> None:
+        self.installs: list[dict] = []
+
+    def get_controller_state(self) -> ControllerMissionAdapterState:
+        return ControllerMissionAdapterState(controller_version=0, status="idle")
+
+    def install_mission(self, *, pending_snapshot: dict, expected_controller_version: int | None = None):
+        self.installs.append({
+            "pending_snapshot": pending_snapshot,
+            "expected_controller_version": expected_controller_version,
+        })
+        return ControllerMissionInstallResult(
+            ok=True,
+            status="executing",
+            controller_state=ControllerMissionAdapterState(
+                controller_version=1,
+                status="executing",
+                operation_id=str(pending_snapshot.get("operation_id") or ""),
+                revision_id=str(pending_snapshot.get("revision_id") or ""),
+                draft_id=str(pending_snapshot.get("draft_id") or ""),
+                mission_export=dict(pending_snapshot.get("mission_export") or {}),
+                mission=dict(pending_snapshot.get("mission") or {}),
+                plan=dict(pending_snapshot.get("plan") or {}),
+            ),
+        )
 
 
 def _make_service(adapter=None) -> tuple[MissionExecutionService, Path]:
@@ -373,6 +403,23 @@ def test_execute_revision_creates_rebased_revision_on_stale_controller_version()
     assert rebased["review_context"]["rebase"]["base_controller_version"] == 7
     assert rebased["review_context"]["rebase"]["rebased_from_revision_id"] == exported["id"]
     assert rebased["review_context"]["rebase"]["base_revision_id"] == "mission-rev-live123"
+
+
+def test_execute_revision_auto_exports_proposed_revision() -> None:
+    adapter = _SuccessfulInstallAdapter()
+    svc, _ = _make_service(adapter=adapter)
+    proposal = _make_proposal(svc, n_waypoints=2)
+
+    result = svc.execute_revision(proposal["id"])
+
+    assert result["ok"] is True
+    assert result["status"] == "executing"
+    assert adapter.installs
+    updated = svc.get_revision(proposal["id"])
+    assert updated is not None
+    assert updated["status"] == "executing"
+    assert isinstance(updated["mission"].get("mission_export"), dict)
+    assert updated["mission"]["mission_export"].get("file_path")
 
 
 # --- ADR 0019 backend provenance guard ---

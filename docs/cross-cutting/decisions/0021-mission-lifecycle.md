@@ -5,7 +5,11 @@ Status: Accepted
 
 ## Context
 
-ADR 0002 made "AI cannot cause rover motion" a *structural* invariant. ADR 0012 made "approval is not execution" a non-negotiable map-widget invariant. Together they hard-coded a single safety stance for every build, every operator, every environment.
+The initial product policy made "AI cannot cause rover motion" and "approval is
+not execution" structural invariants for every build. It also established three
+map safety rules that remain current: do not mutate executing missions from the
+client, do not silently overwrite authoritative state, and do not invent backend
+contracts for UI affordances.
 
 That stance is mandatory for real-rover use. It is friction in the 3D simulator where active development happens: two-step approval for every test mission slows iteration without adding meaningful safety. At the same time the product is gaining a persistent mission sidebar where missions can be created either manually or by AI chat and should be treated as the same kind of object after creation. A single shipped stance cannot serve both contexts.
 
@@ -44,6 +48,14 @@ Mode lives in **Settings → Mission Lifecycle**. Defaults: sim build → Autono
 
 AI-driven changes are non-destructive by default; only manual edits and explicit overrides mutate.
 
+**Chat output contract (clarified 2026-06-14).** Mission-authoring turns produce
+two operator-visible outputs: the assistant's normal text response remains in
+the conversation, and the successful planning tool call creates the durable
+Mission object used by the map and mission sidebar. Text-only route descriptions
+do not count as Mission creation. Routes supplied directly by the operator as
+waypoint coordinates enter this same lifecycle after structured validation;
+they are not a separate import-only or text-only artifact type.
+
 ### 4. Three independent UI states: Visible, Selected, Active
 
 | State | Cardinality | Controlled by | Purpose |
@@ -81,20 +93,19 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 
 ## Consequences
 
-- The structural "AI cannot cause motion" invariant from ADR 0002 becomes a configurable policy. **Shipping the default correctly per build target is now a load-bearing safety responsibility** (see Open Questions).
-- ADR 0012 invariants 2, 3, 4 (no client-side mutation of executing missions, no silent overwrites, no inventing backend contracts) **survive** as cross-cutting rules. Only invariant 1 (Approval ≠ Execution) is modified: it remains true in Strict and softens in Confirm / Autonomous.
+- "AI cannot cause motion" becomes a configurable policy. **Shipping the default correctly per build target is a load-bearing safety responsibility** (see Open Questions).
+- No client-side mutation of executing missions, no silent overwrites, and no invented backend contracts remain cross-cutting rules in every mode. Separate approval and execution remains mandatory in Strict mode and softens in Confirm / Autonomous.
 - The operator-facing concept is the Mission. Draft / revision plumbing stays internal.
 - Comparison is native: regenerations and AI edits produce new rows by default; old and new stay overlayable.
 - ADR 0019 (per-waypoint provenance) remains in force, orthogonal to Mission-level `origin`.
 - ADR 0020 (optimistic concurrency) is used by the new tool surface — `edit_mission_in_place` bumps `client_version`; execute paths carry `expected_controller_version` (the legacy revision-execute endpoint via its client token, AI execution via the narrow first-install gate described in §1).
-- Single source of truth for the lifecycle replaces content previously spread across ADRs 0002 and 0012 plus several `design.md` sections. Those `design.md` sections will follow as implementation lands; until then, the system runs effectively in Strict mode.
+- This ADR is the single source of truth for lifecycle policy and the cross-cutting map safety rules above.
 
 ## Alternatives Considered
 
-- **Keep ADR 0002 structural; add execute-after-approval as a per-request flag.** Rejected: sim ergonomics pushed back hard; the structural framing prevented iteration speed without adding sim safety.
+- **Keep execution authorization structural; add execute-after-approval as a per-request flag.** Rejected: sim ergonomics pushed back hard; the structural framing prevented iteration speed without adding sim safety.
 - **Heuristic imperative-vs-interrogative classifier deciding whether AI may execute.** Rejected: fragile LLM judgment, prompt-injectable, hard to test. Mode + tool-binding is auditable. Parked as an Open Question in case the spirit returns.
 - **Per-mission risk classification (low/med/high) gates execution.** Rejected: premature. One mode covers current needs with much less surface.
-- **Delete ADRs 0002 and 0012 outright.** Rejected per [STYLE.md](../../STYLE.md) convention — supersede in place; numbers are never reused.
 - **Renumber later ADRs to fill the gap.** Rejected — breaks references in commit messages, archived snapshots, and `design.md` links for no real gain.
 
 ## Open Questions (revisit before real-rover hardware lands)
@@ -110,8 +121,5 @@ A settings-icon button on the map widget / mission sidebar deep-links to this ta
 
 ## Follow-Ups
 
-- ADR 0002 → status updated to *Superseded by ADR 0021*; content preserved.
-- ADR 0012 → status updated to *Superseded by ADR 0021*; content preserved (invariants 2–4 still in force per § Consequences above).
-- ADR 0019 and ADR 0020 → unchanged; remain Accepted.
-- Implementation of Confirm and Autonomous modes plus the flat-Mission UI is new work; `design.md` (ai-agent, gcs) will catch up incrementally as code lands.
+- ADR 0019 and ADR 0020 remain complementary current decisions.
 - **2026-06-04 — `approved`/`awaiting_approval` status cleanup complete.** Both statuses removed from all Python frozensets, SQL guards, and JS sets. `approve_revision()`, `approve_revision_for_draft()`, `approve_draft()`, the REST `/approve` endpoint, and the graph approval-interrupt nodes (`request_planning_shell_approval`, `record_approval`) are deleted. New revisions initialize to `proposed`. The `approved_at` DB column is retained as a dead no-op.

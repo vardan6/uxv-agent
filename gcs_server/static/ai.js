@@ -95,9 +95,14 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'query_nearest_objects',
   'resolve_spatial_target',
   'get_current_mission_state',
+  'parse_rover_intent',
+  'create_mission_from_waypoints',
+  'propose_mission_draft',
+  'resolve_mission_reference',
 ]);
 
 const AI_MISSION_ACTION_TOOL_NAMES = new Set([
+  'create_mission_from_waypoints',
   'propose_mission_draft',
   'set_mission_geofence',
   'export_mission',
@@ -205,6 +210,26 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     name: 'get_current_mission_state',
     permission: 'read_only',
     description: 'Get the current mission state. This is read-only.',
+  },
+  {
+    name: 'parse_rover_intent',
+    permission: 'read_only',
+    description: 'Parse an operator mission request into structured intent before route planning and Mission creation.',
+  },
+  {
+    name: 'create_mission_from_waypoints',
+    permission: 'planning',
+    description: 'Create a durable Mission from an ordered array of operator-supplied local-coordinate waypoints.',
+  },
+  {
+    name: 'propose_mission_draft',
+    permission: 'planning',
+    description: 'Submit the completed plan and create the durable Mission object shown on the map and in the mission sidebar.',
+  },
+  {
+    name: 'resolve_mission_reference',
+    permission: 'read_only',
+    description: 'Resolve a mission number, name, or pronoun to an existing Mission before an AI-assisted edit.',
   },
   {
     name: 'get_current_replay_summary',
@@ -1805,7 +1830,7 @@ function renderRunModeToggle() {
     button.disabled = isSending() || Boolean(aiState.activeSession?.archived_at);
     if (buttonRunMode === 'agent') {
       const title = agentSupported
-        ? 'Use read-only rover tools when the provider supports tool calling'
+        ? 'Use rover inspection and mission-planning tools when the provider supports tool calling'
         : 'This provider may fall back to plain agent chat without tool calls';
       button.title = title;
       button.setAttribute('aria-label', title);
@@ -3227,7 +3252,7 @@ async function resendMessage(messageId) {
   const message = live.messages.find((item) => item.id === messageId);
   const content = String(message?.content || '').trim();
   if (!content) return;
-  const runMode = messageRunMode(message);
+  const runMode = currentRunMode();
   live.sending = true;
   const abortController = new AbortController();
   live.abortController = abortController;

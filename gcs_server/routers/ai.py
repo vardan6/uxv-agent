@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import threading
 import uuid
@@ -32,6 +33,21 @@ from gcs_server.routers.llm import _redact_secret_text
 from gcs_server.runtime import AppRuntime
 
 router = APIRouter()
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively replace nan/inf float values with None so JSONResponse doesn't crash.
+
+    MAVLink mission items use nan for unused params (e.g. yaw on a ground rover).
+    Python's json.dumps allows nan by default but Starlette's JSONResponse does not.
+    """
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
 
 _AI_SOURCE_CONTROL_LABELS = {
     "project_docs": "Project docs",
@@ -1767,7 +1783,7 @@ async def clear_controller_mission(request: Request) -> JSONResponse:
             "expected_controller_version": expected_controller_version,
         },
     )
-    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+    return JSONResponse(_sanitize_for_json(result), status_code=200 if result.get("ok") else 409)
 
 
 @router.get("/api/ai/execution/state")
@@ -1935,7 +1951,7 @@ async def execute_mission_revision(revision_id: str, request: Request) -> JSONRe
             "expected_controller_version": expected_controller_version,
         },
     )
-    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+    return JSONResponse(_sanitize_for_json(result), status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/api/ai/mission-revisions/{revision_id}/reject")

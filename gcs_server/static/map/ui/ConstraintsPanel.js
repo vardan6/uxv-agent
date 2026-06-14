@@ -7,9 +7,10 @@
 const KIND_LABEL = { allowed_corridor: 'Allowed corridor', blockage: 'Blockage' };
 
 export class ConstraintsPanel {
-  constructor(parent, { onToggleEnabled = null, onEdit = null, onDelete = null, onClose = null } = {}) {
+  constructor(parent, { onToggleEnabled = null, onEdit = null, onEditShape = null, onDelete = null, onClose = null } = {}) {
     this._onToggleEnabled = onToggleEnabled;
     this._onEdit = onEdit;
+    this._onEditShape = onEditShape;
     this._onDelete = onDelete;
     this._onClose = onClose;
     this._list = [];
@@ -133,7 +134,15 @@ export class ConstraintsPanel {
         Promise.resolve(this._onDelete?.(c)).finally(() => { deleteBtn.disabled = false; });
       });
 
-      row.append(swatch, label, renameBtn, ruleBtn, enableBtn, deleteBtn);
+      const editShapeBtn = document.createElement('button');
+      editShapeBtn.type = 'button';
+      editShapeBtn.textContent = 'Edit shape';
+      editShapeBtn.title = 'Reshape this constraint polygon on the map';
+      editShapeBtn.addEventListener('click', () => {
+        this._onEditShape?.(c);
+      });
+
+      row.append(swatch, label, renameBtn, ruleBtn, enableBtn, editShapeBtn, deleteBtn);
       this._listEl.appendChild(row);
     }
   }
