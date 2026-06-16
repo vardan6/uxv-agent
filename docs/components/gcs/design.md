@@ -131,6 +131,10 @@ Current AI Chat behavior:
 - LLM provider configuration comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - Agent mode is wired through `ToolRegistry`; tools cover rover state, scene summary, object queries, mission state, and replay analytics
+- a separate terminal AI CLI is planned as a thin client over the existing
+  `/api/ai/...` backend surface; see [design/ai-cli.md](./design/ai-cli.md)
+- cleanup planning for removing legacy `/intent` and `/plan` entry points lives
+  in [design/intent-plan-cleanup.md](./intent-plan-cleanup.md)
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 
@@ -205,6 +209,7 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 - `ws.py`: WebSocket connection manager
 - `ai/`: current-context service, provider registry, chat service, session storage, and secret storage
 - `static/`: dashboard and setup frontend assets
+- `tools/` / `bin/` (planned): terminal AI CLI thin client over `/api/ai/...`
 
 ## Current Limitations
 

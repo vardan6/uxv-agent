@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -57,6 +57,8 @@ except ImportError:
     _LANGGRAPH_CHECKPOINTER_AVAILABLE = False
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCS_DIR = REPO_ROOT / "docs"
 
 
 def _resolve_gcs_data_path(path: object) -> Path:
@@ -169,6 +171,46 @@ async def settings_page() -> FileResponse:
 @app.get("/ai")
 async def ai_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "ai.html")
+
+
+@app.get("/docs/{path:path}")
+async def docs_viewer(path: str) -> HTMLResponse:
+    resolved = (DOCS_DIR / path).resolve()
+    if not str(resolved).startswith(str(DOCS_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        from markdown_it import MarkdownIt
+        md = MarkdownIt()
+        body_html = md.render(resolved.read_text(encoding="utf-8"))
+    except ImportError:
+        body_html = f"<pre>{resolved.read_text(encoding='utf-8')}</pre>"
+    title = resolved.stem
+    return HTMLResponse(content=f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body {{ max-width: 860px; margin: 32px auto; padding: 0 20px 60px; font-family: inherit; }}
+  .docs-back {{ display:inline-block; margin-bottom:18px; color:var(--muted); font-size:0.82rem; text-decoration:none; }}
+  .docs-back:hover {{ color:var(--text); }}
+  .docs-body h1,.docs-body h2,.docs-body h3 {{ margin-top:1.6em; }}
+  .docs-body pre {{ padding:10px 14px; border-radius:8px; background:var(--panel-strong,#1e1e1e); overflow-x:auto; }}
+  .docs-body code {{ font-size:0.88em; }}
+  .docs-body table {{ border-collapse:collapse; width:100%; }}
+  .docs-body th,.docs-body td {{ padding:6px 10px; border:1px solid var(--line,#333); text-align:left; }}
+  .docs-body blockquote {{ margin:0; padding:8px 14px; border-left:3px solid var(--accent,#4a9); color:var(--muted); }}
+</style>
+</head>
+<body>
+<a class="docs-back" href="javascript:history.back()">&#8592; back</a>
+<div class="docs-body">{body_html}</div>
+</body>
+</html>""")
 
 
 @app.get("/api/health")

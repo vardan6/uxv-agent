@@ -19,6 +19,7 @@ from gcs_server.ai import mission_patterns
 from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
 from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
 from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
+from gcs_server.ai.retrieval import search_project_docs as _search_project_docs
 from gcs_server.ai.road_graph_service import RoadGraphService
 from gcs_server.ai.session_store import normalize_source_controls
 from gcs_server.ai.spatial_query_service import SpatialQueryService
@@ -172,6 +173,9 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
 })
 
 _OPTIONAL_TOOL_NAMES_BY_SOURCE = {
+    "project_docs": frozenset({
+        "search_project_docs",
+    }),
     "replay_reports": frozenset({
         "get_current_replay_summary",
         "get_recent_telemetry",
@@ -375,6 +379,12 @@ class ToolRegistry:
                 "Get metadata-only sensor and video status, including telemetry freshness, camera freshness, configured video delivery, and current perception limitations. Use this for questions about whether the agent can currently see live camera data or rely on sensor freshness. This tool does not expose raw frames, detections, or vision inference output.",
                 READ_ONLY,
                 self._get_sensor_status,
+            ),
+            tool(
+                "search_project_docs",
+                "Search the project's own documentation — requirements, design docs, ADRs, glossary, and operational notes — for grounded, citeable context. Returns the most relevant doc chunks with their file path, heading path, similarity score, and a citation ref. Use this when the operator asks how the system is designed, why a decision was made, what an ADR or requirement says, or for definitions of project terms. Pass a focused natural-language query and optionally limit (default 5). Available only when the project_docs source control is enabled.",
+                ANALYSIS,
+                self._search_project_docs,
             ),
             tool(
                 "plan_route_around_group",
@@ -998,6 +1008,20 @@ class ToolRegistry:
             "perception_available": False,
             "perception_note": "This phase exposes only metadata and freshness; raw frames, detections, and perception events are not implemented.",
         }
+
+    def _search_project_docs(
+        self,
+        context: ToolInvocationContext,
+        query: str,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        secret_resolver = getattr(getattr(context.runtime, "secret_store", None), "get_secret", None)
+        return _search_project_docs(
+            context.runtime.config,
+            query,
+            limit=limit,
+            secret_resolver=secret_resolver,
+        )
 
     def _plan_route_around_group(
         self,

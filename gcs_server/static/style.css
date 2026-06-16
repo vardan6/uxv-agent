@@ -3570,6 +3570,41 @@ code {
   line-height: 1.35;
 }
 
+.ai-citation-title {
+  margin-top: 10px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ai-citation-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-citation-item {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-strong) 30%, transparent);
+}
+
+.ai-citation-link {
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.ai-citation-link:hover {
+  text-decoration: underline;
+}
+
 .ai-agent-tools-title {
   margin-bottom: 6px;
   color: var(--muted);

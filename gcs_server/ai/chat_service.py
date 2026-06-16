@@ -275,6 +275,8 @@ class AIChatService:
                     # post-loop fallback content (e.g. repeated-tool-failure messages)
                     # still reaches the client via the assistant_message event below,
                     # which replaces the pending bubble wholesale.
+                    _ctx_meta = _context_meta(context_snapshot)
+                    _rag_cits = _rag_citations_from_tool_calls(agent_result.tool_calls)
                     assistant_message = self._store.add_message(
                         session_id,
                         role="assistant",
@@ -296,7 +298,8 @@ class AIChatService:
                             "agent_tool_fallback_error": agent_tooling_error,
                             "response_metadata": agent_result.response_metadata,
                             "usage_metadata": agent_result.usage_metadata,
-                            **_context_meta(context_snapshot),
+                            **_ctx_meta,
+                            "retrieval_citations": list(_ctx_meta.get("retrieval_citations") or []) + _rag_cits,
                         },
                     )
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
@@ -404,6 +407,8 @@ class AIChatService:
                 # Keep the request alive by falling back to plain invoke.
                 agent_tooling_error = str(exc)
             if agent_result is not None:
+                _ctx_meta = _context_meta(context_snapshot)
+                _rag_cits = _rag_citations_from_tool_calls(agent_result.tool_calls)
                 return self._store.add_message(
                     session_id,
                     role="assistant",
@@ -425,7 +430,8 @@ class AIChatService:
                         "agent_tool_fallback_error": agent_tooling_error,
                         "response_metadata": agent_result.response_metadata,
                         "usage_metadata": agent_result.usage_metadata,
-                        **_context_meta(context_snapshot),
+                        **_ctx_meta,
+                        "retrieval_citations": list(_ctx_meta.get("retrieval_citations") or []) + _rag_cits,
                     },
                 )
         langchain_messages = _to_langchain_messages(
@@ -823,6 +829,18 @@ def _context_meta(context_snapshot: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     meta = context_snapshot.get("meta")
     return meta if isinstance(meta, dict) else {}
+
+
+def _rag_citations_from_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    for call in tool_calls:
+        if str(call.get("name") or "") == "search_project_docs":
+            result = call.get("result") or {}
+            if isinstance(result, dict):
+                for c in result.get("citations") or []:
+                    if isinstance(c, dict):
+                        citations.append(c)
+    return citations
 
 
 def _data_access_manifest(context_snapshot: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -702,6 +702,7 @@ function renderContextStatus(message) {
 
 function buildChatMarkdown(session, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
   const live = liveStateFor(session.id);
   const messages = (live?.messages || []).filter((m) => String(m.content || '').trim());
   const title = session.title || 'New chat';
@@ -710,7 +711,7 @@ function buildChatMarkdown(session, options = {}) {
 
   for (const message of messages) {
     if (message.role === 'user') {
-      lines.push('## You', '', String(message.content).trim(), '');
+      lines.push('## User', '', String(message.content).trim(), '');
       continue;
     }
     if (message.role === 'assistant') {
@@ -728,27 +729,101 @@ function buildChatMarkdown(session, options = {}) {
       }
       lines.push(header, '', String(message.content).trim(), '');
 
-      if (includeDiagnostics) {
-        const tools = agentToolCalls(message);
-        if (tools.length) {
-          lines.push('<details><summary>Agent activity</summary>', '');
-          for (const call of tools) {
-            const name = call.name || call.tool || 'tool';
-            const status = call.status ? ` [${call.status}]` : '';
-            const args = summarizeAgentToolArgs(call.args || call.arguments);
-            const result = summarizeAgentToolResult(call.result);
-            const argPart = args ? ` — ${args}` : '';
-            const resPart = result ? ` → ${result}` : '';
-            lines.push(`- ${name}${status}${argPart}${resPart}`);
-          }
-          lines.push('', '</details>', '');
-        }
+      if (shouldIncludeAgentActivityMarkdown(message, { includeDiagnostics, includeOpenActivity })) {
+        appendAgentActivityMarkdown(lines, message, { includeDiagnostics });
       }
       continue;
     }
     lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function shouldIncludeAgentActivityMarkdown(message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
+  if (messageRunMode(message) !== 'agent') return false;
+  if (includeDiagnostics) return true;
+  if (!includeOpenActivity) return false;
+  return isMessageActivityOpen(message?.id);
+}
+
+function appendAgentActivityMarkdown(lines, message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const calls = agentToolCalls(message);
+  const trace = agentTraceEvents(message);
+  const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
+    ? message.meta.prompt_context_tool_calls
+    : [];
+  const fallbackError = String(message?.meta?.agent_tool_fallback_error || '').trim();
+  const iterations = distinctAgentIterations(message);
+  if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return;
+
+  const status = calls.some((call) => (call?.status || '') === 'running')
+    ? 'Running'
+    : (calls.length ? 'Complete' : 'Recorded');
+
+  lines.push('### Agent activity', '');
+  lines.push(`- Status: ${status}`);
+  if (iterations.length) lines.push(`- Iterations: ${iterations.length}`);
+  if (calls.length) lines.push(`- Tool calls: ${calls.length}`);
+  if (promptCalls.length) lines.push(`- Context injections: ${promptCalls.length}`);
+  lines.push('');
+
+  if (trace.length) {
+    lines.push('#### Run trace', '');
+    trace.forEach((event, index) => {
+      const summary = summarizeAgentTraceEvent(event, index);
+      if (summary) lines.push(`- ${summary}`);
+    });
+    lines.push('');
+  }
+
+  if (calls.length) {
+    lines.push('#### Tools used', '');
+    calls.forEach((call, index) => {
+      const statusValue = call?.status || (call?.result !== undefined ? 'complete' : 'running');
+      const resultSummary = statusValue === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
+      const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
+      const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
+      const toolName = call?.name || call?.tool || `tool_${index + 1}`;
+      lines.push(`##### Tool ${index + 1}: \`${toolName}\``, '');
+      lines.push(`- Status: ${statusValue}`);
+      if (Number.isFinite(call?.iteration)) lines.push(`- Iteration: ${call.iteration}`);
+      if (latency) lines.push(`- Latency: ${latency}`);
+      if (argsSummary) lines.push(`- Arguments summary: ${argsSummary}`);
+      if (resultSummary && resultSummary !== statusValue) lines.push(`- Result summary: ${resultSummary}`);
+      lines.push('');
+
+      const argsValue = call?.args ?? call?.arguments;
+      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
+        lines.push('###### Arguments', '');
+        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
+      }
+      if (call?.result !== undefined) {
+        lines.push('###### Result', '');
+        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
+      } else if (includeDiagnostics) {
+        lines.push('###### Result', '', '_Waiting for tool result._', '');
+      }
+    });
+  }
+
+  if (promptCalls.length) {
+    lines.push('#### Context used', '');
+    promptCalls.forEach((call, index) => {
+      const name = call?.name || `context_${index + 1}`;
+      const summary = summarizeAgentToolResult(call?.result);
+      lines.push(`##### Context ${index + 1}: \`${name}\``, '');
+      if (summary) lines.push(`- Summary: ${summary}`, '');
+      lines.push('###### Injected result', '');
+      lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+    });
+  }
+
+  if (fallbackError) {
+    lines.push('#### Fallback', '', fallbackError, '');
+  }
 }
 
 function agentToolCalls(message) {
@@ -802,6 +877,57 @@ function prettyAgentJson(value, maxChars = 3600) {
   if (!normalized) return '';
   if (normalized.length <= maxChars) return escapeHtml(normalized);
   return `${escapeHtml(normalized.slice(0, maxChars))}\n…`;
+}
+
+function jsonForMarkdown(value) {
+  if (value == null) return 'null';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '""';
+    return trimmed;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function markdownCodeFence(content, language = '') {
+  const text = String(content || '').trimEnd();
+  const fence = text.includes('```') ? '````' : '```';
+  const lang = language ? String(language).trim() : '';
+  return `${fence}${lang}\n${text}\n${fence}`;
+}
+
+function detectMarkdownCodeLang(value) {
+  return typeof value === 'string' ? '' : 'json';
+}
+
+function summarizeAgentTraceEvent(event, index = 0) {
+  if (!event || typeof event !== 'object') return `Event ${index + 1}`;
+  if (event.type === 'agent_run_start') return 'Agent run started';
+  if (event.type === 'agent_iteration_start') {
+    return `Iteration ${event.iteration || '?' } started`;
+  }
+  if (event.type === 'agent_run_end') {
+    return `Run finished${event.stop_reason ? `: ${event.stop_reason}` : ''}`;
+  }
+  if (event.type === 'tool_call_start') {
+    const name = event.tool_name || event.name || event.tool_call?.name || 'tool';
+    const iteration = Number.isFinite(event.iteration) ? ` (iteration ${event.iteration})` : '';
+    return `Tool started: ${name}${iteration}`;
+  }
+  if (event.type === 'tool_call_end') {
+    const name = event.tool_name || event.name || event.tool_call?.name || 'tool';
+    const iteration = Number.isFinite(event.iteration) ? ` (iteration ${event.iteration})` : '';
+    return `Tool finished: ${name}${iteration}`;
+  }
+  const parts = [];
+  if (event.type) parts.push(String(event.type));
+  if (Number.isFinite(event.iteration)) parts.push(`iteration ${event.iteration}`);
+  if (event.stop_reason) parts.push(`reason: ${event.stop_reason}`);
+  return parts.join(' · ') || `Event ${index + 1}`;
 }
 
 function distinctAgentIterations(message) {
@@ -1068,6 +1194,23 @@ function renderRetrievalPanel(message) {
     `;
   }).join('');
 
+  let citationHtml = '';
+  if (citations.length) {
+    const citationItems = citations.map((c) => {
+      const rawPath = String(c.path || '');
+      const docPath = rawPath.startsWith('docs/') ? rawPath.slice(5) : rawPath;
+      const url = `/docs/${docPath}`;
+      const headings = Array.isArray(c.heading_path) ? c.heading_path : (c.heading_path ? [c.heading_path] : []);
+      const headingLabel = headings.length ? ` — ${escapeHtml(headings[headings.length - 1])}` : '';
+      const filename = rawPath.split('/').pop() || rawPath;
+      return `<li class="ai-citation-item"><a class="ai-citation-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(filename)}${headingLabel}</a></li>`;
+    }).join('');
+    citationHtml = `
+      <div class="ai-citation-title">Sources</div>
+      <ul class="ai-citation-list">${citationItems}</ul>
+    `;
+  }
+
   return `
     <div class="ai-retrieval-panel" aria-label="Retrieval surfaces">
       <div class="ai-retrieval-title">Retrieval surfaces</div>
@@ -1076,6 +1219,7 @@ function renderRetrievalPanel(message) {
         ${enabled.length ? `<span>enabled: ${escapeHtml(enabled.join(', '))}</span>` : ''}
       </div>
       <ul class="ai-retrieval-list">${rows}</ul>
+      ${citationHtml}
     </div>
   `;
 }

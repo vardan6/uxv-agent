@@ -764,7 +764,7 @@ The `/ai` map is the authoring surface — there is no separate Missions page. C
 | World | New `world_objects` and `world_observations` tables | `query_world_object`, `recall_last_seen`, `predict_object_position` | confidence decays with time; eviction below threshold |
 | Operator | New `operator_profile` table | `recall_operator_preference`, `update_operator_memory` (policy-gated) | operator can view, edit, purge |
 
-Current footprint: working + session active. Other layers ship as empty tables + tool stubs that return "memory layer not yet populated." See [ADR 0003](../../cross-cutting/decisions/0003-rag-scope-vs-live-context.md) and [ADR 0007](../../cross-cutting/decisions/0007-rag-later-not-now-for-live-state.md) for scope.
+Current footprint: working + session active. Other layers ship as empty tables + tool stubs that return "memory layer not yet populated." See [ADR 0003](../../cross-cutting/decisions/0003-rag-scope-vs-live-context.md) for scope and [ADR 0028](../../cross-cutting/decisions/0028-rag-project-docs-first-consumer-qdrant.md) for the `project_docs` RAG implementation (supersedes ADR 0007's timing). `project_docs` citations surface as clickable links in the chat retrieval panel; each link opens `GET /docs/{path}` which renders the source markdown file in-browser.
 
 ## Specialist Agents and Handoffs
 

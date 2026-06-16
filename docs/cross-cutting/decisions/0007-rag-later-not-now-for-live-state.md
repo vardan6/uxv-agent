@@ -1,7 +1,7 @@
 # 0007. RAG Is Deferred; Live State Stays Structured Only
 
 Date: 2026-05-20
-Status: Accepted
+Status: Superseded by [ADR 0028](./0028-rag-project-docs-first-consumer-qdrant.md) (timing only; the structured-live-state scope of [ADR 0003](./0003-rag-scope-vs-live-context.md) is unchanged)
 
 ## Context
 
