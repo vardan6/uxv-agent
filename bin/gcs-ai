@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Launcher for the GCS AI CLI. Resolves the venv relative to this script.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV="$REPO_ROOT/.venv"
+
+if [[ -f "$VENV/bin/python" ]]; then
+    exec "$VENV/bin/python" "$REPO_ROOT/tools/gcs_ai_cli.py" "$@"
+else
+    exec python3 "$REPO_ROOT/tools/gcs_ai_cli.py" "$@"
+fi

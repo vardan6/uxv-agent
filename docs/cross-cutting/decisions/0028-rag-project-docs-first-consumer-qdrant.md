@@ -113,6 +113,81 @@ SPLADE — see point 4a) → **hybrid (RRF) + reranking** and adds **Contextual
 Retrieval** (LLM-generated per-chunk context at ingest) — no collection
 recreation required.
 
+**9. Embedding management is operator-facing from Settings; identity, status,
+and citations are operationalized (amendment, 2026-06-17).** Slice 1's CLI-only
+ingest is extended into a managed surface, without changing the chunk-level
+idempotency already shipped. The surface is a **dedicated "RAG" tab** in the
+GCS Settings page — a new tab, not a section within an existing tab, because
+the corpus/embedding concerns are a distinct operator domain from model config:
+
+- **Single source of truth for the embedding model is the `embeddings` routing
+  purpose.** Both the read side (`retrieval.py`) and the write side
+  (`rag_service` ingest, when triggered from the app) resolve `base_url` +
+  `model_id` from `model_routing.embeddings`. The collection name is **derived**
+  from that model (`collection_name_for(model_id, dim, version)`) rather than
+  hardcoded, making point 5's "model swap → new collection" automatic. The
+  env-var defaults in `rag_service/ingest.py` survive only for standalone CLI use.
+- **Per-collection manifest is a reserved Qdrant sentinel point** (fixed-UUID id,
+  `kind: "__manifest__"`, excluded from search by filter): `embedding_model_id`,
+  `base_url`, `dim`, `version`, `created_at`, `last_ingest_at`, `point_count`,
+  and `files: {path: content_hash}`. Chosen over a SQLite table or JSON sidecar
+  because it travels with the collection and resets atomically on
+  drop/regenerate, so it cannot drift from the vectors it describes.
+- **Ingest from Settings runs as an in-process async background job** (job id +
+  progress poll) — embedding the full corpus takes minutes, so the trigger is
+  non-blocking; one job per collection at a time. `incremental` reuses the
+  existing `content_hash` skip/delete-stale path; `regenerate` drops and rebuilds.
+- **Staleness is computed, not stored as status**: from the current routed model
+  + the manifest, status is one of `up_to_date | stale | missing |
+  model_mismatch`. A `missing`/`model_mismatch` collection for the *current*
+  routed model is surfaced as an operator warning ("no matching embeddings
+  collection — generate now"), directly satisfying the model-change-detection
+  requirement.
+- **Citations are rendered, not just returned.** `search_project_docs` already
+  returns per-chunk `citations` (`path`, `heading_path`, `ref`). The assistant
+  message carries them through to the UI, which renders both the model's inline
+  prose links **and** a deterministic "Sources" footer. Each link targets the
+  existing `/docs/{path}` viewer at the chunk's section via a heading-anchor
+  slug derived from `heading_path` — so the viewer gains heading-id anchors.
+
+**9a. RAG tab is a multi-model management surface; collections persist per model
+(amendment, 2026-06-17).** The RAG tab gains an embedding model selector that
+is the primary control surface for `model_routing.embeddings` — consistent with
+the AI chat provider dropdown, which is the primary selector for the active chat
+provider. Changing the selector saves the routing and immediately triggers a
+status refresh (spinner → result within ~500 ms); no manual refresh step.
+
+- **Collections persist per model and coexist in Qdrant.** Switching models
+  does not destroy another model's collection. Each collection is owned by the
+  model that produced it (`collection_name_for(model_id, dim)` is deterministic).
+  An operator can freely switch between models; if a model's collection was
+  previously built and docs have not changed, status is `up_to_date` and the
+  switch is instantaneous. The collection for the previously-active model remains
+  intact. `model_mismatch` therefore means the manifest's recorded dim/model
+  does not match the current provider config for that same model — a rare
+  corruption state, not the normal model-switch path.
+- **Dropdown source is providers configured for the `embeddings` routing purpose.**
+  Only providers that have been assigned the `embeddings` purpose in the Routing
+  tab appear as choices. This is the same set the Routing tab shows for that row;
+  the RAG tab does not introduce a parallel provider list.
+- **Button labels and enabled states are fixed by staleness:**
+  - *"Update Index"* — triggers `incremental` ingest (re-embeds only changed
+    chunks via `content_hash` diff). Disabled when staleness is `missing` or
+    `model_mismatch` (no existing collection to diff against).
+  - *"Rebuild Index"* — triggers `regenerate` ingest (drops collection, re-embeds
+    every document). Always enabled. Required when: model/dimension changed
+    (new collection needed), `model_mismatch` (corrupt manifest), or operator
+    wants a clean slate. A confirmation prompt guards against accidental use.
+  - Neither button is conditionally relabelled; the status pill and banner carry
+    the contextual explanation.
+- **Qdrant-down is a distinct UI state, not a generic error.** A 503 from
+  `GET /api/rag/status` renders an actionable banner: *"Qdrant is not running.
+  Start it with `bin/rag up`."* Other backend errors (embeddings config not
+  resolved, no provider configured) render their specific message from
+  `response.error`. The JS path uses `data.error || data.detail` so FastAPI
+  errors and RAG-specific errors are both surfaced rather than collapsed to
+  "Request failed."
+
 ## Consequences
 
 - **Enables** grounded, cited answers over the project's own docs, lighting up

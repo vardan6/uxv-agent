@@ -2,6 +2,20 @@
 
 Status date: 2026-06-17.
 
+Implementation status:
+
+- Slice 0 complete: keep/delete boundary documented here.
+- Slice 1 complete in code: shared `ToolRegistry` now lives on direct app state;
+  normal AI routes no longer reach it through `planning_shell_runtime`.
+- Slice 2 complete in code/docs: the dedicated `/intent` slash path, endpoint,
+  and active product docs were removed; shared parsing internals remain.
+- Slice 3 complete in code: dedicated `request_clarification` and planner-only
+  interrupt/resume behavior are removed.
+- Slice 4 complete in code: `/plan` frontend/backend entry points are removed.
+- Slice 5 complete in code: planning-shell runtime/graph files and app wiring
+  are deleted.
+- Remaining work is Slice 6: finish the active doc/state cleanup pass.
+
 This document defines a safe cleanup plan for removing the `/intent` and
 `/plan` slash-command entry points, their dedicated frontend/backend surfaces,
 and any now-dead supporting code, without accidentally deleting shared
@@ -194,9 +208,9 @@ runtime code risks breaking normal AI routes.
 
 ### Current state
 
-- app startup creates a `ToolRegistry`
-- app startup creates `PlanningShellGraphRuntime`
-- normal AI routes obtain the shared registry through the planning-shell runtime
+- app startup creates a shared `ToolRegistry`
+- app startup also creates `PlanningShellGraphRuntime`
+- normal AI routes now obtain the registry directly from `app.state.tool_registry`
 
 ### Target state
 
@@ -213,6 +227,14 @@ runtime code risks breaking normal AI routes.
   without being the owner of it
 - verify normal Agent chat still works
 
+### Status
+
+Done on 2026-06-17.
+
+The shared registry is now owned by app state and passed into the temporary
+planning-shell runtime as a consumer only. This was the only hidden coupling
+blocking later deletion of planning-shell runtime wiring.
+
 ### Verifiable
 
 - normal `/api/ai/sessions/{id}/messages`
@@ -222,6 +244,8 @@ runtime code risks breaking normal AI routes.
 ### Deletion not yet allowed
 
 - do not delete planning-shell routes or graph code in this slice
+- do not treat this slice alone as proof that planning-shell runtime/graph code
+  is dead; later slices still need explicit call-site removal
 
 ## Slice 2 — Remove `/intent` entry point and dedicated intent-test surface
 
@@ -253,6 +277,13 @@ runtime code risks breaking normal AI routes.
 - remove intent-only message metadata and UI rendering if no longer referenced
 - update docs to describe intent parsing as an internal/shared capability rather
   than a user-facing mode
+
+### Status
+
+Done on 2026-06-17.
+
+The dedicated `/intent` product surface is gone from the active UI and backend.
+Shared parsing internals remain in place for mission-planning/tooling flows.
 
 ### Verifiable
 
@@ -457,7 +488,6 @@ points. Cleanup should update these in phases:
 - `docs/components/gcs/design/ai-cli.md`
 - `docs/components/ai-agent/requirements.md`
 - `docs/components/ai-agent/design/intent-parsing.md`
-- `docs/components/ai-agent/design/planning-shell.md`
 - `docs/components/ai-agent/design.md`
 
 ### Mandatory doc-update rule

@@ -4,14 +4,33 @@ import os
 from typing import Any
 
 from gcs_server.ai.session_store import normalize_source_controls
+from rag_service.collection import collection_name_for
 
-# Dense collection populated by rag_service/ingest.py. MUST match ingest's
-# COLLECTION_NAME / EMBEDDING_DIM and the `embeddings` routing provider, or
-# query vectors land in a different space than the stored ones (ADR 0028 §8).
-PROJECT_DOCS_COLLECTION = "project_docs_v1_qwen3e4b_2560"
+_DEFAULT_EMBEDDINGS_MODEL = "qwen3-embedding-4b"
+_DEFAULT_EMBEDDINGS_DIM = 2560
+# Fallback constant — used only when config-based resolution fails (graceful degradation).
+PROJECT_DOCS_COLLECTION = collection_name_for(_DEFAULT_EMBEDDINGS_MODEL, _DEFAULT_EMBEDDINGS_DIM)
 PROJECT_DOCS_DENSE_VECTOR = "dense"
 DEFAULT_QDRANT_REST_PORT = 9004
 DEFAULT_SEARCH_LIMIT = 5
+
+
+def _resolve_collection(config: Any) -> str:
+    """Derive the project_docs collection name from the currently routed embeddings provider.
+
+    Falls back to the default (Qwen3/2560) if the provider or its dim field is absent,
+    so chat degrades gracefully rather than raising on misconfiguration.
+    """
+    try:
+        from gcs_server.ai.provider_registry import resolve_embeddings_provider
+        provider = resolve_embeddings_provider(config)
+        model_id = str(provider.get("model_id") or "").strip()
+        dim = provider.get("embedding_dim")
+        if model_id and dim:
+            return collection_name_for(model_id, int(dim))
+    except Exception:  # noqa: BLE001
+        pass
+    return PROJECT_DOCS_COLLECTION
 
 
 def _qdrant_rest_port(qdrant_port: int | None) -> int:
@@ -45,6 +64,8 @@ def search_project_docs(
             "note": "Empty query; provide a question or keywords to search project docs.",
         }
 
+    collection = _resolve_collection(config)
+
     try:
         from gcs_server.ai.provider_registry import embed_query
         vector = embed_query(config, text, secret_resolver=secret_resolver)
@@ -72,7 +93,7 @@ def search_project_docs(
     try:
         client = QdrantClient(host="127.0.0.1", port=port)
         response = client.query_points(
-            collection_name=PROJECT_DOCS_COLLECTION,
+            collection_name=collection,
             query=vector,
             using=PROJECT_DOCS_DENSE_VECTOR,
             limit=int(limit) if int(limit) > 0 else DEFAULT_SEARCH_LIMIT,
@@ -86,7 +107,7 @@ def search_project_docs(
             "citations": [],
             "note": (
                 f"Could not query Qdrant on :{port} collection "
-                f"'{PROJECT_DOCS_COLLECTION}' (is it up and ingested?): {exc}"
+                f"'{collection}' (is it up and ingested?): {exc}"
             ),
         }
 
@@ -117,7 +138,7 @@ def search_project_docs(
     return {
         "available": True,
         "status": "ok" if results else "no_matches",
-        "collection": PROJECT_DOCS_COLLECTION,
+        "collection": collection,
         "query": text,
         "results": results,
         "citations": citations,

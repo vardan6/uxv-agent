@@ -98,8 +98,8 @@ candidate filtering. For example:
 
 The same registry serves:
 - Agent mode (Chat page)
-- Rover Intent Test
-- LangGraph planning-shell workflows
+- shared rover-intent parsing
+- shared mission-authoring workflows
 - future MCP server adapters
 
 Initial read-only tools:

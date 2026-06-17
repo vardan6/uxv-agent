@@ -93,23 +93,22 @@ Three load-bearing boundaries:
 - physical authority lives in backend services, autopilot, and hardware rather
   than in the model loop
 
-## 2. Current Planning Shell
+## 2. Current Mission-Authoring Flow
 
 The planner loop is the sole planning core. Deterministic validation and
-approval remain outside free-form model reasoning.
+approval remain outside free-form model reasoning, but the dedicated
+planning-shell wrapper has been removed from the live product surface.
 
 ```mermaid
 flowchart TB
     S([START]) --> CAP[capture_request]
     CAP --> INIT[retrieve_current_context<br/>compact snapshot + manifest]
     INIT --> LP[planner_loop_node<br/>AgentLoopRuntime · role=planner]
-    LP -.-> PCL[prepare_clarification ⏸<br/>resume into LP]
-    PCL -.-> LP
     LP -.-> CR[critic_loop_node<br/>optional future]
     LP --> VD[validate_draft 🔒]
     CR --> VD
     VD --> ST["store_draft<br/>(mission_execution.create_proposal)"]
-    ST --> AP[request_planning_shell_approval ⏸]
+    ST --> AP[request mission approval]
     AP --> D{approved?}
     D -- yes --> RA["record_approval<br/>(mission_execution.approve + export)"] --> FN[finalize_response]
     D -- no --> RJ["record_rejection<br/>(mission_execution.reject)"] --> FN
@@ -121,8 +120,8 @@ Durable properties:
 - `validate_draft` is the last deterministic gate before storage
 - draft approval is the only operator approval at this planning tier
 - canonical mission storage lives in `mission_execution`
-- clarification resumes the same planning loop rather than switching to a
-  separate planning path
+- clarification is no longer a dedicated runtime interrupt in the current
+  product surface
 
 ## 3. AgentLoopRuntime — Internal State Machine
 
@@ -143,11 +142,7 @@ stateDiagram-v2
     Guard --> Esc: escalate
 
     Act --> Terminal: call == terminal_action
-    Act --> Clarify: call == request_clarification
     Act --> Invoke: otherwise
-
-    Clarify --> Resume: interrupt(question)
-    Resume --> Plan: operator answered<br/>state refreshed
 
     Invoke --> Observe: ToolRegistry.invoke
     Observe --> Reflect: append observation
@@ -205,9 +200,6 @@ sequenceDiagram
             L->>X: agent_tool_result
           else allow + terminal tool
             L->>L: capture artifact
-          else allow + request_clarification
-            L-->>OP: interrupt(question)
-            OP-->>L: answer
           else deny / escalate
             L->>X: agent_guardrail_result
             L-->>OP: stop_reason
@@ -236,8 +228,8 @@ flowchart LR
       RC[report_complete]
     end
     subgraph Halt
-      RQ[requires_clarification]
-      RPS[requires_planning_shell]
+      RQ[requires_clarification<br/>reserved]
+      RPS[requires_planning_shell<br/>historical]
       RCS[requires_command_staging]
       REA[requires_execution_approval]
       HR[handoff_requested]

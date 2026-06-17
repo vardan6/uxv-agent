@@ -8,10 +8,10 @@ Status note (implementation reality):
 
 - `AgentLoopRuntime` is implemented and powers Agent chat.
 - The visible `/ai` Agent can inspect state and author durable Missions through the shared planning tools. A successful terminal proposal persists the canonical revision plus flat Mission row before the assistant response completes, so the normal chat text and map/sidebar object are produced by the same turn.
-- The planning shell wraps the planning flow.
+- Agent chat now owns the live planning flow directly through shared planning tools.
 - The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
 - `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
-- Canonical mission storage and approval/execution writes now flow through `mission_execution`; planning-shell draft compatibility seams still exist around the current wrapper flow. Real external controller transport has since landed (ADR 0023 Phases 1–3): a `ControllerMissionAdapter` with pymavlink + MAVSDK backends, and a relocatable behavior-tree executor driving nav segments to the FC, gated by the ADR 0021 execution modes. The AI execution tools (`arm_execution`/`execute_mission`/`cancel_execution`/`abort`) are bound per mode. See `roadmap.md` for live status.
+- Canonical mission storage and approval/execution writes now flow through `mission_execution`. Real external controller transport has since landed (ADR 0023 Phases 1–3): a `ControllerMissionAdapter` with pymavlink + MAVSDK backends, and a relocatable behavior-tree executor driving nav segments to the FC, gated by the ADR 0021 execution modes. The AI execution tools (`arm_execution`/`execute_mission`/`cancel_execution`/`abort`) are bound per mode. See `roadmap.md` for live status.
 
 This document is **expected to evolve** as implementation lands. File names, phase ordering, and runtime interface shapes can be updated in place through normal review.
 
@@ -24,7 +24,7 @@ This document is **expected to evolve** as implementation lands. File names, pha
 - [Tool and Permission Model](#tool-and-permission-model)
 - [Policy Engine](#policy-engine)
 - [Context and Data Strategy](#context-and-data-strategy)
-- [Planning-Shell Integration](#planning-shell-integration)
+- [Agent Mission-Authoring Integration](#agent-mission-authoring-integration)
 - [Route Planning, Vehicle Profiles, and Mission Export](#route-planning-vehicle-profiles-and-mission-export)
 - [Memory Subsystem](#memory-subsystem)
 - [Specialist Agents and Handoffs](#specialist-agents-and-handoffs)
@@ -65,7 +65,7 @@ Non-readers (for them, see [requirements.md](./requirements.md)):
 Operator Terminal (text today, voice later)
   │
   ▼
-AIChatService / PlanningShell
+AIChatService
   │
   ▼
 AgentLoopRuntime  ────►  ContextManifest
@@ -252,13 +252,6 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
                 observations.append(_tool_obs(call, {"accepted": True}))
                 messages.append(_tool_message(call, {"status": "accepted"}))
                 continue
-            if call.name == "request_clarification":
-                response_payload = lg_interrupt(call.args)         # durable HITL
-                observations.append(_tool_obs(call, response_payload))
-                messages.append(_tool_message(call, response_payload))
-                state = _refresh_state_after_clarification(rt, state)
-                continue
-
             # 4) act
             result = rt.tool_registry.invoke(
                 call.name, args=call.args,
@@ -297,9 +290,8 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
 ### Important properties
 
 - **Single role provider per loop.** Specialist tools may internally call their own providers (e.g., `parse_rover_intent` keeps its own structured-output provider).
-- **Tool calls are sequential in v1.** Determinism over throughput for approval-gated flows. `allow_parallel_tool_calls` is a future config knob.
+- **Tool calls are sequential in v1.** Determinism over throughput for mission-authoring and safety-gated flows. `allow_parallel_tool_calls` is a future config knob.
 - **Terminal actions are tools, not free-form output.** `propose_mission_draft` is the planning exit signal; its args schema is the mission draft schema. Strictly stronger than parsing free-form JSON.
-- **`request_clarification` wraps `interrupt()`.** Same durable HITL as today's `prepare_clarification`. The planner decides when it is needed.
 - **No execution tools bound to the model.** `_bind_role_tools` reads from `ToolRegistry` with `permissions ⊆ DEFAULT_PERMISSIONS`.
 - **High baseline input-token usage is expected in Agent mode.** The fixed overhead from system safety instructions, tool catalog/binding, and compact context injection is intentional; short prompts can still produce multi-thousand input-token runs. **Do not optimize away this baseline by default.** Token-baseline reduction is a separate, explicitly scoped optimization task and must preserve safety guardrails, tool reliability, and operator-facing answer quality.
 - **Narrow greeting fast-path is allowed.** A trivial small-talk bypass may skip tool-loop/context injection for short greeting-only prompts in Agent mode, but it must remain strict and must not trigger for rover-state, map-object, mission, telemetry, or replay intent.
@@ -359,8 +351,8 @@ Exactly one stop reason per run. Agent chat stores `agent_stop_reason`, `agent_i
 | `draft_proposed` | Planning shell produced a mission draft |
 | `critique_complete` | Critic specialist finished review |
 | `report_complete` | Reporter specialist finished a report |
-| `requires_clarification` | Operator clarification needed (interrupt) |
-| `requires_planning_shell` | Agent mode detected motion planning; recommends the current `/plan` planning-shell entry point |
+| `requires_clarification` | Reserved stop reason for a future dedicated clarification contract; not used by the current product surface |
+| `requires_planning_shell` | Historical stop reason from the removed `/plan` path; no longer used by the current product surface |
 | `requires_command_staging` | Task needs staging; not available in current mode |
 | `requires_execution_approval` | Execution authority needed but not granted |
 | `handoff_requested` | Loop requested a typed specialist / workflow handoff |
@@ -451,7 +443,7 @@ Layers (each independent):
 - **Input guardrails** — unsafe requests, prompt injection, out-of-scope robot requests, ambiguous motion, low STT confidence.
 - **Tool guardrails** — permission tier, grant scope, source controls, freshness, side effects, budget, rate limits, vehicle-profile binding.
 - **Output guardrails** — no false execution claims, no secret leakage, no ungrounded live-state claims, clear uncertainty when data is stale.
-- **Workflow guardrails** — planning-shell approval is draft approval only; staging and execution require separate approvals. `export_mission(draft_id)` is allowed only when `draft.lifecycle == approved`.
+- **Workflow guardrails** — mission drafting is non-executing; staging and execution require separate approvals. `export_mission(draft_id)` is allowed only when `draft.lifecycle == approved`.
 - **Execution guardrails** — future commands validate geofence, controller lock, telemetry freshness, obstacle policy, mission state, operator grant.
 
 Phase-3 footprint: thin wrapper around the current permission filter. Same behavior, but the seam exists so future tiers do not require rewriting the loop. Traces emit `agent_policy_decision` events; blocked calls stop with `policy_denied`.
@@ -489,9 +481,12 @@ Rules:
 
 Detail: [design.md](./design.md).
 
-## Planning-Shell Integration
+## Agent Mission-Authoring Integration
 
-The planning shell remains a durable HITL wrapper. The shared runtime remains the reasoning center. The shell hands semantic mission proposal packages to `mission_execution`, which owns authoritative draft/revision state, approval effects, and controller-facing behavior. The old graph no longer owns mission storage and approval semantics.
+The shared runtime remains the reasoning center. Mission-authoring prompts now
+flow through the normal Agent runtime and hand semantic mission proposal
+packages to `mission_execution`, which owns authoritative draft/revision state,
+approval effects, and controller-facing behavior.
 
 ```text
 START
@@ -501,12 +496,12 @@ START
               └─► critic_loop_node?       optional (Phase 7); role=critic
                   └─► validate_draft      deterministic, unchanged; backstop for empty waypoints
                       └─► hand off to mission_execution (proposal package)
-                          └─► request_planning_shell_approval   interrupt()
+                          └─► request mission approval through mission_execution
                               └─► record_approval | record_rejection
                                   └─► finalize_response
 ```
 
-Disappearing nodes (collapsed into tools as of Phase 6):
+Disappearing nodes (collapsed into tools during the planner migration):
 
 | Former planning-shell node | Now |
 |---|---|
@@ -518,13 +513,11 @@ Disappearing nodes (collapsed into tools as of Phase 6):
 | `parse_intent` | `parse_rover_intent` tool |
 | `resolve_target` | `resolve_spatial_target` tool |
 | `generate_mission_draft` | `propose_mission_draft` terminal tool |
-| `prepare_clarification` | `request_clarification` tool wrapping `interrupt()` |
-
-Planning-shell loop config:
+Agent mission-authoring loop config:
 
 ```python
 AgentLoopConfig(
-    run_mode="planning_shell",
+    run_mode="agent",
     role="planner",
     terminal_action="propose_mission_draft",
     max_iterations=8,
@@ -533,7 +526,7 @@ AgentLoopConfig(
 )
 ```
 
-State additions to `PlanningShellGraphState`:
+Historical state additions from the removed planning-shell wrapper:
 
 ```python
 class PlanningShellGraphState(TypedDict, total=False):
@@ -547,7 +540,7 @@ Detail: [design.md](./design.md), [design.md](./design.md), [design.md](./design
 
 ## Route Planning, Vehicle Profiles, and Mission Export
 
-A mission draft is incomplete unless it carries a drivable route and an exporter that serialises it into a flight-controller-ready artifact. This subsystem slots into the existing planning-shell as tools (no new graph nodes), behind a first-class vehicle abstraction.
+A mission draft is incomplete unless it carries a drivable route and an exporter that serialises it into a flight-controller-ready artifact. This subsystem slots into the shared Agent mission-authoring flow as tools (no new graph nodes), behind a first-class vehicle abstraction.
 
 Detail: [design.md](./design.md), [design.md](./design.md).
 
@@ -557,7 +550,7 @@ Keep the graph topology vehicle- and task-agnostic. Every new capability ships a
 
 ### `VehicleProfile` (`gcs_server/ai/vehicle_profile.py`)
 
-First-class profile concept. Populated for all currently-anticipated kinds (`ground_vehicle`, `multirotor`, `fixed_wing`) even though only `ground_vehicle` is exercised end-to-end. Goal: when multirotor or fixed-wing is wired up later, no refactor of the planner / exporter / tool-registry / planning-shell graph is required — only new planner-tool files and a scene swap.
+First-class profile concept. Populated for all currently-anticipated kinds (`ground_vehicle`, `multirotor`, `fixed_wing`) even though only `ground_vehicle` is exercised end-to-end. Goal: when multirotor or fixed-wing is wired up later, no refactor of the planner / exporter / tool-registry / shared mission-authoring flow is required — only new planner-tool files and a scene swap.
 
 ```python
 @dataclass
@@ -749,7 +742,7 @@ The `/ai` map is the authoring surface — there is no separate Missions page. C
 
 - **New**: `gcs_server/ai/road_graph_service.py`, `gcs_server/ai/mission_export_service.py`, `gcs_server/ai/vehicle_profile.py`.
 - **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `export_mission`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/policy_engine.py` (gate `export_mission` on `draft.lifecycle == approved`); `gcs_server/ai/mission_draft_service.py` (extend step schema with `waypoints` + `route_summary`; add lifecycle fields); `gcs_server/scene_map.py` (expose centerlines).
-- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionDraftService` for storage + approval flow, existing `PolicyEngine` for tier gating, existing `validate` step in the planning-shell graph.
+- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionDraftService` for storage + approval flow, existing `PolicyEngine` for tier gating, and the existing deterministic mission validation step.
 - **Possibly bump**: `config/terrain_scene.v1.json` + `terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
 
 ## Memory Subsystem
@@ -788,7 +781,7 @@ Planner    → Critic:        MissionDraft + ToolTrace
 Critic     → Planner:       Critique{accepted, concerns, suggested_revisions, confidence, policy_flags}
 Planner    → Researcher:    ResearchRequest{question, scope, source_controls}
 Researcher → Planner:       ResearchResult{summary, citations, loaded_refs}
-Planner    → PlanningShell: MissionDraftRequest{prompt, context_refs, source_controls}
+Planner    → Mission approval boundary: MissionDraftRequest{prompt, context_refs, source_controls}
 Stager     → Executor:      StagedCommand{command_id, expected_outcome, grant_id}
 Monitor    → Planner:       ReplanRequest{mission_id, reason, observations}
 Reporter   → Memory:        EpisodeRecord{task_id, outcome, summary, citations}
@@ -917,7 +910,8 @@ Voice is an I/O channel over the same runtime. No separate brain.
 Input rules:
 
 - STT produces text + confidence + n-best + audio reference.
-- Below threshold (e.g., 0.7): force `request_clarification` echoing n-best.
+- Below threshold (e.g., 0.7): return a normal assistant clarification request
+  echoing the n-best candidates.
 - Barge-in cancels TTS immediately; new utterance becomes active prompt.
 - Voice input stored with `input_modality = "voice"`, `stt_confidence`, alternatives, trace ID.
 
@@ -1078,7 +1072,7 @@ Phases are sequenced by what they unlock. Any phase can move based on product pr
 | **2** | Structured trace + stop reasons; loop start / end / iteration events; repeated-tool-failure detection; provider-tool-calling fallback. **Done.** | Platform |
 | **3** | `PolicyEngine` seam; data-access manifest in loop input; extend `ToolDefinition` with `tier` / `required_scopes` / `side_effects`. **Done.** | Platform |
 | **4** | Bounded lazy tools: settings, AI session listing / search / message, available-data-surface discovery, sensor / perception metadata stubs. | Platform |
-| **5** | Introduce the planning-shell planner-loop node with an initial migration flag. **Done.** | Platform |
+| **5** | Introduce the shared planner-loop mission-authoring path with an initial migration flag. **Done.** | Platform |
 | **6** | Default-on planner loop; remove the superseded deterministic-DAG nodes. **Done.** | Platform |
 | **7** | Critic (7a) + Reporter (7b) + memory foundations (session summaries, mission / report memory, operator preference memory). | Platform |
 | **8** | Voice terminal: STT / TTS adapters, voice transcript metadata, barge-in, fixed-grammar approvals + e-stop. | Platform |
@@ -1154,11 +1148,11 @@ Before any tier-3+ work starts, **all** must hold:
 | `ToolRegistry` | Tool registration and permission filtering | implemented; extended with tier / scopes / side_effects |
 | `PolicyEngine` | Permission / grant / policy decision before tool execution | thin wrapper, implemented |
 | `AIContextService` | Compact current context and manifest | implemented |
-| `PlanningShellGraph` | Durable HITL shell for planning approval | implemented; simplified |
+| `Planning flow` | Shared Agent runtime plus mission-authoring tools | implemented |
 | `MissionDraftService` | Store and validate draft lifecycle | implemented |
 | `MissionExecutionService` | Authoritative mission revision / operation / controller-handoff state | implemented; real-controller adapter slice next |
 | `ProviderRegistry` | Role / purpose model routing | implemented; evolves to roles |
-| `AgentTraceStore` | JSONL trace persistence | implemented for Agent chat; planning-shell integration later |
+| `AgentTraceStore` | JSONL trace persistence | implemented for Agent chat |
 | `MemoryStore` | Layered memory | scaffolded; populated Phase 7 |
 | `TaskStore` | Long-horizon task lifecycle | scaffolded; wired Phase 9 |
 | `RoadGraphService` | Road graph build + queries | implemented |
@@ -1251,10 +1245,10 @@ Paired so reviewers can decide together. Product-level questions live in [requir
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Default loop iteration cap: 6 or 8? | Chat at 6; planning-shell planner at 8. |
+| 1 | Default loop iteration cap: 6 or 8? | Chat at 6; planner-style Agent turns at 8. |
 | 2 | `propose_mission_draft` mid-loop or only final? | Final only. Simpler invariant: once proposed, loop exits. |
 | 3 | Allow planner to retry `parse_rover_intent` after new observations? | One retry, gated by `_intent_retries` counter. |
-| 4 | Unify Agent chat + planning-shell runtime immediately? | Done (shared `AgentLoopRuntime`). |
+| 4 | Keep planning as a separate runtime? | No; current product path uses shared `AgentLoopRuntime`. |
 | 5 | Streaming: include free-text content in `agent_plan_update`? | Strip free-text; only summary + tool-call summaries. |
 | 6 | Sub-tool provider routing (`parse_rover_intent`)? | Keep its own structured-output provider; independent of planner. |
 | 7 | Critic provider — same as planner or different family? | Same in single-provider deployments; different family once available. |
@@ -1276,7 +1270,6 @@ Detailed per-topic design content lives in sibling files under [`design/`](./des
 - [`design/graph-spec.md`](./design/graph-spec.md) — Graph Spec
 - [`design/intent-parsing.md`](./design/intent-parsing.md) — Intent Parsing
 - [`design/mission-execution.md`](./design/mission-execution.md) — Mission Execution
-- [`design/planning-shell.md`](./design/planning-shell.md) — Planning Shell
 - [`design/replay-access.md`](./design/replay-access.md) — Replay Access
 - [`design/route-planning.md`](./design/route-planning.md) — Route Planning
 - [`design/spatial-tools.md`](./design/spatial-tools.md) — Spatial Tools

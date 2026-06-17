@@ -177,6 +177,10 @@ If `--session-id` is provided, the CLI should:
 
 - Standard output should contain the assistant answer only.
 - Operational/status noise should go to stderr.
+- After a reply, a one-line model/token/timing summary should print to stderr
+  (provider · model · latency · input/output tokens · tok/s · iterations/tools),
+  mirroring the web chat footer. It is suppressible with `--no-stats` and never
+  touches stdout or `--output-file`.
 - `--output-file` should write the final assistant answer exactly once after the
   request completes.
 - In streaming mode, stdout should show deltas as they arrive and still finish
@@ -200,13 +204,6 @@ These already map to `POST /api/ai/sessions/{session_id}/commands`:
 - `/tool-activity`
 - `/context`
 
-#### Run-mode backed
-
-These are not backend “session commands”; they select a different execution path:
-
-- `/intent`
-- `/plan`
-
 ### Additional CLI requirement
 
 The CLI should also support:
@@ -225,21 +222,6 @@ Important current backend fact:
 #### `/capabilities brief`, `/capabilities full`, `/retrieval-surfaces`, `/tool-activity`, `/context`
 
 Pass through to the existing backend command endpoint unchanged.
-
-#### `/intent`
-
-Interpret as:
-
-- set effective run mode to `intent`
-- send the remaining prompt text through the normal AI message path
-
-#### `/plan`
-
-Interpret as:
-
-- use the existing planning-shell stream path rather than the normal message
-  endpoint
-- preserve the same semantics as the web chat planning-shell behavior
 
 #### `/model`
 
@@ -389,8 +371,8 @@ Cons:
 - more hand-written code for timeouts, retries, error shaping, and streaming
 - rougher NDJSON handling for `/messages/stream`
 - more branching if blocking and streaming use different client paths
-- becomes less attractive once slash-command routing and planning-shell support
-  are added
+- becomes less attractive once slash-command routing and richer session/provider
+  handling are added
 
 Best fit:
 
@@ -408,7 +390,7 @@ Use one client library for:
 Pros:
 
 - one consistent API for both blocking and streaming
-- cleaner streaming flow for `/messages/stream` and later planning-shell streams
+- cleaner streaming flow for `/messages/stream`
 - simpler timeout configuration
 - easier future extension if auth headers, retries, or async variants are ever
   needed
@@ -422,8 +404,7 @@ Cons:
 
 Best fit:
 
-- if the CLI is expected to support streaming, slash-command parity, and `/plan`
-  early
+- if the CLI is expected to support streaming and slash-command parity early
 
 ### Recommendation after your requirements
 
@@ -555,7 +536,7 @@ Deliverable:
 - `--stream`
 - NDJSON event parsing
 - stable handling of partial deltas and final persisted message
-- slash-command routing for `/intent` and endpoint-backed session commands
+- slash-command routing for endpoint-backed session commands
 
 Verifiable:
 
@@ -569,8 +550,7 @@ Deliverable:
 - cleaner stderr diagnostics
 - documented exit codes
 - README usage section
-- complete web-chat slash parity, including `/plan`, if not already landed in
-  Slice 3
+- complete web-chat slash parity for the surviving command surface
 - optional session listing/retry only if still small
 
 Verifiable:

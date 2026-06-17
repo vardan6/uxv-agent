@@ -568,9 +568,9 @@ def _to_langchain_messages(
 
 def _normalize_run_mode(run_mode: str) -> str:
     clean = str(run_mode or "chat").strip().lower()
-    if clean in {"general_chat", "chat", "planning_shell", "intent", "rover_intent_test"}:
+    if clean in {"general_chat", "chat", "intent", "rover_intent_test"}:
         return "chat"
-    if clean == "agent":
+    if clean in {"agent", "planning_shell"}:
         return "agent"
     raise ValueError("run_mode must be chat or agent")
 

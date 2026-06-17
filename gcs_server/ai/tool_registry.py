@@ -449,13 +449,6 @@ class ToolRegistry:
                 self._lazy_load_sensor,
             ),
             tool(
-                "request_clarification",
-                "Ask the operator for missing information before drafting a mission. Pass the questions list from parse_rover_intent's missing_information field. Calling this tool signals the graph to pause and surface a clarification card to the operator. Only call this once per planning run.",
-                READ_ONLY,
-                self._request_clarification,
-                is_terminal=True,
-            ),
-            tool(
                 "create_mission_from_waypoints",
                 "Create an operator-visible Mission directly from supplied local-coordinate waypoints. Use this when the operator provides an explicit route in any text or structured format. Extract the route into a waypoints array of {x, y, z} objects and pass optional route metadata such as waypoint_count, path_length_m, or route_hash. The tool validates the structured data and persists the same durable Mission revision used by the map and mission sidebar. This is a terminal planning action; it does not execute or export the mission.",
                 PLANNING,
@@ -1387,25 +1380,6 @@ class ToolRegistry:
             "telemetry_fresh": rover.get("telemetry_fresh"),
             "camera_fresh": rover.get("camera_fresh"),
             "available": bool(rover),
-        }
-
-    def _request_clarification(
-        self,
-        context: ToolInvocationContext,
-        questions: list,
-        intent_summary: str = "",
-    ) -> dict[str, Any]:
-        # Terminal tool: returning a handoff causes the agent loop to stop with
-        # stop_reason="clarification_requested". The graph routes to prepare_clarification,
-        # which surfaces the card to the operator via interrupt() and then bridges to the
-        # legacy draft generation path on resume.
-        return {
-            "ok": True,
-            "handoff": {
-                "type": "clarification_request",
-                "questions": list(questions or []),
-                "intent_summary": str(intent_summary or ""),
-            },
         }
 
     def _create_mission_from_waypoints(
@@ -2506,7 +2480,7 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "context_summary": "string — compact planning context summary (optional)",
         },
         "required_inputs": ["prompt"],
-        "upstream_from_tools": ["operator mission request", "planning-shell context summary"],
+        "upstream_from_tools": ["operator mission request", "compact mission-planning context summary"],
         "returns": {"ok": "boolean", "intent": "object", "parse_errors": "string[]"},
         "next_tools": [
             "lazy_load_replay",
@@ -2514,7 +2488,6 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "lazy_load_settings",
             "lazy_load_sensor",
             "resolve_spatial_target",
-            "request_clarification",
             "propose_mission_draft",
         ],
     },
@@ -2550,16 +2523,6 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "available": "boolean",
         },
         "next_tools": ["propose_mission_draft"],
-    },
-    "request_clarification": {
-        "inputs": {
-            "questions": "object[] — clarification prompts derived from parse_rover_intent.missing_information",
-            "intent_summary": "string — compact explanation of the blocked intent (optional)",
-        },
-        "required_inputs": ["questions"],
-        "upstream_from_tools": ["parse_rover_intent.missing_information"],
-        "returns": {"ok": "boolean", "handoff": "object{type,questions,intent_summary}"},
-        "next_tools": [],
     },
     "create_mission_from_waypoints": {
         "inputs": {

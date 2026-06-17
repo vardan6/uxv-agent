@@ -127,13 +127,6 @@ fields like `intent_type`, `target`, `area`, `requires_rover_motion`,
 `missing_information`. Produced by `IntentService` from the operator's
 prompt.
 
-## Intent Test
-
-A diagnostic parsing path that runs intent parsing and target resolution
-without taking further action. Useful for debugging and pre-flight checks.
-It should be treated as a tooling/debug surface, not a permanent primary
-mode of the product.
-
 ## Lazy Retrieval
 
 On-demand loading of larger *stored* information (replay reports, AI
@@ -181,14 +174,6 @@ always-on context. Registered through `ToolRegistry`.
 A label on a registered tool indicating what category of action it
 represents: `read_only`, `analysis`, `planning`. The classes
 `command_staging` and `execution` are explicitly rejected by the registry.
-
-## Planning Shell
-
-The durable wrapper around the shared agent runtime that handles
-clarification pauses, draft approval, and other human-in-the-loop workflow
-steps. Implemented in code under the `planning_shell` namespace
-(`planning_shell_graph.py`, `PlanningShellGraphState`,
-`PlanningShellGraphRuntime`, `/planning-shell/stream`).
 
 ## Presence Topic
 

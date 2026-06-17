@@ -238,7 +238,7 @@ Everything else is discovery-on-demand. Do not add new "mandatory load" docs. Pr
 
 - Reference modules with `path/file.py` (e.g., `gcs_server/ai/context_service.py`).
 - Reference functions with `module.function_name()`.
-- Reference API routes with the full path (e.g., `POST /api/ai/sessions/{session_id}/intent-test`).
+- Reference API routes with the full path (e.g., `POST /api/ai/sessions/{session_id}/messages/stream`).
 - Use `path/file.py:42` when pointing at a specific line.
 
 ## Lists vs Prose

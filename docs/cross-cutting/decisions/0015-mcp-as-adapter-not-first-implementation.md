@@ -7,14 +7,14 @@ Status: Accepted
 
 Model Context Protocol (MCP) is an attractive substrate for exposing rover and replay tools to external agents. The shortest path from "we want agent tools" to "agent tools exist" is to write them as MCP servers from day one.
 
-That shortest path has a coupling cost: every internal caller of these tools — the GCS Agent mode, the Intent Test surface, the LangGraph planning shell, server-side request planning — would either go through an MCP client transport for in-process calls, or duplicate the logic outside MCP. The first option adds latency and packaging weight to internal flows that already have direct Python access; the second creates two implementations of the same query.
+That shortest path has a coupling cost: every internal caller of these tools — the GCS Agent mode, shared intent-parsing and mission-authoring flows, the LangGraph planning shell, server-side request planning — would either go through an MCP client transport for in-process calls, or duplicate the logic outside MCP. The first option adds latency and packaging weight to internal flows that already have direct Python access; the second creates two implementations of the same query.
 
 ## Decision
 
 MCP is treated as an adapter layer, not the first implementation. The order of work is:
 
 1. Build deterministic spatial / state / replay services as normal Python modules.
-2. Expose them through a single in-process tool registry, used by Agent mode, Intent Test, and planning shell.
+2. Expose them through a single in-process tool registry, used by Agent mode, shared intent-parsing and mission-authoring flows, and planning shell.
 3. Later, surface a stable subset of read-only and planning tools through MCP for external agents.
 
 ## Consequences

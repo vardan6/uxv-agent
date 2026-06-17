@@ -97,6 +97,16 @@ const settingsEls = {
   saveModelRouting: document.getElementById('save-model-routing'),
   reloadModelRouting: document.getElementById('reload-model-routing'),
   llmRoutingStatus: document.getElementById('llm-routing-status'),
+  ragStatusPill: document.getElementById('rag-status-pill'),
+  ragModelWarning: document.getElementById('rag-model-warning'),
+  ragModelSelect: document.getElementById('rag-model-select'),
+  ragCollection: document.getElementById('rag-collection'),
+  ragPointCount: document.getElementById('rag-point-count'),
+  ragLastIngest: document.getElementById('rag-last-ingest'),
+  ragEmbedIncremental: document.getElementById('rag-embed-incremental'),
+  ragEmbedRegenerate: document.getElementById('rag-embed-regenerate'),
+  ragRefreshStatus: document.getElementById('rag-refresh-status'),
+  ragStatusMessage: document.getElementById('rag-status-message'),
   jsonExportToggles: Array.from(document.querySelectorAll('.json-export-toggle')),
   jsonImportToggles: Array.from(document.querySelectorAll('.json-import-toggle')),
   jsonPreview: document.getElementById('json-preview'),
@@ -390,7 +400,7 @@ function syncThemeControls() {
 function readSelectedTab() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  return ['connectivity', 'video', 'appearance', 'ai-settings', 'llm-provider', 'json'].includes(tab) ? tab : 'connectivity';
+  return ['connectivity', 'video', 'appearance', 'ai-settings', 'llm-provider', 'rag', 'json'].includes(tab) ? tab : 'connectivity';
 }
 
 function renderTabs(tab) {
@@ -1676,6 +1686,170 @@ function bindLlmSettings() {
   });
 }
 
+const RAG_STALENESS_META = {
+  up_to_date: { label: 'Up to date', pill: 'ok', warn: '' },
+  stale: { label: 'Stale', pill: 'warn', warn: 'Some docs changed since the last run. Click “Update Index” to update the index.' },
+  missing: { label: 'Not indexed', pill: 'warn', warn: 'No index exists yet for the routed model. Click “Rebuild Index” to create it.' },
+  model_mismatch: { label: 'Model changed', pill: 'danger', warn: 'The embeddings model changed — the current index was built with a different model. Click “Rebuild index” to recreate it for the new model.' },
+};
+
+let ragPollTimer = null;
+
+function setRagStatusMessage(message) {
+  if (settingsEls.ragStatusMessage) settingsEls.ragStatusMessage.textContent = message;
+}
+
+function setRagBusy(busy) {
+  for (const btn of [settingsEls.ragEmbedIncremental, settingsEls.ragEmbedRegenerate]) {
+    if (btn) btn.disabled = busy;
+  }
+}
+
+function formatTimestamp(value) {
+  if (!value) return '–';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function renderRagModelSelect() {
+  if (!settingsEls.ragModelSelect) return;
+  const currentId = (modelRouting.embeddings && modelRouting.embeddings.primary_provider_id) || '';
+  const embeddingProviders = llmProviders.filter((p) => Array.isArray(p.capabilities) && p.capabilities.includes('embeddings'));
+  settingsEls.ragModelSelect.innerHTML = embeddingProviders.length === 0
+    ? '<option value="">– no embedding providers configured –</option>'
+    : embeddingProviders.map((p) =>
+        `<option value="${escapeHtml(p.id)}"${p.id === currentId ? ' selected' : ''}>${escapeHtml(p.display_name || p.id)}</option>`
+      ).join('');
+}
+
+function renderRagStatus(status) {
+  const meta = RAG_STALENESS_META[status.staleness] || { label: status.staleness || 'unknown', pill: 'warn', warn: '' };
+  if (settingsEls.ragStatusPill) {
+    settingsEls.ragStatusPill.textContent = meta.label;
+    settingsEls.ragStatusPill.className = `pill ${meta.pill}`;
+  }
+  renderRagModelSelect();
+  if (settingsEls.ragCollection) settingsEls.ragCollection.textContent = status.collection || '–';
+  if (settingsEls.ragPointCount) settingsEls.ragPointCount.textContent = status.exists ? String(status.point_count ?? 0) : '0';
+  if (settingsEls.ragLastIngest) settingsEls.ragLastIngest.textContent = formatTimestamp(status.last_ingest_at);
+  if (settingsEls.ragModelWarning) {
+    if (meta.warn) {
+      settingsEls.ragModelWarning.textContent = meta.warn;
+      settingsEls.ragModelWarning.hidden = false;
+    } else {
+      settingsEls.ragModelWarning.hidden = true;
+    }
+  }
+  const disableUpdateIndex = status.staleness === 'missing' || status.staleness === 'model_mismatch';
+  if (settingsEls.ragEmbedIncremental) settingsEls.ragEmbedIncremental.disabled = disableUpdateIndex;
+}
+
+async function loadRagSettings() {
+  setRagStatusMessage('Loading RAG status.');
+  const response = await fetch('/api/rag/status');
+  if (llmProviders.length === 0) {
+    try { await loadLlmSettings(); } catch (_) {}
+  }
+  if (response.status === 503) {
+    if (settingsEls.ragStatusPill) {
+      settingsEls.ragStatusPill.textContent = 'Offline';
+      settingsEls.ragStatusPill.className = 'pill danger';
+    }
+    setRagStatusMessage('Qdrant is not running. Start it with `bin/rag up`.');
+    renderRagModelSelect();
+    return;
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || data.detail || 'Could not read RAG status');
+  }
+  renderRagStatus(data);
+  setRagStatusMessage(`Collection ${data.collection} — ${data.exists ? `${data.point_count} chunks` : 'not embedded yet'}.`);
+}
+
+async function pollRagJob(jobId) {
+  if (ragPollTimer) clearTimeout(ragPollTimer);
+  const data = await readJson(`/api/rag/ingest/${encodeURIComponent(jobId)}`);
+  const job = data.job || {};
+  if (job.status === 'running' || job.status === 'pending') {
+    setRagStatusMessage(`Embedding (${job.mode})… status: ${job.status}.`);
+    ragPollTimer = setTimeout(() => {
+      pollRagJob(jobId).catch((error) => {
+        setRagBusy(false);
+        setRagStatusMessage(error.message);
+      });
+    }, 2000);
+    return;
+  }
+  setRagBusy(false);
+  if (job.status === 'complete') {
+    const stats = job.stats || {};
+    const detail = Object.keys(stats).length ? ` (${Object.entries(stats).map(([k, v]) => `${k}: ${v}`).join(', ')})` : '';
+    setRagStatusMessage(`Embedding complete${detail}.`);
+  } else if (job.status === 'error') {
+    setRagStatusMessage(`Embedding failed: ${job.error || 'unknown error'}`);
+  } else {
+    setRagStatusMessage(`Embedding ended with status: ${job.status}.`);
+  }
+  await loadRagSettings();
+}
+
+async function triggerRagIngest(mode) {
+  if (mode === 'regenerate' && !window.confirm('Rebuild index will delete the existing collection and re-embed every document from scratch. Continue?')) {
+    return;
+  }
+  setRagBusy(true);
+  setRagStatusMessage(`Starting ${mode} embedding…`);
+  const response = await fetch('/api/rag/ingest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    setRagBusy(false);
+    throw new Error(data.error || data.detail || 'Could not start embedding job');
+  }
+  await pollRagJob(data.job_id);
+}
+
+function bindRagSettings() {
+  if (settingsEls.ragRefreshStatus) {
+    settingsEls.ragRefreshStatus.addEventListener('click', () => {
+      loadRagSettings().catch((error) => setRagStatusMessage(error.message));
+    });
+  }
+  if (settingsEls.ragEmbedIncremental) {
+    settingsEls.ragEmbedIncremental.addEventListener('click', () => {
+      triggerRagIngest('incremental').catch((error) => setRagStatusMessage(error.message));
+    });
+  }
+  if (settingsEls.ragEmbedRegenerate) {
+    settingsEls.ragEmbedRegenerate.addEventListener('click', () => {
+      triggerRagIngest('regenerate').catch((error) => setRagStatusMessage(error.message));
+    });
+  }
+  if (settingsEls.ragModelSelect) {
+    settingsEls.ragModelSelect.addEventListener('change', () => {
+      const providerId = settingsEls.ragModelSelect.value;
+      if (!providerId) return;
+      if (!modelRouting.embeddings || typeof modelRouting.embeddings !== 'object') {
+        modelRouting.embeddings = { primary_provider_id: '', fallback_provider_ids: [], allow_runtime_override: true };
+      }
+      modelRouting.embeddings.primary_provider_id = providerId;
+      setRagStatusMessage('Saving embeddings model…');
+      // Skip updateRoutingFromDom() — the routing table's embeddings row would overwrite this.
+      readJson('/api/model-routing', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ routing: modelRouting }),
+      })
+        .then((result) => { modelRouting = result.routing || {}; return loadRagSettings(); })
+        .catch((error) => setRagStatusMessage(error.message));
+    });
+  }
+}
+
 function bindTabs() {
   for (const link of settingsEls.tabLinks) {
     link.addEventListener('click', (event) => {
@@ -1704,6 +1878,7 @@ function initSettings() {
   bindMissionLifecycle();
   bindAiSettings();
   bindLlmSettings();
+  bindRagSettings();
 
   settingsEls.mqttForm.addEventListener('submit', (event) => {
     saveConnectivity(event).catch((error) => {
@@ -1801,6 +1976,9 @@ function initSettings() {
   loadLlmSettings().catch((error) => {
     setLlmStatus(error.message);
     setRoutingStatus(error.message);
+  });
+  loadRagSettings().catch((error) => {
+    setRagStatusMessage(error.message);
   });
   clearProviderForm();
 }
