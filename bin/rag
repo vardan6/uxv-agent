@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Manage the Qdrant sidecar for Remote Rover RAG (ADR 0028).
+# Usage: bin/rag <up|down|status|logs>
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+COMPOSE_FILE="$REPO_ROOT/rag_service/docker-compose.yml"
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  up)
+    echo "Starting Qdrant sidecar…"
+    docker compose -f "$COMPOSE_FILE" up -d "$@"
+    echo "Qdrant is up. Dashboard: http://127.0.0.1:${REMOTE_ROVER_QDRANT_REST_PORT:-9004}/dashboard"
+    ;;
+  down)
+    echo "Stopping Qdrant sidecar…"
+    docker compose -f "$COMPOSE_FILE" down "$@"
+    ;;
+  status)
+    docker compose -f "$COMPOSE_FILE" ps
+    ;;
+  logs)
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 -f "$@"
+    ;;
+  *)
+    echo "Usage: bin/rag <up|down|status|logs>"
+    echo ""
+    echo "  up      Start Qdrant (detached)"
+    echo "  down    Stop Qdrant"
+    echo "  status  Show container status"
+    echo "  logs    Tail Qdrant logs"
+    exit 1
+    ;;
+esac

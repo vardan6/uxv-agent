@@ -19,6 +19,7 @@ from gcs_server.ai import mission_patterns
 from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
 from gcs_server.ai.provider_registry import resolve_intent_provider as _resolve_intent_provider
 from gcs_server.ai.provider_registry import resolve_provider as _resolve_provider
+from gcs_server.ai.retrieval import search_project_docs as _search_project_docs
 from gcs_server.ai.road_graph_service import RoadGraphService
 from gcs_server.ai.session_store import normalize_source_controls
 from gcs_server.ai.spatial_query_service import SpatialQueryService
@@ -172,6 +173,9 @@ _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
 })
 
 _OPTIONAL_TOOL_NAMES_BY_SOURCE = {
+    "project_docs": frozenset({
+        "search_project_docs",
+    }),
     "replay_reports": frozenset({
         "get_current_replay_summary",
         "get_recent_telemetry",
@@ -377,6 +381,12 @@ class ToolRegistry:
                 self._get_sensor_status,
             ),
             tool(
+                "search_project_docs",
+                "Search the project's own documentation — requirements, design docs, ADRs, glossary, and operational notes — for grounded, citeable context. Returns the most relevant doc chunks with their file path, heading path, similarity score, and a citation ref. Use this when the operator asks how the system is designed, why a decision was made, what an ADR or requirement says, or for definitions of project terms. Pass a focused natural-language query and optionally limit (default 5). Available only when the project_docs source control is enabled.",
+                ANALYSIS,
+                self._search_project_docs,
+            ),
+            tool(
                 "plan_route_around_group",
                 "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id — do not pass it to export_mission. Next step is propose_mission_draft with these waypoints to create a draft; then export_mission(draft_id) after approval. Does not upload to the flight controller.",
                 PLANNING,
@@ -437,13 +447,6 @@ class ToolRegistry:
                 "Load sensor and telemetry freshness status. Returns telemetry_fresh and camera_fresh flags. Call this when the operator's request depends on live sensor availability or to flag staleness constraints in the mission draft.",
                 READ_ONLY,
                 self._lazy_load_sensor,
-            ),
-            tool(
-                "request_clarification",
-                "Ask the operator for missing information before drafting a mission. Pass the questions list from parse_rover_intent's missing_information field. Calling this tool signals the graph to pause and surface a clarification card to the operator. Only call this once per planning run.",
-                READ_ONLY,
-                self._request_clarification,
-                is_terminal=True,
             ),
             tool(
                 "create_mission_from_waypoints",
@@ -999,6 +1002,20 @@ class ToolRegistry:
             "perception_note": "This phase exposes only metadata and freshness; raw frames, detections, and perception events are not implemented.",
         }
 
+    def _search_project_docs(
+        self,
+        context: ToolInvocationContext,
+        query: str,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        secret_resolver = getattr(getattr(context.runtime, "secret_store", None), "get_secret", None)
+        return _search_project_docs(
+            context.runtime.config,
+            query,
+            limit=limit,
+            secret_resolver=secret_resolver,
+        )
+
     def _plan_route_around_group(
         self,
         context: ToolInvocationContext,
@@ -1363,25 +1380,6 @@ class ToolRegistry:
             "telemetry_fresh": rover.get("telemetry_fresh"),
             "camera_fresh": rover.get("camera_fresh"),
             "available": bool(rover),
-        }
-
-    def _request_clarification(
-        self,
-        context: ToolInvocationContext,
-        questions: list,
-        intent_summary: str = "",
-    ) -> dict[str, Any]:
-        # Terminal tool: returning a handoff causes the agent loop to stop with
-        # stop_reason="clarification_requested". The graph routes to prepare_clarification,
-        # which surfaces the card to the operator via interrupt() and then bridges to the
-        # legacy draft generation path on resume.
-        return {
-            "ok": True,
-            "handoff": {
-                "type": "clarification_request",
-                "questions": list(questions or []),
-                "intent_summary": str(intent_summary or ""),
-            },
         }
 
     def _create_mission_from_waypoints(
@@ -2482,7 +2480,7 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "context_summary": "string — compact planning context summary (optional)",
         },
         "required_inputs": ["prompt"],
-        "upstream_from_tools": ["operator mission request", "planning-shell context summary"],
+        "upstream_from_tools": ["operator mission request", "compact mission-planning context summary"],
         "returns": {"ok": "boolean", "intent": "object", "parse_errors": "string[]"},
         "next_tools": [
             "lazy_load_replay",
@@ -2490,7 +2488,6 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "lazy_load_settings",
             "lazy_load_sensor",
             "resolve_spatial_target",
-            "request_clarification",
             "propose_mission_draft",
         ],
     },
@@ -2526,16 +2523,6 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "available": "boolean",
         },
         "next_tools": ["propose_mission_draft"],
-    },
-    "request_clarification": {
-        "inputs": {
-            "questions": "object[] — clarification prompts derived from parse_rover_intent.missing_information",
-            "intent_summary": "string — compact explanation of the blocked intent (optional)",
-        },
-        "required_inputs": ["questions"],
-        "upstream_from_tools": ["parse_rover_intent.missing_information"],
-        "returns": {"ok": "boolean", "handoff": "object{type,questions,intent_summary}"},
-        "next_tools": [],
     },
     "create_mission_from_waypoints": {
         "inputs": {

@@ -287,13 +287,13 @@ Implemented (Phase 3 and earlier):
 - `SpatialQueryService` — deterministic geometry service with 9 methods; used by agent tools and intent parsing
 - `ToolRegistry` — permissioned per-request tool registry; Agent mode rewired through it; `ReadOnlyAgentToolset` removed; current tool declarations include `tier`, `required_scopes`, and `side_effects`
 - `PolicyEngine` seam — thin tool-call policy evaluation before execution; current enforcement preserves read-only / non-executing behavior
-- shared compact data-access manifest used by Agent chat context and planning-shell graph state
+- shared compact data-access manifest used by Agent chat context and mission-authoring flows
 - structured rover intent parsing (`IntentService`) and mission-draft workflow (`MissionDraftService`)
-- LangGraph planning shell (Phases 1–3): deterministic draft flow, durable checkpointer, interrupt-driven approval and clarification gates
+- direct Agent mission-authoring through shared planning tools and deterministic mission validation/storage
 
 Implemented after Phase 4:
 - `classify_request_scope`, lazy data branches (replay, AI memory, settings, sensor), and bounded source controls
-- assistant/planning-shell metadata now records `retrieved_sources`, `loaded_data_refs`, and `retrieval_citations`
+- assistant metadata now records `retrieved_sources`, `loaded_data_refs`, and `retrieval_citations`
 
 Planned next behavior (Phase 5+):
 - RAG/source toggles, document upload, and citations
@@ -347,12 +347,11 @@ Current important modules:
 - `gcs_server/scene_map.py`: scene-map payload from `config/terrain_scene.v1.json`
 - `gcs_server/ai/context_service.py`: live current-context providers for AI Chat
 - `gcs_server/ai/spatial_query_service.py`: deterministic spatial/geometry query service
-- `gcs_server/ai/tool_registry.py`: permissioned per-request tool registry for Agent and planning-shell flows
+- `gcs_server/ai/tool_registry.py`: permissioned per-request tool registry for Agent and mission-authoring flows
 - `gcs_server/ai/intent_service.py`: structured rover intent parsing with repair
 - `gcs_server/ai/mission_draft_service.py`: mission-draft CRUD, validate, approve/reject
 - `gcs_server/ai/planning_shell_graph.py`: LangGraph planning graph
 - `gcs_server/ai/graph_state.py`: `PlanningShellGraphState` TypedDict
-- `gcs_server/ai/graph_runtime.py`: `PlanningShellGraphRuntime` service container
 - `gcs_server/ai/provider_registry.py`: configured provider to LangChain model adapter
 - `gcs_server/ai/chat_service.py`: read-only Chat/Agent orchestration
 - `gcs_server/ai/session_store.py`: SQLite AI session/message storage

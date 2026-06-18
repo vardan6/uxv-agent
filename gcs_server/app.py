@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import os
+import re
 import sys
 import uuid
 import warnings
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -30,9 +31,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gcs_server.ai.agent_traces import AgentTraceStore
 from gcs_server.ai.chat_service import AIChatService
-from gcs_server.ai.context_service import AIContextService
-from gcs_server.ai.graph_runtime import PlanningShellGraphRuntime
-from gcs_server.ai.intent_service import IntentService
 from gcs_server.ai.tool_registry import ToolRegistry
 from gcs_server.config import load_config, save_config
 from gcs_server.runtime import AppRuntime, GCS_DIR, build_runtime
@@ -43,20 +41,15 @@ from gcs_server.routers import ai as ai_router_module
 from gcs_server.routers import device_config as device_config_router_module
 from gcs_server.routers import mission_lifecycle as mission_lifecycle_router_module
 from gcs_server.routers import operational_constraints as operational_constraints_router_module
+from gcs_server.routers import rag as rag_router_module
 from gcs_server.routers.ai import AIInflightStreamManager
 from gcs_server.routers.device_config import _rover_availability_policy
 from gcs_server.mavlink_telemetry import MavlinkTelemetryBridge
 from gcs_server.routers.llm import _repair_stored_secret_refs
 
-# Phase 2: LangGraph checkpointer for interrupt/resume approval
-try:
-    from langgraph.checkpoint.memory import MemorySaver as _MemorySaver
-    _LANGGRAPH_CHECKPOINTER_AVAILABLE = True
-except ImportError:
-    _MemorySaver = None  # type: ignore[assignment,misc]
-    _LANGGRAPH_CHECKPOINTER_AVAILABLE = False
-
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCS_DIR = REPO_ROOT / "docs"
 
 
 def _resolve_gcs_data_path(path: object) -> Path:
@@ -74,6 +67,7 @@ async def lifespan(app: FastAPI):
     runtime = await build_runtime(config)
     app.state.runtime = runtime
     _tool_registry = ToolRegistry()
+    app.state.tool_registry = _tool_registry
     agent_trace_store = AgentTraceStore(
         _resolve_gcs_data_path(config.logging.get("agent_trace_dir", "data/agent_traces"))
     )
@@ -85,18 +79,6 @@ async def lifespan(app: FastAPI):
         trace_store=agent_trace_store,
     )
     app.state.ai_inflight_streams = AIInflightStreamManager()
-    _checkpointer = _MemorySaver() if _LANGGRAPH_CHECKPOINTER_AVAILABLE else None
-    app.state.planning_shell_runtime = PlanningShellGraphRuntime(
-        app_runtime=runtime,
-        tool_registry=_tool_registry,
-        context_service=AIContextService(runtime),
-        intent_service=IntentService(),
-        draft_service=runtime.mission_draft_service,
-        ai_session_store=runtime.ai_store,
-        secret_resolver=runtime.secret_store.get_secret,
-        checkpointer=_checkpointer,
-        trace_store=agent_trace_store,
-    )
     await runtime.control_service.start()
     await runtime.mqtt_runtime.start()
     mavlink_telemetry_url = os.environ.get("MAVLINK_TELEMETRY_URL", "").strip()
@@ -129,6 +111,7 @@ app.include_router(ai_router_module.router)
 app.include_router(device_config_router_module.router)
 app.include_router(mission_lifecycle_router_module.router)
 app.include_router(operational_constraints_router_module.router)
+app.include_router(rag_router_module.router)
 
 
 @app.middleware("http")
@@ -169,6 +152,71 @@ async def settings_page() -> FileResponse:
 @app.get("/ai")
 async def ai_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "ai.html")
+
+
+def _slugify_heading(text: str) -> str:
+    """GitHub-ish heading slug. Must match `slugifyHeading` in static/ai.js."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _inject_heading_anchors(html: str) -> str:
+    """Add stable `id` slugs to rendered <h1>..<h6> so cited links can deep-link."""
+    used: dict[str, int] = {}
+
+    def _add_id(match: "re.Match[str]") -> str:
+        level, inner = match.group(1), match.group(2)
+        text = re.sub(r"<[^>]+>", "", inner)  # strip inline markup
+        slug = _slugify_heading(text)
+        if not slug:
+            return match.group(0)
+        count = used.get(slug, 0)
+        used[slug] = count + 1
+        if count:
+            slug = f"{slug}-{count}"
+        return f'<h{level} id="{slug}">{inner}</h{level}>'
+
+    return re.sub(r"<h([1-6])>(.*?)</h\1>", _add_id, html, flags=re.DOTALL)
+
+
+@app.get("/docs/{path:path}")
+async def docs_viewer(path: str) -> HTMLResponse:
+    resolved = (DOCS_DIR / path).resolve()
+    if not str(resolved).startswith(str(DOCS_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        from markdown_it import MarkdownIt
+        md = MarkdownIt()
+        body_html = md.render(resolved.read_text(encoding="utf-8"))
+        body_html = _inject_heading_anchors(body_html)
+    except ImportError:
+        body_html = f"<pre>{resolved.read_text(encoding='utf-8')}</pre>"
+    title = resolved.stem
+    return HTMLResponse(content=f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body {{ max-width: 860px; margin: 32px auto; padding: 0 20px 60px; font-family: inherit; }}
+  .docs-back {{ display:inline-block; margin-bottom:18px; color:var(--muted); font-size:0.82rem; text-decoration:none; }}
+  .docs-back:hover {{ color:var(--text); }}
+  .docs-body h1,.docs-body h2,.docs-body h3,.docs-body h4,.docs-body h5,.docs-body h6 {{ margin-top:1.6em; scroll-margin-top:24px; }}
+  .docs-body pre {{ padding:10px 14px; border-radius:8px; background:var(--panel-strong,#1e1e1e); overflow-x:auto; }}
+  .docs-body code {{ font-size:0.88em; }}
+  .docs-body table {{ border-collapse:collapse; width:100%; }}
+  .docs-body th,.docs-body td {{ padding:6px 10px; border:1px solid var(--line,#333); text-align:left; }}
+  .docs-body blockquote {{ margin:0; padding:8px 14px; border-left:3px solid var(--accent,#4a9); color:var(--muted); }}
+</style>
+</head>
+<body>
+<a class="docs-back" href="javascript:history.back()">&#8592; back</a>
+<div class="docs-body">{body_html}</div>
+</body>
+</html>""")
 
 
 @app.get("/api/health")

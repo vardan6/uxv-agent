@@ -3570,6 +3570,88 @@ code {
   line-height: 1.35;
 }
 
+.ai-citation-title {
+  margin-top: 10px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ai-citation-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-citation-item {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-strong) 30%, transparent);
+}
+
+.ai-citation-index {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.ai-citation-link {
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.ai-citation-link:hover {
+  text-decoration: underline;
+}
+
+.rag-status-grid {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.rag-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line, #2a2a2a);
+}
+
+.rag-status-row dt {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.rag-status-row dd {
+  margin: 0;
+  font-size: 0.82rem;
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+  text-align: right;
+}
+
+.rag-status-row-select {
+  align-items: center;
+}
+
+.rag-status-row-select dd {
+  font-family: inherit;
+}
+
+.rag-status-row-select select {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
 .ai-agent-tools-title {
   margin-bottom: 6px;
   color: var(--muted);

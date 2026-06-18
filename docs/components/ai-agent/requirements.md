@@ -437,7 +437,9 @@ The product direction is correct when all of these are true:
 
 - The target architecture is a universal bounded agent loop, not a growing library of hardcoded node DAGs.
 - The long-term primary `/ai` experience is one Agent mode. Chat may exist temporarily as a simpler fallback/testing path during migration.
-- During the current migration, `/plan` remains the explicit planning-shell entry point. Do not expose a separate planning product mode or imply Agent auto-routing into planning before that path has its own product/runtime design.
+- Do not reintroduce a separate `/plan` or planning-shell product mode without a
+  new approved product/runtime design. Planning-authoring behavior currently
+  lives under the primary Agent experience plus shared mission tools.
 - Project-specific capabilities belong in tools, deterministic services, policy, memory, and approval layers around the core loop.
 - Retrieval and discovery must be lazy by default.
 - Compact always-on context is required; large front-loaded prompts are not the target design.
@@ -451,7 +453,8 @@ The product direction is correct when all of these are true:
 
 ## Open Product Questions
 
-- When should the temporary `/plan` entry point collapse into the primary Agent experience, and what operator signal should replace it if any?
+- Should mission-authoring prompts stay fully inside the primary Agent
+  experience, or should a different explicit planning signal ever return?
 - How much of the agent's short plan summary should be surfaced without encouraging chain-of-thought leakage?
 - Which future memory writes require lightweight confirmation versus full approval artifacts?
 - When future execution levels arrive, which grants are per-run versus long-lived scoped grants?

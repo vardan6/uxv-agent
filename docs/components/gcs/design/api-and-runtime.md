@@ -90,7 +90,7 @@ send prompts or publish rover control commands.
 ## AI Chat Boundary
 
 The `/ai` surface is a provider-backed Chat/Agent workspace with supervised
-non-executing side paths such as intent testing and the planning shell.
+non-executing planning paths and shared internal intent parsing.
 
 Durable rules:
 
@@ -108,8 +108,25 @@ Mission-execution boundary:
 
 - canonical mission revision and controller-cutover state live behind the
   backend `mission_execution` boundary
-- planning-shell compatibility flows may still sync into that boundary, but the
-  GCS should treat `mission_execution` as the durable owner of mission state
+- Agent mission-authoring flows sync into that boundary, and the GCS should
+  treat `mission_execution` as the durable owner of mission state
+
+## RAG Surface
+
+The `/api/rag` surface exposes the RAG knowledge layer (ADR 0028) to the
+operator UI and CLI.
+
+Durable rules:
+
+- `GET /api/rag/status` — resolves the expected Qdrant collection from the
+  currently routed embeddings provider, reads the ingest sentinel point, and
+  returns `staleness` (`up_to_date | stale | missing | model_mismatch`).
+- `POST /api/rag/ingest {mode: incremental|regenerate}` — launches a background
+  ingest job; one job per collection enforced. `regenerate` deletes and
+  recreates the collection. Returns `job_id`.
+- `GET /api/rag/ingest/{job_id}` — polls job status and final stats.
+- The ingest sentinel is a zero-vector point in the same collection (type=manifest);
+  normal searches are unaffected because it scores near zero on cosine queries.
 
 ## Current Architecture Limits
 

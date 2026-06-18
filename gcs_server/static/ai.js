@@ -333,9 +333,6 @@ function liveStateFor(sessionId) {
       pendingUserMessageId: '',
       pendingAssistantMessageId: '',
       abortController: null,
-      // Phase 2: planning-shell interrupt/resume state
-      pendingInterrupt: null,  // { threadId, approvalPayload } when graph is suspended
-      planningShellThreadId: '',
       scrollTop: 0,
       pinnedToBottom: true,
     });
@@ -500,6 +497,14 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+// Heading slug for docs deep-links. Must match `_slugify_heading` in gcs_server/app.py.
+function slugifyHeading(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 function normalizeSourceControls(value) {
@@ -702,6 +707,7 @@ function renderContextStatus(message) {
 
 function buildChatMarkdown(session, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
   const live = liveStateFor(session.id);
   const messages = (live?.messages || []).filter((m) => String(m.content || '').trim());
   const title = session.title || 'New chat';
@@ -710,7 +716,7 @@ function buildChatMarkdown(session, options = {}) {
 
   for (const message of messages) {
     if (message.role === 'user') {
-      lines.push('## You', '', String(message.content).trim(), '');
+      lines.push('## User', '', String(message.content).trim(), '');
       continue;
     }
     if (message.role === 'assistant') {
@@ -728,27 +734,101 @@ function buildChatMarkdown(session, options = {}) {
       }
       lines.push(header, '', String(message.content).trim(), '');
 
-      if (includeDiagnostics) {
-        const tools = agentToolCalls(message);
-        if (tools.length) {
-          lines.push('<details><summary>Agent activity</summary>', '');
-          for (const call of tools) {
-            const name = call.name || call.tool || 'tool';
-            const status = call.status ? ` [${call.status}]` : '';
-            const args = summarizeAgentToolArgs(call.args || call.arguments);
-            const result = summarizeAgentToolResult(call.result);
-            const argPart = args ? ` — ${args}` : '';
-            const resPart = result ? ` → ${result}` : '';
-            lines.push(`- ${name}${status}${argPart}${resPart}`);
-          }
-          lines.push('', '</details>', '');
-        }
+      if (shouldIncludeAgentActivityMarkdown(message, { includeDiagnostics, includeOpenActivity })) {
+        appendAgentActivityMarkdown(lines, message, { includeDiagnostics });
       }
       continue;
     }
     lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function shouldIncludeAgentActivityMarkdown(message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
+  if (messageRunMode(message) !== 'agent') return false;
+  if (includeDiagnostics) return true;
+  if (!includeOpenActivity) return false;
+  return isMessageActivityOpen(message?.id);
+}
+
+function appendAgentActivityMarkdown(lines, message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const calls = agentToolCalls(message);
+  const trace = agentTraceEvents(message);
+  const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
+    ? message.meta.prompt_context_tool_calls
+    : [];
+  const fallbackError = String(message?.meta?.agent_tool_fallback_error || '').trim();
+  const iterations = distinctAgentIterations(message);
+  if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return;
+
+  const status = calls.some((call) => (call?.status || '') === 'running')
+    ? 'Running'
+    : (calls.length ? 'Complete' : 'Recorded');
+
+  lines.push('### Agent activity', '');
+  lines.push(`- Status: ${status}`);
+  if (iterations.length) lines.push(`- Iterations: ${iterations.length}`);
+  if (calls.length) lines.push(`- Tool calls: ${calls.length}`);
+  if (promptCalls.length) lines.push(`- Context injections: ${promptCalls.length}`);
+  lines.push('');
+
+  if (trace.length) {
+    lines.push('#### Run trace', '');
+    trace.forEach((event, index) => {
+      const summary = summarizeAgentTraceEvent(event, index);
+      if (summary) lines.push(`- ${summary}`);
+    });
+    lines.push('');
+  }
+
+  if (calls.length) {
+    lines.push('#### Tools used', '');
+    calls.forEach((call, index) => {
+      const statusValue = call?.status || (call?.result !== undefined ? 'complete' : 'running');
+      const resultSummary = statusValue === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
+      const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
+      const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
+      const toolName = call?.name || call?.tool || `tool_${index + 1}`;
+      lines.push(`##### Tool ${index + 1}: \`${toolName}\``, '');
+      lines.push(`- Status: ${statusValue}`);
+      if (Number.isFinite(call?.iteration)) lines.push(`- Iteration: ${call.iteration}`);
+      if (latency) lines.push(`- Latency: ${latency}`);
+      if (argsSummary) lines.push(`- Arguments summary: ${argsSummary}`);
+      if (resultSummary && resultSummary !== statusValue) lines.push(`- Result summary: ${resultSummary}`);
+      lines.push('');
+
+      const argsValue = call?.args ?? call?.arguments;
+      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
+        lines.push('###### Arguments', '');
+        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
+      }
+      if (call?.result !== undefined) {
+        lines.push('###### Result', '');
+        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
+      } else if (includeDiagnostics) {
+        lines.push('###### Result', '', '_Waiting for tool result._', '');
+      }
+    });
+  }
+
+  if (promptCalls.length) {
+    lines.push('#### Context used', '');
+    promptCalls.forEach((call, index) => {
+      const name = call?.name || `context_${index + 1}`;
+      const summary = summarizeAgentToolResult(call?.result);
+      lines.push(`##### Context ${index + 1}: \`${name}\``, '');
+      if (summary) lines.push(`- Summary: ${summary}`, '');
+      lines.push('###### Injected result', '');
+      lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+    });
+  }
+
+  if (fallbackError) {
+    lines.push('#### Fallback', '', fallbackError, '');
+  }
 }
 
 function agentToolCalls(message) {
@@ -802,6 +882,57 @@ function prettyAgentJson(value, maxChars = 3600) {
   if (!normalized) return '';
   if (normalized.length <= maxChars) return escapeHtml(normalized);
   return `${escapeHtml(normalized.slice(0, maxChars))}\n…`;
+}
+
+function jsonForMarkdown(value) {
+  if (value == null) return 'null';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '""';
+    return trimmed;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function markdownCodeFence(content, language = '') {
+  const text = String(content || '').trimEnd();
+  const fence = text.includes('```') ? '````' : '```';
+  const lang = language ? String(language).trim() : '';
+  return `${fence}${lang}\n${text}\n${fence}`;
+}
+
+function detectMarkdownCodeLang(value) {
+  return typeof value === 'string' ? '' : 'json';
+}
+
+function summarizeAgentTraceEvent(event, index = 0) {
+  if (!event || typeof event !== 'object') return `Event ${index + 1}`;
+  if (event.type === 'agent_run_start') return 'Agent run started';
+  if (event.type === 'agent_iteration_start') {
+    return `Iteration ${event.iteration || '?' } started`;
+  }
+  if (event.type === 'agent_run_end') {
+    return `Run finished${event.stop_reason ? `: ${event.stop_reason}` : ''}`;
+  }
+  if (event.type === 'tool_call_start') {
+    const name = event.tool_name || event.name || event.tool_call?.name || 'tool';
+    const iteration = Number.isFinite(event.iteration) ? ` (iteration ${event.iteration})` : '';
+    return `Tool started: ${name}${iteration}`;
+  }
+  if (event.type === 'tool_call_end') {
+    const name = event.tool_name || event.name || event.tool_call?.name || 'tool';
+    const iteration = Number.isFinite(event.iteration) ? ` (iteration ${event.iteration})` : '';
+    return `Tool finished: ${name}${iteration}`;
+  }
+  const parts = [];
+  if (event.type) parts.push(String(event.type));
+  if (Number.isFinite(event.iteration)) parts.push(`iteration ${event.iteration}`);
+  if (event.stop_reason) parts.push(`reason: ${event.stop_reason}`);
+  return parts.join(' · ') || `Event ${index + 1}`;
 }
 
 function distinctAgentIterations(message) {
@@ -988,7 +1119,7 @@ function renderIntentPanel(message) {
   const intentType = escapeHtml(intent.intent_type || 'unknown');
   const summary = escapeHtml(intent.summary || '');
   const confidence = Number.isFinite(intent.confidence) ? `${Math.round(intent.confidence * 100)}%` : '—';
-  const requiresMotion = intent.requires_rover_motion ? 'Yes — operator approval required' : 'No';
+  const requiresMotion = intent.requires_rover_motion ? 'Yes — execution approval still required' : 'No';
 
   const target = intent.target || {};
   const targetParts = [
@@ -1068,6 +1199,25 @@ function renderRetrievalPanel(message) {
     `;
   }).join('');
 
+  let citationHtml = '';
+  if (citations.length) {
+    const citationItems = citations.map((c, idx) => {
+      const rawPath = String(c.path || '');
+      const docPath = rawPath.startsWith('docs/') ? rawPath.slice(5) : rawPath;
+      const headings = Array.isArray(c.heading_path) ? c.heading_path : (c.heading_path ? [c.heading_path] : []);
+      const lastHeading = headings.length ? String(headings[headings.length - 1]) : '';
+      const anchor = lastHeading ? `#${slugifyHeading(lastHeading)}` : '';
+      const url = `/docs/${docPath}${anchor}`;
+      const headingLabel = lastHeading ? ` — ${escapeHtml(lastHeading)}` : '';
+      const filename = rawPath.split('/').pop() || rawPath;
+      return `<li class="ai-citation-item"><span class="ai-citation-index">[${idx + 1}]</span> <a class="ai-citation-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(filename)}${headingLabel}</a></li>`;
+    }).join('');
+    citationHtml = `
+      <div class="ai-citation-title">Sources</div>
+      <ul class="ai-citation-list">${citationItems}</ul>
+    `;
+  }
+
   return `
     <div class="ai-retrieval-panel" aria-label="Retrieval surfaces">
       <div class="ai-retrieval-title">Retrieval surfaces</div>
@@ -1076,6 +1226,7 @@ function renderRetrievalPanel(message) {
         ${enabled.length ? `<span>enabled: ${escapeHtml(enabled.join(', '))}</span>` : ''}
       </div>
       <ul class="ai-retrieval-list">${rows}</ul>
+      ${citationHtml}
     </div>
   `;
 }
@@ -1143,28 +1294,6 @@ function closeSourcesPopover() {
 function toggleSourcesPopover() {
   if (isSourcesPopoverOpen()) closeSourcesPopover();
   else openSourcesPopover();
-}
-
-async function sendIntentTestRequest(sessionId, content, abortController) {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-  const response = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/intent-test`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Operator-Timezone': timezone },
-    body: JSON.stringify({ content, timezone }),
-    signal: abortController.signal,
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.detail || `Intent test failed (${response.status})`);
-  }
-  const result = await response.json();
-  const live = liveStateFor(sessionId);
-  if (Array.isArray(result.user_message) || result.user_message) {
-    const msgs = live.messages.filter((m) => !m.id?.startsWith('pending-'));
-    if (result.user_message) msgs.push(result.user_message);
-    if (result.assistant_message) msgs.push(result.assistant_message);
-    live.messages = msgs;
-  }
 }
 
 async function sendSessionCommand(sessionId, command) {
@@ -1516,181 +1645,6 @@ function mergeServerAndLocalMessages(serverMessages, existingMessages) {
   return merged;
 }
 
-// ── Planning-shell streaming and approval ─────────────────────────────────────
-
-function handlePlanningShellStreamEvent(sessionId, eventData) {
-  const live = liveStateFor(sessionId);
-  if (eventData.type === 'graph_run_start') {
-    live.planningShellThreadId = eventData.thread_id || '';
-    setAiStatus('Planning shell started.');
-  } else if (eventData.type === 'graph_resume_start') {
-    setAiStatus(`Submitting ${eventData.decision || 'decision'}...`);
-  } else if (eventData.type === 'graph_node_result') {
-    const node = String(eventData.node || '').replace(/_/g, ' ');
-    setAiStatus(`Planning shell: ${node}...`);
-  } else if (eventData.type === 'graph_retrieval_result') {
-    updatePendingRetrievalState(
-      sessionId,
-      eventData.retrieval_request || {},
-      eventData.retrieved_sources || [],
-      eventData.retrieval_citations || [],
-    );
-  } else if (eventData.type === 'mission_draft_created') {
-    setAiStatus(`Draft created (${eventData.draft_id || '?'}).`);
-  } else if (eventData.type === 'mission_draft_decision') {
-    const status = eventData.approval_status || '';
-    setAiStatus(`Draft ${status}.`, status === 'rejected' ? 'warn' : 'ok');
-  } else if (eventData.type === 'graph_interrupt') {
-    live.pendingInterrupt = {
-      threadId: eventData.thread_id || live.planningShellThreadId || '',
-      approvalPayload: eventData.interrupt_value || {},
-    };
-    // Remove the spinner pending message — graph is paused, not running
-    live.messages = live.messages.filter((m) => m.id !== live.pendingAssistantMessageId);
-    live.pendingAssistantMessageId = '';
-    const interruptType = (eventData.interrupt_value || {}).type || '';
-    setAiStatus(
-      interruptType === 'clarification_request'
-        ? 'Clarification needed before planning can continue.'
-        : 'Mission draft awaiting your approval.',
-      'warn',
-    );
-    if (aiState.activeSession?.id === sessionId) renderMessages();
-  } else if (eventData.type === 'graph_run_error') {
-    throw new Error(String(eventData.error || 'Planning shell error'));
-  } else if (eventData.type === 'graph_run_end') {
-    live.pendingInterrupt = null;
-    setAiStatus('Planning shell complete.', 'ok');
-  }
-  if (aiState.activeSession?.id === sessionId) renderMessages();
-}
-
-async function sendPlanningShellRequest(sessionId, content, abortController) {
-  const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/planning-shell/stream`;
-  const response = await fetch(url, withAiTimezone({
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-    signal: abortController.signal,
-  }));
-  if (!response.ok) {
-    let detail = await response.text();
-    try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
-    throw new Error(detail || `${response.status}`);
-  }
-  await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
-}
-
-async function resumePlanningShellApproval(sessionId, threadId, decision, note) {
-  const live = liveStateFor(sessionId);
-  live.pendingInterrupt = null;
-  live.sending = true;
-  const abortController = new AbortController();
-  live.abortController = abortController;
-  renderMessages();
-  setAiStatus(`Submitting ${decision}...`);
-  try {
-    const url = `/api/ai/sessions/${encodeURIComponent(sessionId)}/planning-shell/thread/${encodeURIComponent(threadId)}/resume`;
-    const response = await fetch(url, withAiTimezone({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, note: note || '' }),
-      signal: abortController.signal,
-    }));
-    if (!response.ok) {
-      let detail = await response.text();
-      try { const p = JSON.parse(detail); detail = p.detail || detail; } catch (_) {}
-      throw new Error(detail || `${response.status}`);
-    }
-    await readJsonLinesStream(response, (event) => handlePlanningShellStreamEvent(sessionId, event));
-    await refreshSessionLive(sessionId);
-    await loadSessions();
-    setAiStatus('Ready.', 'ok');
-  } catch (error) {
-    const isAbort = error?.name === 'AbortError';
-    setAiStatus(isAbort ? 'Interrupted.' : (error.message || 'Approval failed.'), isAbort ? 'warn' : 'danger');
-  } finally {
-    clearSessionLiveState(sessionId);
-    renderMessages();
-  }
-}
-
-function renderPlanningShellApprovalCard(sessionId, interrupt) {
-  const payload = interrupt.approvalPayload || {};
-  if (payload.type === 'clarification_request') {
-    return renderClarificationCard(sessionId, interrupt);
-  }
-  const threadId = interrupt.threadId || '';
-  const safeThreadId = escapeHtml(threadId);
-  const goal = escapeHtml(String(payload.goal || payload.summary || ''));
-  const draftId = escapeHtml(String(payload.draft_id || ''));
-  const revisionId = escapeHtml(String(payload.mission_revision_id || ''));
-  const risks = Array.isArray(payload.risks) ? payload.risks : [];
-  const routeSummary = payload.route_summary && typeof payload.route_summary === 'object' ? payload.route_summary : {};
-  const waypointCount = Number(routeSummary.waypoint_count || 0);
-  const distanceM = Number(routeSummary.total_distance_m || 0);
-  const routeLabel = waypointCount > 0
-    ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}${distanceM > 0 ? ` · ${distanceM.toFixed(1)} m` : ''}`
-    : '';
-  const riskItems = risks.length
-    ? `<ul class="ai-approval-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
-    : '';
-  return `
-    <div class="ai-approval-card" role="region" aria-label="Mission draft approval">
-      <div class="ai-approval-title">Mission Draft — Awaiting Approval</div>
-      ${draftId ? `<div class="ai-approval-row"><span class="ai-approval-label">Draft ID</span><span class="ai-approval-value">${draftId}</span></div>` : ''}
-      ${revisionId ? `<div class="ai-approval-row"><span class="ai-approval-label">Revision ID</span><span class="ai-approval-value">${revisionId}</span></div>` : ''}
-      ${goal ? `<div class="ai-approval-row"><span class="ai-approval-label">Goal</span><span class="ai-approval-value">${goal}</span></div>` : ''}
-      ${routeLabel ? `<div class="ai-approval-row"><span class="ai-approval-label">Route</span><span class="ai-approval-value">${escapeHtml(routeLabel)}</span></div>` : ''}
-      ${riskItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Risks</span>${riskItems}</div>` : ''}
-      <div class="ai-approval-note-row">
-        <label class="ai-approval-note-label" for="ai-approval-note-input">Note (optional)</label>
-        <input type="text" id="ai-approval-note-input" class="ai-approval-note-input" placeholder="Reason for approval or rejection…" />
-      </div>
-      <div class="ai-approval-actions">
-        <button class="ai-approval-btn ai-approval-approve" type="button"
-          data-approval-action="approve"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Approve</button>
-        <button class="ai-approval-btn ai-approval-reject" type="button"
-          data-approval-action="reject"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Reject</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderClarificationCard(sessionId, interrupt) {
-  const payload = interrupt.approvalPayload || {};
-  const threadId = interrupt.threadId || '';
-  const safeThreadId = escapeHtml(threadId);
-  const questions = Array.isArray(payload.questions) ? payload.questions : [];
-  const intentSummary = escapeHtml(String(payload.intent_summary || ''));
-  const questionItems = questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('');
-  return `
-    <div class="ai-approval-card ai-clarification-card" role="region" aria-label="Clarification needed">
-      <div class="ai-approval-title">Clarification Needed</div>
-      ${intentSummary ? `<div class="ai-approval-row"><span class="ai-approval-label">Request</span><span class="ai-approval-value">${intentSummary}</span></div>` : ''}
-      ${questionItems ? `<div class="ai-approval-row"><span class="ai-approval-label">Missing</span><ul class="ai-approval-risks ai-clarification-questions">${questionItems}</ul></div>` : ''}
-      <div class="ai-approval-note-row">
-        <label class="ai-approval-note-label" for="ai-clarification-input">Your answer</label>
-        <textarea id="ai-clarification-input" class="ai-approval-note-input ai-clarification-input" rows="2" placeholder="Provide the missing information…"></textarea>
-      </div>
-      <div class="ai-approval-actions">
-        <button class="ai-approval-btn ai-approval-approve" type="button"
-          data-clarification-action="continue"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Continue</button>
-        <button class="ai-approval-btn ai-approval-reject" type="button"
-          data-clarification-action="cancel"
-          data-thread-id="${safeThreadId}"
-          data-session-id="${escapeHtml(sessionId)}">Cancel</button>
-      </div>
-    </div>
-  `;
-}
-
 function formatAiTime(value) {
   if (!value) return '';
   return new Date(value * 1000).toLocaleString([], {
@@ -1769,22 +1723,17 @@ function providerNameForMessage(message) {
 
 function normalizeRunMode(value) {
   const clean = String(value || '').trim().toLowerCase();
-  if (clean === 'agent') return 'agent';
-  if (clean === 'intent' || clean === 'rover_intent_test') return 'intent';
-  if (clean === 'planning_shell') return 'planning_shell';
+  if (clean === 'agent' || clean === 'planning_shell') return 'agent';
   return 'chat';
 }
 
 function sessionModeToRunMode(session) {
-  const mode = normalizeRunMode(session?.mode);
-  return mode === 'intent' || mode === 'planning_shell' ? 'agent' : mode;
+  return normalizeRunMode(session?.mode);
 }
 
 function runModeToSessionMode(runMode) {
   const mode = normalizeRunMode(runMode);
   if (mode === 'agent') return 'agent';
-  if (mode === 'intent') return 'rover_intent_test';
-  if (mode === 'planning_shell') return 'planning_shell';
   return 'general_chat';
 }
 
@@ -1799,8 +1748,6 @@ function messageRunMode(message) {
 function runModeLabel(runMode) {
   const mode = normalizeRunMode(runMode);
   if (mode === 'agent') return 'Agent';
-  if (mode === 'intent') return 'Intent Test';
-  if (mode === 'planning_shell') return 'Planning Shell';
   return 'Chat';
 }
 
@@ -2312,9 +2259,6 @@ function renderMessages(options = {}) {
     aiEls.messageList.innerHTML = `<div class="ai-empty-state">${viewingArchived ? 'Archived chat has no messages.' : 'Start a new conversation.'}</div>`;
     return;
   }
-  const pendingInterrupt = activeLive?.pendingInterrupt || null;
-  const sessionIdForApproval = aiState.activeSession?.id || '';
-
   aiEls.messageList.innerHTML = messages.map((message) => {
     const isPendingAssistant = message.role === 'assistant'
       && message.id === pendingAssistantId
@@ -2390,7 +2334,7 @@ function renderMessages(options = {}) {
         : ''}
     </article>
   `;
-  }).join('') + (pendingInterrupt ? renderPlanningShellApprovalCard(sessionIdForApproval, pendingInterrupt) : '');
+  }).join('');
   postRenderMessages();
   if (shouldStickToBottom) {
     aiEls.messageList.scrollTop = aiEls.messageList.scrollHeight;
@@ -2489,8 +2433,16 @@ function replacePendingAssistantMessage(sessionId, serverMessage) {
   if (isMessageActivityOpen(pendingId, true)) {
     setMessageActivityOpen(serverMessage?.id, true);
   }
+  // Server meta has only source-control-level citations (no path/heading_path).
+  // Preserve chunk-level citations accumulated from search_project_docs tool results.
+  const pending = live.messages.find((m) => m.id === pendingId);
+  const accumulated = pending?.meta?.retrieval_citations;
+  let finalMessage = serverMessage;
+  if (Array.isArray(accumulated) && accumulated.length && accumulated.some((c) => c.path)) {
+    finalMessage = { ...finalMessage, meta: { ...(finalMessage?.meta || {}), retrieval_citations: accumulated } };
+  }
   live.messages = live.messages.map((message) => (
-    message.id === pendingId ? serverMessage : message
+    message.id === pendingId ? finalMessage : message
   ));
 }
 
@@ -2538,6 +2490,18 @@ function updatePendingRetrievalState(sessionId, retrievalRequest, retrievedSourc
     if (retrievalRequest && typeof retrievalRequest === 'object') meta.retrieval_request = retrievalRequest;
     if (Array.isArray(retrievedSources)) meta.retrieved_sources = retrievedSources;
     if (Array.isArray(retrievalCitations)) meta.retrieval_citations = retrievalCitations;
+    return { ...message, meta };
+  });
+}
+
+function accumulateRetrievalCitations(sessionId, newCitations) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    const existing = Array.isArray(meta.retrieval_citations) ? meta.retrieval_citations : [];
+    meta.retrieval_citations = [...existing, ...newCitations];
     return { ...message, meta };
   });
 }
@@ -2600,6 +2564,10 @@ function handleAiStreamEvent(sessionId, eventData) {
     updatePendingAgentTrace(sessionId, eventData);
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
     pushAiToolStatusMessage(eventData.tool_call || {});
+    const tc = eventData.tool_call || {};
+    if (tc.name === 'search_project_docs' && Array.isArray(tc.result?.citations) && tc.result.citations.length) {
+      accumulateRetrievalCitations(sessionId, tc.result.citations);
+    }
   } else if (eventData.type === 'graph_retrieval_result') {
     updatePendingRetrievalState(
       sessionId,
@@ -3000,18 +2968,6 @@ const AI_SLASH_COMMANDS = [
     serverCommand: 'context',
     description: 'Show the latest context snapshot, providers, retrieval sources, and loaded context blocks.',
   },
-  {
-    command: '/intent',
-    kind: 'run_mode',
-    runMode: 'intent',
-    description: 'Parse a rover task into structured intent without executing it.',
-  },
-  {
-    command: '/plan',
-    kind: 'run_mode',
-    runMode: 'planning_shell',
-    description: 'Run the planning shell for the current prompt.',
-  },
 ];
 
 function slashCommandDefinition(command) {
@@ -3161,8 +3117,6 @@ async function sendMessage(event) {
   setAiStatus(
     isSessionCommand ? `Running ${slash.command}...`
     : runMode === 'agent' ? 'Agent is checking rover context.'
-    : runMode === 'intent' ? 'Parsing rover intent...'
-    : runMode === 'planning_shell' ? 'Planning shell starting...'
     : 'Waiting for model response.'
   );
 
@@ -3194,26 +3148,16 @@ async function sendMessage(event) {
       pushLocalPendingMessages(sessionId, content, runMode);
       renderMessages();
     }
-    if (runMode === 'intent') {
-      await sendIntentTestRequest(sessionId, content, abortController);
-    } else if (runMode === 'planning_shell') {
-      await sendPlanningShellRequest(sessionId, content, abortController);
-    } else {
-      saveInflightMarker(sessionId, 'messages');
-      await streamAiRequest(
-        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-        { content, run_mode: runMode },
-        abortController,
-        sessionId,
-      );
-    }
-    // Refresh from server and update live state (works even if user switched away).
-    // Skip refresh if the planning shell is suspended at interrupt.
-    if (!liveStateFor(sessionId).pendingInterrupt) {
-      await refreshSessionLive(sessionId);
-      await loadSessions();
-    }
-    if (aiState.activeSession?.id === sessionId && !liveStateFor(sessionId).pendingInterrupt) {
+    saveInflightMarker(sessionId, 'messages');
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+      { content, run_mode: runMode },
+      abortController,
+      sessionId,
+    );
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    if (aiState.activeSession?.id === sessionId) {
       setAiStatus('Ready.', 'ok');
     }
   } catch (error) {
@@ -3260,25 +3204,16 @@ async function resendMessage(messageId) {
   renderMessages();
   setAiStatus('Resending message.');
   try {
-    if (runMode === 'intent') {
-      await sendIntentTestRequest(sessionId, content, abortController);
-    } else if (runMode === 'planning_shell') {
-      await sendPlanningShellRequest(sessionId, content, abortController);
-    } else {
-      saveInflightMarker(sessionId, 'messages');
-      await streamAiRequest(
-        `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
-        { content, run_mode: runMode },
-        abortController,
-        sessionId,
-      );
-    }
-    // Planning-shell sessions can pause at interrupt() waiting for operator input.
-    if (!liveStateFor(sessionId).pendingInterrupt) {
-      await refreshSessionLive(sessionId);
-      await loadSessions();
-      if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
-    }
+    saveInflightMarker(sessionId, 'messages');
+    await streamAiRequest(
+      `/api/ai/sessions/${encodeURIComponent(sessionId)}/messages/stream`,
+      { content, run_mode: runMode },
+      abortController,
+      sessionId,
+    );
+    await refreshSessionLive(sessionId);
+    await loadSessions();
+    if (aiState.activeSession?.id === sessionId) setAiStatus('Ready.', 'ok');
   } catch (error) {
     const isAbort = error?.name === 'AbortError';
     const messageText = isAbort ? 'Response interrupted.' : error.message;
@@ -3753,36 +3688,6 @@ function bindAi() {
   }, true);
   aiEls.messageList.addEventListener('scroll', updateMessageListScrollIntent, { passive: true });
   aiEls.messageList.addEventListener('click', (event) => {
-    // Planning-shell clarification card buttons
-    const clarificationBtn = event.target.closest('[data-clarification-action]');
-    if (clarificationBtn) {
-      const action = clarificationBtn.dataset.clarificationAction;
-      const threadId = clarificationBtn.dataset.threadId || '';
-      const sid = clarificationBtn.dataset.sessionId || '';
-      const answerInput = document.getElementById('ai-clarification-input');
-      const answer = answerInput ? answerInput.value.trim() : '';
-      if (sid && threadId) {
-        resumePlanningShellApproval(sid, threadId, action, answer)
-          .catch((err) => setAiStatus(err.message || 'Clarification failed.', 'danger'));
-      }
-      return;
-    }
-
-    // Planning-shell approval card buttons
-    const approvalBtn = event.target.closest('[data-approval-action]');
-    if (approvalBtn) {
-      const decision = approvalBtn.dataset.approvalAction;
-      const threadId = approvalBtn.dataset.threadId || '';
-      const sid = approvalBtn.dataset.sessionId || '';
-      const noteInput = document.getElementById('ai-approval-note-input');
-      const note = noteInput ? noteInput.value.trim() : '';
-      if (sid && threadId && (decision === 'approve' || decision === 'reject')) {
-        resumePlanningShellApproval(sid, threadId, decision, note)
-          .catch((err) => setAiStatus(err.message || 'Approval failed.', 'danger'));
-      }
-      return;
-    }
-
     const action = event.target.closest('[data-message-action]');
     if (!action) return;
     if (action.dataset.messageAction === 'toggle-speech') {

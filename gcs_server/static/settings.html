@@ -45,6 +45,7 @@
         <a class="settings-tab" data-settings-tab-link href="?tab=mission-lifecycle">Mission Lifecycle</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=ai-settings">AI Settings</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=llm-provider">Add LLM Provider</a>
+        <a class="settings-tab" data-settings-tab-link href="?tab=rag">RAG</a>
         <a class="settings-tab" data-settings-tab-link href="?tab=json">Config I/O</a>
       </section>
 
@@ -473,6 +474,51 @@
                 <button id="reload-model-routing" type="button" class="ghost">Reload Routing</button>
               </div>
               <p id="llm-routing-status" class="status-banner">Routing rules load after providers are available.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-rag" class="settings-pane" data-settings-tab="rag" hidden>
+          <div class="settings-grid settings-grid-compact">
+            <article class="panel panel-secondary">
+              <div class="panel-head">
+                <div>
+                  <p class="section-kicker">Knowledge</p>
+                  <h2>Project Docs Embeddings</h2>
+                </div>
+                <span id="rag-status-pill" class="pill">Loading</span>
+              </div>
+              <p class="settings-note">Project documentation is embedded into a Qdrant collection so the AI assistant can ground answers in requirements, design docs, and ADRs (ADR&nbsp;0028). The collection is derived from the routed <strong>embeddings</strong> model; changing that model requires a full regenerate.</p>
+
+              <p id="rag-model-warning" class="status-banner" hidden></p>
+
+              <dl class="rag-status-grid">
+                <div class="rag-status-row rag-status-row-select">
+                  <dt>Routed model</dt>
+                  <dd><select id="rag-model-select"></select></dd>
+                </div>
+                <div class="rag-status-row">
+                  <dt>Collection</dt>
+                  <dd id="rag-collection">–</dd>
+                </div>
+                <div class="rag-status-row">
+                  <dt>Indexed chunks</dt>
+                  <dd id="rag-point-count">–</dd>
+                </div>
+                <div class="rag-status-row">
+                  <dt>Last updated</dt>
+                  <dd id="rag-last-ingest">–</dd>
+                </div>
+              </dl>
+
+              <div class="form-actions form-actions-inline">
+                <button id="rag-embed-incremental" type="button" title="Re-embeds only documents that have changed since the last run. Safe to run at any time.">Update Index</button>
+                <button id="rag-embed-regenerate" type="button" class="ghost" title="Deletes the current index and re-embeds every document. Required after changing the embeddings model.">Rebuild Index</button>
+                <button id="rag-refresh-status" type="button" class="ghost" title="Re-check the current index status from Qdrant.">↻ Refresh</button>
+              </div>
+              <p id="rag-status-message" class="status-banner">Loading RAG status.</p>
+              <p id="rag-last-incremental-result" class="settings-note" hidden></p>
+              <p id="rag-last-regenerate-result" class="settings-note" hidden></p>
             </article>
           </div>
         </section>

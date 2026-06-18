@@ -1,8 +1,175 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from gcs_server.ai.session_store import normalize_source_controls
+from rag_service.collection import collection_name_for
+
+_DEFAULT_EMBEDDINGS_MODEL = "qwen3-embedding-4b"
+_DEFAULT_EMBEDDINGS_DIM = 2560
+# Fallback constant — used only when config-based resolution fails (graceful degradation).
+PROJECT_DOCS_COLLECTION = collection_name_for(_DEFAULT_EMBEDDINGS_MODEL, _DEFAULT_EMBEDDINGS_DIM)
+PROJECT_DOCS_DENSE_VECTOR = "dense"
+DEFAULT_QDRANT_REST_PORT = 9004
+DEFAULT_SEARCH_LIMIT = 5
+
+
+def _resolve_collection(config: Any) -> str:
+    """Derive the project_docs collection name from the currently routed embeddings provider.
+
+    Falls back to the default (Qwen3/2560) if the provider or its dim field is absent,
+    so chat degrades gracefully rather than raising on misconfiguration.
+    """
+    try:
+        from gcs_server.ai.provider_registry import resolve_embeddings_provider
+        provider = resolve_embeddings_provider(config)
+        model_id = str(provider.get("model_id") or "").strip()
+        dim = provider.get("embedding_dim")
+        if model_id and dim:
+            return collection_name_for(model_id, int(dim))
+    except Exception:  # noqa: BLE001
+        pass
+    return PROJECT_DOCS_COLLECTION
+
+
+def _qdrant_rest_port(qdrant_port: int | None) -> int:
+    if qdrant_port:
+        return int(qdrant_port)
+    return int(os.environ.get("REMOTE_ROVER_QDRANT_REST_PORT", DEFAULT_QDRANT_REST_PORT))
+
+
+def search_project_docs(
+    config: Any,
+    query: str,
+    *,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    secret_resolver: Any = None,
+    qdrant_port: int | None = None,
+) -> dict[str, Any]:
+    """Query the dense `project_docs` collection and return chunks + citations.
+
+    Read side of the RAG path (ADR 0028 §3/§8): embed the query through the
+    `embeddings` routing provider, run a dense vector search against Qdrant, and
+    return grounded, citeable chunks. Degrades gracefully (``available: false``)
+    when embeddings or Qdrant are unreachable so chat stays usable.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return {
+            "available": False,
+            "status": "empty_query",
+            "results": [],
+            "citations": [],
+            "note": "Empty query; provide a question or keywords to search project docs.",
+        }
+
+    collection = _resolve_collection(config)
+
+    try:
+        from gcs_server.ai.provider_registry import embed_query
+        vector = embed_query(config, text, secret_resolver=secret_resolver)
+    except Exception as exc:  # noqa: BLE001 — surface as graceful unavailability
+        return {
+            "available": False,
+            "status": "embeddings_unavailable",
+            "results": [],
+            "citations": [],
+            "note": f"Could not embed the query (is the embeddings provider up?): {exc}",
+        }
+
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError:
+        return {
+            "available": False,
+            "status": "client_missing",
+            "results": [],
+            "citations": [],
+            "note": "qdrant-client is not installed; install gcs_server/requirements-gcs.txt.",
+        }
+
+    port = _qdrant_rest_port(qdrant_port)
+    effective_limit = int(limit) if int(limit) > 0 else DEFAULT_SEARCH_LIMIT
+    prefetch_limit = effective_limit * 4
+
+    # Attempt sparse encoding for hybrid RRF search; fall back to dense-only gracefully.
+    sparse_vector = None
+    try:
+        from rag_service.sparse import get_encoder
+        sv = get_encoder().encode([text])[0]
+        from qdrant_client.models import SparseVector
+        sparse_vector = SparseVector(indices=sv["indices"], values=sv["values"])
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        client = QdrantClient(host="127.0.0.1", port=port)
+        if sparse_vector is not None:
+            from qdrant_client.models import Fusion, FusionQuery, Prefetch
+            response = client.query_points(
+                collection_name=collection,
+                prefetch=[
+                    Prefetch(query=vector, using=PROJECT_DOCS_DENSE_VECTOR, limit=prefetch_limit),
+                    Prefetch(query=sparse_vector, using="sparse", limit=prefetch_limit),
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=effective_limit,
+                with_payload=True,
+            )
+        else:
+            response = client.query_points(
+                collection_name=collection,
+                query=vector,
+                using=PROJECT_DOCS_DENSE_VECTOR,
+                limit=effective_limit,
+                with_payload=True,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": False,
+            "status": "qdrant_unavailable",
+            "results": [],
+            "citations": [],
+            "note": (
+                f"Could not query Qdrant on :{port} collection "
+                f"'{collection}' (is it up and ingested?): {exc}"
+            ),
+        }
+
+    results: list[dict[str, Any]] = []
+    citations: list[dict[str, Any]] = []
+    for hit in getattr(response, "points", []) or []:
+        payload = hit.payload or {}
+        path = str(payload.get("path") or "")
+        heading_path = payload.get("heading_path") or []
+        chunk_index = payload.get("chunk_index")
+        ref = f"{path}#{chunk_index}" if path else ""
+        results.append({
+            "path": path,
+            "heading_path": heading_path,
+            "chunk_index": chunk_index,
+            "text": str(payload.get("text") or ""),
+            "content_hash": str(payload.get("content_hash") or ""),
+            "score": float(getattr(hit, "score", 0.0) or 0.0),
+            "ref": ref,
+        })
+        citations.append({
+            "source": "project_docs",
+            "path": path,
+            "heading_path": heading_path,
+            "ref": ref,
+        })
+
+    return {
+        "available": True,
+        "status": "ok" if results else "no_matches",
+        "collection": collection,
+        "query": text,
+        "hybrid": sparse_vector is not None,
+        "results": results,
+        "citations": citations,
+    }
 
 
 def normalize_retrieval_request(
@@ -52,10 +219,10 @@ def build_retrieved_sources(
         sources.append({
             "source": "project_docs",
             "kind": "knowledge",
-            "available": False,
-            "status": "planned",
+            "available": True,
+            "status": "tool",
             "requested": False,
-            "note": "Project-document retrieval is a Phase 4 surface; RAG is not wired yet.",
+            "note": "Project docs are searchable via search_project_docs (Qdrant dense, ADR 0028).",
         })
     if source_controls.get("mission_history"):
         sources.append({

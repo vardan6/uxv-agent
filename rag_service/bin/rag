@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Remote Rover RAG dispatcher (ADR 0028) — thin bash, fat Python.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE_DIR="$(cd "$DIR/.." && pwd)"
+REPO_DIR="$(cd "$SERVICE_DIR/.." && pwd)"
+COMPOSE_FILE="$SERVICE_DIR/docker-compose.yml"
+VENV="$REPO_DIR/.venv"
+
+REST_PORT="${REMOTE_ROVER_QDRANT_REST_PORT:-9004}"
+
+usage() {
+  cat <<EOF
+Usage: rag <command> [options]
+
+  up              Start the Qdrant sidecar (pulls the image on first run).
+  down            Stop the Qdrant sidecar (data volume is preserved).
+  status          Report whether Qdrant is reachable on :$REST_PORT.
+  ingest          Ingest project_docs into Qdrant (incremental, idempotent).
+    --dry-run              Show changes without embedding or upserting.
+    --docs-dir DIR         Override the docs/ directory.
+    --backfill-sparse      Backfill BM42 sparse vectors into existing dense-only points.
+    --contextual           Prepend LLM-generated context to each chunk before embedding.
+    --contextual-model M   Chat model for contextual enrichment.
+
+Env:
+  OPENAI_API_KEY                 Required for embedding (ingest).
+  REMOTE_ROVER_QDRANT_REST_PORT  REST port (default 9004)
+  REMOTE_ROVER_QDRANT_GRPC_PORT  gRPC port (default 9005)
+EOF
+}
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker not found on PATH. Install Docker (or enable Docker Desktop WSL integration)." >&2
+    exit 1
+  fi
+}
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+cmd_up() {
+  require_docker
+  compose up -d
+  echo "Qdrant starting; check readiness with: rag status"
+}
+
+cmd_down() {
+  require_docker
+  compose down
+}
+
+cmd_status() {
+  require_docker
+  if curl -fsS "http://127.0.0.1:$REST_PORT/healthz" >/dev/null 2>&1; then
+    echo "Qdrant: healthy (http://127.0.0.1:$REST_PORT)"
+  else
+    echo "Qdrant: unreachable on :$REST_PORT (is it up? try: rag up)" >&2
+    exit 1
+  fi
+}
+
+require_venv() {
+  if [[ ! -x "$VENV/bin/python" ]]; then
+    echo "Python venv not found at $VENV. Create it with: python -m venv $VENV && pip install -r $SERVICE_DIR/requirements.txt" >&2
+    exit 1
+  fi
+}
+
+cmd_ingest() {
+  require_venv
+  PYTHONPATH="$REPO_DIR" "$VENV/bin/python" -m rag_service.ingest "$@"
+}
+
+case "${1:-}" in
+  up)     cmd_up ;;
+  down)   cmd_down ;;
+  status) cmd_status ;;
+  ingest) shift; cmd_ingest "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) echo "Unknown command: $1" >&2; echo >&2; usage >&2; exit 2 ;;
+esac

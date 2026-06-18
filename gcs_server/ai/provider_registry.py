@@ -22,6 +22,7 @@ OPENAI_COMPATIBLE_PROVIDER_TYPES = {
 
 
 _MODEL_CACHE: dict[str, Any] = {}
+_EMBEDDINGS_CLIENT_CACHE: dict[str, Any] = {}
 
 
 def _provider_cache_key(provider: dict[str, Any], secret_resolver: Callable[[str], str] | None) -> str:
@@ -47,6 +48,7 @@ def _provider_cache_key(provider: dict[str, Any], secret_resolver: Callable[[str
 def evict_model_cache() -> None:
     """Clear the process-level model cache (call after provider config changes)."""
     _MODEL_CACHE.clear()
+    _EMBEDDINGS_CLIENT_CACHE.clear()
 
 
 @dataclass(slots=True)
@@ -91,6 +93,81 @@ def resolve_intent_provider(
             raise ValueError(f"LLM provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
         return ResolvedProvider(provider=provider, model=_cached_chat_model(provider, secret_resolver=secret_resolver))
     raise ValueError("No LLM provider is configured for intent parsing.")
+
+
+def resolve_embeddings_provider(
+    config: Any,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Resolve the provider for the `embeddings` routing purpose (query side)."""
+    providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+    provider = (
+        _find_provider(providers, provider_id)
+        if provider_id
+        else _provider_from_routing(config.model_routing, providers, "embeddings", allow_default=False)
+    )
+    if provider is None:
+        raise ValueError("No embeddings provider is configured (model routing purpose 'embeddings').")
+    if not provider.get("enabled", True):
+        raise ValueError(f"Embeddings provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
+    return provider
+
+
+def embed_texts(
+    config: Any,
+    texts: list[str],
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> list[list[float]]:
+    """Embed texts through the routed embeddings provider (OpenAI-compatible /embeddings)."""
+    provider = resolve_embeddings_provider(config, provider_id=provider_id, secret_resolver=secret_resolver)
+    model = str(provider.get("model_id") or "").strip()
+    if not model:
+        raise ValueError("Selected embeddings provider has no model_id.")
+    client = _cached_embeddings_client(provider, secret_resolver=secret_resolver)
+    response = client.embeddings.create(model=model, input=list(texts))
+    return [item.embedding for item in response.data]
+
+
+def embed_query(
+    config: Any,
+    text: str,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> list[float]:
+    """Embed a single query string; query-side counterpart to rag_service ingestion."""
+    vectors = embed_texts(config, [str(text or "")], provider_id=provider_id, secret_resolver=secret_resolver)
+    if not vectors:
+        raise ValueError("Embeddings provider returned no vectors.")
+    return vectors[0]
+
+
+def _cached_embeddings_client(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    key = _provider_cache_key(provider, secret_resolver)
+    if key not in _EMBEDDINGS_CLIENT_CACHE:
+        _EMBEDDINGS_CLIENT_CACHE[key] = _build_embeddings_client(provider, secret_resolver=secret_resolver)
+    return _EMBEDDINGS_CLIENT_CACHE[key]
+
+
+def _build_embeddings_client(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    provider_type = str(provider.get("provider_type", "openai_compatible"))
+    if provider_type not in OPENAI_COMPATIBLE_PROVIDER_TYPES:
+        raise ValueError(f"Unsupported embeddings provider type: {provider_type}")
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("The openai package is not installed. Install gcs_server/requirements-gcs.txt.") from exc
+
+    api_key = _api_key_for_provider(provider, secret_resolver=secret_resolver)
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(provider.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = _normalized_base_url(provider_type, base_url)
+    return OpenAI(**kwargs)
 
 
 def _cached_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:

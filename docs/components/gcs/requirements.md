@@ -153,6 +153,21 @@ The model routing section assigns providers to AI purposes:
 
 Each purpose has a primary and an optional fallback. These assignments persist in the loaded GCS settings JSON.
 
+### RAG Tab
+
+Manage the embedding index used by the AI assistant to ground answers in project documentation.
+
+The operator can:
+
+- select the active embedding model from a dropdown listing every provider configured for the **Embeddings** routing purpose; changing the selection immediately updates the active model and refreshes the index status
+- see the status of the selected model's index: **Up to date**, **Stale** (docs changed since last run), **Not indexed** (never built for this model), or **Model mismatch** (manifest dimension does not match current provider config)
+- see the collection name, number of indexed chunks, and when the index was last updated
+- run **Update Index** — re-embeds only documents that have changed since the last run; disabled when status is **Not indexed** or **Model mismatch**
+- run **Rebuild Index** — deletes the current collection and re-embeds every document from scratch; always available; requires confirmation
+- see an actionable error message when Qdrant is not running: *"Qdrant is not running. Start it with `bin/rag up`."*
+
+Each embedding model retains its own index collection in Qdrant. Switching models does not destroy another model's collection; the operator can switch freely and each model's staleness is independently tracked.
+
 ### JSON Tab
 
 Export and import selected settings sections. The operator chooses which sections to include via checkboxes:

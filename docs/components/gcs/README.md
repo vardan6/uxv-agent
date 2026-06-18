@@ -1,6 +1,6 @@
 # GCS
 
-The browser-facing Ground Control Station: dashboard, replay, settings, and the AI workspace that hosts Chat, Agent, intent-test, and planning-shell modes. The GCS owns browser connections, controller locking, MQTT control publication, telemetry relay, presence signaling, and all backend APIs that power the operator UI.
+The browser-facing Ground Control Station: dashboard, replay, settings, and the AI workspace that hosts Chat and Agent, plus the remaining backend seams around supervised mission-planning cleanup. The GCS owns browser connections, controller locking, MQTT control publication, telemetry relay, presence signaling, and all backend APIs that power the operator UI.
 
 | Doc | Tier | Purpose |
 |---|---|---|

@@ -50,8 +50,7 @@ It is responsible for:
 - selected-section JSON settings export/load/save/apply (shipped: merged 2026-05-05)
 - `/ai` provider-backed Chat and read-only Agent modes
 - session-level source controls and bounded lazy retrieval surfaces for replay reports, AI chat history, safe settings/config, and sensor metadata
-- `/ai` intent-test path for non-executing structured rover-task parsing
-- `/ai` planning-shell path for non-executing mission-draft planning with approval gates (reached via `/plan <prompt>`)
+- `/ai` Chat and Agent paths, including direct Agent mission-authoring through shared planning tools
 - route-planning drafts and QGC `.plan` export for approved route-bearing drafts
 - backend-owned mission revision storage, current mission-state APIs, overlay APIs, and controller mission-state APIs
 - durable mission execution transition with controller-version checks and execution-attempt persistence
@@ -61,9 +60,9 @@ It is responsible for:
 - compact live current-context injection for AI Chat
 - structured rover/runtime/settings/LLM/map/replay context providers for AI Chat
 - read-only agent tools for rover state, scene summary, object queries, mission state, and replay analytics
-- structured rover intent parsing with optional deterministic target-resolution hints
+- structured rover intent parsing as a shared internal capability with optional deterministic target-resolution hints
 - mission-draft storage and approval/reject flow with two-approval model
-- planning shell reached through `/plan`: planner-loop planning core, durable checkpointer, interrupt-driven approval and clarification gates, streaming NDJSON events, approval and clarification cards in UI
+- Agent mission-authoring through shared planning tools: planner loop inside the normal Agent runtime, deterministic mission validation/storage, and normal chat responses instead of planner-only interrupt cards
 
 Current execution-boundary status:
 
@@ -126,11 +125,15 @@ Current AI Chat behavior:
 
 - `/ai` is a provider-backed Chat/Agent workspace
 - the live composer exposes Chat and Agent as the visible modes
-- `/intent <prompt>` and the planning shell (via `/plan <prompt>`) remain available as supervised non-executing side paths
-- `/plan` is the current explicit planning-shell entry point; there is no separate visible planning product mode
+- there is no separate visible planning product mode; mission-authoring now
+  happens through the primary Agent experience
 - LLM provider configuration comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - Agent mode is wired through `ToolRegistry`; tools cover rover state, scene summary, object queries, mission state, and replay analytics
+- a separate terminal AI CLI is planned as a thin client over the existing
+  `/api/ai/...` backend surface; see [design/ai-cli.md](./design/ai-cli.md)
+- cleanup planning for removing legacy `/intent` and `/plan` entry points lives
+  in [design/intent-plan-cleanup.md](./intent-plan-cleanup.md)
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 
@@ -163,7 +166,7 @@ The bottom map info bar shows live cursor `x/y` in local scene metres, sampled t
 
 For the map widget design spec and phase 1A–1E delivery plan, see [design.md](./design.md).
 
-For AI context, intent parsing, and planning-shell wiring, see [design.md](./design.md).
+For AI context and intent parsing, see [design.md](./design.md).
 
 Current status of follow-on map work:
 
@@ -205,6 +208,7 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 - `ws.py`: WebSocket connection manager
 - `ai/`: current-context service, provider registry, chat service, session storage, and secret storage
 - `static/`: dashboard and setup frontend assets
+- `tools/` / `bin/` (planned): terminal AI CLI thin client over `/api/ai/...`
 
 ## Current Limitations
 
