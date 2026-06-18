@@ -577,8 +577,22 @@ function postRenderMessages() {
 
   // Copy raw markdown button
   list.querySelectorAll('.ai-message-copy-md').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const md = btn.dataset.md || '';
+    btn.addEventListener('click', (event) => {
+      const messageId = String(btn.dataset.messageId || '');
+      const session = aiState.activeSession;
+      const live = session ? liveStateFor(session.id) : null;
+      const message = (live?.messages || []).find((item) => String(item?.id || '') === messageId);
+      const activityState = readMessageActivityStateFromDom(btn.closest('.ai-message'));
+      const includeDiagnostics = Boolean(event.shiftKey || event.altKey);
+      const md = message
+        ? buildMessageMarkdown(message, {
+            includeDiagnostics,
+            activityOpen: activityState.activityOpen,
+            openToolIndexes: activityState.openToolIndexes,
+            openContextIndexes: activityState.openContextIndexes,
+          })
+        : (btn.dataset.md || '');
+      if (!String(md || '').trim()) return;
       navigator.clipboard.writeText(md).then(() => {
         btn.innerHTML = aiCheckIcon();
         btn.dataset.tooltip = 'Copied!';
@@ -708,6 +722,7 @@ function renderContextStatus(message) {
 function buildChatMarkdown(session, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
   const includeOpenActivity = options.includeOpenActivity !== false;
+  const activityStateByMessageId = options.activityStateByMessageId || null;
   const live = liveStateFor(session.id);
   const messages = (live?.messages || []).filter((m) => String(m.content || '').trim());
   const title = session.title || 'New chat';
@@ -715,33 +730,68 @@ function buildChatMarkdown(session, options = {}) {
   const lines = [`# Chat: ${title}${when ? ` — ${when}` : ''}`, ''];
 
   for (const message of messages) {
-    if (message.role === 'user') {
-      lines.push('## User', '', String(message.content).trim(), '');
-      continue;
-    }
-    if (message.role === 'assistant') {
-      const provider = providerNameForMessage(message);
-      const mode = messageRunMode(message);
-      const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
-      let header = `## Assistant (${provider}${modeLabel})`;
-      if (includeDiagnostics) {
-        const diag = [];
-        if (message.model_id) diag.push(message.model_id);
-        if (message.latency_ms) diag.push(`${message.latency_ms} ms`);
-        const stats = messageStats(message);
-        if (stats) diag.push(stats);
-        if (diag.length) header += ` — ${diag.join(' · ')}`;
-      }
-      lines.push(header, '', String(message.content).trim(), '');
-
-      if (shouldIncludeAgentActivityMarkdown(message, { includeDiagnostics, includeOpenActivity })) {
-        appendAgentActivityMarkdown(lines, message, { includeDiagnostics });
-      }
-      continue;
-    }
-    lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
+    const activityState = activityStateByMessageId?.[String(message?.id || '')] || {};
+    appendMessageMarkdown(lines, message, {
+      includeDiagnostics,
+      includeOpenActivity,
+      activityOpen: activityState.activityOpen,
+      openToolIndexes: activityState.openToolIndexes,
+      openContextIndexes: activityState.openContextIndexes,
+    });
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function buildMessageMarkdown(message, options = {}) {
+  const lines = [];
+  appendMessageMarkdown(lines, message, options);
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function messageMarkdownFooter(message) {
+  if (message?.role !== 'assistant') return '';
+  const parts = [providerNameForMessage(message)];
+  if (message.model_id) parts.push(String(message.model_id));
+  if (message.latency_ms) parts.push(`${message.latency_ms} ms`);
+  const stats = messageStats(message);
+  if (stats) parts.push(stats);
+  return parts.filter(Boolean).join(' · ');
+}
+
+function appendMessageMarkdown(lines, message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
+  if (message.role === 'user') {
+    lines.push('## User', '', String(message.content).trim(), '');
+    return;
+  }
+  if (message.role === 'assistant') {
+    const provider = providerNameForMessage(message);
+    const mode = messageRunMode(message);
+    const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
+    let header = `## Assistant (${provider}${modeLabel})`;
+    if (includeDiagnostics) {
+      const diag = [];
+      if (message.model_id) diag.push(message.model_id);
+      if (message.latency_ms) diag.push(`${message.latency_ms} ms`);
+      const stats = messageStats(message);
+      if (stats) diag.push(stats);
+      if (diag.length) header += ` — ${diag.join(' · ')}`;
+    }
+    lines.push(header, '', String(message.content).trim(), '');
+
+    if (shouldIncludeAgentActivityMarkdown(message, {
+      includeDiagnostics,
+      includeOpenActivity,
+      activityOpen: options.activityOpen,
+    })) {
+      appendAgentActivityMarkdown(lines, message, options);
+    }
+    const footer = messageMarkdownFooter(message);
+    if (footer) lines.push(`_${footer}_`, '');
+    return;
+  }
+  lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
 }
 
 function shouldIncludeAgentActivityMarkdown(message, options = {}) {
@@ -750,11 +800,14 @@ function shouldIncludeAgentActivityMarkdown(message, options = {}) {
   if (messageRunMode(message) !== 'agent') return false;
   if (includeDiagnostics) return true;
   if (!includeOpenActivity) return false;
+  if (typeof options.activityOpen === 'boolean') return options.activityOpen;
   return isMessageActivityOpen(message?.id);
 }
 
 function appendAgentActivityMarkdown(lines, message, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const openToolIndexes = options.openToolIndexes instanceof Set ? options.openToolIndexes : null;
+  const openContextIndexes = options.openContextIndexes instanceof Set ? options.openContextIndexes : null;
   const calls = agentToolCalls(message);
   const trace = agentTraceEvents(message);
   const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
@@ -792,6 +845,7 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
       const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
       const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
       const toolName = call?.name || call?.tool || `tool_${index + 1}`;
+      const includeToolPayload = includeDiagnostics || !openToolIndexes || openToolIndexes.has(index);
       lines.push(`##### Tool ${index + 1}: \`${toolName}\``, '');
       lines.push(`- Status: ${statusValue}`);
       if (Number.isFinite(call?.iteration)) lines.push(`- Iteration: ${call.iteration}`);
@@ -801,11 +855,11 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
       lines.push('');
 
       const argsValue = call?.args ?? call?.arguments;
-      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
+      if (includeToolPayload && argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
         lines.push('###### Arguments', '');
         lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
       }
-      if (call?.result !== undefined) {
+      if (includeToolPayload && call?.result !== undefined) {
         lines.push('###### Result', '');
         lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
       } else if (includeDiagnostics) {
@@ -819,10 +873,13 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
     promptCalls.forEach((call, index) => {
       const name = call?.name || `context_${index + 1}`;
       const summary = summarizeAgentToolResult(call?.result);
+      const includeContextPayload = includeDiagnostics || !openContextIndexes || openContextIndexes.has(index);
       lines.push(`##### Context ${index + 1}: \`${name}\``, '');
       if (summary) lines.push(`- Summary: ${summary}`, '');
-      lines.push('###### Injected result', '');
-      lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+      if (includeContextPayload) {
+        lines.push('###### Injected result', '');
+        lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+      }
     });
   }
 
@@ -952,95 +1009,168 @@ function distinctAgentIterations(message) {
   return Array.from(iterations).sort((a, b) => a - b);
 }
 
-function renderAgentToolRows(message) {
-  const calls = agentToolCalls(message);
-  return calls.map((call) => {
-    const status = call.status || (call.result !== undefined ? 'complete' : 'running');
-    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
-    const argsSummary = summarizeAgentToolArgs(call.args);
-    const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
-    const iteration = Number.isFinite(call.iteration) ? `Iteration ${call.iteration}` : '';
-    return `
-      <details class="ai-activity-step ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
-        <summary>
-          <span class="ai-agent-tool-dot" aria-hidden="true"></span>
-          <span class="ai-activity-step-main">
-            <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
-            <span class="ai-activity-step-meta">
-              ${iteration ? `<span>${escapeHtml(iteration)}</span>` : ''}
-              ${argsSummary ? `<span>${escapeHtml(argsSummary)}</span>` : ''}
-            </span>
-          </span>
-          <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
-        </summary>
-        <div class="ai-activity-step-body">
-          ${call.args && typeof call.args === 'object' && Object.keys(call.args).length
-            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Arguments</div><pre>${prettyAgentJson(call.args, 2400)}</pre></div>`
-            : ''}
-          ${call.result !== undefined
-            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Result</div><pre>${prettyAgentJson(call.result)}</pre></div>`
-            : '<div class="ai-activity-note">Waiting for tool result.</div>'}
-        </div>
-      </details>
-    `;
-  }).join('');
+function readMessageActivityStateFromDom(messageEl) {
+  const emptyState = {
+    activityOpen: false,
+    openToolIndexes: new Set(),
+    openContextIndexes: new Set(),
+  };
+  if (!messageEl) return emptyState;
+  const disclosure = messageEl.querySelector('[data-message-disclosure="activity"]');
+  if (!disclosure) return emptyState;
+
+  const openToolIndexes = new Set();
+  disclosure.querySelectorAll('[data-activity-kind="tool"][data-tool-index]').forEach((node) => {
+    const index = Number(node.dataset.toolIndex);
+    if (node.open && Number.isFinite(index) && index >= 0) openToolIndexes.add(index);
+  });
+
+  const openContextIndexes = new Set();
+  disclosure.querySelectorAll('[data-activity-kind="context"][data-context-index]').forEach((node) => {
+    const index = Number(node.dataset.contextIndex);
+    if (node.open && Number.isFinite(index) && index >= 0) openContextIndexes.add(index);
+  });
+
+  return {
+    activityOpen: disclosure.open,
+    openToolIndexes,
+    openContextIndexes,
+  };
 }
 
-function renderPromptContextRows(message) {
+function readActivityStateByMessageIdFromDom(rootEl) {
+  const stateByMessageId = {};
+  if (!rootEl) return stateByMessageId;
+  rootEl.querySelectorAll('.ai-message-copy-md[data-message-id]').forEach((button) => {
+    const messageId = String(button.dataset.messageId || '');
+    if (!messageId) return;
+    stateByMessageId[messageId] = readMessageActivityStateFromDom(button.closest('.ai-message'));
+  });
+  return stateByMessageId;
+}
+
+function renderAgentFlowToolCard(call, index) {
+  const status = call.status || (call.result !== undefined ? 'complete' : 'running');
+  const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
+  const argsSummary = summarizeAgentToolArgs(call.args);
+  const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
+  return `
+    <details class="ai-activity-step ai-agent-tool-${escapeHtml(status)}" data-activity-kind="tool" data-tool-index="${Number.isFinite(index) ? index : ''}">
+      <summary>
+        <span class="ai-agent-tool-dot" aria-hidden="true"></span>
+        <span class="ai-activity-step-main">
+          <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
+          ${argsSummary ? `<span class="ai-activity-step-meta"><span>${escapeHtml(argsSummary)}</span></span>` : ''}
+        </span>
+        <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
+      </summary>
+      <div class="ai-activity-step-body">
+        ${call.args && typeof call.args === 'object' && Object.keys(call.args).length
+          ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Arguments</div><pre>${prettyAgentJson(call.args, 2400)}</pre></div>`
+          : ''}
+        ${call.result !== undefined
+          ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Result</div><pre>${prettyAgentJson(call.result)}</pre></div>`
+          : '<div class="ai-activity-note">Waiting for tool result.</div>'}
+      </div>
+    </details>
+  `;
+}
+
+function renderAgentFlow(message) {
+  const calls = agentToolCalls(message);
+  const trace = agentTraceEvents(message);
   const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
     ? message.meta.prompt_context_tool_calls
     : [];
-  if (!promptCalls.length) return '';
-  const rows = promptCalls.map((call) => {
-    const summary = summarizeAgentToolResult(call?.result);
-    return `
-      <details class="ai-activity-step">
-        <summary>
-          <span class="ai-activity-step-kind">Context</span>
-          <span class="ai-activity-step-main">
-            <span class="ai-agent-tool-name">${escapeHtml(call?.name || 'context')}</span>
-          </span>
-          <span class="ai-agent-tool-status">${escapeHtml(summary || 'available')}</span>
-        </summary>
-        <div class="ai-activity-step-body">
-          <div class="ai-activity-block">
-            <div class="ai-activity-block-label">Injected result</div>
-            <pre>${prettyAgentJson(call?.result)}</pre>
-          </div>
-        </div>
-      </details>
-    `;
-  }).join('');
-  return `
-    <section class="ai-activity-section">
-      <div class="ai-activity-section-title">Context used</div>
-      <div class="ai-activity-step-list">${rows}</div>
-    </section>
-  `;
-}
+  const fallbackError = String(message?.meta?.agent_tool_fallback_error || '').trim();
+  if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return '';
 
-function renderAgentTraceChips(message) {
-  const trace = agentTraceEvents(message);
-  const chips = trace.map((event) => {
-    if (!event || typeof event !== 'object') return '';
-    if (event.type === 'agent_iteration_start') {
-      return `<span class="ai-activity-chip">Iteration ${escapeHtml(String(event.iteration || '?'))}</span>`;
+  const runStart = trace.find((e) => e?.type === 'agent_run_start');
+  const runEnd = trace.find((e) => e?.type === 'agent_run_end');
+  const iterations = distinctAgentIterations(message);
+  const nodes = [];
+
+  // Agent run start node
+  const runMeta = [runStart?.provider, runStart?.model].filter(Boolean);
+  nodes.push(`<div class="ai-flow-node ai-flow-node-start">
+    <span class="ai-flow-label">Agent run${runMeta.length ? `<span class="ai-flow-meta"> · ${escapeHtml(runMeta.join(' · '))}</span>` : ''}</span>
+  </div>`);
+
+  // Context preamble node (rendered before iteration 1 until ADR 0029 removes the duplicate)
+  if (promptCalls.length) {
+    const rows = promptCalls.map((call, index) => {
+      const summary = summarizeAgentToolResult(call?.result);
+      return `
+        <details class="ai-activity-step" data-activity-kind="context" data-context-index="${index}">
+          <summary>
+            <span class="ai-activity-step-kind">Context</span>
+            <span class="ai-activity-step-main">
+              <span class="ai-agent-tool-name">${escapeHtml(call?.name || 'context')}</span>
+            </span>
+            <span class="ai-agent-tool-status">${escapeHtml(summary || 'available')}</span>
+          </summary>
+          <div class="ai-activity-step-body">
+            <div class="ai-activity-block">
+              <div class="ai-activity-block-label">Injected result</div>
+              <pre>${prettyAgentJson(call?.result)}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }).join('');
+    nodes.push(`<div class="ai-flow-node ai-flow-node-context">
+      <span class="ai-flow-label">Context used</span>
+      <div class="ai-flow-tool-list">${rows}</div>
+    </div>`);
+  }
+
+  // Iteration nodes with nested tool cards
+  if (iterations.length) {
+    iterations.forEach((n) => {
+      const iterCalls = calls
+        .map((call, index) => ({ call, index }))
+        .filter(({ call }) => Number(call.iteration) === n);
+      const toolHtml = iterCalls.map(({ call, index }) => renderAgentFlowToolCard(call, index)).join('');
+      nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+        <span class="ai-flow-label">Iteration ${n}</span>
+        ${toolHtml
+          ? `<div class="ai-flow-tool-list">${toolHtml}</div>`
+          : '<span class="ai-flow-empty">no tools</span>'}
+      </div>`);
+    });
+    const orphaned = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => !Number.isFinite(Number(call.iteration)) || Number(call.iteration) <= 0);
+    if (orphaned.length) {
+      const toolHtml = orphaned.map(({ call, index }) => renderAgentFlowToolCard(call, index)).join('');
+      nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+        <div class="ai-flow-tool-list">${toolHtml}</div>
+      </div>`);
     }
-    if (event.type === 'agent_run_end') {
-      return `<span class="ai-activity-chip">Done · ${escapeHtml(String(event.stop_reason || 'complete'))}</span>`;
-    }
-    if (event.type === 'agent_run_start') {
-      return `<span class="ai-activity-chip">Agent run</span>`;
-    }
-    return '';
-  }).filter(Boolean).join('');
-  if (!chips) return '';
-  return `
-    <section class="ai-activity-section">
-      <div class="ai-activity-section-title">Run trace</div>
-      <div class="ai-activity-chip-row">${chips}</div>
-    </section>
-  `;
+  } else if (calls.length) {
+    const toolHtml = calls.map((call, index) => renderAgentFlowToolCard(call, index)).join('');
+    nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+      <div class="ai-flow-tool-list">${toolHtml}</div>
+    </div>`);
+  }
+
+  // Done node
+  if (runEnd) {
+    const stopReason = runEnd.stop_reason || 'complete';
+    nodes.push(`<div class="ai-flow-node ai-flow-node-end">
+      <span class="ai-flow-label">Done · ${escapeHtml(stopReason)}</span>
+    </div>`);
+  }
+
+  // Fallback error node
+  if (fallbackError) {
+    nodes.push(`<div class="ai-flow-node ai-flow-node-error">
+      <span class="ai-flow-label">Fallback</span>
+      <span class="ai-flow-empty">${escapeHtml(fallbackError)}</span>
+    </div>`);
+  }
+
+  return `<div class="ai-flow">${nodes.join('')}</div>`;
 }
 
 function renderAgentActivityDisclosure(message, options = {}) {
@@ -1067,8 +1197,10 @@ function renderAgentActivityDisclosure(message, options = {}) {
   const stateLabel = pending
     ? (calls.length ? 'Live' : 'Starting')
     : (calls.length ? 'Complete' : 'Recorded');
-  const toolRows = renderAgentToolRows(message);
   const openAttr = isMessageActivityOpen(message.id, pending) ? ' open' : '';
+  const flowContent = renderAgentFlow(message);
+  const panelContent = flowContent
+    || (pending ? '<div class="ai-activity-note">Waiting for the first tool call.</div>' : '');
 
   return `
     <details class="ai-activity-disclosure ai-activity-${escapeHtml(status)}${pending ? ' ai-activity-live' : ''}" data-message-disclosure="activity" data-message-id="${escapeHtml(message.id)}"${openAttr}>
@@ -1092,20 +1224,7 @@ function renderAgentActivityDisclosure(message, options = {}) {
         </span>
       </summary>
       <div class="ai-activity-panel">
-        ${renderAgentTraceChips(message)}
-        ${toolRows
-          ? `<section class="ai-activity-section">
-              <div class="ai-activity-section-title">Tools used</div>
-              <div class="ai-activity-step-list">${toolRows}</div>
-            </section>`
-          : (pending ? '<div class="ai-activity-note">Waiting for the first tool call.</div>' : '')}
-        ${renderPromptContextRows(message)}
-        ${fallbackError
-          ? `<section class="ai-activity-section">
-              <div class="ai-activity-section-title">Fallback</div>
-              <div class="ai-activity-note">${escapeHtml(fallbackError)}</div>
-            </section>`
-          : ''}
+        ${panelContent}
       </div>
     </details>
   `;
@@ -3600,7 +3719,10 @@ function bindAi() {
     const session = aiState.activeSession;
     if (!session) return;
     const includeDiagnostics = Boolean(event.shiftKey || event.altKey);
-    const md = buildChatMarkdown(session, { includeDiagnostics });
+    const md = buildChatMarkdown(session, {
+      includeDiagnostics,
+      activityStateByMessageId: readActivityStateByMessageIdFromDom(aiEls.messageList),
+    });
     if (!md.trim()) {
       setAiStatus('Nothing to copy yet.', 'warn');
       return;

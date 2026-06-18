@@ -3669,6 +3669,69 @@ code {
   list-style: none;
 }
 
+/* Unified agent flow — vertical connected timeline */
+.ai-flow {
+  display: flex;
+  flex-direction: column;
+  margin-left: 7px;
+  padding-left: 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+}
+
+.ai-flow-node {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 6px 0 6px 18px;
+}
+
+.ai-flow-node::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 11px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 36%, var(--line));
+}
+
+.ai-flow-node-start::before,
+.ai-flow-node-end::before {
+  width: 10px;
+  height: 10px;
+  left: -6px;
+  top: 10px;
+  background: color-mix(in srgb, var(--accent) 56%, transparent);
+}
+
+.ai-flow-node-error::before {
+  background: color-mix(in srgb, var(--danger, #e05) 50%, var(--line));
+}
+
+.ai-flow-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.ai-flow-meta {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.ai-flow-tool-list {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-flow-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .ai-agent-tool-row {
   color: var(--muted);
   font-size: 0.82rem;
