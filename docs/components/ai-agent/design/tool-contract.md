@@ -42,3 +42,42 @@ Contract metadata is injected into each tool description and surfaced in:
 - `/tools` command output in AI chat
 
 So the contract is available both at runtime and in operator-visible docs.
+
+## Runtime Projection Rule
+
+The full contract is the **source of truth**, but the model-facing projection of
+that contract does **not** need to serialize every field verbatim on every turn.
+
+Keep the distinction explicit:
+
+- **Right:** keep complete contract metadata for bound dispatcher tools.
+- **Wrong:** pay to emit the full contract verbosity into every model-facing tool
+  description when the same meaning already exists in the base description,
+  inferred argument schema, manifest, or operator-facing capability docs.
+
+Required policy:
+
+- `TOOL_CONTRACTS` stays complete for every bound tool.
+- The runtime description may use a **compact projection** of that contract.
+- Operator/debug surfaces may still expose the **full contract**.
+- Any projection change must be measured with the tool-surface harness and
+  checked against agent/HITL prompts because it changes the model-visible tool
+  surface.
+
+Preferred model-facing projection order:
+
+1. base description with trigger condition and boundary
+2. required arguments and operation/mode/action enum values
+3. compact return-shape summary
+4. only the minimum follow-up guidance the model actually needs
+
+Fields with the weakest always-on token ROI are usually:
+
+- verbose per-argument `inputs` prose when the schema already carries the types
+- detailed `returns` maps for every dispatcher branch
+- `upstream_from_tools`
+- `next_tools`
+
+Those fields are still valuable in the contract itself and in operator-facing
+docs. The optimization target is the **runtime projection**, not the contract
+record.

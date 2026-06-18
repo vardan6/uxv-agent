@@ -30,6 +30,8 @@ CLAUDE.md
 
 config/common.local.json
 
+docs/trigger.md
+
 gcs_server/data/
 gcs_server/data_*/
 .runtime/

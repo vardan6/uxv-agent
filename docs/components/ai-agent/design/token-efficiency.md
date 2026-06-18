@@ -71,6 +71,54 @@ All Tier 1 binding-reduction slices shipped: spatial (−5), AI memory/settings 
 Schema bytes still dominate. Context block budget is a cap, not a constant; actual prompt
 size for a given request can be far smaller. Re-run the harness after each further change.
 
+### Measured post-dispatcher-contract follow-up (2026-06-18, local review pass)
+
+The branch follow-up that restored mandatory dispatcher contracts raised the
+default schema from `38,174 B` to `41,706 B` (about `+9%`, still `−24%` vs the
+`54,921 B` baseline). This is the correct trade for contract completeness, but
+it also exposed a new optimization target: **contract projection verbosity**.
+
+Important split:
+
+- keep full dispatcher contract metadata
+- do not assume the full contract must be serialized verbatim into every
+  model-facing tool description
+
+Local audit of the five new dispatcher contracts (`control_mission`,
+`query_replay_sessions`, `analyze_replay_sessions`, `query_ai_memory`,
+`query_settings`) showed roughly `3236` added chars of always-on runtime text,
+with the largest contributors in the appended contract block being:
+
+- `inputs`: `1459` chars
+- `returns`: `1048` chars
+- `upstream_from_tools`: `507` chars
+
+This makes compact runtime projection the next low-risk place to cut tokens
+without discarding the contracts themselves.
+
+## Contract Projection Rule
+
+Treat contract storage and model-facing contract projection as separate
+surfaces.
+
+- `TOOL_CONTRACTS` remains the durable source of truth.
+- The runtime description should include only the minimum contract detail the
+  model needs to select the tool and form valid arguments.
+- `/capabilities` or other operator/debug surfaces may remain more verbose.
+
+Recommended compression order:
+
+1. keep base description + operation/mode/action values
+2. keep required arguments and compact return-shape summary
+3. trim or omit always-on `upstream_from_tools`
+4. trim or omit always-on `next_tools`
+5. compress verbose `returns` branch maps into top-level summaries when the
+   branch detail is already clear elsewhere
+
+Do **not** "optimize" by removing contracts entirely. For dispatcher tools that
+would trade token savings for weaker discoverability and higher invalid-call
+risk.
+
 ### Expected magnitude per change (pre-harness estimates)
 
 These are the **per-change price estimates** from the 2026-06-18 plan review,
@@ -110,6 +158,7 @@ The main recurring cost sources are:
 - always-on injection of rarely-needed surfaces (e.g. runtime/broker config)
 - eager detail pre-fetch in chat mode when equivalent tools exist
 - verbose tool descriptions and tool-result retransmission
+- full-contract verbosity repeated in model-facing tool descriptions
 - overlapping tool schemas that force the model to choose among near-duplicate capabilities
 
 ## Optimization Priorities
@@ -122,6 +171,8 @@ Apply improvements in this order:
 - consolidate overlapping tool schemas where a single operation-mode tool can call
   the same deterministic handlers (bind-new and unbind-old in the same slice so the
   bound catalog never temporarily grows)
+- preserve full tool contracts, but compress the **model-facing projection** of
+  those contracts before attempting higher-risk pruning
 - prefer context-delta mode over replaying full snapshots every turn
 - disable or aggressively trim eager-detail pre-fetch when tools can fetch the same facts on demand
 - reduce redundant tool-result replay and repeated failed tool invocations

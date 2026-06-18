@@ -87,14 +87,14 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'list_data_surfaces',
   'get_current_rover_state',
   'get_scene_summary',
-  'query_objects_in_front',
-  'query_objects_near',
-  'query_objects_by_kind',
-  'query_objects_to_left',
-  'query_objects_to_right',
-  'query_nearest_objects',
+  'query_map_objects',
   'resolve_spatial_target',
   'get_current_mission_state',
+  'plan_route_around_group',
+  'plan_route_between',
+  'generate_pattern_subtree',
+  'set_mission_geofence',
+  'export_mission',
   'parse_rover_intent',
   'create_mission_from_waypoints',
   'propose_mission_draft',
@@ -109,6 +109,7 @@ const AI_MISSION_ACTION_TOOL_NAMES = new Set([
   'arm_execution',
   'execute_mission',
   'cancel_execution',
+  'control_mission',
   'pause_mission',
   'resume_mission',
   'stop_mission',
@@ -122,33 +123,29 @@ function pushAiToolStatusMessage(toolCall) {
   const result = toolCall.result;
   const ok = result == null || result.ok !== false;
   const summary = summarizeAgentToolResult(result);
-  const label = name.replace(/_/g, ' ');
+  const args = toolCall.args || toolCall.arguments;
+  const action = args && typeof args === 'object' ? String(args.action || '').trim() : '';
+  let label = name.replace(/_/g, ' ');
+  if (name === 'control_mission' && action) {
+    label = `control mission: ${action}`;
+  }
   const text = summary ? `AI → ${label}: ${summary}` : `AI → ${label}`;
   statusBar.push(text, ok ? 'info' : 'error');
 }
 
 const AI_OPTIONAL_TOOL_NAMES_BY_SOURCE = {
+  project_docs: new Set([
+    'search_project_docs',
+  ]),
   replay_reports: new Set([
-    'get_current_replay_summary',
-    'get_recent_telemetry',
-    'list_replay_sessions',
-    'resolve_replay_sessions',
-    'get_replay_session_summary',
-    'get_replay_session_metrics',
-    'get_replay_session_path',
-    'search_replay_session_events',
-    'compare_replay_sessions',
-    'aggregate_replay_sessions',
+    'query_replay_sessions',
+    'analyze_replay_sessions',
   ]),
   ai_chat_history: new Set([
-    'list_ai_sessions',
-    'search_ai_messages',
-    'get_ai_session_messages',
+    'query_ai_memory',
   ]),
   settings_config: new Set([
-    'get_settings_summary',
-    'get_settings_section',
-    'get_llm_provider_summary',
+    'query_settings',
   ]),
   sensor_context: new Set([
     'get_sensor_status',
@@ -172,44 +169,44 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.',
   },
   {
-    name: 'query_objects_in_front',
+    name: 'query_map_objects',
     permission: 'read_only',
-    description: 'Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_objects_near',
-    permission: 'read_only',
-    description: 'Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
-  },
-  {
-    name: 'query_objects_by_kind',
-    permission: 'read_only',
-    description: 'Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.',
-  },
-  {
-    name: 'query_objects_to_left',
-    permission: 'read_only',
-    description: 'Find map objects to the rover\'s left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_objects_to_right',
-    permission: 'read_only',
-    description: 'Find map objects to the rover\'s right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_nearest_objects',
-    permission: 'read_only',
-    description: 'Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
+    description: 'Query map objects by spatial mode: `front` (forward cone), `near` (radius), `by_kind` (matching kind), `left`/`right` (lateral flank), or `nearest` (closest overall). Optional kinds filters object kinds; pass position/coordinates and heading_deg to query from a hypothetical pose. Falls back to last_known_replay_state when live telemetry is stale.',
   },
   {
     name: 'resolve_spatial_target',
     permission: 'planning',
-    description: 'Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects. Target objects may also include position or coordinates and optionally heading_deg.',
+    description: 'Resolve a spatial target against the current map and rover pose. Accepts a target object (kind/side/distance/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as "nearest tree on the left". Can use last_known_replay_state when live telemetry is stale.',
   },
   {
     name: 'get_current_mission_state',
     permission: 'read_only',
     description: 'Get the current mission state. This is read-only.',
+  },
+  {
+    name: 'plan_route_around_group',
+    permission: 'planning',
+    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the rover and back. Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+  },
+  {
+    name: 'plan_route_between',
+    permission: 'planning',
+    description: 'Compute a road-graph route between two resolved targets (Dijkstra). Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+  },
+  {
+    name: 'generate_pattern_subtree',
+    permission: 'planning',
+    description: 'Generate a navigation subtree for a repeated path or area coverage: `corridor` densifies a polyline into evenly-spaced waypoints (optional multiple passes); `survey` fills a rectangle with a lawnmower sweep. Set the result as the draft tree in propose_mission_draft. Does not upload.',
+  },
+  {
+    name: 'set_mission_geofence',
+    permission: 'planning',
+    description: 'Set or clear an inclusion geofence on an existing Mission by mission_id. Pass a polygon of WGS84 vertices, optional rally_points and alt bounds, or clear=true to remove. Appends an approval-required revision; the fence uploads to the FC when the mission is armed/executed.',
+  },
+  {
+    name: 'export_mission',
+    permission: 'planning',
+    description: 'Convert a mission draft (by draft_id from propose_mission_draft) to a QGC-compatible .plan file. Returns file_path, waypoint_count, and the plan structure.',
   },
   {
     name: 'parse_rover_intent',
@@ -232,84 +229,29 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'Resolve a mission number, name, or pronoun to an existing Mission before an AI-assisted edit.',
   },
   {
-    name: 'get_current_replay_summary',
+    name: 'search_project_docs',
+    permission: 'analysis',
+    description: 'Search the project documentation (requirements, design docs, ADRs, glossary, operational notes) for grounded, citeable context. Returns the most relevant doc chunks with file path, heading path, score, and a citation ref. Available only when the project_docs source control is enabled.',
+  },
+  {
+    name: 'query_replay_sessions',
+    permission: 'analysis',
+    description: 'Query replay session data by operation: `current`, `telemetry`, `list`, `resolve` (natural-language selector → session_ids), `summary`, `path`, or `events`. Call `list` or `resolve` first when you need session_ids.',
+  },
+  {
+    name: 'analyze_replay_sessions',
+    permission: 'analysis',
+    description: 'Analyze replay session data by operation: `metrics` (per-session analytics), `compare` (rank multiple sessions), or `aggregate` (totals/averages/top-N over a selector or session_ids). Travel distance = path_length_m; furthest from start = max_distance_from_start_m.',
+  },
+  {
+    name: 'query_ai_memory',
+    permission: 'analysis',
+    description: 'Query AI chat session history by operation: `list` (saved sessions), `search` (messages by text), or `get` (a bounded message window from one session). Call `list` first to discover session_ids, or `search` to locate a specific message.',
+  },
+  {
+    name: 'query_settings',
     permission: 'read_only',
-    description: 'Get the active replay session summary.',
-  },
-  {
-    name: 'get_recent_telemetry',
-    permission: 'read_only',
-    description: 'Get recent telemetry samples from the active replay session.',
-  },
-  {
-    name: 'list_replay_sessions',
-    permission: 'analysis',
-    description: 'List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.',
-  },
-  {
-    name: 'resolve_replay_sessions',
-    permission: 'analysis',
-    description: 'Resolve a natural-language replay session selector such as all sessions, latest 5 sessions, first session, or a date-based selector into explicit session_ids.',
-  },
-  {
-    name: 'get_replay_session_summary',
-    permission: 'read_only',
-    description: 'Get a replay session summary by session_id.',
-  },
-  {
-    name: 'get_replay_session_metrics',
-    permission: 'analysis',
-    description: 'Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.',
-  },
-  {
-    name: 'get_replay_session_path',
-    permission: 'analysis',
-    description: 'Get downsampled replay path points for a session_id.',
-  },
-  {
-    name: 'search_replay_session_events',
-    permission: 'analysis',
-    description: 'Search runtime events within a replay session.',
-  },
-  {
-    name: 'compare_replay_sessions',
-    permission: 'analysis',
-    description: 'Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
-  },
-  {
-    name: 'aggregate_replay_sessions',
-    permission: 'analysis',
-    description: 'Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
-  },
-  {
-    name: 'list_ai_sessions',
-    permission: 'analysis',
-    description: 'List saved AI chat sessions with bounded metadata, message counts, archival state, and latest-message previews. Call this before `get_ai_session_messages` when you need a specific session_id, or before `search_ai_messages` when the operator refers to earlier chats without naming the session.',
-  },
-  {
-    name: 'search_ai_messages',
-    permission: 'analysis',
-    description: 'Search saved AI messages by text across the current session or across saved sessions and return bounded match snippets with session/message references. Use this when the operator asks about earlier answers, prior discussions, or something that was said before and you need to locate the right session or message window.',
-  },
-  {
-    name: 'get_ai_session_messages',
-    permission: 'read_only',
-    description: 'Load a bounded window of saved AI messages from one session. If session_id is omitted, use the current AI session. Call this after `list_ai_sessions` or `search_ai_messages` when you need the surrounding conversation, not just a preview or search snippet.',
-  },
-  {
-    name: 'get_settings_summary',
-    permission: 'read_only',
-    description: 'Get the safe compact settings summary available to AI flows, including which top-level sections exist, key non-secret configuration summaries, and the settings path. Call this first before requesting one section with `get_settings_section` or checking provider/routing state with `get_llm_provider_summary`.',
-  },
-  {
-    name: 'get_settings_section',
-    permission: 'read_only',
-    description: 'Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.',
-  },
-  {
-    name: 'get_llm_provider_summary',
-    permission: 'read_only',
-    description: 'Get safe LLM provider and model-routing metadata, including enabled providers, active chat-provider resolution, and routing rules without exposing secrets. Use this when the operator asks which provider/model path is active or how AI routing is configured.',
+    description: 'Query GCS settings and LLM provider configuration by operation: `summary` (overview + section names), `section` (one section by name), or `provider` (safe provider/model-routing metadata). Never exposes secrets.',
   },
   {
     name: 'get_sensor_status',

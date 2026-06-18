@@ -62,12 +62,7 @@ def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_name
                 "tool",
                 [
                     "get_scene_summary",
-                    "query_objects_in_front",
-                    "query_objects_near",
-                    "query_objects_by_kind",
-                    "query_objects_to_left",
-                    "query_objects_to_right",
-                    "query_nearest_objects",
+                    "query_map_objects",
                     "resolve_spatial_target",
                 ],
                 "scene_summary_only",
