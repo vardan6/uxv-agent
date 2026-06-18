@@ -39,14 +39,45 @@ compact context block uses a 24,000-char default budget, so it is materially
 larger than the inputs to early estimates — never optimize it (or anything) on
 assumed sizes.
 
+**Harness:** `gcs_server/tools/measure_agent_surfaces.py`  
+Run from repo root: `PYTHONPATH=gcs_server:. .venv/bin/python -m tools.measure_agent_surfaces`
+
+### Measured baseline (2026-06-18, post-ADR-0029-Tier-1)
+
+"default" = `normalize_source_controls({})` → replay_reports + project_docs on.  
+"all-on" = all five optional source controls enabled.
+
+| Surface | default | all-on |
+|---------|---------|--------|
+| Tools bound | 31 | 38 |
+| Provider tool-schema JSON | 54,921 B (~13,730 tok) | 63,616 B (~15,904 tok) |
+| Tool-name list prompt | 770 chars (~192 tok) | 922 chars (~230 tok) |
+| Data-surface manifest prompt | 703 chars (~175 tok) | 900 chars (~225 tok) |
+| Context block budget | 24,000 chars (~6,000 tok) | same |
+
+### Measured post-Tier-1 (2026-06-18, spatial + metadata + replay dispatchers)
+
+All Tier 1 binding-reduction slices shipped: spatial (−5), AI memory/settings (−4), replay (−8).
+
+| Surface | default | all-on |
+|---------|---------|--------|
+| Tools bound | 18 | 21 |
+| Provider tool-schema JSON | 38,174 B (~9,543 tok) | 42,465 B (~10,616 tok) |
+| Tool-name list prompt | 440 chars (~110 tok) | 492 chars (~123 tok) |
+| Data-surface manifest prompt | 354 chars (~88 tok) | 451 chars (~112 tok) |
+| Context block budget | 24,000 chars (~6,000 tok) | same |
+
+**Total reduction from baseline:** −16,747 B default (−30.5%), −21,151 B all-on (−33.3%).
+Schema bytes still dominate. Context block budget is a cap, not a constant; actual prompt
+size for a given request can be far smaller. Re-run the harness after each further change.
+
 ### Expected magnitude per change (pre-harness estimates)
 
 These are the **per-change price estimates** from the 2026-06-18 plan review,
 retained here so the cost intuition lives in the durable plan — **not measured
-values.** They rest on an assumed ~9–11k-token broad agent turn (~8–10k schemas,
-compact context historically estimated ~200 tokens but really 1–3k given the 24k
-budget). The Tier-0 harness exists to replace this table with measured numbers;
-until then, treat every figure as directional and do not gate a decision on it.
+values.** They rest on the measured ~13–16k-token schema surface and an assumed
+context block well under the 24k cap for typical requests. Replace individual
+rows with measured deltas from the harness as each slice ships.
 
 | Change | Token impact (est.) | Runtime / latency | Risk |
 |---|---|---|---|
@@ -134,9 +165,8 @@ High-confidence consolidation targets:
   list/search/message-window tools
 - settings queries: one `query_settings(operation=..., section=...)` dispatcher
   can replace summary/section/provider-summary tools
-- mission-keyed pause/resume/stop: one
-  `control_mission_execution(action=..., mission_id=...)` dispatcher can replace
-  the three non-emergency mission control tools
+- mission-keyed pause/resume/stop: `control_mission(action=..., mission_id=...)`
+  dispatcher replaces the three non-emergency mission control tools ✓ done
 
 Medium-confidence consolidation target:
 

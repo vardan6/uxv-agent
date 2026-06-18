@@ -28,34 +28,19 @@ from typing import Any
 CACHEABLE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "get_scene_summary",
-        "query_objects_by_kind",
-        "list_replay_sessions",
-        "get_replay_session_summary",
-        "get_replay_session_metrics",
-        "get_replay_session_path",
-        "search_replay_session_events",
-        "compare_replay_sessions",
-        "aggregate_replay_sessions",
-        "resolve_replay_sessions",
-        "list_ai_sessions",
-        "get_ai_session_messages",
-        "search_ai_messages",
+        "query_replay_sessions",
+        "analyze_replay_sessions",
+        "query_ai_memory",
         "list_data_surfaces",
-        "get_settings_summary",
-        "get_settings_section",
-        "get_llm_provider_summary",
+        "query_settings",
     }
 )
 
 
 # Per-tool TTL (seconds). Default 300s; shorter for tools that may drift.
 _TOOL_TTL_SECONDS: dict[str, int] = {
-    "get_settings_summary": 60,
-    "get_settings_section": 60,
-    "get_llm_provider_summary": 60,
-    "list_ai_sessions": 30,
-    "search_ai_messages": 30,
-    "get_ai_session_messages": 30,
+    "query_settings": 60,
+    "query_ai_memory": 30,
 }
 _DEFAULT_TTL_SECONDS = 300
 

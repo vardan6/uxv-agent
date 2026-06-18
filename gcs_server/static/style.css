@@ -3287,6 +3287,10 @@ code {
   border-radius: 12px;
   background: color-mix(in srgb, var(--text) 2%, transparent);
   overflow: hidden;
+  --ai-activity-secondary-text: var(--muted);
+  --ai-activity-secondary-size: 0.74rem;
+  --ai-activity-secondary-weight: 500;
+  --ai-activity-secondary-line: 1.35;
 }
 
 .ai-activity-disclosure > summary {
@@ -3340,8 +3344,10 @@ code {
 }
 
 .ai-activity-summary-meta {
-  color: var(--muted);
-  font-size: 0.78rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
   text-align: right;
 }
 
@@ -3444,8 +3450,10 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
-  color: var(--muted);
-  font-size: 0.74rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-activity-step-kind {
@@ -3487,9 +3495,10 @@ code {
 }
 
 .ai-activity-note {
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.4;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-retrieval-panel {
@@ -3514,8 +3523,10 @@ code {
   flex-wrap: wrap;
   gap: 8px 12px;
   margin-bottom: 8px;
-  color: var(--muted);
-  font-size: 0.76rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-retrieval-list {
@@ -3547,8 +3558,10 @@ code {
 }
 
 .ai-retrieval-status {
-  color: var(--muted);
-  font-size: 0.74rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
   text-transform: lowercase;
 }
 
@@ -3565,9 +3578,10 @@ code {
 
 .ai-retrieval-note {
   margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.35;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-citation-title {
@@ -3717,9 +3731,10 @@ code {
 }
 
 .ai-flow-meta {
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--muted);
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-flow-tool-list {
@@ -3728,13 +3743,17 @@ code {
 }
 
 .ai-flow-empty {
-  color: var(--muted);
-  font-size: 0.78rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-agent-tool-row {
-  color: var(--muted);
-  font-size: 0.82rem;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
 }
 
 .ai-agent-tool-dot {
@@ -3760,6 +3779,15 @@ code {
   text-align: right;
   overflow-wrap: anywhere;
   white-space: normal;
+  color: var(--ai-activity-secondary-text);
+  font-size: var(--ai-activity-secondary-size);
+  font-weight: var(--ai-activity-secondary-weight);
+  line-height: var(--ai-activity-secondary-line);
+}
+
+.ai-activity-step[data-activity-kind="context"] .ai-agent-tool-name {
+  color: color-mix(in srgb, var(--text) 84%, var(--muted));
+  font-size: 0.74rem;
 }
 
 @keyframes aiToolPulse {

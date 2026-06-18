@@ -107,11 +107,12 @@ Initial read-only tools:
 ```text
 get_current_rover_state()
 get_scene_summary()
-query_objects_in_front(max_distance_m, fov_deg, kinds=None)
-query_objects_near(radius_m, kinds=None)
-query_objects_by_kind(kind)
-query_objects_to_left(max_distance_m, angle_width_deg, kinds=None)
-query_objects_to_right(max_distance_m, angle_width_deg, kinds=None)
+query_map_objects(mode, kinds=None, kind=None, position=None, heading_deg=None,
+                  max_distance_m=None, fov_deg=20, angle_width_deg=90, radius_m=50, limit=5)
+  # mode: front | near | by_kind | left | right | nearest
+  # replaces query_objects_in_front, query_objects_near, query_objects_by_kind,
+  #           query_objects_to_left, query_objects_to_right, query_nearest_objects
+resolve_spatial_target(target)
 get_recent_telemetry(seconds, limit)
 get_replay_summary(session_id=None)
 ```
@@ -212,8 +213,8 @@ MCP should be treated as an adapter layer, not the first internal implementation
 First build normal Python services and a tool registry. Later, expose stable read-only and planning tools through MCP for external agents:
 
 ```text
-query_objects_in_front
-query_objects_near
+query_map_objects
+resolve_spatial_target
 get_current_rover_state
 get_scene_summary
 get_recent_telemetry
