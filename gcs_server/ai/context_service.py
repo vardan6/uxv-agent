@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 import re
@@ -36,15 +35,10 @@ class AIContextService:
         clean_source_controls = normalize_source_controls(source_controls)
         providers = [
             "get_current_rover_state",
-            "get_runtime_context",
             "get_current_mission_state",
             "get_scene_summary",
         ]
-        # B4: fetch independent async sources in parallel
-        rover, runtime = await asyncio.gather(
-            self.get_current_rover_state(),
-            self.get_runtime_context(),
-        )
+        rover = await self.get_current_rover_state()
         settings: dict[str, Any] = {}
         llm: dict[str, Any] = {"session": {"id": session_id}}
         if str(run_mode or "").strip().lower() != "agent":
@@ -99,7 +93,6 @@ class AIContextService:
         context = {
             "generated_at": time.time(),
             "rover": rover,
-            "runtime": runtime,
             "settings": settings,
             "llm": llm,
             "mission": mission,
@@ -506,12 +499,17 @@ class AIContextService:
 
 def _format_context_block(context: dict[str, Any], dropped: list[str] | None = None) -> str:
     header = (
-        "Live GCS current context. Treat these structured facts as more current than conversation history. "
-        "This chat is read-only and must not publish control commands."
+        "Live GCS context — treat as authoritative facts more current than conversation history. "
+        "Read-only; do not publish control commands."
     )
     if dropped:
-        header += f" Context budget applied; omitted: {', '.join(dropped)}."
-    return f"{header}\n{json.dumps(context, separators=(',', ':'), sort_keys=True)}"
+        header += f" Budget applied; omitted: {', '.join(dropped)}."
+    lines = [header]
+    for key, value in context.items():
+        if key == "generated_at" or value is None or value == {} or value == [] or value == {"session": {"id": ""}}:
+            continue
+        lines.append(f"{key}: {json.dumps(value, separators=(',', ':'))}")
+    return "\n".join(lines)
 
 
 def _without_latest_frame(video: dict[str, Any]) -> dict[str, Any]:
@@ -678,7 +676,7 @@ def _apply_context_budget(
       Phase 1 — drop non-relevant always-on background sections first.
       Phase 2 — trim large triggered detail sections (preserve, reduce size).
       Phase 3 — last resort: drop triggered detail sections.
-    rover, runtime, and mission are never touched.
+    rover and mission are never touched.
     """
     if _estimate_chars(context) <= max_chars:
         return context, []
