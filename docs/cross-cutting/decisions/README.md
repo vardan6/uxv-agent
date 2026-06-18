@@ -29,3 +29,4 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0026](./0026-replay-session-logging-ships-scrubbing-replay-deferred.md) | Telemetry Session Logging And Frame Scrubbing Ship Now; Deterministic Full-State Replay And Synchronized Video Remain Deferred |
 | [0027](./0027-soft-constraint-route-scoring-for-pattern-planning.md) | Soft-Constraint Route Scoring For Operator-Drawn Pattern Planning |
 | [0028](./0028-rag-project-docs-first-consumer-qdrant.md) | RAG Ships: `project_docs` Is The First Consumer, On A Qdrant Sidecar |
+| [0029](./0029-lazy-context-injection.md) | Lazy Context Injection: Agent Calls Live-State Tools On Demand, No Server-Side Pre-Injection |

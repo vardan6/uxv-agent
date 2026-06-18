@@ -18,8 +18,11 @@ Usage: rag <command> [options]
   down            Stop the Qdrant sidecar (data volume is preserved).
   status          Report whether Qdrant is reachable on :$REST_PORT.
   ingest          Ingest project_docs into Qdrant (incremental, idempotent).
-    --dry-run       Show changes without embedding or upserting.
-    --docs-dir DIR  Override the docs/ directory.
+    --dry-run              Show changes without embedding or upserting.
+    --docs-dir DIR         Override the docs/ directory.
+    --backfill-sparse      Backfill BM42 sparse vectors into existing dense-only points.
+    --contextual           Prepend LLM-generated context to each chunk before embedding.
+    --contextual-model M   Chat model for contextual enrichment.
 
 Env:
   OPENAI_API_KEY                 Required for embedding (ingest).

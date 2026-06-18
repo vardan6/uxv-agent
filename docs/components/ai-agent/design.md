@@ -1028,6 +1028,47 @@ Rules:
 - `agent_plan_update.summary` is a user-safe summary, **not** raw chain-of-thought. Free-text model content is stripped.
 - New events are primarily for debugging, audit, and the eval harness. UI surface for them is incremental.
 
+## Agent Chat UI — Observable Reasoning Flow
+
+The agent activity disclosure in the chat UI must present run trace and tool usage as one unified vertical flow, not two separate flat sections. This is the agreed design from 2026-06-18.
+
+### Unified flow structure
+
+```
+Agent run
+  │
+  ├─ Iteration 1
+  │    └─ [tool card] search_project_docs · 372 ms · available, status…
+  │         (expand: args JSON + result JSON)
+  │
+  ├─ Iteration 2
+  │    └─ (no tools)
+  │
+  └─ Done · final_answer
+```
+
+Each node is a `<div>` in a vertical flex stack connected by a CSS `border-left` line on the container — no canvas, no library.
+
+### Node types
+
+| Node | Source event | CSS class |
+|---|---|---|
+| Agent run | `agent_run_start` | `ai-flow-node-start` |
+| Iteration N | `agent_iteration_start` | `ai-flow-node-iteration` |
+| Tool card | `agent_tool_progress` entry with `call.iteration === N` | `ai-flow-tool-card` |
+| Done | `agent_run_end` | `ai-flow-node-end` |
+
+### Invariants
+
+- Per-tool `<details>` expand/collapse is preserved for args JSON and result JSON.
+- Streaming is preserved: nodes are appended to the DOM as events arrive; no batch-render on completion.
+- Tool cards are nested inside their iteration node using `call.iteration` as the join key.
+- The "Context used" section (pre-injected `prompt_context_tool_calls`) disappears once ADR 0029 lazy context injection lands. Until then it is rendered as a preamble node before Iteration 1 in the flow.
+
+### Implementation boundary
+
+`renderAgentFlow(message)` in `gcs_server/static/ai.js` replaces both `renderAgentTraceChips` and `renderAgentToolRows`. `renderAgentActivityDisclosure` calls `renderAgentFlow` in place of the two separate sections. Data sources — `agentTraceEvents`, `agentToolCalls`, `distinctAgentIterations` — are unchanged.
+
 ## Observability, Replay, and Evaluation
 
 Every run has: `run_id`, `trace_id`, session ID, provider / model, role, run mode, permissions, source controls, grants, loop iterations, stop reason, tool calls (latency + result summary), guardrail / policy decisions, loaded source refs and citations, handoff decisions, approval / resume events, task / mission IDs.

@@ -90,15 +90,41 @@ def search_project_docs(
         }
 
     port = _qdrant_rest_port(qdrant_port)
+    effective_limit = int(limit) if int(limit) > 0 else DEFAULT_SEARCH_LIMIT
+    prefetch_limit = effective_limit * 4
+
+    # Attempt sparse encoding for hybrid RRF search; fall back to dense-only gracefully.
+    sparse_vector = None
+    try:
+        from rag_service.sparse import get_encoder
+        sv = get_encoder().encode([text])[0]
+        from qdrant_client.models import SparseVector
+        sparse_vector = SparseVector(indices=sv["indices"], values=sv["values"])
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         client = QdrantClient(host="127.0.0.1", port=port)
-        response = client.query_points(
-            collection_name=collection,
-            query=vector,
-            using=PROJECT_DOCS_DENSE_VECTOR,
-            limit=int(limit) if int(limit) > 0 else DEFAULT_SEARCH_LIMIT,
-            with_payload=True,
-        )
+        if sparse_vector is not None:
+            from qdrant_client.models import Fusion, FusionQuery, Prefetch
+            response = client.query_points(
+                collection_name=collection,
+                prefetch=[
+                    Prefetch(query=vector, using=PROJECT_DOCS_DENSE_VECTOR, limit=prefetch_limit),
+                    Prefetch(query=sparse_vector, using="sparse", limit=prefetch_limit),
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=effective_limit,
+                with_payload=True,
+            )
+        else:
+            response = client.query_points(
+                collection_name=collection,
+                query=vector,
+                using=PROJECT_DOCS_DENSE_VECTOR,
+                limit=effective_limit,
+                with_payload=True,
+            )
     except Exception as exc:  # noqa: BLE001
         return {
             "available": False,
@@ -140,6 +166,7 @@ def search_project_docs(
         "status": "ok" if results else "no_matches",
         "collection": collection,
         "query": text,
+        "hybrid": sparse_vector is not None,
         "results": results,
         "citations": citations,
     }

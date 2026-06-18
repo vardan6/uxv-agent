@@ -1,7 +1,9 @@
-"""project_docs ingestion pipeline — dense-only slice 1 (ADR 0028 §8/§9).
+"""project_docs ingestion pipeline — dense+sparse hybrid (ADR 0028 §8/§9).
 
 Usage (CLI):
     python -m rag_service.ingest [--docs-dir PATH] [--dry-run]
+    python -m rag_service.ingest --backfill-sparse
+    python -m rag_service.ingest --contextual [--contextual-model MODEL]
 
 The CLI path reads connection params from env vars (below).  The app-triggered
 path (Slice 1.6D) calls ``run_ingest(params, ...)`` directly after resolving
@@ -15,6 +17,8 @@ Env (CLI path only):
     REMOTE_ROVER_EMBEDDINGS_DIM       Embedding dimension (default 2560)
     REMOTE_ROVER_EMBEDDINGS_API_KEY   API key; LM Studio ignores it (default lm-studio)
     REMOTE_ROVER_QDRANT_REST_PORT     Qdrant REST port (default 9004)
+    REMOTE_ROVER_CONTEXTUAL_MODEL     Chat model for contextual enrichment (--contextual)
+    REMOTE_ROVER_CONTEXTUAL_BASE_URL  Base URL for contextual chat (default: embeddings URL)
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from typing import Any
 from rag_service.collection import collection_name_for
 
 EMBED_BATCH_SIZE = 96
+SPARSE_BATCH_SIZE = 128
 
 _DEFAULT_BASE_URL = "http://winhost:1234/v1"
 _DEFAULT_MODEL = "qwen3-embedding-4b"
@@ -39,6 +44,14 @@ _DEFAULT_DIM = 2560
 # ---------------------------------------------------------------------------
 # IngestParams — the single resolved bundle passed to the ingest core
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ContextualConfig:
+    """Config for LLM-based per-chunk context generation (Contextual Retrieval pattern)."""
+    base_url: str
+    model: str
+    api_key: str
 
 
 @dataclass(frozen=True)
@@ -168,7 +181,7 @@ def _scroll_path(client: Any, collection: str, rel_path: str) -> dict[str, dict[
 # ---------------------------------------------------------------------------
 
 
-def _embed_batch(texts: list[str], params: IngestParams) -> list[list[float]]:
+def _embed_batch(texts: list[str], params: IngestParams) -> tuple[list[list[float]], int]:
     from openai import OpenAI
 
     client = OpenAI(api_key=params.api_key, base_url=params.base_url)
@@ -180,15 +193,87 @@ def _embed_batch(texts: list[str], params: IngestParams) -> list[list[float]]:
                 f"Embedding dim mismatch: got {len(embedding)}, expected {params.dim}. "
                 f"Check model '{params.model_id}' produces {params.dim}-dim vectors."
             )
-    return embeddings
+    usage = getattr(response, "usage", None)
+    tokens = int(getattr(usage, "total_tokens", 0) or getattr(usage, "prompt_tokens", 0) or 0)
+    if tokens == 0:
+        tokens = sum(len(t) for t in texts) // 4
+    return embeddings, tokens
 
 
-def _embed_all(texts: list[str], params: IngestParams) -> list[list[float]]:
+def _embed_all(texts: list[str], params: IngestParams) -> tuple[list[list[float]], int]:
     embeddings: list[list[float]] = []
+    total_tokens = 0
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i : i + EMBED_BATCH_SIZE]
-        embeddings.extend(_embed_batch(batch, params))
-    return embeddings
+        batch_embeddings, batch_tokens = _embed_batch(batch, params)
+        embeddings.extend(batch_embeddings)
+        total_tokens += batch_tokens
+    return embeddings, total_tokens
+
+
+# ---------------------------------------------------------------------------
+# Sparse encoding (in-process BM42 via fastembed)
+# ---------------------------------------------------------------------------
+
+
+def _sparse_encode(texts: list[str]) -> list[dict[str, list]] | None:
+    """Encode texts into sparse vectors. Returns None if fastembed is unavailable."""
+    try:
+        from rag_service.sparse import get_encoder
+        encoder = get_encoder()
+        return encoder.encode(texts)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Warning: sparse encoding unavailable ({exc}); continuing dense-only.")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Contextual Retrieval enrichment
+# ---------------------------------------------------------------------------
+
+
+_CONTEXTUAL_PROMPT_TMPL = """\
+<document>
+{doc}
+</document>
+Here is the chunk we want to situate within the whole document:
+<chunk>
+{chunk}
+</chunk>
+Please give a short succinct context to situate this chunk within the overall document \
+for the purposes of improving search retrieval of the chunk. \
+Answer only with the succinct context and nothing else."""
+
+
+def _generate_context(doc_text: str, chunk_text: str, cfg: ContextualConfig) -> str:
+    from openai import OpenAI
+    client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+    prompt = _CONTEXTUAL_PROMPT_TMPL.format(doc=doc_text, chunk=chunk_text)
+    response = client.chat.completions.create(
+        model=cfg.model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=200,
+        temperature=0,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+def _enrich_chunks(
+    chunks: list[Any],
+    doc_text: str,
+    cfg: ContextualConfig,
+) -> list[tuple[Any, str]]:
+    """Return [(chunk, enriched_text)] for each chunk with contextual prefix prepended."""
+    enriched: list[tuple[Any, str]] = []
+    for chunk in chunks:
+        try:
+            ctx = _generate_context(doc_text, chunk.text, cfg)
+            enriched_text = f"{ctx}\n\n{chunk.text}" if ctx else chunk.text
+        except Exception as exc:  # noqa: BLE001
+            print(f"    Warning: contextual generation failed for chunk {chunk.chunk_index}: {exc}")
+            enriched_text = chunk.text
+        enriched.append((chunk, enriched_text))
+    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +289,7 @@ def _ingest_file(
     *,
     dry_run: bool,
     stats: dict[str, int],
+    contextual_cfg: ContextualConfig | None = None,
 ) -> None:
     from rag_service.chunker import chunk_markdown_file
     from qdrant_client.models import PointIdsList, PointStruct
@@ -213,6 +299,7 @@ def _ingest_file(
         return
 
     existing = _scroll_path(client, params.collection, rel_path) if client is not None else {}
+    use_contextual = contextual_cfg is not None
 
     to_embed: list[tuple[int, Any]] = []
     seen_ids: set[str] = set()
@@ -221,7 +308,9 @@ def _ingest_file(
         pid = _point_id(rel_path, chunk.chunk_index)
         seen_ids.add(pid)
         payload = existing.get(pid, {})
-        if payload.get("content_hash") == chunk.content_hash:
+        hash_match = payload.get("content_hash") == chunk.content_hash
+        mode_match = bool(payload.get("contextual")) == use_contextual
+        if hash_match and mode_match:
             stats["skipped"] += 1
         else:
             to_embed.append((len(to_embed), chunk))
@@ -237,29 +326,45 @@ def _ingest_file(
     if not to_embed:
         return
 
-    texts = [c.text for _, c in to_embed]
-
     if dry_run:
         stats["upserted"] += len(to_embed)
         return
 
-    embeddings = _embed_all(texts, params)
+    # Contextual enrichment: call LLM to generate per-chunk context before embedding.
+    if use_contextual:
+        doc_text = file_path.read_text(encoding="utf-8", errors="replace")
+        raw_chunks = [c for _, c in to_embed]
+        enriched = _enrich_chunks(raw_chunks, doc_text, contextual_cfg)
+        texts = [t for _, t in enriched]
+    else:
+        enriched = [(c, c.text) for _, c in to_embed]
+        texts = [c.text for _, c in to_embed]
 
-    points = [
-        PointStruct(
+    embeddings, tokens = _embed_all(texts, params)
+    stats["tokens"] = stats.get("tokens", 0) + tokens
+
+    sparse_vecs = _sparse_encode(texts)
+
+    points = []
+    for (_, chunk), (_, embedded_text), embedding in zip(to_embed, enriched, embeddings):
+        vector: dict[str, Any] = {"dense": embedding}
+        if sparse_vecs is not None:
+            from qdrant_client.models import SparseVector
+            sv = sparse_vecs[len(points)]
+            vector["sparse"] = SparseVector(indices=sv["indices"], values=sv["values"])
+        points.append(PointStruct(
             id=_point_id(rel_path, chunk.chunk_index),
-            vector={"dense": embedding},
+            vector=vector,
             payload={
                 "source": "project_docs",
                 "path": rel_path,
                 "heading_path": chunk.heading_path,
                 "chunk_index": chunk.chunk_index,
                 "content_hash": chunk.content_hash,
-                "text": chunk.text,
+                "text": embedded_text,
+                "contextual": use_contextual,
             },
-        )
-        for (_, chunk), embedding in zip(to_embed, embeddings)
-    ]
+        ))
 
     client.upsert(collection_name=params.collection, points=points)
     stats["upserted"] += len(points)
@@ -276,16 +381,19 @@ def run_ingest(
     docs_dir: Path,
     dry_run: bool = False,
     qdrant_port: int = 9004,
+    contextual_cfg: ContextualConfig | None = None,
 ) -> dict[str, int]:
     """Ingest all markdown files under docs_dir into Qdrant using params.
 
-    Returns stats dict with keys: upserted, skipped, deleted.
+    Returns stats dict with keys: upserted, skipped, deleted, tokens.
     """
     md_files = sorted(docs_dir.rglob("*.md"))
     print(f"Discovered {len(md_files)} markdown files in {docs_dir}")
     print(f"  collection: {params.collection}  model: {params.model_id}  dim: {params.dim}")
+    if contextual_cfg:
+        print(f"  contextual enrichment: ON  model: {contextual_cfg.model}")
 
-    stats: dict[str, int] = {"upserted": 0, "skipped": 0, "deleted": 0}
+    stats: dict[str, int] = {"upserted": 0, "skipped": 0, "deleted": 0, "tokens": 0}
 
     client = None
     if not dry_run:
@@ -294,7 +402,11 @@ def run_ingest(
 
     for path in md_files:
         rel_path = str(path.relative_to(docs_dir.parent))
-        _ingest_file(client, path, rel_path, params, dry_run=dry_run, stats=stats)
+        _ingest_file(
+            client, path, rel_path, params,
+            dry_run=dry_run, stats=stats,
+            contextual_cfg=contextual_cfg,
+        )
 
     if not dry_run and client is not None:
         from rag_service.manifest import write_manifest
@@ -311,6 +423,77 @@ def run_ingest(
 
 
 # ---------------------------------------------------------------------------
+# Sparse backfill — populate sparse vectors on existing dense-only points
+# ---------------------------------------------------------------------------
+
+
+def backfill_sparse(
+    params: IngestParams,
+    *,
+    dry_run: bool = False,
+    qdrant_port: int = 9004,
+) -> dict[str, int]:
+    """Add sparse vectors to existing points that only have dense.
+
+    Scrolls the collection, skips points that already have sparse or lack text
+    payload, computes BM42 sparse in-process, and upserts updated points.
+    """
+    from qdrant_client.models import PointStruct, SparseVector
+    from rag_service.sparse import get_encoder
+
+    encoder = get_encoder()
+    client = _qdrant_client(qdrant_port)
+    stats = {"updated": 0, "skipped": 0}
+    offset = None
+    collection = params.collection
+
+    print(f"Backfilling sparse vectors in '{collection}'...")
+
+    while True:
+        response, offset = client.scroll(
+            collection_name=collection,
+            with_payload=True,
+            with_vectors=True,
+            limit=100,
+            offset=offset,
+        )
+
+        needs_sparse: list[Any] = []
+        for point in response:
+            vectors = point.vector if isinstance(point.vector, dict) else {}
+            if "sparse" in vectors:
+                stats["skipped"] += 1
+                continue
+            text = (point.payload or {}).get("text", "")
+            if not text or (point.payload or {}).get("type") == "manifest":
+                stats["skipped"] += 1
+                continue
+            needs_sparse.append(point)
+
+        if needs_sparse and not dry_run:
+            texts = [(p.payload or {}).get("text", "") for p in needs_sparse]
+            sparse_vecs = encoder.encode(texts)
+            updated: list[PointStruct] = []
+            for point, sv in zip(needs_sparse, sparse_vecs):
+                vectors = point.vector if isinstance(point.vector, dict) else {}
+                updated.append(PointStruct(
+                    id=point.id,
+                    vector={
+                        "dense": vectors.get("dense") or [],
+                        "sparse": SparseVector(indices=sv["indices"], values=sv["values"]),
+                    },
+                    payload=point.payload or {},
+                ))
+            client.upsert(collection_name=collection, points=updated)
+
+        stats["updated"] += len(needs_sparse)
+        if offset is None:
+            break
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -319,10 +502,30 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Ingest project_docs into Qdrant")
     parser.add_argument("--docs-dir", help="Path to docs/ directory (default: auto-detected)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without embedding or upserting")
+    parser.add_argument(
+        "--backfill-sparse",
+        action="store_true",
+        help="Backfill BM42 sparse vectors into existing dense-only points; skip full ingest",
+    )
+    parser.add_argument(
+        "--contextual",
+        action="store_true",
+        help="Prepend LLM-generated context to each chunk before embedding (Contextual Retrieval)",
+    )
+    parser.add_argument(
+        "--contextual-model",
+        help="Chat model for contextual enrichment (default: REMOTE_ROVER_CONTEXTUAL_MODEL env)",
+    )
     args = parser.parse_args(argv)
 
     params = resolve_params_from_env()
     port = int(os.environ.get("REMOTE_ROVER_QDRANT_REST_PORT", "9004"))
+
+    if args.backfill_sparse:
+        dry_tag = " [dry-run]" if args.dry_run else ""
+        stats = backfill_sparse(params, dry_run=args.dry_run, qdrant_port=port)
+        print(f"Backfill done{dry_tag}: {stats['updated']} updated, {stats['skipped']} skipped.")
+        return
 
     if args.docs_dir:
         docs_dir = Path(args.docs_dir).resolve()
@@ -332,8 +535,28 @@ def main(argv: list[str] | None = None) -> None:
     if not docs_dir.is_dir():
         sys.exit(f"docs directory not found: {docs_dir}")
 
+    contextual_cfg: ContextualConfig | None = None
+    if args.contextual:
+        model = (
+            args.contextual_model
+            or os.environ.get("REMOTE_ROVER_CONTEXTUAL_MODEL", "").strip()
+        )
+        if not model:
+            sys.exit(
+                "Contextual mode requires a chat model. "
+                "Set --contextual-model or REMOTE_ROVER_CONTEXTUAL_MODEL."
+            )
+        base_url = os.environ.get("REMOTE_ROVER_CONTEXTUAL_BASE_URL", "").strip() or params.base_url
+        contextual_cfg = ContextualConfig(base_url=base_url, model=model, api_key=params.api_key)
+
     dry_tag = " [dry-run]" if args.dry_run else ""
-    stats = run_ingest(params, docs_dir=docs_dir, dry_run=args.dry_run, qdrant_port=port)
+    stats = run_ingest(
+        params,
+        docs_dir=docs_dir,
+        dry_run=args.dry_run,
+        qdrant_port=port,
+        contextual_cfg=contextual_cfg,
+    )
     print(
         f"Done{dry_tag}: {stats['upserted']} upserted, "
         f"{stats['skipped']} unchanged, "

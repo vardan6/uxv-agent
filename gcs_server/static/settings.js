@@ -107,6 +107,8 @@ const settingsEls = {
   ragEmbedRegenerate: document.getElementById('rag-embed-regenerate'),
   ragRefreshStatus: document.getElementById('rag-refresh-status'),
   ragStatusMessage: document.getElementById('rag-status-message'),
+  ragLastIncrementalResult: document.getElementById('rag-last-incremental-result'),
+  ragLastRegenerateResult: document.getElementById('rag-last-regenerate-result'),
   jsonExportToggles: Array.from(document.querySelectorAll('.json-export-toggle')),
   jsonImportToggles: Array.from(document.querySelectorAll('.json-import-toggle')),
   jsonPreview: document.getElementById('json-preview'),
@@ -1742,6 +1744,13 @@ function renderRagStatus(status) {
   }
   const disableUpdateIndex = status.staleness === 'missing' || status.staleness === 'model_mismatch';
   if (settingsEls.ragEmbedIncremental) settingsEls.ragEmbedIncremental.disabled = disableUpdateIndex;
+  for (const [key, el] of [
+    ['rag-last-incremental-result', settingsEls.ragLastIncrementalResult],
+    ['rag-last-regenerate-result', settingsEls.ragLastRegenerateResult],
+  ]) {
+    const saved = localStorage.getItem(key);
+    if (el && saved) { el.textContent = saved; el.hidden = false; }
+  }
 }
 
 async function loadRagSettings() {
@@ -1784,8 +1793,22 @@ async function pollRagJob(jobId) {
   setRagBusy(false);
   if (job.status === 'complete') {
     const stats = job.stats || {};
-    const detail = Object.keys(stats).length ? ` (${Object.entries(stats).map(([k, v]) => `${k}: ${v}`).join(', ')})` : '';
+    const parts = [];
+    if (stats.upserted != null) parts.push(`${stats.upserted} embedded`);
+    if (stats.skipped != null) parts.push(`${stats.skipped} unchanged`);
+    if (stats.deleted != null) parts.push(`${stats.deleted} deleted`);
+    if (stats.tokens > 0) parts.push(`${stats.tokens.toLocaleString()} tokens`);
+    const detail = parts.length ? ` (${parts.join(', ')})` : '';
     setRagStatusMessage(`Embedding complete${detail}.`);
+    const label = job.mode === 'regenerate' ? 'Last Rebuild Index' : 'Last Update Index';
+    const summaryEl = job.mode === 'regenerate' ? settingsEls.ragLastRegenerateResult : settingsEls.ragLastIncrementalResult;
+    const storageKey = job.mode === 'regenerate' ? 'rag-last-regenerate-result' : 'rag-last-incremental-result';
+    if (summaryEl) {
+      const text = `${label}: ${parts.length ? parts.join(', ') : 'no changes'}.`;
+      summaryEl.textContent = text;
+      summaryEl.hidden = false;
+      localStorage.setItem(storageKey, text);
+    }
   } else if (job.status === 'error') {
     setRagStatusMessage(`Embedding failed: ${job.error || 'unknown error'}`);
   } else {

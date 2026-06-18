@@ -2433,8 +2433,16 @@ function replacePendingAssistantMessage(sessionId, serverMessage) {
   if (isMessageActivityOpen(pendingId, true)) {
     setMessageActivityOpen(serverMessage?.id, true);
   }
+  // Server meta has only source-control-level citations (no path/heading_path).
+  // Preserve chunk-level citations accumulated from search_project_docs tool results.
+  const pending = live.messages.find((m) => m.id === pendingId);
+  const accumulated = pending?.meta?.retrieval_citations;
+  let finalMessage = serverMessage;
+  if (Array.isArray(accumulated) && accumulated.length && accumulated.some((c) => c.path)) {
+    finalMessage = { ...finalMessage, meta: { ...(finalMessage?.meta || {}), retrieval_citations: accumulated } };
+  }
   live.messages = live.messages.map((message) => (
-    message.id === pendingId ? serverMessage : message
+    message.id === pendingId ? finalMessage : message
   ));
 }
 
@@ -2482,6 +2490,18 @@ function updatePendingRetrievalState(sessionId, retrievalRequest, retrievedSourc
     if (retrievalRequest && typeof retrievalRequest === 'object') meta.retrieval_request = retrievalRequest;
     if (Array.isArray(retrievedSources)) meta.retrieved_sources = retrievedSources;
     if (Array.isArray(retrievalCitations)) meta.retrieval_citations = retrievalCitations;
+    return { ...message, meta };
+  });
+}
+
+function accumulateRetrievalCitations(sessionId, newCitations) {
+  const live = liveStateFor(sessionId);
+  if (!live.pendingAssistantMessageId) return;
+  live.messages = live.messages.map((message) => {
+    if (message.id !== live.pendingAssistantMessageId) return message;
+    const meta = { ...(message.meta || {}) };
+    const existing = Array.isArray(meta.retrieval_citations) ? meta.retrieval_citations : [];
+    meta.retrieval_citations = [...existing, ...newCitations];
     return { ...message, meta };
   });
 }
@@ -2544,6 +2564,10 @@ function handleAiStreamEvent(sessionId, eventData) {
     updatePendingAgentTrace(sessionId, eventData);
     updatePendingAgentToolCall(sessionId, eventData.tool_call || {}, 'complete');
     pushAiToolStatusMessage(eventData.tool_call || {});
+    const tc = eventData.tool_call || {};
+    if (tc.name === 'search_project_docs' && Array.isArray(tc.result?.citations) && tc.result.citations.length) {
+      accumulateRetrievalCitations(sessionId, tc.result.citations);
+    }
   } else if (eventData.type === 'graph_retrieval_result') {
     updatePendingRetrievalState(
       sessionId,

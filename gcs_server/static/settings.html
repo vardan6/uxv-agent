@@ -513,10 +513,12 @@
 
               <div class="form-actions form-actions-inline">
                 <button id="rag-embed-incremental" type="button" title="Re-embeds only documents that have changed since the last run. Safe to run at any time.">Update Index</button>
-                <button id="rag-embed-regenerate" type="button" class="ghost" title="Deletes the current index and re-embeds every document. Required after changing the embeddings model.">Rebuild index</button>
+                <button id="rag-embed-regenerate" type="button" class="ghost" title="Deletes the current index and re-embeds every document. Required after changing the embeddings model.">Rebuild Index</button>
                 <button id="rag-refresh-status" type="button" class="ghost" title="Re-check the current index status from Qdrant.">↻ Refresh</button>
               </div>
               <p id="rag-status-message" class="status-banner">Loading RAG status.</p>
+              <p id="rag-last-incremental-result" class="settings-note" hidden></p>
+              <p id="rag-last-regenerate-result" class="settings-note" hidden></p>
             </article>
           </div>
         </section>
