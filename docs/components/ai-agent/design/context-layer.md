@@ -242,6 +242,8 @@ Query-triggered details:
 - examples include objects in front of the rover, objects near the rover, objects by kind, current replay summary, and recent telemetry samples
 - future examples include objects to the left/right, objects inside a sector, route-intersecting objects, dynamic detected objects, and mission validation details
 - in agent mode, spatial query-triggered details are not preloaded into the prompt; the read-only agent tools fetch them on demand
+- the always-on set is scoped by need-frequency (ADR 0029): rover, mission, and scene summaries stay always-on because most operator turns depend on them; `runtime`/broker/sim/map config is tool-loaded (`get_runtime_context`) because it is rarely the answer. Lazy loading is applied only where data is usually *not* needed — lazy-loading a usually-needed surface would add a round-trip to most turns
+- rover and scene are injected once (the compact block), not duplicated as synthetic turn-0 tool calls (ADR 0029 removes that duplicate)
 
 This keeps normal questions small while still allowing richer answers for spatial and recent-history questions.
 
@@ -251,11 +253,13 @@ Examples:
 What is the rover state?
 ```
 
-Uses:
+Uses (compact always-on summaries):
 - current rover state
-- runtime context
-- mission placeholder
+- mission summary
 - scene summary
+
+Runtime/broker config is no longer in the always-on set (ADR 0029); the agent
+calls `get_runtime_context` if a question actually needs it.
 
 ```text
 What objects are in front of the rover within 100 meters and 20 degrees?

@@ -7,12 +7,76 @@ snapshots, and verbose tool history are resent on every request. The durable
 design goal is to reduce repeated token cost without degrading tool-selection
 accuracy or mission-planning safety.
 
+## The Lazy-Loading Trade-off Rule
+
+Lazy loading is **not** universally good. The governing rule for every
+context/tool decision:
+
+> **Lazy loading wins when data is usually *not* needed. It loses when data is
+> usually needed** — you pay an extra LLM round-trip *and* you still send the data
+> (now as a tool result with schema + framing overhead), just one turn later.
+
+Consequence: classify each always-on surface by need-frequency and lazy-load only
+the rarely-needed ones.
+
+- Usually needed each turn (keep always-on, compact): rover pose, mission state,
+  scene summary, run mode/permissions, manifest, safety boundaries.
+- Usually not needed (lazy via tools): runtime/broker/sim/map config, detailed map
+  objects, replay paths/metrics, telemetry samples, settings sections, chat
+  history, sensor detail, RAG chunks.
+
+The same rule applies to **tool schemas**: prune/defer schemas the current turn is
+unlikely to use; never defer the schemas most turns need. See ADR 0029 for the
+context application and the roadmap "Agent Tool-Schema Optimization" tiers for the
+schema application.
+
+## Measure Before Cutting
+
+Token-savings claims must be backed by the measurement harness, not estimates.
+Measure all surfaces separately: provider tool-schema payload, the tool-name list
+prompt, the data-surface manifest prompt, and the compact context block. The
+compact context block uses a 24,000-char default budget, so it is materially
+larger than the inputs to early estimates — never optimize it (or anything) on
+assumed sizes.
+
+### Expected magnitude per change (pre-harness estimates)
+
+These are the **per-change price estimates** from the 2026-06-18 plan review,
+retained here so the cost intuition lives in the durable plan — **not measured
+values.** They rest on an assumed ~9–11k-token broad agent turn (~8–10k schemas,
+compact context historically estimated ~200 tokens but really 1–3k given the 24k
+budget). The Tier-0 harness exists to replace this table with measured numbers;
+until then, treat every figure as directional and do not gate a decision on it.
+
+| Change | Token impact (est.) | Runtime / latency | Risk |
+|---|---|---|---|
+| Remove `_tool_calls()` duplicate | −~200 tok typical, more if all synthetic results populate | none | Low once scoped as de-dup (High only if mis-read as full lazy) |
+| `AGENT_SYSTEM_PROMPT` state sentence | +~20–35 tok/turn | none | Low |
+| Conditional `_prompt_for_mode` wording | ~neutral | none | Low (required) |
+| Lazy-load `runtime` config | − broker/sim/map JSON each turn | +1 round-trip only on rare config questions | Very low |
+| Compact rendering of context block | − JSON key/punctuation overhead | none | Very low |
+| Remove/keep "Context used" UI | no model-token impact | none | Medium if removed while real context still sent; low as de-dup |
+| Meta route (vs blanket bypass) | saves most broad-schema cost for meta turns; docs route preserves citations | +1 tool call only when docs needed | Medium (broad classifier) → lower with conservative patterns + fallback |
+| Audit + measurement harness | none (enables real measurement) | dev-only | Very low; do first |
+| Spatial dispatcher compatibility | neutral if unbound; +1 schema if bound alongside old | none | Medium unless binding is explicit |
+| Spatial binding reduction | net −5 schemas, ~500–1,500 tok | none | Low–medium; needs trace/manual eval |
+| AI memory/settings dispatchers | net −4 schemas, ~400–1,200 tok | none | Low if gates/redaction unchanged |
+| Replay dispatcher (2 tools) | net −8 schemas, ~1k–2.5k tok when replay enabled | none | Medium; broad arg shapes hurt weaker models |
+| Execution consolidation | net −2 schemas, ~200–600 tok when bound | none | Medium-high (safety); HITL |
+| Per-intent keyword pruning | ~50–70% schema-token savings on many turns (~4k–7k of a 10k prompt) | none if local mapping | Medium-high; must handle follow-ups/multi-domain |
+| Semantic / tool-attention loading | ~90–95% schema savings | +embedding call ~10–200 ms | Medium; needs eval + fallback |
+| Progressive meta-tools | could cut broad turns to a few k tok | +≥1 discovery round-trip (+50–100% on first tool use) | Medium-high; slower first answer; less compelling at 31–38 tools |
+
 ## Primary Cost Drivers
 
 The main recurring cost sources are:
 
 - conversation history replay
 - full live-context snapshots even when little changed
+- **duplicated** state injection — historically rover/scene were injected both as
+  a synthetic turn-0 tool-call preamble and inside the compact context block
+  (removed in ADR 0029)
+- always-on injection of rarely-needed surfaces (e.g. runtime/broker config)
 - eager detail pre-fetch in chat mode when equivalent tools exist
 - verbose tool descriptions and tool-result retransmission
 - overlapping tool schemas that force the model to choose among near-duplicate capabilities
@@ -21,12 +85,21 @@ The main recurring cost sources are:
 
 Apply improvements in this order:
 
-- enable provider-side prompt caching for stable prompt prefixes
+- measure first (harness over the surfaces above); never cut on estimates
+- remove duplicated injection and always-on rarely-needed surfaces (lazy-loading
+  rule), keeping usually-needed state always-on and compact
+- consolidate overlapping tool schemas where a single operation-mode tool can call
+  the same deterministic handlers (bind-new and unbind-old in the same slice so the
+  bound catalog never temporarily grows)
 - prefer context-delta mode over replaying full snapshots every turn
 - disable or aggressively trim eager-detail pre-fetch when tools can fetch the same facts on demand
 - reduce redundant tool-result replay and repeated failed tool invocations
-- consolidate overlapping tools where a single operation-mode tool can call the same deterministic handlers
-- shrink tool descriptions only behind evaluation coverage
+- audit any remaining **uncached** fallback/chat paths and surface cache-hit
+  telemetry — provider prompt caching is already enabled for the agent system
+  prompt (`agent_loop.py` sets Anthropic `cache_control`; OpenAI auto-caches), so
+  the remaining work is verification and measurement, not adding caching
+- shrink tool descriptions or per-intent prune the visible catalog only behind
+  evaluation coverage, because both change the model's visible capability surface
 
 ## Tool-Schema Footprint
 
