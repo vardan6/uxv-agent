@@ -152,6 +152,7 @@ class ToolInvocationContext:
 _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "list_data_surfaces",
     "get_current_rover_state",
+    "get_runtime_context",
     "get_scene_summary",
     "query_map_objects",
     "resolve_spatial_target",
@@ -297,6 +298,12 @@ class ToolRegistry:
                 "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.",
                 READ_ONLY,
                 self._get_scene_summary,
+            ),
+            tool(
+                "get_runtime_context",
+                "Get the current runtime environment: MQTT broker connection (host, port, state), controller link state, video delivery config, simulation backend settings, map config, and active replay session id. Call this when the operator asks about connectivity, MQTT configuration, broker status, video pipeline, or simulation parameters.",
+                READ_ONLY,
+                self._get_runtime_context,
             ),
             tool(
                 "query_map_objects",
@@ -593,6 +600,10 @@ class ToolRegistry:
     def _get_scene_summary(self, context: ToolInvocationContext) -> dict[str, Any]:
         scene = context.context_snapshot.get("scene")
         return dict(scene) if isinstance(scene, dict) else AIContextService(context.runtime).get_scene_map_summary()
+
+    def _get_runtime_context(self, context: ToolInvocationContext) -> dict[str, Any]:
+        runtime = context.context_snapshot.get("runtime")
+        return dict(runtime) if isinstance(runtime, dict) else {}
 
     def _query_objects_in_front(
         self,
@@ -2359,6 +2370,20 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "upstream_from_tools": [],
         "returns": {"object_kinds": "object{kind->count}", "spawn": "object{x,y,z}", "object_count": "number"},
         "next_tools": ["query_map_objects", "resolve_spatial_target"],
+    },
+    "get_runtime_context": {
+        "inputs": {},
+        "required_inputs": [],
+        "upstream_from_tools": [],
+        "returns": {
+            "broker": "object{host,port,connected,...}",
+            "controller": "object",
+            "video": "object",
+            "simulation": "object",
+            "map": "object",
+            "replay_session_id": "string | null",
+        },
+        "next_tools": [],
     },
     "query_map_objects": {
         "inputs": {

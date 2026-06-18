@@ -39,6 +39,7 @@ class AIContextService:
             "get_scene_summary",
         ]
         rover = await self.get_current_rover_state()
+        runtime = await self.get_runtime_context()
         settings: dict[str, Any] = {}
         llm: dict[str, Any] = {"session": {"id": session_id}}
         if str(run_mode or "").strip().lower() != "agent":
@@ -93,6 +94,7 @@ class AIContextService:
         context = {
             "generated_at": time.time(),
             "rover": rover,
+            "runtime": runtime,
             "settings": settings,
             "llm": llm,
             "mission": mission,
@@ -506,7 +508,7 @@ def _format_context_block(context: dict[str, Any], dropped: list[str] | None = N
         header += f" Budget applied; omitted: {', '.join(dropped)}."
     lines = [header]
     for key, value in context.items():
-        if key == "generated_at" or value is None or value == {} or value == [] or value == {"session": {"id": ""}}:
+        if key in ("generated_at", "runtime") or value is None or value == {} or value == [] or value == {"session": {"id": ""}}:
             continue
         lines.append(f"{key}: {json.dumps(value, separators=(',', ':'))}")
     return "\n".join(lines)
