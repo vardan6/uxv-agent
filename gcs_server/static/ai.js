@@ -313,7 +313,6 @@ const AI_MAP_HEIGHT_KEY = 'gcs-ai-map-height';
 const AI_SIDEBAR_MIN = 240;
 const AI_SIDEBAR_MAX = 560;
 const AI_SHELL_HEIGHT_MIN = 420;
-const AI_SHELL_HEIGHT_MAX = 1100;
 const AI_MAP_HEIGHT_MIN = 320;
 const AI_MAP_HEIGHT_MAX = 1100;
 const AI_MOBILE_QUERY = '(max-width: 1100px)';
@@ -700,18 +699,32 @@ function messageMarkdownFooter(message) {
   return parts.filter(Boolean).join(' · ');
 }
 
+function formatMessageTimestamp(message) {
+  const ts = message?.created_at;
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
 function appendMessageMarkdown(lines, message, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
   const includeOpenActivity = options.includeOpenActivity !== false;
   if (message.role === 'user') {
-    lines.push('## User', '', String(message.content).trim(), '');
+    const ts = formatMessageTimestamp(message);
+    const header = ts ? `## User · ${ts}` : '## User';
+    lines.push(header, '', String(message.content).trim(), '');
     return;
   }
   if (message.role === 'assistant') {
     const provider = providerNameForMessage(message);
     const mode = messageRunMode(message);
     const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
-    let header = `## Assistant (${provider}${modeLabel})`;
+    const ts = formatMessageTimestamp(message);
+    const tsLabel = ts ? ` · ${ts}` : '';
+    let header = `## Assistant (${provider}${modeLabel})${tsLabel}`;
     if (includeDiagnostics) {
       const diag = [];
       if (message.model_id) diag.push(message.model_id);
@@ -759,55 +772,14 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
   const iterations = distinctAgentIterations(message);
   if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return;
 
-  const status = calls.some((call) => (call?.status || '') === 'running')
-    ? 'Running'
-    : (calls.length ? 'Complete' : 'Recorded');
+  const runStart = trace.find((e) => e?.type === 'agent_run_start');
+  const runEnd = trace.find((e) => e?.type === 'agent_run_end');
 
   lines.push('### Agent activity', '');
-  lines.push(`- Status: ${status}`);
-  if (iterations.length) lines.push(`- Iterations: ${iterations.length}`);
-  if (calls.length) lines.push(`- Tool calls: ${calls.length}`);
-  if (promptCalls.length) lines.push(`- Context injections: ${promptCalls.length}`);
-  lines.push('');
 
-  if (trace.length) {
-    lines.push('#### Run trace', '');
-    trace.forEach((event, index) => {
-      const summary = summarizeAgentTraceEvent(event, index);
-      if (summary) lines.push(`- ${summary}`);
-    });
-    lines.push('');
-  }
-
-  if (calls.length) {
-    lines.push('#### Tools used', '');
-    calls.forEach((call, index) => {
-      const statusValue = call?.status || (call?.result !== undefined ? 'complete' : 'running');
-      const resultSummary = statusValue === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
-      const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
-      const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
-      const toolName = call?.name || call?.tool || `tool_${index + 1}`;
-      const includeToolPayload = includeDiagnostics || !openToolIndexes || openToolIndexes.has(index);
-      lines.push(`##### Tool ${index + 1}: \`${toolName}\``, '');
-      lines.push(`- Status: ${statusValue}`);
-      if (Number.isFinite(call?.iteration)) lines.push(`- Iteration: ${call.iteration}`);
-      if (latency) lines.push(`- Latency: ${latency}`);
-      if (argsSummary) lines.push(`- Arguments summary: ${argsSummary}`);
-      if (resultSummary && resultSummary !== statusValue) lines.push(`- Result summary: ${resultSummary}`);
-      lines.push('');
-
-      const argsValue = call?.args ?? call?.arguments;
-      if (includeToolPayload && argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
-        lines.push('###### Arguments', '');
-        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
-      }
-      if (includeToolPayload && call?.result !== undefined) {
-        lines.push('###### Result', '');
-        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
-      } else if (includeDiagnostics) {
-        lines.push('###### Result', '', '_Waiting for tool result._', '');
-      }
-    });
+  if (runStart) {
+    const runMeta = [runStart.provider, runStart.model].filter(Boolean);
+    lines.push(`**Agent run**${runMeta.length ? ` · ${runMeta.join(' · ')}` : ''}`, '');
   }
 
   if (promptCalls.length) {
@@ -815,14 +787,70 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
     promptCalls.forEach((call, index) => {
       const name = call?.name || `context_${index + 1}`;
       const summary = summarizeAgentToolResult(call?.result);
+      lines.push(`- \`${name}\`${summary ? ` — ${summary}` : ''}`);
       const includeContextPayload = includeDiagnostics || !openContextIndexes || openContextIndexes.has(index);
-      lines.push(`##### Context ${index + 1}: \`${name}\``, '');
-      if (summary) lines.push(`- Summary: ${summary}`, '');
-      if (includeContextPayload) {
-        lines.push('###### Injected result', '');
+      if (includeContextPayload && call?.result !== undefined) {
+        lines.push('');
         lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
       }
     });
+    lines.push('');
+  }
+
+  const appendToolLine = (call, index) => {
+    const status = call?.status || (call?.result !== undefined ? 'complete' : 'running');
+    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
+    const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
+    const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
+    const toolName = call?.name || call?.tool || `tool_${index + 1}`;
+    const parts = [`\`${toolName}\``];
+    if (argsSummary) parts.push(argsSummary);
+    if (resultSummary && resultSummary !== status) parts.push(resultSummary);
+    if (latency) parts.push(latency);
+    lines.push(`- ${parts.join(' · ')}`);
+    const includeToolPayload = includeDiagnostics || !openToolIndexes || openToolIndexes.has(index);
+    if (includeToolPayload) {
+      const argsValue = call?.args ?? call?.arguments;
+      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
+        lines.push('');
+        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
+      }
+      if (call?.result !== undefined) {
+        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
+      } else if (includeDiagnostics) {
+        lines.push('', '_Waiting for tool result._', '');
+      }
+    }
+  };
+
+  if (iterations.length) {
+    iterations.forEach((n) => {
+      const iterCalls = calls
+        .map((call, index) => ({ call, index }))
+        .filter(({ call }) => Number(call.iteration) === n);
+      lines.push(`#### Iteration ${n}`, '');
+      if (!iterCalls.length) {
+        lines.push('- no tools', '');
+      } else {
+        iterCalls.forEach(({ call, index }) => appendToolLine(call, index));
+        lines.push('');
+      }
+    });
+    const orphaned = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => !Number.isFinite(Number(call.iteration)) || Number(call.iteration) <= 0);
+    if (orphaned.length) {
+      orphaned.forEach(({ call, index }) => appendToolLine(call, index));
+      lines.push('');
+    }
+  } else if (calls.length) {
+    calls.forEach((call, index) => appendToolLine(call, index));
+    lines.push('');
+  }
+
+  if (runEnd) {
+    const stopReason = runEnd.stop_reason || 'complete';
+    lines.push(`**Done · ${stopReason}**`, '');
   }
 
   if (fallbackError) {
@@ -3453,7 +3481,7 @@ function bindLayoutResizer() {
 }
 
 function clampShellHeight(value) {
-  return Math.max(AI_SHELL_HEIGHT_MIN, Math.min(AI_SHELL_HEIGHT_MAX, Number(value) || 680));
+  return Math.max(AI_SHELL_HEIGHT_MIN, Number(value) || 680);
 }
 
 function setShellHeight(height, persist = true) {
@@ -3517,7 +3545,7 @@ function bindHeightResizer() {
     event.preventDefault();
     const currentHeight = Number(aiEls.heightResizer.getAttribute('aria-valuenow')) || 680;
     if (event.key === 'Home') setShellHeight(AI_SHELL_HEIGHT_MIN);
-    else if (event.key === 'End') setShellHeight(AI_SHELL_HEIGHT_MAX);
+    else if (event.key === 'End') setShellHeight(document.documentElement.scrollHeight);
     else setShellHeight(currentHeight + (event.key === 'ArrowDown' ? 32 : -32));
   });
 }

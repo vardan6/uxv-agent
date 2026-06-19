@@ -1,5 +1,11 @@
 # AI Agent Token Efficiency
 
+Related docs:
+
+- [Agent Tool Discoverability and Contracts](../../../cross-cutting/research/2026-06-18-agent-tool-discoverability-and-contracts.md)
+- [Tool Loading & Context Management](../../../cross-cutting/research/tool-loading-context-management.md)
+- [Tool Contract Standard](./tool-contract.md)
+
 ## Motivation
 
 Agent turns can become expensive when stable prompt material, full context
@@ -119,32 +125,6 @@ Do **not** "optimize" by removing contracts entirely. For dispatcher tools that
 would trade token savings for weaker discoverability and higher invalid-call
 risk.
 
-### Expected magnitude per change (pre-harness estimates)
-
-These are the **per-change price estimates** from the 2026-06-18 plan review,
-retained here so the cost intuition lives in the durable plan — **not measured
-values.** They rest on the measured ~13–16k-token schema surface and an assumed
-context block well under the 24k cap for typical requests. Replace individual
-rows with measured deltas from the harness as each slice ships.
-
-| Change | Token impact (est.) | Runtime / latency | Risk |
-|---|---|---|---|
-| Remove `_tool_calls()` duplicate | −~200 tok typical, more if all synthetic results populate | none | Low once scoped as de-dup (High only if mis-read as full lazy) |
-| `AGENT_SYSTEM_PROMPT` state sentence | +~20–35 tok/turn | none | Low |
-| Conditional `_prompt_for_mode` wording | ~neutral | none | Low (required) |
-| Lazy-load `runtime` config | − broker/sim/map JSON each turn | +1 round-trip only on rare config questions | Very low |
-| Compact rendering of context block | − JSON key/punctuation overhead | none | Very low |
-| Remove/keep "Context used" UI | no model-token impact | none | Medium if removed while real context still sent; low as de-dup |
-| Meta route (vs blanket bypass) | saves most broad-schema cost for meta turns; docs route preserves citations | +1 tool call only when docs needed | Medium (broad classifier) → lower with conservative patterns + fallback |
-| Audit + measurement harness | none (enables real measurement) | dev-only | Very low; do first |
-| Spatial dispatcher compatibility | neutral if unbound; +1 schema if bound alongside old | none | Medium unless binding is explicit |
-| Spatial binding reduction | net −5 schemas, ~500–1,500 tok | none | Low–medium; needs trace/manual eval |
-| AI memory/settings dispatchers | net −4 schemas, ~400–1,200 tok | none | Low if gates/redaction unchanged |
-| Replay dispatcher (2 tools) | net −8 schemas, ~1k–2.5k tok when replay enabled | none | Medium; broad arg shapes hurt weaker models |
-| Execution consolidation | net −2 schemas, ~200–600 tok when bound | none | Medium-high (safety); HITL |
-| Per-intent keyword pruning | ~50–70% schema-token savings on many turns (~4k–7k of a 10k prompt) | none if local mapping | Medium-high; must handle follow-ups/multi-domain |
-| Semantic / tool-attention loading | ~90–95% schema savings | +embedding call ~10–200 ms | Medium; needs eval + fallback |
-| Progressive meta-tools | could cut broad turns to a few k tok | +≥1 discovery round-trip (+50–100% on first tool use) | Medium-high; slower first answer; less compelling at 31–38 tools |
 
 ## Primary Cost Drivers
 

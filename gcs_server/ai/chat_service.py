@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator
 from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
+from .smalltalk_patterns import MAX_SMALLTALK_CHARS, SMALLTALK_SET, normalize_for_smalltalk
 from .tool_registry import allowed_tool_names_for_source_controls
 
 
@@ -630,22 +631,9 @@ def _is_trivial_agent_smalltalk(messages: list[dict[str, Any]]) -> bool:
     content = _latest_user_content(messages)
     if not content:
         return False
-    if len(content) > 40:
+    if len(content) > MAX_SMALLTALK_CHARS:
         return False
-    simple = {
-        "hi",
-        "hello",
-        "hey",
-        "yo",
-        "sup",
-        "hiya",
-        "good morning",
-        "good afternoon",
-        "good evening",
-        "how are you",
-        "how are you?",
-    }
-    return content in simple
+    return normalize_for_smalltalk(content) in SMALLTALK_SET
 
 
 def _system_prompt_for_run_mode(run_mode: str) -> str:
