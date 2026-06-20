@@ -8,6 +8,7 @@ from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
 from .smalltalk_patterns import MAX_SMALLTALK_CHARS, SMALLTALK_SET, normalize_for_smalltalk
+from .usage_telemetry import normalize_usage_metadata
 from .tool_registry import allowed_tool_names_for_source_controls
 
 
@@ -860,8 +861,9 @@ def _json_line(data: dict[str, Any]) -> str:
 
 
 def _usage_metadata(response: Any) -> dict[str, Any]:
-    usage = getattr(response, "usage_metadata", {}) or {}
-    return usage if isinstance(usage, dict) else {}
+    # Promotes cache-hit counters (cache_read/cache_creation) to top-level keys
+    # so prompt-cache savings are observable in stored meta. See usage_telemetry.
+    return normalize_usage_metadata(response)
 
 
 def _is_tool_calling_unsupported_error(exc: Exception) -> bool:

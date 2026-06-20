@@ -2523,12 +2523,13 @@ code {
     0 16px 30px color-mix(in srgb, var(--bg-base) 56%, transparent),
     0 4px 10px color-mix(in srgb, #000000 18%, transparent);
   display: grid;
-  grid-template-columns: minmax(240px, var(--ai-sidebar-width)) 10px minmax(0, 1fr);
+  grid-template-columns: minmax(240px, var(--ai-sidebar-width)) 8px minmax(0, 1fr);
   grid-template-rows: minmax(420px, var(--ai-shell-height)) 10px;
   grid-template-areas:
     "sidebar splitter chat"
     "footer footer footer";
-  gap: 4px;
+  column-gap: 0;
+  row-gap: 4px;
   align-items: stretch;
 }
 
@@ -2548,28 +2549,34 @@ code {
   grid-area: sidebar;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 18px;
+  gap: 12px;
   min-width: 0;
   overflow: hidden;
+  padding: 14px 14px 14px 0;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .ai-layout-resizer {
   grid-area: splitter;
   align-self: stretch;
-  width: 10px;
-  min-width: 10px;
+  width: 8px;
+  min-width: 8px;
   min-height: 100%;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background:
     linear-gradient(
       90deg,
       transparent 0,
-      transparent 5px,
+      transparent 3px,
+      color-mix(in srgb, var(--line) 76%, transparent) 3px,
       color-mix(in srgb, var(--line) 76%, transparent) 5px,
-      color-mix(in srgb, var(--line) 76%, transparent) 7px,
-      transparent 7px
+      transparent 5px
     );
   cursor: col-resize;
   touch-action: none;
@@ -2603,10 +2610,10 @@ code {
     linear-gradient(
       90deg,
       transparent 0,
-      transparent 4px,
-      color-mix(in srgb, var(--accent) 72%, var(--line)) 4px,
-      color-mix(in srgb, var(--accent) 72%, var(--line)) 8px,
-      transparent 8px
+      transparent 2px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 2px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 6px,
+      transparent 6px
     );
 }
 
@@ -2637,7 +2644,7 @@ code {
 .ai-sidebar-head-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-start;
   max-width: 100%;
@@ -2650,7 +2657,7 @@ code {
 }
 
 .ai-sidebar-head h2 {
-  font-size: clamp(1.45rem, 2vw, 1.9rem);
+  font-size: clamp(1.22rem, 1.6vw, 1.5rem);
 }
 
 .ai-sidebar-head {
@@ -2668,22 +2675,22 @@ code {
 }
 
 #ai-new-session {
-  width: 38px;
-  height: 38px;
-  min-height: 38px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
   padding: 0;
-  border-radius: 10px;
-  font-size: 1.2rem;
+  border-radius: 8px;
+  font-size: 1.05rem;
 }
 
 #ai-show-archived {
-  min-height: 38px;
-  padding-inline: 12px;
+  min-height: 34px;
+  padding-inline: 10px;
 }
 
 #ai-show-active {
-  min-height: 38px;
-  padding-inline: 12px;
+  min-height: 34px;
+  padding-inline: 10px;
 }
 
 #ai-show-active[aria-pressed="true"],
@@ -2695,35 +2702,42 @@ code {
 #ai-session-search {
   width: 100%;
   min-width: 0;
+  min-height: 38px;
+  padding-block: 8px;
 }
 
 .ai-session-list {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
   min-height: 0;
   overflow: auto;
-  padding: 2px 12px 8px 0;
+  padding: 0 10px 4px 0;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
 .ai-session-row {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   width: 100%;
-  padding: 12px 12px;
-  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  border-radius: 12px;
+  padding: 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 52%, transparent);
+  border-radius: 10px;
   text-align: left;
-  background: var(--button-secondary-gradient);
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-base) 40%, transparent);
+  background: color-mix(in srgb, var(--panel-strong) 54%, transparent);
   cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.ai-session-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 18%, var(--panel-strong));
 }
 
 .ai-session-row.active {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: var(--button-active-gradient);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 34%, var(--panel-strong));
 }
 
 .ai-session-row:focus-visible {
@@ -2754,21 +2768,21 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 700;
-  font-size: 1.07rem;
+  font-weight: 650;
+  font-size: 0.98rem;
   line-height: 1.2;
 }
 
 .ai-session-count {
   min-width: 28px;
-  padding: 3px 7px;
+  padding: 2px 6px;
   border-radius: 999px;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   line-height: 1.2;
   text-align: center;
-  background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: color-mix(in srgb, var(--panel-strong) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
 }
 
 .ai-session-actions {
@@ -2778,15 +2792,15 @@ code {
 }
 
 .ai-session-action {
-  width: 26px;
-  min-width: 26px;
-  height: 22px;
-  min-height: 22px;
+  width: 24px;
+  min-width: 24px;
+  height: 20px;
+  min-height: 20px;
   padding: 0;
   border-radius: 6px;
   align-self: center;
   line-height: 1;
-  font-size: 0.84rem;
+  font-size: 0.78rem;
 }
 
 .ai-session-title-input {
@@ -2802,7 +2816,7 @@ code {
 .ai-message-meta,
 .ai-message-foot {
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   line-height: 1.34;
 }
 
@@ -5933,6 +5947,12 @@ code {
     min-height: auto;
   }
 
+  .ai-sidebar {
+    padding-right: 14px;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+  }
+
   .ai-layout-resizer,
   .ai-height-resizer {
     display: none;
@@ -6055,6 +6075,10 @@ code {
   .ai-sidebar,
   .ai-chat-panel {
     padding: 16px;
+  }
+
+  .ai-sidebar {
+    border-bottom: 0;
   }
 
   .ai-session-row {

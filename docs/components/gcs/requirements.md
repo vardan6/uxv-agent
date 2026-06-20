@@ -192,6 +192,12 @@ A standalone first-run page for editing MQTT settings. Equivalent to the Connect
 
 For the full AI agent product requirements — intent parsing, planning shell, mission execution, memory, and operator interaction model — see [AI Agent requirements](../ai-agent/requirements.md). This section covers the GCS-owned surfaces on the `/ai` page: the map widget, mission list, and edit UI.
 
+### Chat workspace layout
+
+The `/ai` page's conversation workspace must remain a light operator GUI, not a heavy admin console. The sessions sidebar and conversation panel should use a narrow, low-contrast resize divider consistent with the newer mission-map sidebar divider. The divider must remain easy to drag, keyboard-accessible, and hidden in the existing mobile stacked layout.
+
+The sessions sidebar should stay compact enough that the conversation remains the primary workspace while still exposing active/archived filters, search, session actions, and readable session previews. Visual cleanup must not change chat/session persistence, provider selection, message sending, retry/stop behavior, source controls, or the map widget below the chat.
+
 ### Map widget
 
 The `/ai` page hosts a reusable `MapWidget` (Leaflet + `L.CRS.Simple`, local scene metres) that renders the rover's operating scene and all mission overlays. The map is vehicle-aware — it reads the active `VehicleProfile` to populate property panels and enforce vehicle-specific dispatch rules.

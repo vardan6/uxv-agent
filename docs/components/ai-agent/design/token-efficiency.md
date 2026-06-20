@@ -159,7 +159,11 @@ Apply improvements in this order:
 - audit any remaining **uncached** fallback/chat paths and surface cache-hit
   telemetry — provider prompt caching is already enabled for the agent system
   prompt (`agent_loop.py` sets Anthropic `cache_control`; OpenAI auto-caches), so
-  the remaining work is verification and measurement, not adding caching
+  the remaining work is verification and measurement, not adding caching.
+  Cache counters are now normalized by `ai/usage_telemetry.py` (promotes
+  `cache_read_input_tokens` / `cache_creation_input_tokens` from LangChain's
+  nested `input_token_details` to top-level keys in stored message meta);
+  live-provider confirmation of an actual cache hit is the remaining step.
 - shrink tool descriptions or per-intent prune the visible catalog only behind
   evaluation coverage, because both change the model's visible capability surface
 

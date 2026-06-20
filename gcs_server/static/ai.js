@@ -497,13 +497,25 @@ const _MARKDOWN_PURIFY_CONFIG = {
   KEEP_CONTENT: true,
 };
 
+// Cache rendered markdown keyed by raw content. renderMarkdown is a pure
+// function of `content`, so during streaming we re-render the whole message
+// list every frame but only the one growing message actually re-parses —
+// completed messages become O(1) lookups instead of re-running marked+DOMPurify.
+const _markdownCache = new Map();
+
 function renderMarkdown(content) {
   if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
     return escapeHtml(content);
   }
+  const key = String(content || '');
+  const cached = _markdownCache.get(key);
+  if (cached !== undefined) return cached;
   ensureMarkdown();
-  const rawHtml = marked.parse(String(content || ''));
-  return DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+  const rawHtml = marked.parse(key);
+  const clean = DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+  if (_markdownCache.size > 200) _markdownCache.clear();
+  _markdownCache.set(key, clean);
+  return clean;
 }
 
 function postRenderMessages() {
@@ -2287,7 +2299,29 @@ function updateMessageListScrollIntent() {
   saveSessionScrollState();
 }
 
+// Stream events can fire many times per network chunk (one per token delta plus
+// tool/trace events), all processed synchronously in a tight loop. Rendering on
+// every one rebuilds the full message DOM repeatedly and blocks the main thread
+// — freezing the UI and restarting the thinking animation each time. Coalesce
+// those into at most one render per animation frame so the browser stays
+// responsive and CSS animations can actually paint.
+let _coalescedRenderHandle = null;
+
+function scheduleRenderMessages() {
+  if (_coalescedRenderHandle !== null) return;
+  _coalescedRenderHandle = requestAnimationFrame(() => {
+    _coalescedRenderHandle = null;
+    renderMessages();
+  });
+}
+
 function renderMessages(options = {}) {
+  // A direct render supersedes any frame we had queued; drop it to avoid an
+  // extra rebuild painting a stale intermediate state on top of this one.
+  if (_coalescedRenderHandle !== null) {
+    cancelAnimationFrame(_coalescedRenderHandle);
+    _coalescedRenderHandle = null;
+  }
   const preserveScroll = Boolean(options.preserveScroll);
   const forceScrollBottom = Boolean(options.forceScrollBottom);
   const restoreScrollTop = Number.isFinite(options.restoreScrollTop)
@@ -2667,9 +2701,11 @@ function handleAiStreamEvent(sessionId, eventData) {
   } else if (eventData.type === 'error') {
     throw new Error(String(eventData.detail || 'Chat streaming failed.'));
   }
-  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI
+  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI.
+  // Coalesced to one render per frame so a burst of deltas in a single network chunk doesn't
+  // block the main thread (see scheduleRenderMessages).
   if (aiState.activeSession?.id === sessionId) {
-    renderMessages();
+    scheduleRenderMessages();
   }
   if (autoSpeakMessageId) {
     speakAiMessage(autoSpeakMessageId).catch((error) => setAiStatus(error.message, 'warn'));

@@ -137,6 +137,21 @@ Current AI Chat behavior:
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 
+### AI chat frontend layout
+
+The `/ai` chat layout is owned by `static/ai.html`, `static/ai.js`, and
+`static/style.css`. Its sessions/sidebar resizer should follow the lighter
+`MapWidget` list-resizer pattern: keep the usable hit target, make the visible
+divider narrow and low contrast, and let the adjacent panel own any subtle
+border. Do not fork resize semantics away from the current AI chat behavior:
+saved sidebar width, pointer capture, ARIA separator values, keyboard arrow
+resizing, and the mobile rule that hides the divider must keep working.
+
+Visual cleanup of the chat workspace should be CSS-first unless a behavior bug
+requires JavaScript. It must not touch AI session/message storage, provider
+routing, streaming/retry/stop behavior, source controls, or `MapWidget`
+mission/map behavior.
+
 ## Map Widget
 
 The `/ai` page hosts a `MapWidget` (`static/map/MapWidget.js`) below the chat panel. It is the primary mission authoring surface and the live vehicle view during mission execution.

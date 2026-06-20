@@ -7,6 +7,7 @@ from typing import Any
 
 from .prompts import build_intent_prompt
 from .schemas import make_empty_intent, validate_intent
+from .usage_telemetry import normalize_usage_metadata
 
 _MAX_REPAIR_ATTEMPTS = 1
 _GREETING_PATTERN = re.compile(
@@ -171,8 +172,8 @@ def _coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _usage_metadata(response: Any) -> dict[str, Any]:
-    usage = getattr(response, "usage_metadata", {}) or {}
-    return usage if isinstance(usage, dict) else {}
+    # Promotes cache-hit counters to top-level keys; see ai.usage_telemetry.
+    return normalize_usage_metadata(response)
 
 
 def _response_metadata(response: Any) -> dict[str, Any]:
