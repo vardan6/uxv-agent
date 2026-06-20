@@ -319,6 +319,7 @@ body {
   justify-content: space-between;
   gap: 20px;
   padding: 16px 20px;
+  flex-wrap: wrap;
 }
 
 .app-brand {
@@ -346,8 +347,10 @@ body {
 }
 
 .app-nav {
+  flex: 1 1 520px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
   align-self: end;
@@ -475,10 +478,19 @@ body[data-page="ai"] .page-intro {
 .replay-split-pane {
   --replay-sidebar-width: 344px;
   --replay-pane-height: 760px;
+  --replay-card-radius: 18px;
+  --replay-card-shadow:
+    0 10px 24px color-mix(in srgb, var(--bg-base) 62%, transparent),
+    0 2px 7px color-mix(in srgb, #000000 14%, transparent);
   display: grid;
-  grid-template-columns: minmax(260px, var(--replay-sidebar-width)) 22px minmax(0, 1fr);
+  grid-template-columns: minmax(260px, var(--replay-sidebar-width)) 6px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "sidebar divider map"
+    ". . controls";
   align-items: stretch;
-  gap: 0;
+  column-gap: 0;
+  row-gap: 10px;
   height: var(--replay-pane-height);
   min-height: 0;
 }
@@ -780,21 +792,23 @@ select:focus-visible {
 }
 
 .replay-main {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  align-content: start;
-  gap: 14px;
+  display: contents;
   min-width: 0;
   min-height: 0;
-  height: 100%;
 }
 
 .replay-map-panel {
+  grid-area: map;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
   height: 100%;
+  padding: 12px 10px;
+  border-radius: var(--replay-card-radius);
+  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-strong));
+  box-shadow: var(--replay-card-shadow);
 }
 
 .map-layer-toolbar {
@@ -803,7 +817,7 @@ select:focus-visible {
   gap: 4px 8px;
   align-items: center;
   margin-bottom: 0;
-  padding: 5px 8px;
+  padding: 4px 6px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
@@ -1487,8 +1501,8 @@ select:focus-visible {
 .replay-map .leaflet-control-zoom,
 .map-widget-map .leaflet-control-zoom,
 .map-basemap-panel .leaflet-control-zoom {
-  margin-top: 8px;
-  margin-left: 8px;
+  margin-top: 6px;
+  margin-left: 6px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 12px;
   overflow: hidden;
@@ -1584,6 +1598,7 @@ select:focus-visible {
 }
 
 .replay-sidebar {
+  grid-area: sidebar;
   position: relative;
   top: auto;
   align-self: stretch;
@@ -1594,40 +1609,40 @@ select:focus-visible {
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  border-right: 0;
+  padding: 12px 6px 12px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  border-radius: var(--replay-card-radius);
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-strong));
+  box-shadow: var(--replay-card-shadow);
 }
 
 .replay-sidebar .panel-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  align-items: start;
+  gap: 10px;
   margin-bottom: 0;
 }
 
-.session-head-meta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+.session-head-top {
+  display: block;
 }
 
-.session-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 2px 2px 0;
-}
-
-.session-sort-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.session-head-top h2 {
   min-width: 0;
+  margin: 7px 0 0;
+  padding-left: 2px;
+  font-size: clamp(1.22rem, 1.6vw, 1.5rem);
+  line-height: 1.1;
 }
 
-.session-sort-button,
-.session-sort-direction {
+.session-sort-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.replay-sort-trigger {
   width: 34px;
   min-width: 34px;
   height: 34px;
@@ -1643,52 +1658,225 @@ select:focus-visible {
   color: var(--muted);
 }
 
-.session-sort-button svg,
-.session-sort-direction svg {
+.replay-sort-trigger svg {
   width: 16px;
   height: 16px;
   fill: currentColor;
+  flex: 0 0 auto;
 }
 
-.session-sort-button:hover,
-.session-sort-button:focus-visible,
-.session-sort-direction:hover,
-.session-sort-direction:focus-visible {
+.replay-sort-trigger:hover,
+.replay-sort-trigger:focus-visible,
+.replay-sort-trigger[aria-expanded="true"] {
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
   background: color-mix(in srgb, var(--accent-soft) 22%, var(--panel-strong));
 }
 
-.session-sort-button.active,
-.session-sort-direction {
-  color: var(--accent);
+.session-sort-summary {
+  display: none;
 }
 
-.session-sort-button.active {
+.session-sort-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(244px, calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 14px;
+  background: var(--panel-strong, var(--panel));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  display: grid;
+  gap: 12px;
+}
+
+.session-sort-popover[hidden] {
+  display: none;
+}
+
+.session-sort-popover-section {
+  display: grid;
+  gap: 8px;
+}
+
+.session-sort-popover-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.session-sort-popover-list {
+  display: grid;
+  gap: 6px;
+}
+
+.session-sort-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+  color: var(--text);
+  text-align: left;
+}
+
+.session-sort-menu-item::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--line) 88%, transparent);
+  flex: 0 0 auto;
+}
+
+.session-sort-menu-item:hover,
+.session-sort-menu-item:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 16%, var(--panel-strong));
+}
+
+.session-sort-menu-item.active {
   border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--accent-soft) 42%, var(--panel-strong)),
     color-mix(in srgb, var(--accent-soft) 16%, transparent)
   );
-  box-shadow: 0 10px 18px color-mix(in srgb, var(--accent-soft) 28%, transparent);
 }
 
-.session-sort-direction svg {
-  transition: transform 160ms ease;
+.session-sort-menu-item.active::after {
+  background: radial-gradient(circle at center, var(--accent) 0 4px, transparent 4.5px);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
 }
 
-.session-sort-direction.ascending svg {
-  transform: rotate(180deg);
+.replay-session-icon-btn {
+  position: relative;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-strong) 68%, transparent);
+  color: var(--muted);
+}
+
+.replay-session-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.replay-session-icon-btn:hover,
+.replay-session-icon-btn:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 22%, var(--panel-strong));
+}
+
+.replay-session-icon-btn:last-child {
+  color: var(--accent);
+}
+
+.replay-session-icon-btn:last-child:hover,
+.replay-session-icon-btn:last-child:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 42%, var(--panel-strong)),
+    color-mix(in srgb, var(--accent-soft) 16%, transparent)
+  );
+}
+
+.replay-sort-trigger::after,
+.replay-session-icon-btn::after {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  max-width: min(180px, calc(100vw - 32px));
+  width: max-content;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  color: var(--text);
+  content: attr(data-tooltip);
+  font-size: 0.68rem;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  white-space: normal;
+  text-align: right;
+  font-weight: 500;
+}
+
+.replay-sort-trigger:hover::after,
+.replay-sort-trigger:focus-visible::after,
+.replay-session-icon-btn:hover::after,
+.replay-session-icon-btn:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.session-head-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.session-head-meta .pill {
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 42%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-strong) 84%, transparent);
+}
+
+#current-session-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 6px 0 0;
 }
 
 .replay-sidebar .session-list {
   flex: 1 1 auto;
   min-height: 0;
+  align-content: start;
   gap: 8px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 0 4px 4px 0;
   scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .replay-map-panel,
@@ -1699,9 +1887,17 @@ select:focus-visible {
 }
 
 .replay-map-panel {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-left: 0;
+  padding: 12px 10px;
+}
+
+.replay-map-panel .panel-head {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+
+.replay-map-panel .panel-head h2 {
+  margin: 7px 0 0;
+  line-height: 1.1;
 }
 
 .replay-controls-panel,
@@ -1711,64 +1907,57 @@ select:focus-visible {
 }
 
 .replay-split-divider {
+  grid-area: divider;
   position: relative;
   display: grid;
   place-items: center;
   align-self: stretch;
+  width: 6px;
+  min-width: 6px;
+  min-height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 2px,
+      color-mix(in srgb, var(--line) 78%, transparent) 2px,
+      color-mix(in srgb, var(--line) 78%, transparent) 4px,
+      transparent 4px
+    );
   cursor: col-resize;
   touch-action: none;
   user-select: none;
 }
 
 .replay-split-divider-line {
-  width: 2px;
-  height: 100%;
-  border-radius: 999px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent) 20%, transparent),
-      color-mix(in srgb, var(--accent) 58%, var(--line)),
-      color-mix(in srgb, var(--accent) 20%, transparent)
-    );
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--line) 25%, transparent),
-    0 0 18px color-mix(in srgb, var(--accent) 16%, transparent);
-  transition: box-shadow 160ms ease, background 160ms ease;
+  display: none;
 }
 
 .replay-split-divider-handle {
-  position: absolute;
-  width: 12px;
-  height: 108px;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--accent) 42%, transparent) 0, transparent 62%),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--panel-strong) 96%, transparent),
-      color-mix(in srgb, var(--accent) 22%, var(--button-secondary-bg)),
-      color-mix(in srgb, var(--panel) 84%, transparent)
-    );
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  box-shadow:
-    var(--shadow),
-    inset 0 1px 0 color-mix(in srgb, var(--panel-strong) 86%, transparent);
+  display: none;
 }
 
 .replay-split-divider:hover .replay-split-divider-line,
 .replay-split-divider:focus-visible .replay-split-divider-line,
 .replay-shell.is-resizing .replay-split-divider-line {
+  display: none;
+}
+
+.replay-split-divider:hover,
+.replay-split-divider:focus-visible,
+.replay-shell.is-resizing .replay-split-divider {
   background:
     linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent) 30%, transparent),
-      color-mix(in srgb, var(--accent) 80%, var(--line)),
-      color-mix(in srgb, var(--accent) 30%, transparent)
+      90deg,
+      transparent 0,
+      transparent 1px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 1px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 5px,
+      transparent 5px
     );
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 0 28px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .replay-split-divider:focus-visible {
@@ -1795,61 +1984,51 @@ select:focus-visible {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 18px;
+  height: 10px;
+  min-height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 4px,
+      color-mix(in srgb, var(--line) 76%, transparent) 6px,
+      transparent 6px
+    );
   cursor: row-resize;
   touch-action: none;
   user-select: none;
 }
 
 .replay-height-divider-line {
-  width: 100%;
-  height: 2px;
-  border-radius: 999px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 20%, transparent),
-      color-mix(in srgb, var(--accent) 58%, var(--line)),
-      color-mix(in srgb, var(--accent) 20%, transparent)
-    );
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--line) 25%, transparent),
-    0 0 18px color-mix(in srgb, var(--accent) 16%, transparent);
-  transition: box-shadow 160ms ease, background 160ms ease;
+  display: none;
 }
 
 .replay-height-divider-handle {
-  position: absolute;
-  width: 108px;
-  height: 12px;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--accent) 42%, transparent) 0, transparent 62%),
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--panel-strong) 96%, transparent),
-      color-mix(in srgb, var(--accent) 22%, var(--button-secondary-bg)),
-      color-mix(in srgb, var(--panel) 84%, transparent)
-    );
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  box-shadow:
-    var(--shadow),
-    inset 0 1px 0 color-mix(in srgb, var(--panel-strong) 86%, transparent);
+  display: none;
 }
 
 .replay-height-divider:hover .replay-height-divider-line,
 .replay-height-divider:focus-visible .replay-height-divider-line,
 .replay-shell.is-height-resizing .replay-height-divider-line {
+  display: none;
+}
+
+.replay-height-divider:hover,
+.replay-height-divider:focus-visible,
+.replay-shell.is-height-resizing .replay-height-divider {
   background:
     linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 30%, transparent),
-      color-mix(in srgb, var(--accent) 80%, var(--line)),
-      color-mix(in srgb, var(--accent) 30%, transparent)
+      180deg,
+      transparent 0,
+      transparent 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 3px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 7px,
+      transparent 7px
     );
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 0 28px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .replay-height-divider:focus-visible {
@@ -1862,15 +2041,21 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1fr) 30px;
   gap: 8px;
   align-items: center;
-  padding: 8px 9px;
+  padding: 10px;
   border-radius: 10px;
-  background: var(--button-secondary-gradient);
-  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: color-mix(in srgb, var(--panel-strong) 54%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 52%, transparent);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
 }
 
 .session-item.active {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: var(--button-active-gradient);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 34%, var(--panel-strong));
+}
+
+.session-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 18%, var(--panel-strong));
 }
 
 .session-select {
@@ -1894,10 +2079,10 @@ select:focus-visible {
 }
 
 .session-delete {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
   padding: 0;
   align-self: center;
   border-radius: 8px;
@@ -1918,8 +2103,9 @@ select:focus-visible {
 .session-title,
 .event-row strong {
   display: block;
-  font-size: 0.84rem;
-  line-height: 1.18;
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
 .session-meta {
@@ -1986,6 +2172,7 @@ select:focus-visible {
 }
 
 .replay-controls-panel {
+  grid-area: controls;
   width: 100%;
   justify-self: stretch;
   padding-top: 10px;
@@ -2515,7 +2702,7 @@ code {
   --ai-shell-height: 680px;
   --ai-card-radius: 14px;
   --ai-card-padding-y: 13px;
-  --ai-card-padding-x: 16px;
+  --ai-card-padding-x: 14px;
   --ai-card-shadow:
     0 10px 24px color-mix(in srgb, var(--bg-base) 62%, transparent),
     0 2px 7px color-mix(in srgb, #000000 14%, transparent);
@@ -2523,7 +2710,7 @@ code {
     0 16px 30px color-mix(in srgb, var(--bg-base) 56%, transparent),
     0 4px 10px color-mix(in srgb, #000000 18%, transparent);
   display: grid;
-  grid-template-columns: minmax(240px, var(--ai-sidebar-width)) 8px minmax(0, 1fr);
+  grid-template-columns: minmax(240px, var(--ai-sidebar-width)) 6px minmax(0, 1fr);
   grid-template-rows: minmax(420px, var(--ai-shell-height)) 10px;
   grid-template-areas:
     "sidebar splitter chat"
@@ -2542,7 +2729,6 @@ code {
 .ai-chat-panel {
   height: 100%;
   min-height: 0;
-  padding: clamp(16px, 1.7vw, 24px);
 }
 
 .ai-sidebar {
@@ -2552,31 +2738,30 @@ code {
   gap: 12px;
   min-width: 0;
   overflow: hidden;
-  padding: 14px 14px 14px 0;
-  border: 0;
-  border-right: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  padding: 12px 6px 12px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-strong));
+  box-shadow: var(--ai-card-shadow);
 }
 
 .ai-layout-resizer {
   grid-area: splitter;
   align-self: stretch;
-  width: 8px;
-  min-width: 8px;
+  width: 6px;
+  min-width: 6px;
   min-height: 100%;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background:
     linear-gradient(
       90deg,
       transparent 0,
-      transparent 3px,
-      color-mix(in srgb, var(--line) 76%, transparent) 3px,
-      color-mix(in srgb, var(--line) 76%, transparent) 5px,
-      transparent 5px
+      transparent 2px,
+      color-mix(in srgb, var(--line) 78%, transparent) 2px,
+      color-mix(in srgb, var(--line) 78%, transparent) 4px,
+      transparent 4px
     );
   cursor: col-resize;
   touch-action: none;
@@ -2610,10 +2795,10 @@ code {
     linear-gradient(
       90deg,
       transparent 0,
-      transparent 2px,
-      color-mix(in srgb, var(--accent) 72%, var(--line)) 2px,
-      color-mix(in srgb, var(--accent) 72%, var(--line)) 6px,
-      transparent 6px
+      transparent 1px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 1px,
+      color-mix(in srgb, var(--accent) 72%, var(--line)) 5px,
+      transparent 5px
     );
 }
 
@@ -2712,7 +2897,7 @@ code {
   gap: 8px;
   min-height: 0;
   overflow: auto;
-  padding: 0 10px 4px 0;
+  padding: 0 4px 4px 0;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -2845,6 +3030,7 @@ code {
   min-width: 0;
   min-height: 0;
   overflow: visible;
+  padding: 12px 6px 12px 8px;
 }
 
 .ai-chat-actions {
@@ -3056,7 +3242,7 @@ code {
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding: 6px 6px 8px 0;
+  padding: 4px 2px 8px 0;
 }
 
 .ai-empty-state {
@@ -4181,6 +4367,60 @@ code {
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+.map-widget-shell.mission-list-right {
+  grid-template-columns: minmax(0, 1fr) 8px var(--map-list-width, 280px);
+}
+
+.map-widget-shell.mission-list-right .map-widget-map-col {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.map-widget-shell.mission-list-right .map-list-resizer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.map-widget-shell.mission-list-right .map-widget-list {
+  grid-column: 3;
+  grid-row: 1;
+  border-right: 0;
+  border-left: 1px solid var(--line);
+}
+
+.mission-console-shell {
+  width: min(1600px, calc(100vw - 32px));
+}
+
+.mission-console-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.mission-console-replay-sidebar {
+  border-radius: 18px;
+  border-right: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--bg-base) 62%, transparent),
+    0 2px 7px color-mix(in srgb, #000000 14%, transparent);
+}
+
+.mission-console-map-area {
+  margin-top: 0;
+  min-height: 560px;
+}
+
+.mission-console-chat-shell {
+  margin-top: 12px;
+  --ai-shell-height: 560px;
+}
+
+.mission-console-chat-shell .ai-chat-panel {
+  min-height: 0;
 }
 
 .map-widget-head {
@@ -5379,6 +5619,23 @@ code {
     grid-template-rows: 220px minmax(420px, 1fr);
   }
 
+  .map-widget-shell.mission-list-right {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(420px, 1fr) 220px;
+  }
+
+  .map-widget-shell.mission-list-right .map-widget-map-col {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .map-widget-shell.mission-list-right .map-widget-list {
+    grid-column: 1;
+    grid-row: 2;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
   .map-list-resizer {
     display: none;
   }
@@ -5862,10 +6119,35 @@ code {
       "telemetry";
   }
 
+  .mission-console-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-console-replay-sidebar {
+    min-height: 300px;
+    max-height: 420px;
+  }
+
   .replay-split-pane {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas: none;
     gap: 18px;
     height: auto;
+  }
+
+  .replay-main {
+    display: grid;
+    grid-template-rows: auto;
+    align-content: start;
+    gap: 10px;
+    height: auto;
+  }
+
+  .replay-sidebar,
+  .replay-map-panel,
+  .replay-controls-panel {
+    grid-area: auto;
   }
 
   .replay-split-divider {
@@ -5884,8 +6166,22 @@ code {
     border-radius: 20px;
   }
 
+  .session-head-top {
+    display: block;
+  }
+
   .session-toolbar {
-    flex-wrap: wrap;
+    justify-content: flex-start;
+    padding-right: 0;
+  }
+
+  .session-sort-popover {
+    right: auto;
+    left: 0;
+  }
+
+  .session-head-meta {
+    justify-content: flex-start;
   }
 
   .replay-controls-panel {
@@ -5949,7 +6245,6 @@ code {
 
   .ai-sidebar {
     padding-right: 14px;
-    border-right: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
   }
 

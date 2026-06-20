@@ -25,13 +25,21 @@ case "$cmd" in
   logs)
     docker compose -f "$COMPOSE_FILE" logs --tail=50 -f "$@"
     ;;
+  eval)
+    # Golden-question retrieval eval (spot-check, not a test). Needs Qdrant up,
+    # docs ingested, and the embeddings provider reachable.
+    PY="$REPO_ROOT/.venv/bin/python"
+    [ -x "$PY" ] || PY="python3"
+    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PY" -m rag_service.eval "$@"
+    ;;
   *)
-    echo "Usage: bin/rag <up|down|status|logs>"
+    echo "Usage: bin/rag <up|down|status|logs|eval>"
     echo ""
     echo "  up      Start Qdrant (detached)"
     echo "  down    Stop Qdrant"
     echo "  status  Show container status"
     echo "  logs    Tail Qdrant logs"
+    echo "  eval    Run the project_docs golden-question retrieval eval"
     exit 1
     ;;
 esac

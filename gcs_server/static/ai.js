@@ -3838,13 +3838,16 @@ function bindAi() {
 }
 
 async function initAi() {
+  const isMissionConsole = document.body.dataset.page === 'mission-console';
   window.GCSCommon?.initShell({
-    page: 'ai',
-    title: 'AI Chat',
-    subtitle: 'Provider-backed chat sessions for testing configured LLMs.',
+    page: isMissionConsole ? 'mission-console' : 'ai',
+    title: isMissionConsole ? 'Mission Console' : 'AI Chat',
+    subtitle: isMissionConsole
+      ? 'Prototype console combining replay sessions, mission map, and AI agent chat.'
+      : 'Provider-backed chat sessions for testing configured LLMs.',
   });
   const intro = document.querySelector('[data-page-intro]');
-  if (intro && !intro.querySelector('.ai-intro-grid')) {
+  if (!isMissionConsole && intro && !intro.querySelector('.ai-intro-grid')) {
     intro.innerHTML = `
       <div class="ai-intro-grid">
         <div class="ai-intro-main">

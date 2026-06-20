@@ -18,7 +18,8 @@ The Ground Control Station serves five browser pages:
 
 | Page | URL | Purpose |
 |---|---|---|
-| Dashboard | `/` | Live rover control, telemetry, and video |
+| Mission Console | `/` (`/mission-console`) | Primary mission-focused workspace combining replay sessions, mission map/Missions, and AI Agent chat |
+| Dashboard | `/dashboard` | Live rover control, telemetry, and video |
 | Replay | `/replay` | Inspect recorded sessions |
 | Settings | `/settings` | Configure connectivity, video, LLMs, and import/export |
 | MQTT Setup | `/setup/mqtt` | Edit and reconnect the broker connection |
@@ -26,9 +27,19 @@ The Ground Control Station serves five browser pages:
 
 The AI page is documented separately in the [AI Agent component](../ai-agent/requirements.md).
 
-## Dashboard (`/`)
+## Mission Console (`/`, `/mission-console`)
 
-The dashboard is the primary operator surface. It is split into a telemetry/state area and a live camera area, with a compact header for status and navigation.
+Mission Console is the primary operator workspace for mission-focused work. It
+combines the replay-session list, mission map and Mission management surface,
+and AI Agent chat in one page. Existing replay, mission-map, Mission, and AI
+Session behavior should be reused here rather than forked into separate product
+logic.
+
+## Dashboard (`/dashboard`)
+
+The dashboard is the manual-control and live-monitoring surface. It is split
+into a telemetry/state area and a live camera area, with a compact header for
+status and navigation.
 
 ### What The Operator Sees
 

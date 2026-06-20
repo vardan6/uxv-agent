@@ -6,6 +6,11 @@ Status date: 2026-06-01.
 
 Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. The Mission Planner Modernization work (ADRs [0021](../../cross-cutting/decisions/0021-mission-lifecycle.md)/[0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md)/[0023](../../cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md), Phases 1–6) has since landed on `feat/gps-master-coordinate-frame`: external controller link (pymavlink + MAVSDK adapters with health/read/write/clear), a relocatable behavior-tree executor that uploads nav segments to the FC, GPS-master WGS84 coordinate truth, the flat-Mission lifecycle UI, and a real 2D basemap render mode. Replay still uses its separate `static/replay.js` surface; video transport hardening remains a later slice. For live phase/slice status see `roadmap.md`.
 
+Mission Console is now the main browser entry point. `/` redirects to
+`/mission-console`; the previous manual-control dashboard remains available at
+`/dashboard`. The console is a composition layer over existing surfaces, not a
+second implementation of replay, Missions, or AI Session behavior.
+
 ## Table of Contents
 
 - [Scope](#scope)
@@ -85,6 +90,15 @@ The backend assembles four main runtime concerns:
 For the HTTP and WebSocket surface, see [design.md](./design.md).
 
 ## Browser Workflow
+
+Mission-focused workflow starts in Mission Console:
+
+1. browser loads `/mission-console`
+2. replay sessions are listed from the existing replay API
+3. `MapWidget` renders the mission map and Missions surface
+4. AI Session chat reuses the existing `/ai` frontend/runtime behavior
+
+Manual driving still uses the dashboard:
 
 1. browser loads the dashboard
 2. browser opens WebSocket to the GCS

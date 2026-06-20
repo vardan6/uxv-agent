@@ -104,6 +104,7 @@ const MAP_ZOOM_OPTIONS = {
 export class MapWidget {
   constructor(container, opts = {}) {
     this._container = typeof container === 'string' ? document.getElementById(container) : container;
+    this._opts = opts || {};
     this._sessionId = opts.sessionId || '';
     this._map = null;
     this._overlayLayer = null;
@@ -2129,6 +2130,9 @@ export class MapWidget {
 
     const shell = document.createElement('div');
     shell.className = 'map-widget-shell';
+    if (this._opts?.missionListPosition === 'right') {
+      shell.classList.add('mission-list-right');
+    }
     this._shellEl = shell;
 
     const listEl = document.createElement('div');
@@ -2161,8 +2165,8 @@ export class MapWidget {
     emptyState.hidden = true;
     emptyState.innerHTML = `
       <p class="map-empty-title">No missions yet</p>
-      <p class="map-empty-hint">Ask the agent in the chat above to plan a mission.</p>
-      <button class="map-empty-cta" type="button">↑ Go to chat</button>
+      <p class="map-empty-hint">Ask the agent in chat to plan a mission.</p>
+      <button class="map-empty-cta" type="button">Go to chat</button>
     `;
     emptyState.querySelector('.map-empty-cta').addEventListener('click', () => {
       document.querySelector('.ai-chat-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
