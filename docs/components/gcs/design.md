@@ -11,6 +11,16 @@ Mission Console is now the main browser entry point. `/` redirects to
 `/dashboard`. The console is a composition layer over existing surfaces, not a
 second implementation of replay, Missions, or AI Session behavior.
 
+> **Terminology — "dashboard" vs "Drive Console".** Uses of "dashboard" in this
+> document describe the **current `/dashboard` implementation** (page id, file
+> names, focus-driven controller code). The product term for that teleoperation
+> surface is now **Drive Console** (see [requirements.md](./requirements.md)
+> §Drive Console). They refer to the same surface; the rename is product-facing
+> and does not change the implementation names below. The greenfield Operator
+> Console ([ADR 0030](../../cross-cutting/decisions/0030-greenfield-operator-console-frontend.md))
+> replaces this surface with widgets; this doc remains current-implementation truth
+> until that migration lands.
+
 ## Table of Contents
 
 - [Scope](#scope)

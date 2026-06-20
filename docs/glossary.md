@@ -115,10 +115,35 @@ No code path currently flips this to `true`. Distinct from
 A separate future approval step that would authorize staged execution.
 Currently not implemented.
 
+## Data Layer (Frontend Projection)
+
+The single client-side mirror of backend state that all widgets subscribe to:
+one WS connection feeding Runtime State (Zustand) plus TanStack Query over the
+Domain Stores. Widgets read here and communicate only through it — never
+DOM-to-DOM. See [ADR 0031](./cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
+
+## Domain Store
+
+Persistent backend state behind a per-store SQLite + REST surface: replay
+sessions, AI sessions, missions, operational constraints, agent traces.
+Contrast [Runtime State](#runtime-state).
+
+## Drive Console
+
+The teleoperation page (`/dashboard`) — live video, drive controls, and
+telemetry. Renamed from "Dashboard". Pairs with the [Mission Console](#mission-console).
+
 ## GCS
 
 Ground Control Station — the FastAPI + browser application in
 `gcs_server/` that operators use to monitor and control the rover.
+
+## Headless (Full Architecture)
+
+The principle that the backend is a complete, frontend-agnostic application —
+all runtime functionality runs server-side regardless of what is rendered, and
+web / CLI / mobile are clients of the same HTTP/WS contract. See
+[ADR 0031](./cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
 
 ## Intent
 
@@ -316,3 +341,36 @@ The shared bounded reasoning loop that should power chat, grounded
 investigation, planning, and future specialist behaviors. Project-specific
 capabilities are added through tools, policy, memory, and workflow shells
 around this core.
+
+## Operator (Identity)
+
+A user of the GCS. Identity is implicit/local today (no auth — see GCS
+requirements §No Authentication Yet); [Workspaces](#workspace) are keyed by an
+operator-profile id so per-operator server storage can be added later.
+
+## Operator Console
+
+The greenfield widget workspace that the Mission Console is being rebuilt as:
+composable [Widgets](#widget) with free-form docking, floating, popout windows,
+and saved [Workspaces](#workspace). See
+[design/operator-console.md](./components/gcs/design/operator-console.md).
+
+## Runtime State
+
+Live, ephemeral backend state — telemetry, broker, controller, video — held in
+`state_store` and exposed via `/api/snapshot` + WS. Contrast
+[Domain Store](#domain-store). See
+[ADR 0031](./cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
+
+## Widget
+
+A layout-agnostic view over the [Data Layer](#data-layer-frontend-projection) in
+the Operator Console. Owns no authoritative data; all top-level widgets are
+isolatable (dock/split/float/popout). Indivisible sub-parts (OSD overlay,
+chat composer) travel with their widget.
+
+## Workspace
+
+A named, saved layout arrangement of widgets (dockview `toJSON`/`fromJSON`),
+persisted through the `WorkspaceStore` abstraction (localStorage now, server
+later). Not to be confused with the chat workspace layout on `/ai`.

@@ -5,7 +5,7 @@ What the Ground Control Station must provide from the operator's point of view. 
 Companion documents:
 
 - [design.md](./design.md) — implementation strategy, runtime seams, file layout, current limitations.
-- [design.md](./design.md) — HTTP/WebSocket surface, control model, settings model.
+- [design/api-and-runtime.md](./design/api-and-runtime.md) — HTTP/WebSocket surface, control model, settings model.
 
 If documents disagree:
 
@@ -14,18 +14,25 @@ If documents disagree:
 
 ## Pages At A Glance
 
-The Ground Control Station serves five browser pages:
+The Ground Control Station serves these browser pages:
 
 | Page | URL | Purpose |
 |---|---|---|
-| Mission Console | `/` (`/mission-console`) | Primary mission-focused workspace combining replay sessions, mission map/Missions, and AI Agent chat |
-| Dashboard | `/dashboard` | Live rover control, telemetry, and video |
+| Mission Console | `/` (`/mission-console`) | Primary operator workspace — a composable widget surface (map, AI chat, video, telemetry, replay) |
+| Drive Console | `/dashboard` | Live rover teleoperation: video, drive controls, telemetry (renamed from "Dashboard") |
 | Replay | `/replay` | Inspect recorded sessions |
 | Settings | `/settings` | Configure connectivity, video, LLMs, and import/export |
 | MQTT Setup | `/setup/mqtt` | Edit and reconnect the broker connection |
 | AI Agent | `/ai` | Chat / Agent today; converging toward a single primary Agent experience |
 
 The AI page is documented separately in the [AI Agent component](../ai-agent/requirements.md).
+
+The frontend is being rebuilt greenfield as a widget-based **Operator Console**
+(see §Operator Console below). The stack and migration are decided in
+[ADR 0030](../../cross-cutting/decisions/0030-greenfield-operator-console-frontend.md);
+the headless architecture and data layer in
+[ADR 0031](../../cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md);
+implementation in [design/operator-console.md](./design/operator-console.md).
 
 ## Mission Console (`/`, `/mission-console`)
 
@@ -35,9 +42,55 @@ and AI Agent chat in one page. Existing replay, mission-map, Mission, and AI
 Session behavior should be reused here rather than forked into separate product
 logic.
 
-## Dashboard (`/dashboard`)
+## Operator Console (Widget Workspace)
 
-The dashboard is the manual-control and live-monitoring surface. It is split
+The Mission Console is being rebuilt as a composable **widget workspace**. From the
+operator's point of view:
+
+- **Widgets** are self-contained views — map, AI chat, video feed, drive controls,
+  telemetry, replay sessions, replay playback, status bar. Each can be added from
+  an **Add Widget** palette.
+- **Free-form layout:** move any widget anywhere; snap/dock to any edge; split;
+  group as tabs; or **float** a widget over the workspace.
+- **Popout windows:** a widget can be ejected into a **separate OS window**,
+  draggable anywhere including another monitor (e.g. a minimal video or drive
+  window beside the operator). This is desktop-only.
+- **Workspaces:** the operator can **save and restore** named layout arrangements
+  ("Workspaces"). A widget being present or absent never changes whether the
+  underlying functionality works — recording, control, and AI execution run
+  server-side regardless of what is shown.
+- **Multiple instances:** *some* widget types support multiple instances (e.g.
+  several AI chats each pinned to a different session, multiple video feeds, or —
+  designed for but not shipped in the first milestone — several maps). Other widgets
+  are **singletons** (Drive Controls, AI Session List, Replay Sessions, Replay
+  Playback, Status Bar). Which types are multi-instance vs singleton is explicit in
+  the widget catalog in
+  [design/operator-console.md](./design/operator-console.md). A Map widget carries
+  its own layer / object / visibility controls; visibility toggles are per-map.
+
+The architecture that guarantees "no widget depends on another widget" is in
+[ADR 0031](../../cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
+
+## Client Surfaces (Web, CLI, Mobile)
+
+The GCS runtime is a complete, frontend-agnostic application. Clients consume the
+same HTTP/WS contract:
+
+- **Web** — the primary Operator Console (above).
+- **CLI** *(future)* — a headless text client for AI chat, commands, and status.
+  Video and map are out of scope for the CLI.
+- **Mobile web** — video, drive controls (touch d-pad), telemetry, and AI chat work
+  responsively. **Full free-form docking is desktop-only**; mobile uses a
+  simplified stacked / curated layout or a chosen Workspace. This is a documented
+  limitation, not a defect.
+
+## Drive Console (`/dashboard`)
+
+> Renamed from "Dashboard". The Drive Console is the teleoperation surface
+> (live video + drive controls + telemetry); it pairs with the Mission Console
+> (planning/oversight). Existing behavior below is unchanged by the rename.
+
+The Drive Console is the manual-control and live-monitoring surface. It is split
 into a telemetry/state area and a live camera area, with a compact header for
 status and navigation.
 
@@ -116,9 +169,22 @@ The replay page lets the operator inspect previously recorded sessions.
 
 The settings page is organized as tabs. Each tab covers a distinct configuration area.
 
+> **Direction (greenfield):** Settings is being rebuilt VS Code-style — a top
+> **search** line, a left Explorer-style **category tree**, and a **filterable
+> parameter→value list**. The underlying config JSON and its values are
+> **unchanged**; only the editing surface changes. The full MQTT editor moves into
+> the Connectivity category. **Open question (undecided):** whether a lightweight
+> standalone first-run `/setup/mqtt` flow is retained as an onboarding gate, or
+> dropped entirely as a pure duplicate of Settings → Connectivity. Current lean:
+> merge into Settings. Until the operator decides, the standalone-page behavior in
+> §MQTT Setup below describes the *current* implementation, not settled greenfield
+> intent. The configuration areas and behaviors below remain the source of truth
+> for *what* is configurable; see
+> [design/operator-console.md](./design/operator-console.md) §Settings for *how*.
+
 ### Connectivity Tab
 
-Edit MQTT broker host, port, topic prefix, and topic names. Saving applies live — the GCS reconnects without restart. The same surface is available standalone at [MQTT Setup](#mqtt-setup-setupmqtt) for first-run onboarding.
+Edit MQTT broker host, port, topic prefix, and topic names. Saving applies live — the GCS reconnects without restart. Today the same surface is also reachable standalone at [MQTT Setup](#mqtt-setup-setupmqtt) for first-run onboarding; whether that standalone page is retained in the greenfield console is an open question (see the Settings direction note above).
 
 ### Video Tab
 
@@ -196,6 +262,12 @@ Important behavior:
 - **import previews changes before applying** — operator confirms before settings change
 
 ## MQTT Setup (`/setup/mqtt`)
+
+> **Current implementation** (greenfield disposition undecided — see the Settings
+> direction note above). In the greenfield Operator Console the full MQTT editor
+> moves into Settings → Connectivity; whether this standalone page survives as a
+> lightweight onboarding gate or is dropped as a duplicate is an open question
+> (lean: merge).
 
 A standalone first-run page for editing MQTT settings. Equivalent to the Connectivity tab in Settings but accessible without the full settings UI. Useful when initial connectivity is broken and the dashboard cannot load fully.
 
