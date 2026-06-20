@@ -18,7 +18,8 @@ The Ground Control Station serves five browser pages:
 
 | Page | URL | Purpose |
 |---|---|---|
-| Dashboard | `/` | Live rover control, telemetry, and video |
+| Mission Console | `/` (`/mission-console`) | Primary mission-focused workspace combining replay sessions, mission map/Missions, and AI Agent chat |
+| Dashboard | `/dashboard` | Live rover control, telemetry, and video |
 | Replay | `/replay` | Inspect recorded sessions |
 | Settings | `/settings` | Configure connectivity, video, LLMs, and import/export |
 | MQTT Setup | `/setup/mqtt` | Edit and reconnect the broker connection |
@@ -26,9 +27,19 @@ The Ground Control Station serves five browser pages:
 
 The AI page is documented separately in the [AI Agent component](../ai-agent/requirements.md).
 
-## Dashboard (`/`)
+## Mission Console (`/`, `/mission-console`)
 
-The dashboard is the primary operator surface. It is split into a telemetry/state area and a live camera area, with a compact header for status and navigation.
+Mission Console is the primary operator workspace for mission-focused work. It
+combines the replay-session list, mission map and Mission management surface,
+and AI Agent chat in one page. Existing replay, mission-map, Mission, and AI
+Session behavior should be reused here rather than forked into separate product
+logic.
+
+## Dashboard (`/dashboard`)
+
+The dashboard is the manual-control and live-monitoring surface. It is split
+into a telemetry/state area and a live camera area, with a compact header for
+status and navigation.
 
 ### What The Operator Sees
 
@@ -191,6 +202,12 @@ A standalone first-run page for editing MQTT settings. Equivalent to the Connect
 ## AI Agent (`/ai`)
 
 For the full AI agent product requirements — intent parsing, planning shell, mission execution, memory, and operator interaction model — see [AI Agent requirements](../ai-agent/requirements.md). This section covers the GCS-owned surfaces on the `/ai` page: the map widget, mission list, and edit UI.
+
+### Chat workspace layout
+
+The `/ai` page's conversation workspace must remain a light operator GUI, not a heavy admin console. The sessions sidebar and conversation panel should use a narrow, low-contrast resize divider consistent with the newer mission-map sidebar divider. The divider must remain easy to drag, keyboard-accessible, and hidden in the existing mobile stacked layout.
+
+The sessions sidebar should stay compact enough that the conversation remains the primary workspace while still exposing active/archived filters, search, session actions, and readable session previews. Visual cleanup must not change chat/session persistence, provider selection, message sending, retry/stop behavior, source controls, or the map widget below the chat.
 
 ### Map widget
 

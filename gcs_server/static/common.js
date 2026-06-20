@@ -89,12 +89,13 @@
     header.className = 'app-header';
     header.innerHTML = `
       <div class="app-header-inner">
-        <a class="app-brand" href="/">
+        <a class="app-brand" href="/mission-console">
           <span class="app-brand-kicker">Ground Control Station</span>
           <strong>Remote Rover GCS</strong>
         </a>
         <nav class="app-nav" aria-label="Primary">
-          <a class="app-nav-link${page === 'dashboard' ? ' active' : ''}" href="/"${page === 'dashboard' ? ' aria-current="page"' : ''}>Dashboard</a>
+          <a class="app-nav-link${page === 'mission-console' ? ' active' : ''}" href="/mission-console"${page === 'mission-console' ? ' aria-current="page"' : ''}>Mission Console</a>
+          <a class="app-nav-link${page === 'dashboard' ? ' active' : ''}" href="/dashboard"${page === 'dashboard' ? ' aria-current="page"' : ''}>Dashboard</a>
           <a class="app-nav-link${page === 'replay' ? ' active' : ''}" href="/replay"${page === 'replay' ? ' aria-current="page"' : ''}>Replay</a>
           <a class="app-nav-link${page === 'ai' ? ' active' : ''}" href="/ai"${page === 'ai' ? ' aria-current="page"' : ''}>AI Chat</a>
           <a class="app-nav-link${page === 'settings' ? ' active' : ''}" href="/settings"${page === 'settings' ? ' aria-current="page"' : ''}>Settings</a>

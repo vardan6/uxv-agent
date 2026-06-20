@@ -293,7 +293,7 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
 - **Tool calls are sequential in v1.** Determinism over throughput for mission-authoring and safety-gated flows. `allow_parallel_tool_calls` is a future config knob.
 - **Terminal actions are tools, not free-form output.** `propose_mission_draft` is the planning exit signal; its args schema is the mission draft schema. Strictly stronger than parsing free-form JSON.
 - **No execution tools bound to the model.** `_bind_role_tools` reads from `ToolRegistry` with `permissions ⊆ DEFAULT_PERMISSIONS`.
-- **High baseline input-token usage is expected in Agent mode.** The fixed overhead from system safety instructions, tool catalog/binding, and compact context injection is intentional; short prompts can still produce multi-thousand input-token runs. **Do not optimize away this baseline by default.** Token-baseline reduction is a separate, explicitly scoped optimization task and must preserve safety guardrails, tool reliability, and operator-facing answer quality.
+- **High baseline input-token usage is expected in Agent mode, but is being reduced under explicit scope.** The fixed overhead from system safety instructions, tool catalog/binding, and compact context injection is intentional; short prompts can still produce multi-thousand input-token runs. **Do not optimize away this baseline casually.** Token-baseline reduction is governed by a tiered plan (ADR 0029 and roadmap "Agent Tool-Schema Optimization") driven by the rule that **lazy loading wins only for rarely-needed data and loses for usually-needed data** (an extra round-trip plus the data sent late). Tier 1 (remove duplicated injection, lazy-load rarely-needed `runtime` config, compact rendering, consolidate near-duplicate tool schemas) is quality-neutral or quality-positive and needs no eval gate. Removing usually-needed state (rover/scene/mission) or per-intent schema pruning is Tier 3 and **must** stay behind the golden-question eval set. All tiers must preserve safety guardrails, tool reliability, and operator-facing answer quality.
 - **Narrow greeting fast-path is allowed.** A trivial small-talk bypass may skip tool-loop/context injection for short greeting-only prompts in Agent mode, but it must remain strict and must not trigger for rover-state, map-object, mission, telemetry, or replay intent.
 
 ### Runtime interfaces
@@ -451,15 +451,16 @@ Phase-3 footprint: thin wrapper around the current permission filter. Same behav
 ## Context and Data Strategy
 
 ```text
-Always in context:
-  current rover summary
-  current scene summary
-  current mission / replay summary
+Always in context (compact summaries, not full payloads):
+  current rover summary        usually needed -> stays always-on
+  current scene summary        usually needed -> stays always-on
+  current mission summary      usually needed -> stays always-on
   current run mode and permissions
   available data surfaces (manifest)
   safety boundaries
 
-Loaded through tools:
+Loaded through tools (rarely needed per turn -> lazy):
+  runtime / broker / sim / map config  (get_runtime_context)
   detailed map objects
   replay paths and metrics
   session / message history
@@ -469,6 +470,13 @@ Loaded through tools:
   uploaded documents / RAG chunks
   task history
 ```
+
+The always-on set is deliberately the surfaces **most operator turns depend on**.
+`runtime` config moved to tool-loaded under ADR 0029 because it is rarely the
+answer; lazy-loading a usually-needed surface would add a round-trip to the
+majority of turns (lazy loading wins only for rarely-needed data). Rover and
+scene are injected **once** (the compact block), not duplicated as synthetic
+turn-0 tool calls — see ADR 0029.
 
 Rules:
 
@@ -1063,7 +1071,7 @@ Each node is a `<div>` in a vertical flex stack connected by a CSS `border-left`
 - Per-tool `<details>` expand/collapse is preserved for args JSON and result JSON.
 - Streaming is preserved: nodes are appended to the DOM as events arrive; no batch-render on completion.
 - Tool cards are nested inside their iteration node using `call.iteration` as the join key.
-- The "Context used" section (pre-injected `prompt_context_tool_calls`) disappears once ADR 0029 lazy context injection lands. Until then it is rendered as a preamble node before Iteration 1 in the flow.
+- The "Context used" section (synthetic `prompt_context_tool_calls`) disappears once ADR 0029 lands, because that preamble is a removed duplicate of the compact context block — not because all preloaded context is gone. The compact rover/mission/scene block still reaches the model; if a disclosure is wanted, render the compact block as a single preamble node before Iteration 1 rather than as fabricated tool cards. Until ADR 0029 lands, the synthetic preamble is rendered as that preamble node.
 
 ### Implementation boundary
 

@@ -54,8 +54,12 @@ const replayEls = {
   replayMap: document.getElementById('replay-map'),
   sessionList: document.getElementById('session-list'),
   sessionCountPill: document.getElementById('session-count-pill'),
-  sessionSortButtons: Array.from(document.querySelectorAll('[data-session-sort]')),
-  sessionSortDirection: document.getElementById('session-sort-direction'),
+  sessionSortControl: document.querySelector('.session-sort-control'),
+  sessionSortTrigger: document.getElementById('session-sort-trigger'),
+  sessionSortSummary: document.getElementById('session-sort-summary'),
+  sessionSortPopover: document.getElementById('session-sort-popover'),
+  sessionSortFieldButtons: Array.from(document.querySelectorAll('[data-session-sort-field]')),
+  sessionSortDirectionButtons: Array.from(document.querySelectorAll('[data-session-sort-direction]')),
   currentSessionPill: document.getElementById('current-session-pill'),
   loadedSessionPill: document.getElementById('loaded-session-pill'),
   refreshSessions: document.getElementById('refresh-sessions'),
@@ -738,25 +742,57 @@ function sessionCountMarkup(label, value, iconPath) {
   `;
 }
 
+function sessionSortSummaryText() {
+  const sortMeta = REPLAY_SESSION_SORT_META[replayState.sessionSort.field] || REPLAY_SESSION_SORT_META.started_at;
+  const orderLabel = replayState.sessionSort.direction === 'asc' ? sortMeta.ascendingLabel : sortMeta.descendingLabel;
+  return `${sortMeta.label}: ${orderLabel}`;
+}
+
 function updateSessionSortUi() {
   const sortMeta = REPLAY_SESSION_SORT_META[replayState.sessionSort.field] || REPLAY_SESSION_SORT_META.started_at;
-  replayEls.sessionSortButtons.forEach((button) => {
-    const active = button.dataset.sessionSort === replayState.sessionSort.field;
+  replayEls.sessionSortFieldButtons.forEach((button) => {
+    const active = button.dataset.sessionSortField === replayState.sessionSort.field;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
-  if (replayEls.sessionSortDirection) {
-    const ascending = replayState.sessionSort.direction === 'asc';
-    replayEls.sessionSortDirection.classList.toggle('ascending', ascending);
-    replayEls.sessionSortDirection.setAttribute(
-      'title',
-      `Sort order: ${ascending ? sortMeta.ascendingLabel : sortMeta.descendingLabel}. Click to reverse.`
-    );
-    replayEls.sessionSortDirection.setAttribute(
-      'aria-label',
-      `Sort order is ${ascending ? sortMeta.ascendingLabel : sortMeta.descendingLabel}. Click to reverse.`
-    );
+  replayEls.sessionSortDirectionButtons.forEach((button) => {
+    const active = button.dataset.sessionSortDirection === replayState.sessionSort.direction;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  const summaryText = `Sort: ${sessionSortSummaryText()}`;
+  if (replayEls.sessionSortSummary) {
+    replayEls.sessionSortSummary.textContent = summaryText;
   }
+  if (replayEls.sessionSortTrigger) {
+    replayEls.sessionSortTrigger.dataset.tooltip = summaryText;
+    replayEls.sessionSortTrigger.setAttribute('aria-label', summaryText);
+  }
+}
+
+function isReplaySortPopoverOpen() {
+  return replayEls.sessionSortPopover && !replayEls.sessionSortPopover.hidden;
+}
+
+function closeReplaySortPopover() {
+  if (!replayEls.sessionSortPopover || !replayEls.sessionSortTrigger) return;
+  replayEls.sessionSortPopover.hidden = true;
+  replayEls.sessionSortTrigger.setAttribute('aria-expanded', 'false');
+}
+
+function openReplaySortPopover(options = {}) {
+  if (!replayEls.sessionSortPopover || !replayEls.sessionSortTrigger) return;
+  replayEls.sessionSortPopover.hidden = false;
+  replayEls.sessionSortTrigger.setAttribute('aria-expanded', 'true');
+  if (options.focusFirst) {
+    const firstControl = replayEls.sessionSortPopover.querySelector('button');
+    firstControl?.focus();
+  }
+}
+
+function toggleReplaySortPopover(options = {}) {
+  if (isReplaySortPopoverOpen()) closeReplaySortPopover();
+  else openReplaySortPopover(options);
 }
 
 function clearReplaySelection() {
@@ -1420,21 +1456,29 @@ function bindReplayActions() {
   }
   replayEls.refreshSessions?.addEventListener('click', loadSessions);
   replayEls.rolloverSession?.addEventListener('click', rolloverSession);
-  replayEls.sessionSortButtons.forEach((button) => {
+  replayEls.sessionSortTrigger?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleReplaySortPopover();
+  });
+  replayEls.sessionSortFieldButtons.forEach((button) => {
     button.addEventListener('click', () => {
-      const nextField = button.dataset.sessionSort || 'started_at';
-      if (replayState.sessionSort.field === nextField) {
-        replayState.sessionSort.direction = replayState.sessionSort.direction === 'desc' ? 'asc' : 'desc';
-      } else {
-        replayState.sessionSort.field = nextField;
-        replayState.sessionSort.direction = 'desc';
-      }
+      const nextField = button.dataset.sessionSortField || 'started_at';
+      replayState.sessionSort.field = nextField;
+      replayState.sessionSort.direction = 'desc';
       renderSessions();
+      closeReplaySortPopover();
+      replayEls.sessionSortTrigger?.focus();
     });
   });
-  replayEls.sessionSortDirection?.addEventListener('click', () => {
-    replayState.sessionSort.direction = replayState.sessionSort.direction === 'desc' ? 'asc' : 'desc';
-    renderSessions();
+  replayEls.sessionSortDirectionButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextDirection = button.dataset.sessionSortDirection;
+      if (nextDirection !== 'asc' && nextDirection !== 'desc') return;
+      replayState.sessionSort.direction = nextDirection;
+      renderSessions();
+      closeReplaySortPopover();
+      replayEls.sessionSortTrigger?.focus();
+    });
   });
   replayEls.mapViewMode?.addEventListener('change', (event) => {
     replayState.visualMode = event.target.value || 'virtual';
@@ -1481,6 +1525,17 @@ function bindReplayActions() {
   replayEls.timelineScrubber?.addEventListener('input', (event) => {
     stopPlayback();
     applyPlaybackIndex(Number(event.target.value) || 0);
+  });
+  document.addEventListener('click', (event) => {
+    if (!isReplaySortPopoverOpen()) return;
+    if (replayEls.sessionSortControl?.contains(event.target)) return;
+    closeReplaySortPopover();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isReplaySortPopoverOpen()) {
+      closeReplaySortPopover();
+      replayEls.sessionSortTrigger?.focus();
+    }
   });
 }
 

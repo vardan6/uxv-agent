@@ -118,7 +118,7 @@ app.include_router(rag_router_module.router)
 async def add_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/ai") or path.startswith("/static/"):
+    if path == "/" or path.startswith("/dashboard") or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/ai") or path.startswith("/mission-console") or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -130,6 +130,11 @@ def _runtime(request_or_socket: Request | WebSocket) -> AppRuntime:
 
 
 @app.get("/")
+async def mission_console_index() -> RedirectResponse:
+    return RedirectResponse(url="/mission-console", status_code=307)
+
+
+@app.get("/dashboard")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
@@ -152,6 +157,11 @@ async def settings_page() -> FileResponse:
 @app.get("/ai")
 async def ai_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "ai.html")
+
+
+@app.get("/mission-console")
+async def mission_console_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "mission-console.html")
 
 
 def _slugify_heading(text: str) -> str:

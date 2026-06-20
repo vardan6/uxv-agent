@@ -152,13 +152,9 @@ class ToolInvocationContext:
 _ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
     "list_data_surfaces",
     "get_current_rover_state",
+    "get_runtime_context",
     "get_scene_summary",
-    "query_objects_in_front",
-    "query_objects_near",
-    "query_objects_by_kind",
-    "query_objects_to_left",
-    "query_objects_to_right",
-    "query_nearest_objects",
+    "query_map_objects",
     "resolve_spatial_target",
     "get_current_mission_state",
     "plan_route_around_group",
@@ -177,26 +173,14 @@ _OPTIONAL_TOOL_NAMES_BY_SOURCE = {
         "search_project_docs",
     }),
     "replay_reports": frozenset({
-        "get_current_replay_summary",
-        "get_recent_telemetry",
-        "list_replay_sessions",
-        "resolve_replay_sessions",
-        "get_replay_session_summary",
-        "get_replay_session_metrics",
-        "get_replay_session_path",
-        "search_replay_session_events",
-        "compare_replay_sessions",
-        "aggregate_replay_sessions",
+        "query_replay_sessions",
+        "analyze_replay_sessions",
     }),
     "ai_chat_history": frozenset({
-        "list_ai_sessions",
-        "search_ai_messages",
-        "get_ai_session_messages",
+        "query_ai_memory",
     }),
     "settings_config": frozenset({
-        "get_settings_summary",
-        "get_settings_section",
-        "get_llm_provider_summary",
+        "query_settings",
     }),
     "sensor_context": frozenset({
         "get_sensor_status",
@@ -316,63 +300,42 @@ class ToolRegistry:
                 self._get_scene_summary,
             ),
             tool(
-                "query_objects_in_front",
-                "Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg instead of requiring live telemetry.",
+                "get_runtime_context",
+                "Get the current runtime environment: MQTT broker connection (host, port, state), controller link state, video delivery config, simulation backend settings, map config, and active replay session id. Call this when the operator asks about connectivity, MQTT configuration, broker status, video pipeline, or simulation parameters.",
                 READ_ONLY,
-                self._query_objects_in_front,
+                self._get_runtime_context,
             ),
-            tool("query_objects_near", "Find map objects near the rover within radius_m. Uses rover position only (heading not required), with automatic fallback to last_known_replay_state when available. Use this for prompts about nearby, around the rover, close objects, or surroundings. If the operator provides hypothetical map coordinates, pass them as position or coordinates.", READ_ONLY, self._query_objects_near),
-            tool("query_objects_by_kind", "Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.", READ_ONLY, self._query_objects_by_kind),
-            tool("query_objects_to_left", "Find map objects to the rover's left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.", READ_ONLY, self._query_objects_to_left),
-            tool("query_objects_to_right", "Find map objects to the rover's right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.", READ_ONLY, self._query_objects_to_right),
-            tool("query_nearest_objects", "Find nearest map objects to the rover. Uses rover position only (heading not required). Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If heading is unavailable, results still include distance and absolute bearing, while heading-relative fields may be omitted. If live rover telemetry is stale, this tool automatically falls back to last_known_replay_state when available. If the operator provides hypothetical map coordinates, pass them as position or coordinates.", READ_ONLY, self._query_nearest_objects),
+            tool(
+                "query_map_objects",
+                "Query map objects by spatial mode. mode='front': objects in a forward cone (fov_deg, max_distance_m). mode='near': objects within radius_m. mode='by_kind': all objects whose kind matches kind=. mode='left' or mode='right': lateral flank objects (angle_width_deg, max_distance_m). mode='nearest': closest objects overall (limit, optional max_distance_m). Optional kinds filters by object kind for positional modes. For all positional modes, pass position or coordinates and optionally heading_deg to query from a hypothetical pose instead of live telemetry. Falls back to last_known_replay_state when live telemetry is stale.",
+                READ_ONLY,
+                self._query_map_objects,
+            ),
             tool("resolve_spatial_target", "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.", PLANNING, self._resolve_spatial_target),
             tool("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, self._get_current_mission_state),
-            tool("get_current_replay_summary", "Get the active replay session summary.", READ_ONLY, self._get_current_replay_summary),
-            tool("get_recent_telemetry", "Get telemetry samples. By default returns recent samples from the active replay session using seconds+limit. If session_id is provided, returns samples for that explicit session_id so the agent can fetch telemetry from older sessions without extra clarification.", READ_ONLY, self._get_recent_telemetry),
-            tool("list_replay_sessions", "List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.", ANALYSIS, self._list_replay_sessions),
-            tool("resolve_replay_sessions", "Resolve a natural-language replay session selector such as 'all sessions', 'latest 5 sessions', 'first session', or a date-based selector into explicit session_ids.", ANALYSIS, self._resolve_replay_sessions),
-            tool("get_replay_session_summary", "Get a replay session summary by session_id.", READ_ONLY, self._get_replay_session_summary),
-            tool("get_replay_session_metrics", "Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.", ANALYSIS, self._get_replay_session_metrics),
-            tool("get_replay_session_path", "Get downsampled replay path points for a session_id.", ANALYSIS, self._get_replay_session_path),
-            tool("search_replay_session_events", "Search runtime events within a replay session.", ANALYSIS, self._search_replay_session_events),
-            tool("compare_replay_sessions", "Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, self._compare_replay_sessions),
-            tool("aggregate_replay_sessions", "Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.", ANALYSIS, self._aggregate_replay_sessions),
             tool(
-                "list_ai_sessions",
-                "List saved AI chat sessions with bounded metadata, message counts, archival state, and latest-message previews. Call this before `get_ai_session_messages` when you need a specific session_id, or before `search_ai_messages` when the operator refers to earlier chats without naming the session.",
+                "query_replay_sessions",
+                "Query replay session data by operation. operation='current': active replay session summary. operation='telemetry': recent telemetry samples (seconds, limit, optional session_id for a specific session). operation='list': enumerate sessions with started_at/ended_at/counts (limit, order). operation='resolve': resolve a natural-language selector like 'latest 5 sessions' or 'all sessions' into explicit session_ids (selector, timezone_name). operation='summary': session metadata by session_id. operation='path': downsampled path points for session_id (downsample, limit). operation='events': search runtime events within a session (session_id, optional event_type/text/limit). Call 'list' or 'resolve' first when you need session_ids.",
                 ANALYSIS,
-                self._list_ai_sessions,
+                self._query_replay_sessions,
             ),
             tool(
-                "search_ai_messages",
-                "Search saved AI messages by text across the current session or across saved sessions and return bounded match snippets with session/message references. Use this when the operator asks about earlier answers, prior discussions, or something that was said before and you need to locate the right session or message window.",
+                "analyze_replay_sessions",
+                "Analyze replay session data by metric operation. operation='metrics': compute analytics for session_id — duration_s, path_length_m, net_displacement_m, max_distance_from_start_m (refresh to recompute). operation='compare': compare multiple sessions by session_ids — per-session summaries and metrics for ranking and answering longest/furthest questions. operation='aggregate': aggregate across a natural-language selector or explicit session_ids — totals, averages, built-in longest/latest/furthest summaries, ranked top-N (selector, session_ids, timezone_name, top_n). Travel distance = path_length_m; furthest from start = max_distance_from_start_m. Resolve session_ids first with query_replay_sessions(operation='resolve') when needed.",
                 ANALYSIS,
-                self._search_ai_messages,
+                self._analyze_replay_sessions,
             ),
             tool(
-                "get_ai_session_messages",
-                "Load a bounded window of saved AI messages from one session. If session_id is omitted, use the current AI session. Call this after `list_ai_sessions` or `search_ai_messages` when you need the surrounding conversation, not just a preview or search snippet.",
-                READ_ONLY,
-                self._get_ai_session_messages,
+                "query_ai_memory",
+                "Query AI chat session history by operation. operation='list': list saved sessions with metadata, message counts, archival state, and last-message previews (limit, include_archived, archived_only, optional query filter). operation='search': search saved messages by text across sessions or within one (query required, limit, session_id, role). operation='get': load a bounded message window from one session (session_id, limit, before_message_id, role; omit session_id to use the current session). Call 'list' first to discover session_ids, or 'search' to locate a specific message.",
+                ANALYSIS,
+                self._query_ai_memory,
             ),
             tool(
-                "get_settings_summary",
-                "Get the safe compact settings summary available to AI flows, including which top-level sections exist, key non-secret configuration summaries, and the settings path. Call this first before requesting one section with `get_settings_section` or checking provider/routing state with `get_llm_provider_summary`.",
+                "query_settings",
+                "Query GCS settings and LLM provider configuration by operation. operation='summary': compact settings overview — section names, settings_path, and key non-secret configuration summaries. operation='section': one settings section by name (section required; supported: mqtt, key_bindings, video, gcs, simulation, map, mission_lifecycle, ai_settings, settings_path). operation='provider': safe LLM provider and model-routing metadata — enabled providers, active chat-provider resolution, and routing rules. Never exposes secrets.",
                 READ_ONLY,
-                self._get_settings_summary,
-            ),
-            tool(
-                "get_settings_section",
-                "Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `mission_lifecycle`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.",
-                READ_ONLY,
-                self._get_settings_section,
-            ),
-            tool(
-                "get_llm_provider_summary",
-                "Get safe LLM provider and model-routing metadata, including enabled providers, active chat-provider resolution, and routing rules without exposing secrets. Use this when the operator asks which provider/model path is active or how AI routing is configured.",
-                READ_ONLY,
-                self._get_llm_provider_summary,
+                self._query_settings,
             ),
             tool(
                 "get_sensor_status",
@@ -499,26 +462,20 @@ class ToolRegistry:
                 self._abort_execution,
             ),
             # ── Mission-keyed pause / resume / stop (B.4) ────────────────────
-            # These work on any active execution regardless of who started it
-            # (operator via sidebar or AI via execute_mission). They do NOT
+            # Works on any active execution regardless of who started it
+            # (operator via sidebar or AI via execute_mission). Does NOT
             # require a session-owned execution — only a mission_id.
             tool(
-                "pause_mission",
-                "Pause a running mission by its mission id. Works whether the mission was started by the operator (sidebar) or by AI (execute_mission). The rover parks at the FC level until resumed. Use resolve_mission_reference first if you only have a name or index, not the id.",
+                "control_mission",
+                "Pause, resume, or stop a running mission by its mission id. "
+                "action must be one of: 'pause' (park at FC level until resumed), "
+                "'resume' (continue after a pause), or 'stop' (cooperatively halt "
+                "the behavior tree at the next node-step boundary). Works whether "
+                "the mission was started by the operator (sidebar) or by AI "
+                "(execute_mission). Use resolve_mission_reference first if you only "
+                "have a name or index, not the id.",
                 EXECUTION,
-                self._pause_mission_execution,
-            ),
-            tool(
-                "resume_mission",
-                "Resume a paused mission by its mission id. Use after pause_mission or when the operator asks to continue a mission that was paused. Use resolve_mission_reference first if you only have a name or index.",
-                EXECUTION,
-                self._resume_mission_execution,
-            ),
-            tool(
-                "stop_mission",
-                "Stop (abort) a running or paused mission by its mission id. Cooperatively halts the behavior tree at the next node-step boundary. Works regardless of who started the mission. Use resolve_mission_reference first if you only have a name or index.",
-                EXECUTION,
-                self._stop_mission_execution,
+                self._control_mission_execution,
             ),
             # ── Session adapter override (Phase E) ────────────────────────────
             tool(
@@ -644,6 +601,10 @@ class ToolRegistry:
         scene = context.context_snapshot.get("scene")
         return dict(scene) if isinstance(scene, dict) else AIContextService(context.runtime).get_scene_map_summary()
 
+    def _get_runtime_context(self, context: ToolInvocationContext) -> dict[str, Any]:
+        runtime = context.context_snapshot.get("runtime")
+        return dict(runtime) if isinstance(runtime, dict) else {}
+
     def _query_objects_in_front(
         self,
         context: ToolInvocationContext,
@@ -708,6 +669,38 @@ class ToolRegistry:
     ) -> dict[str, Any]:
         rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates)
         return self._spatial.find_nearest_objects(self._scene_payload(context), rover_state, limit, max_distance_m, kinds)
+
+    def _query_map_objects(
+        self,
+        context: ToolInvocationContext,
+        mode: str,
+        kinds: list[str] | None = None,
+        position: dict[str, Any] | list[Any] | str | None = None,
+        coordinates: dict[str, Any] | list[Any] | str | None = None,
+        heading_deg: float | None = None,
+        max_distance_m: float | None = None,
+        fov_deg: float = 20.0,
+        angle_width_deg: float = 90.0,
+        radius_m: float = 50.0,
+        limit: int = 5,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
+        pos = position if position is not None else coordinates
+        if mode == "front":
+            return self._query_objects_in_front(context, max_distance_m=max_distance_m or 100.0, fov_deg=fov_deg, kinds=kinds, position=pos, heading_deg=heading_deg)
+        if mode == "near":
+            return self._query_objects_near(context, radius_m=radius_m, kinds=kinds, position=pos)
+        if mode == "by_kind":
+            if not kind:
+                return {"error": "mode=by_kind requires kind"}
+            return self._query_objects_by_kind(context, kind=kind)
+        if mode == "left":
+            return self._query_objects_to_left(context, max_distance_m=max_distance_m or 100.0, angle_width_deg=angle_width_deg, kinds=kinds, position=pos, heading_deg=heading_deg)
+        if mode == "right":
+            return self._query_objects_to_right(context, max_distance_m=max_distance_m or 100.0, angle_width_deg=angle_width_deg, kinds=kinds, position=pos, heading_deg=heading_deg)
+        if mode == "nearest":
+            return self._query_nearest_objects(context, limit=limit, max_distance_m=max_distance_m, kinds=kinds, position=pos)
+        return {"error": f"unknown mode: {mode!r}. Use one of: front, near, by_kind, left, right, nearest"}
 
     def _resolve_spatial_target(self, context: ToolInvocationContext, target: dict[str, Any] | str) -> dict[str, Any]:
         resolved_target = _normalize_spatial_target(target)
@@ -810,6 +803,57 @@ class ToolRegistry:
             limit=1000,
             top_n=max(1, int(top_n)),
         )
+
+    def _query_replay_sessions(
+        self,
+        context: ToolInvocationContext,
+        operation: str,
+        session_id: str = "",
+        selector: str = "",
+        timezone_name: str = "",
+        limit: int = 100,
+        order: str = "desc",
+        downsample: int = 10,
+        event_type: str = "",
+        text: str = "",
+        seconds: int = 120,
+    ) -> dict[str, Any]:
+        op = str(operation or "").strip().lower()
+        if op == "current":
+            return self._get_current_replay_summary(context)
+        if op == "telemetry":
+            return self._get_recent_telemetry(context, seconds=seconds, limit=limit, session_id=session_id)
+        if op == "list":
+            return self._list_replay_sessions(context, limit=limit, order=order)
+        if op == "resolve":
+            return self._resolve_replay_sessions(context, selector=selector, timezone_name=timezone_name)
+        if op == "summary":
+            return self._get_replay_session_summary(context, session_id=session_id)
+        if op == "path":
+            return self._get_replay_session_path(context, session_id=session_id, downsample=downsample, limit=limit)
+        if op == "events":
+            return self._search_replay_session_events(context, session_id=session_id, event_type=event_type, text=text, limit=limit)
+        return {"error": f"unknown operation: {op!r}. Use one of: current, telemetry, list, resolve, summary, path, events"}
+
+    def _analyze_replay_sessions(
+        self,
+        context: ToolInvocationContext,
+        operation: str,
+        session_id: str = "",
+        session_ids: list[str] | None = None,
+        selector: str = "",
+        timezone_name: str = "",
+        refresh: bool = False,
+        top_n: int = 5,
+    ) -> dict[str, Any]:
+        op = str(operation or "").strip().lower()
+        if op == "metrics":
+            return self._get_replay_session_metrics(context, session_id=session_id, refresh=refresh)
+        if op == "compare":
+            return self._compare_replay_sessions(context, session_ids=session_ids or [])
+        if op == "aggregate":
+            return self._aggregate_replay_sessions(context, selector=selector, session_ids=session_ids, timezone_name=timezone_name, top_n=top_n)
+        return {"error": f"unknown operation: {op!r}. Use one of: metrics, compare, aggregate"}
 
     def _list_ai_sessions(
         self,
@@ -984,6 +1028,42 @@ class ToolRegistry:
             "available": bool(summary),
             **summary,
         }
+
+    def _query_ai_memory(
+        self,
+        context: ToolInvocationContext,
+        operation: str,
+        query: str = "",
+        session_id: str = "",
+        limit: int = 20,
+        include_archived: bool = False,
+        archived_only: bool = False,
+        role: str = "",
+        before_message_id: str = "",
+    ) -> dict[str, Any]:
+        op = str(operation or "").strip().lower()
+        if op == "list":
+            return self._list_ai_sessions(context, limit=limit, include_archived=include_archived, archived_only=archived_only, query=query)
+        if op == "search":
+            return self._search_ai_messages(context, query=query, limit=limit, session_id=session_id, include_archived=include_archived, role=role)
+        if op == "get":
+            return self._get_ai_session_messages(context, session_id=session_id, limit=limit, before_message_id=before_message_id, role=role)
+        return {"error": f"unknown operation: {op!r}. Use one of: list, search, get"}
+
+    def _query_settings(
+        self,
+        context: ToolInvocationContext,
+        operation: str,
+        section: str = "",
+    ) -> dict[str, Any]:
+        op = str(operation or "").strip().lower()
+        if op == "summary":
+            return self._get_settings_summary(context)
+        if op == "section":
+            return self._get_settings_section(context, section=section)
+        if op == "provider":
+            return self._get_llm_provider_summary(context)
+        return {"error": f"unknown operation: {op!r}. Use one of: summary, section, provider"}
 
     def _get_sensor_status(self, context: ToolInvocationContext) -> dict[str, Any]:
         rover = self._rover_snapshot(context)
@@ -1832,6 +1912,19 @@ class ToolRegistry:
             "note": "active for this session only; reverts when session ends",
         }
 
+    def _control_mission_execution(
+        self, context: ToolInvocationContext, action: str, mission_id: str
+    ) -> dict[str, Any]:
+        actions = {
+            "pause": self._pause_mission_execution,
+            "resume": self._resume_mission_execution,
+            "stop": self._stop_mission_execution,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            return {"ok": False, "error": f"unknown action '{action}'; must be pause, resume, or stop"}
+        return handler(context, mission_id)
+
     def _pause_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
         sessions = getattr(context.runtime, "mission_execution_sessions", None)
         if sessions is None:
@@ -2257,7 +2350,7 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": [],
         "upstream_from_tools": [],
         "returns": {"data_surfaces": "surface[]", "source_controls": "object", "planned_sources": "object[]"},
-        "next_tools": ["get_settings_summary", "list_ai_sessions", "get_sensor_status"],
+        "next_tools": ["query_settings", "query_ai_memory", "query_replay_sessions", "get_sensor_status"],
     },
     "get_current_rover_state": {
         "inputs": {},
@@ -2269,61 +2362,52 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "telemetry_fresh": "boolean",
             "last_known_replay_state": "object | null",
         },
-        "next_tools": ["query_nearest_objects", "query_objects_near", "query_objects_in_front", "resolve_spatial_target"],
+        "next_tools": ["query_map_objects", "resolve_spatial_target"],
     },
     "get_scene_summary": {
         "inputs": {},
         "required_inputs": [],
         "upstream_from_tools": [],
         "returns": {"object_kinds": "object{kind->count}", "spawn": "object{x,y,z}", "object_count": "number"},
-        "next_tools": ["query_objects_by_kind", "resolve_spatial_target"],
+        "next_tools": ["query_map_objects", "resolve_spatial_target"],
     },
-    "query_objects_in_front": {
-        "inputs": {"max_distance_m": "number", "fov_deg": "number", "kinds": "string[]", "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "heading_deg": "number"},
+    "get_runtime_context": {
+        "inputs": {},
         "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state (pose/heading)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"],
-        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
-        "next_tools": ["resolve_spatial_target"],
+        "upstream_from_tools": [],
+        "returns": {
+            "broker": "object{host,port,connected,...}",
+            "controller": "object",
+            "video": "object",
+            "simulation": "object",
+            "map": "object",
+            "replay_session_id": "string | null",
+        },
+        "next_tools": [],
     },
-    "query_objects_near": {
-        "inputs": {"radius_m": "number", "kinds": "string[]", "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'"},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state (position; heading optional; replay fallback supported)", "operator-provided coordinates", "get_scene_summary"],
-        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
-        "next_tools": ["resolve_spatial_target"],
-    },
-    "query_objects_by_kind": {
-        "inputs": {"kind": "string"},
-        "required_inputs": ["kind"],
-        "upstream_from_tools": ["get_scene_summary.object_kinds"],
-        "returns": {"available": "boolean", "objects": "object[]"},
-        "next_tools": ["resolve_spatial_target"],
-    },
-    "query_objects_to_left": {
-        "inputs": {"max_distance_m": "number", "angle_width_deg": "number", "kinds": "string[]", "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "heading_deg": "number"},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state (pose/heading)", "operator-provided coordinates/heading"],
-        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
-        "next_tools": ["resolve_spatial_target"],
-    },
-    "query_objects_to_right": {
-        "inputs": {"max_distance_m": "number", "angle_width_deg": "number", "kinds": "string[]", "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "heading_deg": "number"},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state (pose/heading)", "operator-provided coordinates/heading"],
-        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
-        "next_tools": ["resolve_spatial_target"],
-    },
-    "query_nearest_objects": {
-        "inputs": {"limit": "integer", "max_distance_m": "number|null", "kinds": "string[]", "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'", "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'"},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state (position; heading optional; replay fallback supported)", "operator-provided coordinates", "get_scene_summary"],
+    "query_map_objects": {
+        "inputs": {
+            "mode": "string (front|near|by_kind|left|right|nearest)",
+            "kinds": "string[]",
+            "kind": "string (required for mode=by_kind)",
+            "position": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'",
+            "coordinates": "object{x,y,z} | [x,y,z?] | 'x,y[,z]'",
+            "heading_deg": "number",
+            "max_distance_m": "number",
+            "fov_deg": "number",
+            "angle_width_deg": "number",
+            "radius_m": "number",
+            "limit": "integer",
+        },
+        "required_inputs": ["mode"],
+        "upstream_from_tools": ["get_current_rover_state (pose/heading/replay fallback)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"],
         "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
         "next_tools": ["resolve_spatial_target"],
     },
     "resolve_spatial_target": {
         "inputs": {"target": "string | object{description,kind,side,min_distance_m,max_distance_m,relative_bearing_deg,position,coordinates,heading_deg}"},
         "required_inputs": ["target"],
-        "upstream_from_tools": ["get_current_rover_state", "operator-provided coordinates/heading", "get_scene_summary", "query_objects_* results"],
+        "upstream_from_tools": ["get_current_rover_state", "operator-provided coordinates/heading", "get_scene_summary", "query_map_objects results"],
         "returns": {"available": "boolean", "candidates": "object[]", "selected": "object|null", "needs_clarification": "boolean"},
         "next_tools": [],
     },
@@ -2332,118 +2416,95 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_inputs": [],
         "upstream_from_tools": [],
         "returns": {"active": "boolean", "status": "string", "summary": "string"},
+        "next_tools": ["control_mission"],
+    },
+    "control_mission": {
+        "inputs": {
+            "action": "string (pause|resume|stop) — non-emergency execution control; use abort for emergency stop",
+            "mission_id": "string — durable flat Mission id of the running execution",
+        },
+        "required_inputs": ["action", "mission_id"],
+        "upstream_from_tools": ["get_current_mission_state (active mission_id and status)"],
+        "returns": {"ok": "boolean", "error": "string?"},
+        "next_tools": ["get_current_mission_state"],
+    },
+    "query_replay_sessions": {
+        "inputs": {
+            "operation": "string (current|telemetry|list|resolve|summary|path|events)",
+            "session_id": "string (required for summary/path/events; optional for telemetry)",
+            "selector": "string (required for resolve; e.g. 'latest 5 sessions', 'all sessions')",
+            "timezone_name": "string (optional, for resolve)",
+            "limit": "integer",
+            "order": "string(desc|asc) (for list)",
+            "downsample": "integer (for path)",
+            "event_type": "string (for events)",
+            "text": "string (for events)",
+            "seconds": "integer (for telemetry)",
+        },
+        "required_inputs": ["operation"],
+        "upstream_from_tools": ["query_replay_sessions(operation='list'|'resolve') for session_ids", "get_current_replay_summary via operation='current'"],
+        "returns": {
+            "current": "{session_id, telemetry_count, runtime_event_count}",
+            "telemetry": "{result: telemetry_sample[]}",
+            "list": "{sessions: session_summary[], count}",
+            "resolve": "{resolved_session_ids: string[], matched_count, preview_sessions}",
+            "summary": "{session_id, telemetry_count, control_count, runtime_event_count}",
+            "path": "{session_id, point_count, points: path_point[]}",
+            "events": "{events: event[], count}",
+        },
+        "next_tools": ["analyze_replay_sessions", "query_map_objects"],
+    },
+    "analyze_replay_sessions": {
+        "inputs": {
+            "operation": "string (metrics|compare|aggregate)",
+            "session_id": "string (required for metrics)",
+            "session_ids": "string[] (required for compare; optional for aggregate)",
+            "selector": "string (for aggregate)",
+            "timezone_name": "string (for aggregate)",
+            "refresh": "boolean (for metrics)",
+            "top_n": "integer (for aggregate)",
+        },
+        "required_inputs": ["operation"],
+        "upstream_from_tools": ["query_replay_sessions(operation='resolve'|'list') for session_ids"],
+        "returns": {
+            "metrics": "{path_length_m, duration_s, max_distance_from_start_m, net_displacement_m}",
+            "compare": "{sessions: comparison_row[], best_by_metric: object}",
+            "aggregate": "{totals: object, averages: object, top_sessions: session_metric[]}",
+        },
         "next_tools": [],
     },
-    "get_current_replay_summary": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"session_id": "string|null", "telemetry_count": "number", "runtime_event_count": "number"},
-        "next_tools": ["get_recent_telemetry", "get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events"],
-    },
-    "get_recent_telemetry": {
-        "inputs": {"seconds": "integer", "limit": "integer", "session_id": "string (optional)"},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_replay_summary.session_id", "resolve_replay_sessions.resolved_session_ids[*]"],
-        "returns": {"result": "telemetry_sample[]"},
-        "next_tools": ["query_nearest_objects", "query_objects_near"],
-    },
-    "list_replay_sessions": {
-        "inputs": {"limit": "integer", "order": "string(desc|asc)"},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"sessions": "session_summary[]", "count": "number"},
-        "next_tools": ["resolve_replay_sessions", "get_replay_session_summary", "get_replay_session_metrics", "compare_replay_sessions", "aggregate_replay_sessions"],
-    },
-    "resolve_replay_sessions": {
-        "inputs": {"selector": "string", "timezone_name": "string"},
-        "required_inputs": ["selector"],
-        "upstream_from_tools": ["operator natural-language selector"],
-        "returns": {"resolved_session_ids": "string[]", "matched_count": "number", "preview_sessions": "session_summary[]"},
-        "next_tools": ["get_replay_session_summary", "get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events", "compare_replay_sessions", "aggregate_replay_sessions", "get_recent_telemetry"],
-    },
-    "get_replay_session_summary": {
-        "inputs": {"session_id": "string"},
-        "required_inputs": ["session_id"],
-        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id", "get_current_replay_summary.session_id"],
-        "returns": {"session_id": "string", "telemetry_count": "number", "control_count": "number", "runtime_event_count": "number"},
-        "next_tools": ["get_replay_session_metrics", "get_replay_session_path", "search_replay_session_events", "get_recent_telemetry"],
-    },
-    "get_replay_session_metrics": {
-        "inputs": {"session_id": "string", "refresh": "boolean"},
-        "required_inputs": ["session_id"],
-        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id", "get_replay_session_summary.session_id"],
-        "returns": {"path_length_m": "number", "duration_s": "number", "max_distance_from_start_m": "number", "net_displacement_m": "number"},
-        "next_tools": ["compare_replay_sessions", "aggregate_replay_sessions"],
-    },
-    "get_replay_session_path": {
-        "inputs": {"session_id": "string", "downsample": "integer", "limit": "integer"},
-        "required_inputs": ["session_id"],
-        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id"],
-        "returns": {"session_id": "string", "point_count": "number", "points": "path_point[]"},
-        "next_tools": ["get_recent_telemetry"],
-    },
-    "search_replay_session_events": {
-        "inputs": {"session_id": "string", "event_type": "string", "text": "string", "limit": "integer"},
-        "required_inputs": ["session_id"],
-        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids[*]", "list_replay_sessions.sessions[*].session_id"],
-        "returns": {"events": "event[]", "count": "number"},
-        "next_tools": ["compare_replay_sessions", "aggregate_replay_sessions"],
-    },
-    "compare_replay_sessions": {
-        "inputs": {"session_ids": "string[]"},
-        "required_inputs": ["session_ids"],
-        "upstream_from_tools": ["resolve_replay_sessions.resolved_session_ids", "list_replay_sessions.sessions[*].session_id"],
-        "returns": {"sessions": "comparison_row[]", "best_by_metric": "object"},
-        "next_tools": ["aggregate_replay_sessions"],
-    },
-    "aggregate_replay_sessions": {
-        "inputs": {"selector": "string", "session_ids": "string[]", "timezone_name": "string", "top_n": "integer"},
-        "required_inputs": [],
-        "upstream_from_tools": ["resolve_replay_sessions", "list_replay_sessions"],
-        "returns": {"totals": "object", "averages": "object", "top_sessions": "session_metric[]"},
+    "query_ai_memory": {
+        "inputs": {
+            "operation": "string (list|search|get)",
+            "query": "string (required for search; optional title/preview filter for list)",
+            "session_id": "string (for search/get; omit on get to use the current session)",
+            "limit": "integer",
+            "include_archived": "boolean",
+            "archived_only": "boolean",
+            "role": "string (for search/get)",
+            "before_message_id": "string (for get pagination)",
+        },
+        "required_inputs": ["operation"],
+        "upstream_from_tools": ["query_ai_memory(operation='list') for session_ids", "query_ai_memory(operation='search') to locate a message"],
+        "returns": {
+            "list": "{sessions: ai_session_summary[], count, current_session_id}",
+            "search": "{matches: ai_message_match[], count}",
+            "get": "{messages: ai_message[], count, truncated}",
+        },
         "next_tools": [],
     },
-    "list_ai_sessions": {
-        "inputs": {"limit": "integer", "include_archived": "boolean", "archived_only": "boolean", "query": "string"},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"sessions": "ai_session_summary[]", "count": "number", "current_session_id": "string"},
-        "next_tools": ["search_ai_messages", "get_ai_session_messages"],
-    },
-    "search_ai_messages": {
-        "inputs": {"query": "string", "limit": "integer", "session_id": "string", "include_archived": "boolean", "role": "string"},
-        "required_inputs": ["query"],
-        "upstream_from_tools": ["list_ai_sessions"],
-        "returns": {"matches": "ai_message_match[]", "count": "number"},
-        "next_tools": ["get_ai_session_messages"],
-    },
-    "get_ai_session_messages": {
-        "inputs": {"session_id": "string", "limit": "integer", "before_message_id": "string", "role": "string"},
-        "required_inputs": [],
-        "upstream_from_tools": ["list_ai_sessions", "search_ai_messages"],
-        "returns": {"messages": "ai_message[]", "count": "number", "truncated": "boolean"},
-        "next_tools": ["search_ai_messages"],
-    },
-    "get_settings_summary": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"settings_path": "string", "section_names": "string[]", "summary": "object"},
-        "next_tools": ["get_settings_section", "get_llm_provider_summary"],
-    },
-    "get_settings_section": {
-        "inputs": {"section": "string"},
-        "required_inputs": ["section"],
-        "upstream_from_tools": ["get_settings_summary"],
-        "returns": {"section": "string", "value": "object|string", "available": "boolean"},
-        "next_tools": ["get_llm_provider_summary"],
-    },
-    "get_llm_provider_summary": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_settings_summary"],
-        "returns": {"providers": "object[]", "model_routing": "object", "active_chat_provider": "object|null"},
+    "query_settings": {
+        "inputs": {
+            "operation": "string (summary|section|provider)",
+            "section": "string (required for section; one of mqtt, key_bindings, video, gcs, simulation, map, mission_lifecycle, ai_settings, settings_path)",
+        },
+        "required_inputs": ["operation"],
+        "upstream_from_tools": ["query_settings(operation='summary') for section names"],
+        "returns": {
+            "summary": "{settings_path, section_names: string[], summary: object}",
+            "section": "{section, value: object|string, available: boolean}",
+            "provider": "{providers: object[], model_routing: object, active_chat_provider: object|null}",
+        },
         "next_tools": [],
     },
     "get_sensor_status": {

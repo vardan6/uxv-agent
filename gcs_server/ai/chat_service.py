@@ -7,6 +7,8 @@ from typing import Any, Callable, Iterator
 from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
+from .smalltalk_patterns import MAX_SMALLTALK_CHARS, SMALLTALK_SET, normalize_for_smalltalk
+from .usage_telemetry import normalize_usage_metadata
 from .tool_registry import allowed_tool_names_for_source_controls
 
 
@@ -18,6 +20,7 @@ If the operator asks for direct rover motion (move now, fly now, execute) withou
 
 AGENT_SYSTEM_PROMPT = """You are the operator-facing AI agent in Remote Rover GCS.
 Use tools and provided context as authoritative; do not invent rover state, telemetry, or map data.
+You are given a compact summary of current rover pose, mission state, and scene as authoritative facts. Detailed map objects, replay history, telemetry samples, settings, and runtime/broker config are not pre-loaded — call the matching read-only tool when the operator's question needs them.
 Travel distance = path_length_m. Furthest from home/start = max_distance_from_start_m.
 Prefer live rover telemetry when fresh; otherwise use last_known_replay_state and say live is unavailable.
 For underspecified replay/telemetry requests, auto-resolve via tools (e.g. resolve_replay_sessions -> metrics/path/compare/aggregate) before asking for IDs.
@@ -240,7 +243,7 @@ class AIChatService:
         prompt_messages = _fit_messages_to_budget(messages)
         bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
         effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
-        prompt_tool_calls = _tool_calls(effective_context_snapshot) if clean_run_mode == "agent" else []
+        prompt_tool_calls: list[dict[str, Any]] = []
         agent_tooling_error: str | None = None
         should_try_tools = (
             not bypass_for_smalltalk
@@ -389,7 +392,7 @@ class AIChatService:
         prompt_messages = _fit_messages_to_budget(messages)
         bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
         effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
-        prompt_tool_calls = _tool_calls(effective_context_snapshot) if clean_run_mode == "agent" else []
+        prompt_tool_calls: list[dict[str, Any]] = []
         agent_tooling_error: str | None = None
         if (not bypass_for_smalltalk) and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot)):
             started = time.perf_counter()
@@ -629,22 +632,9 @@ def _is_trivial_agent_smalltalk(messages: list[dict[str, Any]]) -> bool:
     content = _latest_user_content(messages)
     if not content:
         return False
-    if len(content) > 40:
+    if len(content) > MAX_SMALLTALK_CHARS:
         return False
-    simple = {
-        "hi",
-        "hello",
-        "hey",
-        "yo",
-        "sup",
-        "hiya",
-        "good morning",
-        "good afternoon",
-        "good evening",
-        "how are you",
-        "how are you?",
-    }
-    return content in simple
+    return normalize_for_smalltalk(content) in SMALLTALK_SET
 
 
 def _system_prompt_for_run_mode(run_mode: str) -> str:
@@ -672,8 +662,10 @@ def _prompt_for_mode(
             f"Read-only tool/context results: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
             f"{base_prompt}"
         )
+    context_sentence = "Use the read-only tool/context results below as current facts. " if tool_calls else ""
+    tool_calls_line = f"Read-only tool calls: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n" if tool_calls else ""
     return (
-        "Agent mode is enabled for this message. Use the read-only tool/context results below as current facts. "
+        f"Agent mode is enabled for this message. {context_sentence}"
         "When the operator asks about nearby, nearest, left, right, ahead, object kinds, sessions, duration, path length, "
         "travel distance, furthest distance, settings, model routing, earlier chats, or available data surfaces, call the matching tools instead of answering from memory. "
         "Treat travel distance as path_length_m. Treat furthest from home/start as max_distance_from_start_m. "
@@ -685,7 +677,7 @@ def _prompt_for_mode(
         "or telemetry values beyond what the operator explicitly supplied.\n"
         f"{tool_guidance}"
         f"{manifest_guidance}"
-        f"Read-only tool calls: {json.dumps(tool_calls, separators=(',', ':'), sort_keys=True)}\n"
+        f"{tool_calls_line}"
         f"{base_prompt}"
     )
 
@@ -869,8 +861,9 @@ def _json_line(data: dict[str, Any]) -> str:
 
 
 def _usage_metadata(response: Any) -> dict[str, Any]:
-    usage = getattr(response, "usage_metadata", {}) or {}
-    return usage if isinstance(usage, dict) else {}
+    # Promotes cache-hit counters (cache_read/cache_creation) to top-level keys
+    # so prompt-cache savings are observable in stored meta. See usage_telemetry.
+    return normalize_usage_metadata(response)
 
 
 def _is_tool_calling_unsupported_error(exc: Exception) -> bool:

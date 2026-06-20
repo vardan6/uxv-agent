@@ -13,7 +13,6 @@ def test_planner_loop_tools_have_applied_contracts() -> None:
         "lazy_load_ai_memory",
         "lazy_load_settings",
         "lazy_load_sensor",
-        "request_clarification",
     }
 
     for name in expected_tools:

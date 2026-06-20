@@ -1,0 +1,112 @@
+# Golden-question eval fixture for the RAG `project_docs` retrieval path.
+#
+# This is a spot-check harness, not a test framework: each question is scored
+# pass/fail on whether the expected source document(s) appear in the top-k
+# retrieval results. No ML scoring.
+#
+# Run:  bin/rag eval            (or: python -m rag_service.eval)
+#
+# Fields per retrieval question:
+#   id                short stable identifier
+#   question          the operator-style query sent to search_project_docs
+#   expected_sources  repo-relative doc paths (as stored in the Qdrant payload
+#                     `path` field, e.g. docs/.../file.md); a path matches if it
+#                     appears in any returned hit's path
+#   match             "any" (default) = pass if >=1 expected source is in top-k
+#                     "all"           = pass only if every expected source is in top-k
+#
+# `tool_trajectories` (below) is a MANUAL checklist, not auto-scored — it records
+# the tool-chaining expectations that the agent-token-schema trims (P3/P7/P8)
+# must not regress. Verify these by hand against a live agent run.
+
+defaults:
+  limit: 5
+  match: any
+
+retrieval:
+  - id: rag-store
+    question: What store backs the RAG project_docs collection?
+    expected_sources:
+      - docs/cross-cutting/decisions/0028-rag-project-docs-first-consumer-qdrant.md
+
+  - id: gps-master-frame
+    question: How are GPS coordinates handled as the master coordinate frame?
+    expected_sources:
+      - docs/cross-cutting/decisions/0022-gps-master-coordinate-frame.md
+
+  - id: behavior-tree-executor
+    question: How does the mission executor run a behavior tree?
+    expected_sources:
+      - docs/cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md
+      - docs/components/ai-agent/design/mission-execution.md
+
+  - id: soft-constraint-scoring
+    question: How does soft-constraint route scoring work for pattern planning?
+    expected_sources:
+      - docs/cross-cutting/decisions/0027-soft-constraint-route-scoring-for-pattern-planning.md
+      - docs/components/ai-agent/design/route-planning.md
+
+  - id: lazy-context-tokens
+    question: How does lazy context injection reduce agent token usage?
+    expected_sources:
+      - docs/cross-cutting/decisions/0029-lazy-context-injection.md
+      - docs/components/ai-agent/design/token-efficiency.md
+
+  - id: intent-parsing
+    question: How does the agent parse a rover intent from an operator request?
+    expected_sources:
+      - docs/components/ai-agent/design/intent-parsing.md
+
+  - id: tool-contract
+    question: How are agent tool contracts structured?
+    expected_sources:
+      - docs/components/ai-agent/design/tool-contract.md
+
+  - id: map-widget
+    question: What does the map widget do in the GCS UI?
+    expected_sources:
+      - docs/components/gcs/design/map-widget.md
+
+  - id: rag-deferred-live-state
+    question: Why was RAG deferred for live rover state?
+    expected_sources:
+      - docs/cross-cutting/decisions/0007-rag-later-not-now-for-live-state.md
+      - docs/cross-cutting/decisions/0003-rag-scope-vs-live-context.md
+
+  - id: replay-logging
+    question: How are replay sessions logged for later analysis?
+    expected_sources:
+      - docs/cross-cutting/decisions/0026-replay-session-logging-ships-scrubbing-replay-deferred.md
+      - docs/components/ai-agent/design/replay-access.md
+
+# ---------------------------------------------------------------------------
+# Manual tool-chaining checklist (NOT auto-scored).
+# Guards against tool-schema trims (P3 drops upstream_from_tools/next_tools from
+# the model-facing description) silently degrading the agent's tool selection
+# and ordering. Run each prompt against a live agent and confirm the expected
+# tool sequence still fires.
+# ---------------------------------------------------------------------------
+tool_trajectories:
+  - id: rover-where
+    prompt: where is the rover?
+    expected_tools:
+      - get_current_rover_state
+
+  - id: mission-status
+    prompt: what missions are running?
+    expected_tools:
+      - get_current_mission_state
+
+  - id: mission-stop
+    prompt: stop the current mission
+    expected_tools:
+      - get_current_mission_state
+      - control_mission
+
+  - id: route-around-boulders
+    prompt: plan a route around the boulder cluster and stage it as a mission
+    expected_tools:
+      - resolve_spatial_target
+      - plan_route_around_group
+      - propose_mission_draft
+      - export_mission

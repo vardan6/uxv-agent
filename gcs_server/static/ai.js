@@ -87,14 +87,14 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'list_data_surfaces',
   'get_current_rover_state',
   'get_scene_summary',
-  'query_objects_in_front',
-  'query_objects_near',
-  'query_objects_by_kind',
-  'query_objects_to_left',
-  'query_objects_to_right',
-  'query_nearest_objects',
+  'query_map_objects',
   'resolve_spatial_target',
   'get_current_mission_state',
+  'plan_route_around_group',
+  'plan_route_between',
+  'generate_pattern_subtree',
+  'set_mission_geofence',
+  'export_mission',
   'parse_rover_intent',
   'create_mission_from_waypoints',
   'propose_mission_draft',
@@ -109,6 +109,7 @@ const AI_MISSION_ACTION_TOOL_NAMES = new Set([
   'arm_execution',
   'execute_mission',
   'cancel_execution',
+  'control_mission',
   'pause_mission',
   'resume_mission',
   'stop_mission',
@@ -122,33 +123,29 @@ function pushAiToolStatusMessage(toolCall) {
   const result = toolCall.result;
   const ok = result == null || result.ok !== false;
   const summary = summarizeAgentToolResult(result);
-  const label = name.replace(/_/g, ' ');
+  const args = toolCall.args || toolCall.arguments;
+  const action = args && typeof args === 'object' ? String(args.action || '').trim() : '';
+  let label = name.replace(/_/g, ' ');
+  if (name === 'control_mission' && action) {
+    label = `control mission: ${action}`;
+  }
   const text = summary ? `AI → ${label}: ${summary}` : `AI → ${label}`;
   statusBar.push(text, ok ? 'info' : 'error');
 }
 
 const AI_OPTIONAL_TOOL_NAMES_BY_SOURCE = {
+  project_docs: new Set([
+    'search_project_docs',
+  ]),
   replay_reports: new Set([
-    'get_current_replay_summary',
-    'get_recent_telemetry',
-    'list_replay_sessions',
-    'resolve_replay_sessions',
-    'get_replay_session_summary',
-    'get_replay_session_metrics',
-    'get_replay_session_path',
-    'search_replay_session_events',
-    'compare_replay_sessions',
-    'aggregate_replay_sessions',
+    'query_replay_sessions',
+    'analyze_replay_sessions',
   ]),
   ai_chat_history: new Set([
-    'list_ai_sessions',
-    'search_ai_messages',
-    'get_ai_session_messages',
+    'query_ai_memory',
   ]),
   settings_config: new Set([
-    'get_settings_summary',
-    'get_settings_section',
-    'get_llm_provider_summary',
+    'query_settings',
   ]),
   sensor_context: new Set([
     'get_sensor_status',
@@ -172,44 +169,44 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.',
   },
   {
-    name: 'query_objects_in_front',
+    name: 'query_map_objects',
     permission: 'read_only',
-    description: 'Find map objects in front of the rover within max_distance_m and fov_deg. Use this for prompts about what is ahead, in front, straight ahead, on the route ahead, or visible in a forward cone. Optional kinds filters the returned object kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_objects_near',
-    permission: 'read_only',
-    description: 'Find map objects near the rover within radius_m. Use this for prompts about nearby, around the rover, close objects, or surroundings. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
-  },
-  {
-    name: 'query_objects_by_kind',
-    permission: 'read_only',
-    description: 'Find all map objects whose kind exactly matches the given kind string. Use this when the operator names an object type such as tree, rock, road, building, or waypoint.',
-  },
-  {
-    name: 'query_objects_to_left',
-    permission: 'read_only',
-    description: 'Find map objects to the rover\'s left. Use this for prompts about left side, port side, left flank, or objects off the left of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_objects_to_right',
-    permission: 'read_only',
-    description: 'Find map objects to the rover\'s right. Use this for prompts about right side, starboard side, right flank, or objects off the right of the rover. If the operator provides hypothetical map coordinates, pass them as position or coordinates and optionally heading_deg.',
-  },
-  {
-    name: 'query_nearest_objects',
-    permission: 'read_only',
-    description: 'Find nearest map objects to the rover. Use this when the operator asks what is closest or nearest, optionally constrained by max_distance_m or kinds. If the operator provides hypothetical map coordinates, pass them as position or coordinates.',
+    description: 'Query map objects by spatial mode: `front` (forward cone), `near` (radius), `by_kind` (matching kind), `left`/`right` (lateral flank), or `nearest` (closest overall). Optional kinds filters object kinds; pass position/coordinates and heading_deg to query from a hypothetical pose. Falls back to last_known_replay_state when live telemetry is stale.',
   },
   {
     name: 'resolve_spatial_target',
     permission: 'planning',
-    description: 'Resolve a structured spatial target description against the current map and rover pose. Use this to turn a described target such as a rock on the left or the nearest tree into concrete candidate objects. Target objects may also include position or coordinates and optionally heading_deg.',
+    description: 'Resolve a spatial target against the current map and rover pose. Accepts a target object (kind/side/distance/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as "nearest tree on the left". Can use last_known_replay_state when live telemetry is stale.',
   },
   {
     name: 'get_current_mission_state',
     permission: 'read_only',
     description: 'Get the current mission state. This is read-only.',
+  },
+  {
+    name: 'plan_route_around_group',
+    permission: 'planning',
+    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the rover and back. Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+  },
+  {
+    name: 'plan_route_between',
+    permission: 'planning',
+    description: 'Compute a road-graph route between two resolved targets (Dijkstra). Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+  },
+  {
+    name: 'generate_pattern_subtree',
+    permission: 'planning',
+    description: 'Generate a navigation subtree for a repeated path or area coverage: `corridor` densifies a polyline into evenly-spaced waypoints (optional multiple passes); `survey` fills a rectangle with a lawnmower sweep. Set the result as the draft tree in propose_mission_draft. Does not upload.',
+  },
+  {
+    name: 'set_mission_geofence',
+    permission: 'planning',
+    description: 'Set or clear an inclusion geofence on an existing Mission by mission_id. Pass a polygon of WGS84 vertices, optional rally_points and alt bounds, or clear=true to remove. Appends an approval-required revision; the fence uploads to the FC when the mission is armed/executed.',
+  },
+  {
+    name: 'export_mission',
+    permission: 'planning',
+    description: 'Convert a mission draft (by draft_id from propose_mission_draft) to a QGC-compatible .plan file. Returns file_path, waypoint_count, and the plan structure.',
   },
   {
     name: 'parse_rover_intent',
@@ -232,84 +229,29 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'Resolve a mission number, name, or pronoun to an existing Mission before an AI-assisted edit.',
   },
   {
-    name: 'get_current_replay_summary',
+    name: 'search_project_docs',
+    permission: 'analysis',
+    description: 'Search the project documentation (requirements, design docs, ADRs, glossary, operational notes) for grounded, citeable context. Returns the most relevant doc chunks with file path, heading path, score, and a citation ref. Available only when the project_docs source control is enabled.',
+  },
+  {
+    name: 'query_replay_sessions',
+    permission: 'analysis',
+    description: 'Query replay session data by operation: `current`, `telemetry`, `list`, `resolve` (natural-language selector → session_ids), `summary`, `path`, or `events`. Call `list` or `resolve` first when you need session_ids.',
+  },
+  {
+    name: 'analyze_replay_sessions',
+    permission: 'analysis',
+    description: 'Analyze replay session data by operation: `metrics` (per-session analytics), `compare` (rank multiple sessions), or `aggregate` (totals/averages/top-N over a selector or session_ids). Travel distance = path_length_m; furthest from start = max_distance_from_start_m.',
+  },
+  {
+    name: 'query_ai_memory',
+    permission: 'analysis',
+    description: 'Query AI chat session history by operation: `list` (saved sessions), `search` (messages by text), or `get` (a bounded message window from one session). Call `list` first to discover session_ids, or `search` to locate a specific message.',
+  },
+  {
+    name: 'query_settings',
     permission: 'read_only',
-    description: 'Get the active replay session summary.',
-  },
-  {
-    name: 'get_recent_telemetry',
-    permission: 'read_only',
-    description: 'Get recent telemetry samples from the active replay session.',
-  },
-  {
-    name: 'list_replay_sessions',
-    permission: 'analysis',
-    description: 'List replay sessions with started_at, ended_at, telemetry_count, control_count, and runtime_event_count. Use this to enumerate sessions, fetch latest/first sessions, or gather candidates before comparing or ranking by metrics.',
-  },
-  {
-    name: 'resolve_replay_sessions',
-    permission: 'analysis',
-    description: 'Resolve a natural-language replay session selector such as all sessions, latest 5 sessions, first session, or a date-based selector into explicit session_ids.',
-  },
-  {
-    name: 'get_replay_session_summary',
-    permission: 'read_only',
-    description: 'Get a replay session summary by session_id.',
-  },
-  {
-    name: 'get_replay_session_metrics',
-    permission: 'analysis',
-    description: 'Get computed replay analytics metrics for a session_id, including duration_s, path_length_m, net_displacement_m, and max_distance_from_start_m.',
-  },
-  {
-    name: 'get_replay_session_path',
-    permission: 'analysis',
-    description: 'Get downsampled replay path points for a session_id.',
-  },
-  {
-    name: 'search_replay_session_events',
-    permission: 'analysis',
-    description: 'Search runtime events within a replay session.',
-  },
-  {
-    name: 'compare_replay_sessions',
-    permission: 'analysis',
-    description: 'Compare multiple replay sessions by explicit session_ids. Returns per-session summaries and metrics so you can rank, sort, and answer longest/furthest questions. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
-  },
-  {
-    name: 'aggregate_replay_sessions',
-    permission: 'analysis',
-    description: 'Aggregate replay analytics across resolved selector results or explicit session_ids. Use this for totals, averages, built-in longest/latest/furthest summaries, and ranked top-N session lists. Travel distance means path_length_m. Furthest from home/start means max_distance_from_start_m.',
-  },
-  {
-    name: 'list_ai_sessions',
-    permission: 'analysis',
-    description: 'List saved AI chat sessions with bounded metadata, message counts, archival state, and latest-message previews. Call this before `get_ai_session_messages` when you need a specific session_id, or before `search_ai_messages` when the operator refers to earlier chats without naming the session.',
-  },
-  {
-    name: 'search_ai_messages',
-    permission: 'analysis',
-    description: 'Search saved AI messages by text across the current session or across saved sessions and return bounded match snippets with session/message references. Use this when the operator asks about earlier answers, prior discussions, or something that was said before and you need to locate the right session or message window.',
-  },
-  {
-    name: 'get_ai_session_messages',
-    permission: 'read_only',
-    description: 'Load a bounded window of saved AI messages from one session. If session_id is omitted, use the current AI session. Call this after `list_ai_sessions` or `search_ai_messages` when you need the surrounding conversation, not just a preview or search snippet.',
-  },
-  {
-    name: 'get_settings_summary',
-    permission: 'read_only',
-    description: 'Get the safe compact settings summary available to AI flows, including which top-level sections exist, key non-secret configuration summaries, and the settings path. Call this first before requesting one section with `get_settings_section` or checking provider/routing state with `get_llm_provider_summary`.',
-  },
-  {
-    name: 'get_settings_section',
-    permission: 'read_only',
-    description: 'Get one safe settings section by name. Supported sections are `mqtt`, `key_bindings`, `video`, `gcs`, `simulation`, `map`, `ai_settings`, and `settings_path`. Call `get_settings_summary` first if you need section discovery or a compact overview. This tool never exposes secrets.',
-  },
-  {
-    name: 'get_llm_provider_summary',
-    permission: 'read_only',
-    description: 'Get safe LLM provider and model-routing metadata, including enabled providers, active chat-provider resolution, and routing rules without exposing secrets. Use this when the operator asks which provider/model path is active or how AI routing is configured.',
+    description: 'Query GCS settings and LLM provider configuration by operation: `summary` (overview + section names), `section` (one section by name), or `provider` (safe provider/model-routing metadata). Never exposes secrets.',
   },
   {
     name: 'get_sensor_status',
@@ -371,7 +313,6 @@ const AI_MAP_HEIGHT_KEY = 'gcs-ai-map-height';
 const AI_SIDEBAR_MIN = 240;
 const AI_SIDEBAR_MAX = 560;
 const AI_SHELL_HEIGHT_MIN = 420;
-const AI_SHELL_HEIGHT_MAX = 1100;
 const AI_MAP_HEIGHT_MIN = 320;
 const AI_MAP_HEIGHT_MAX = 1100;
 const AI_MOBILE_QUERY = '(max-width: 1100px)';
@@ -556,13 +497,25 @@ const _MARKDOWN_PURIFY_CONFIG = {
   KEEP_CONTENT: true,
 };
 
+// Cache rendered markdown keyed by raw content. renderMarkdown is a pure
+// function of `content`, so during streaming we re-render the whole message
+// list every frame but only the one growing message actually re-parses —
+// completed messages become O(1) lookups instead of re-running marked+DOMPurify.
+const _markdownCache = new Map();
+
 function renderMarkdown(content) {
   if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
     return escapeHtml(content);
   }
+  const key = String(content || '');
+  const cached = _markdownCache.get(key);
+  if (cached !== undefined) return cached;
   ensureMarkdown();
-  const rawHtml = marked.parse(String(content || ''));
-  return DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+  const rawHtml = marked.parse(key);
+  const clean = DOMPurify.sanitize(rawHtml, _MARKDOWN_PURIFY_CONFIG);
+  if (_markdownCache.size > 200) _markdownCache.clear();
+  _markdownCache.set(key, clean);
+  return clean;
 }
 
 function postRenderMessages() {
@@ -577,8 +530,22 @@ function postRenderMessages() {
 
   // Copy raw markdown button
   list.querySelectorAll('.ai-message-copy-md').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const md = btn.dataset.md || '';
+    btn.addEventListener('click', (event) => {
+      const messageId = String(btn.dataset.messageId || '');
+      const session = aiState.activeSession;
+      const live = session ? liveStateFor(session.id) : null;
+      const message = (live?.messages || []).find((item) => String(item?.id || '') === messageId);
+      const activityState = readMessageActivityStateFromDom(btn.closest('.ai-message'));
+      const includeDiagnostics = Boolean(event.shiftKey || event.altKey);
+      const md = message
+        ? buildMessageMarkdown(message, {
+            includeDiagnostics,
+            activityOpen: activityState.activityOpen,
+            openToolIndexes: activityState.openToolIndexes,
+            openContextIndexes: activityState.openContextIndexes,
+          })
+        : (btn.dataset.md || '');
+      if (!String(md || '').trim()) return;
       navigator.clipboard.writeText(md).then(() => {
         btn.innerHTML = aiCheckIcon();
         btn.dataset.tooltip = 'Copied!';
@@ -708,6 +675,7 @@ function renderContextStatus(message) {
 function buildChatMarkdown(session, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
   const includeOpenActivity = options.includeOpenActivity !== false;
+  const activityStateByMessageId = options.activityStateByMessageId || null;
   const live = liveStateFor(session.id);
   const messages = (live?.messages || []).filter((m) => String(m.content || '').trim());
   const title = session.title || 'New chat';
@@ -715,33 +683,82 @@ function buildChatMarkdown(session, options = {}) {
   const lines = [`# Chat: ${title}${when ? ` — ${when}` : ''}`, ''];
 
   for (const message of messages) {
-    if (message.role === 'user') {
-      lines.push('## User', '', String(message.content).trim(), '');
-      continue;
-    }
-    if (message.role === 'assistant') {
-      const provider = providerNameForMessage(message);
-      const mode = messageRunMode(message);
-      const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
-      let header = `## Assistant (${provider}${modeLabel})`;
-      if (includeDiagnostics) {
-        const diag = [];
-        if (message.model_id) diag.push(message.model_id);
-        if (message.latency_ms) diag.push(`${message.latency_ms} ms`);
-        const stats = messageStats(message);
-        if (stats) diag.push(stats);
-        if (diag.length) header += ` — ${diag.join(' · ')}`;
-      }
-      lines.push(header, '', String(message.content).trim(), '');
-
-      if (shouldIncludeAgentActivityMarkdown(message, { includeDiagnostics, includeOpenActivity })) {
-        appendAgentActivityMarkdown(lines, message, { includeDiagnostics });
-      }
-      continue;
-    }
-    lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
+    const activityState = activityStateByMessageId?.[String(message?.id || '')] || {};
+    appendMessageMarkdown(lines, message, {
+      includeDiagnostics,
+      includeOpenActivity,
+      activityOpen: activityState.activityOpen,
+      openToolIndexes: activityState.openToolIndexes,
+      openContextIndexes: activityState.openContextIndexes,
+    });
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function buildMessageMarkdown(message, options = {}) {
+  const lines = [];
+  appendMessageMarkdown(lines, message, options);
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function messageMarkdownFooter(message) {
+  if (message?.role !== 'assistant') return '';
+  const parts = [providerNameForMessage(message)];
+  if (message.model_id) parts.push(String(message.model_id));
+  if (message.latency_ms) parts.push(`${message.latency_ms} ms`);
+  const stats = messageStats(message);
+  if (stats) parts.push(stats);
+  return parts.filter(Boolean).join(' · ');
+}
+
+function formatMessageTimestamp(message) {
+  const ts = message?.created_at;
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function appendMessageMarkdown(lines, message, options = {}) {
+  const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const includeOpenActivity = options.includeOpenActivity !== false;
+  if (message.role === 'user') {
+    const ts = formatMessageTimestamp(message);
+    const header = ts ? `## User · ${ts}` : '## User';
+    lines.push(header, '', String(message.content).trim(), '');
+    return;
+  }
+  if (message.role === 'assistant') {
+    const provider = providerNameForMessage(message);
+    const mode = messageRunMode(message);
+    const modeLabel = mode && mode !== 'chat' ? ` · ${runModeLabel(mode)}` : '';
+    const ts = formatMessageTimestamp(message);
+    const tsLabel = ts ? ` · ${ts}` : '';
+    let header = `## Assistant (${provider}${modeLabel})${tsLabel}`;
+    if (includeDiagnostics) {
+      const diag = [];
+      if (message.model_id) diag.push(message.model_id);
+      if (message.latency_ms) diag.push(`${message.latency_ms} ms`);
+      const stats = messageStats(message);
+      if (stats) diag.push(stats);
+      if (diag.length) header += ` — ${diag.join(' · ')}`;
+    }
+    lines.push(header, '', String(message.content).trim(), '');
+
+    if (shouldIncludeAgentActivityMarkdown(message, {
+      includeDiagnostics,
+      includeOpenActivity,
+      activityOpen: options.activityOpen,
+    })) {
+      appendAgentActivityMarkdown(lines, message, options);
+    }
+    const footer = messageMarkdownFooter(message);
+    if (footer) lines.push(`_${footer}_`, '');
+    return;
+  }
+  lines.push(`## ${message.role}`, '', String(message.content).trim(), '');
 }
 
 function shouldIncludeAgentActivityMarkdown(message, options = {}) {
@@ -750,11 +767,14 @@ function shouldIncludeAgentActivityMarkdown(message, options = {}) {
   if (messageRunMode(message) !== 'agent') return false;
   if (includeDiagnostics) return true;
   if (!includeOpenActivity) return false;
+  if (typeof options.activityOpen === 'boolean') return options.activityOpen;
   return isMessageActivityOpen(message?.id);
 }
 
 function appendAgentActivityMarkdown(lines, message, options = {}) {
   const includeDiagnostics = Boolean(options.includeDiagnostics);
+  const openToolIndexes = options.openToolIndexes instanceof Set ? options.openToolIndexes : null;
+  const openContextIndexes = options.openContextIndexes instanceof Set ? options.openContextIndexes : null;
   const calls = agentToolCalls(message);
   const trace = agentTraceEvents(message);
   const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
@@ -764,54 +784,14 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
   const iterations = distinctAgentIterations(message);
   if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return;
 
-  const status = calls.some((call) => (call?.status || '') === 'running')
-    ? 'Running'
-    : (calls.length ? 'Complete' : 'Recorded');
+  const runStart = trace.find((e) => e?.type === 'agent_run_start');
+  const runEnd = trace.find((e) => e?.type === 'agent_run_end');
 
   lines.push('### Agent activity', '');
-  lines.push(`- Status: ${status}`);
-  if (iterations.length) lines.push(`- Iterations: ${iterations.length}`);
-  if (calls.length) lines.push(`- Tool calls: ${calls.length}`);
-  if (promptCalls.length) lines.push(`- Context injections: ${promptCalls.length}`);
-  lines.push('');
 
-  if (trace.length) {
-    lines.push('#### Run trace', '');
-    trace.forEach((event, index) => {
-      const summary = summarizeAgentTraceEvent(event, index);
-      if (summary) lines.push(`- ${summary}`);
-    });
-    lines.push('');
-  }
-
-  if (calls.length) {
-    lines.push('#### Tools used', '');
-    calls.forEach((call, index) => {
-      const statusValue = call?.status || (call?.result !== undefined ? 'complete' : 'running');
-      const resultSummary = statusValue === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
-      const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
-      const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
-      const toolName = call?.name || call?.tool || `tool_${index + 1}`;
-      lines.push(`##### Tool ${index + 1}: \`${toolName}\``, '');
-      lines.push(`- Status: ${statusValue}`);
-      if (Number.isFinite(call?.iteration)) lines.push(`- Iteration: ${call.iteration}`);
-      if (latency) lines.push(`- Latency: ${latency}`);
-      if (argsSummary) lines.push(`- Arguments summary: ${argsSummary}`);
-      if (resultSummary && resultSummary !== statusValue) lines.push(`- Result summary: ${resultSummary}`);
-      lines.push('');
-
-      const argsValue = call?.args ?? call?.arguments;
-      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
-        lines.push('###### Arguments', '');
-        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
-      }
-      if (call?.result !== undefined) {
-        lines.push('###### Result', '');
-        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
-      } else if (includeDiagnostics) {
-        lines.push('###### Result', '', '_Waiting for tool result._', '');
-      }
-    });
+  if (runStart) {
+    const runMeta = [runStart.provider, runStart.model].filter(Boolean);
+    lines.push(`**Agent run**${runMeta.length ? ` · ${runMeta.join(' · ')}` : ''}`, '');
   }
 
   if (promptCalls.length) {
@@ -819,11 +799,70 @@ function appendAgentActivityMarkdown(lines, message, options = {}) {
     promptCalls.forEach((call, index) => {
       const name = call?.name || `context_${index + 1}`;
       const summary = summarizeAgentToolResult(call?.result);
-      lines.push(`##### Context ${index + 1}: \`${name}\``, '');
-      if (summary) lines.push(`- Summary: ${summary}`, '');
-      lines.push('###### Injected result', '');
-      lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+      lines.push(`- \`${name}\`${summary ? ` — ${summary}` : ''}`);
+      const includeContextPayload = includeDiagnostics || !openContextIndexes || openContextIndexes.has(index);
+      if (includeContextPayload && call?.result !== undefined) {
+        lines.push('');
+        lines.push(markdownCodeFence(jsonForMarkdown(call?.result), detectMarkdownCodeLang(call?.result)), '');
+      }
     });
+    lines.push('');
+  }
+
+  const appendToolLine = (call, index) => {
+    const status = call?.status || (call?.result !== undefined ? 'complete' : 'running');
+    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call?.result);
+    const argsSummary = summarizeAgentToolArgs(call?.args || call?.arguments);
+    const latency = Number.isFinite(call?.latency_ms) ? `${Math.round(call.latency_ms)} ms` : '';
+    const toolName = call?.name || call?.tool || `tool_${index + 1}`;
+    const parts = [`\`${toolName}\``];
+    if (argsSummary) parts.push(argsSummary);
+    if (resultSummary && resultSummary !== status) parts.push(resultSummary);
+    if (latency) parts.push(latency);
+    lines.push(`- ${parts.join(' · ')}`);
+    const includeToolPayload = includeDiagnostics || !openToolIndexes || openToolIndexes.has(index);
+    if (includeToolPayload) {
+      const argsValue = call?.args ?? call?.arguments;
+      if (argsValue && typeof argsValue === 'object' && Object.keys(argsValue).length) {
+        lines.push('');
+        lines.push(markdownCodeFence(jsonForMarkdown(argsValue), 'json'), '');
+      }
+      if (call?.result !== undefined) {
+        lines.push(markdownCodeFence(jsonForMarkdown(call.result), detectMarkdownCodeLang(call.result)), '');
+      } else if (includeDiagnostics) {
+        lines.push('', '_Waiting for tool result._', '');
+      }
+    }
+  };
+
+  if (iterations.length) {
+    iterations.forEach((n) => {
+      const iterCalls = calls
+        .map((call, index) => ({ call, index }))
+        .filter(({ call }) => Number(call.iteration) === n);
+      lines.push(`#### Iteration ${n}`, '');
+      if (!iterCalls.length) {
+        lines.push('- no tools', '');
+      } else {
+        iterCalls.forEach(({ call, index }) => appendToolLine(call, index));
+        lines.push('');
+      }
+    });
+    const orphaned = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => !Number.isFinite(Number(call.iteration)) || Number(call.iteration) <= 0);
+    if (orphaned.length) {
+      orphaned.forEach(({ call, index }) => appendToolLine(call, index));
+      lines.push('');
+    }
+  } else if (calls.length) {
+    calls.forEach((call, index) => appendToolLine(call, index));
+    lines.push('');
+  }
+
+  if (runEnd) {
+    const stopReason = runEnd.stop_reason || 'complete';
+    lines.push(`**Done · ${stopReason}**`, '');
   }
 
   if (fallbackError) {
@@ -952,95 +991,168 @@ function distinctAgentIterations(message) {
   return Array.from(iterations).sort((a, b) => a - b);
 }
 
-function renderAgentToolRows(message) {
-  const calls = agentToolCalls(message);
-  return calls.map((call) => {
-    const status = call.status || (call.result !== undefined ? 'complete' : 'running');
-    const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
-    const argsSummary = summarizeAgentToolArgs(call.args);
-    const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
-    const iteration = Number.isFinite(call.iteration) ? `Iteration ${call.iteration}` : '';
-    return `
-      <details class="ai-activity-step ai-agent-tool-row ai-agent-tool-${escapeHtml(status)}">
-        <summary>
-          <span class="ai-agent-tool-dot" aria-hidden="true"></span>
-          <span class="ai-activity-step-main">
-            <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
-            <span class="ai-activity-step-meta">
-              ${iteration ? `<span>${escapeHtml(iteration)}</span>` : ''}
-              ${argsSummary ? `<span>${escapeHtml(argsSummary)}</span>` : ''}
-            </span>
-          </span>
-          <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
-        </summary>
-        <div class="ai-activity-step-body">
-          ${call.args && typeof call.args === 'object' && Object.keys(call.args).length
-            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Arguments</div><pre>${prettyAgentJson(call.args, 2400)}</pre></div>`
-            : ''}
-          ${call.result !== undefined
-            ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Result</div><pre>${prettyAgentJson(call.result)}</pre></div>`
-            : '<div class="ai-activity-note">Waiting for tool result.</div>'}
-        </div>
-      </details>
-    `;
-  }).join('');
+function readMessageActivityStateFromDom(messageEl) {
+  const emptyState = {
+    activityOpen: false,
+    openToolIndexes: new Set(),
+    openContextIndexes: new Set(),
+  };
+  if (!messageEl) return emptyState;
+  const disclosure = messageEl.querySelector('[data-message-disclosure="activity"]');
+  if (!disclosure) return emptyState;
+
+  const openToolIndexes = new Set();
+  disclosure.querySelectorAll('[data-activity-kind="tool"][data-tool-index]').forEach((node) => {
+    const index = Number(node.dataset.toolIndex);
+    if (node.open && Number.isFinite(index) && index >= 0) openToolIndexes.add(index);
+  });
+
+  const openContextIndexes = new Set();
+  disclosure.querySelectorAll('[data-activity-kind="context"][data-context-index]').forEach((node) => {
+    const index = Number(node.dataset.contextIndex);
+    if (node.open && Number.isFinite(index) && index >= 0) openContextIndexes.add(index);
+  });
+
+  return {
+    activityOpen: disclosure.open,
+    openToolIndexes,
+    openContextIndexes,
+  };
 }
 
-function renderPromptContextRows(message) {
+function readActivityStateByMessageIdFromDom(rootEl) {
+  const stateByMessageId = {};
+  if (!rootEl) return stateByMessageId;
+  rootEl.querySelectorAll('.ai-message-copy-md[data-message-id]').forEach((button) => {
+    const messageId = String(button.dataset.messageId || '');
+    if (!messageId) return;
+    stateByMessageId[messageId] = readMessageActivityStateFromDom(button.closest('.ai-message'));
+  });
+  return stateByMessageId;
+}
+
+function renderAgentFlowToolCard(call, index) {
+  const status = call.status || (call.result !== undefined ? 'complete' : 'running');
+  const resultSummary = status === 'running' ? 'running' : summarizeAgentToolResult(call.result);
+  const argsSummary = summarizeAgentToolArgs(call.args);
+  const latency = Number.isFinite(call.latency_ms) ? ` · ${Math.round(call.latency_ms)} ms` : '';
+  return `
+    <details class="ai-activity-step ai-agent-tool-${escapeHtml(status)}" data-activity-kind="tool" data-tool-index="${Number.isFinite(index) ? index : ''}">
+      <summary>
+        <span class="ai-agent-tool-dot" aria-hidden="true"></span>
+        <span class="ai-activity-step-main">
+          <span class="ai-agent-tool-name">${escapeHtml(call.name || 'tool')}</span>
+          ${argsSummary ? `<span class="ai-activity-step-meta"><span>${escapeHtml(argsSummary)}</span></span>` : ''}
+        </span>
+        <span class="ai-agent-tool-status">${escapeHtml(resultSummary || status)}${latency}</span>
+      </summary>
+      <div class="ai-activity-step-body">
+        ${call.args && typeof call.args === 'object' && Object.keys(call.args).length
+          ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Arguments</div><pre>${prettyAgentJson(call.args, 2400)}</pre></div>`
+          : ''}
+        ${call.result !== undefined
+          ? `<div class="ai-activity-block"><div class="ai-activity-block-label">Result</div><pre>${prettyAgentJson(call.result)}</pre></div>`
+          : '<div class="ai-activity-note">Waiting for tool result.</div>'}
+      </div>
+    </details>
+  `;
+}
+
+function renderAgentFlow(message) {
+  const calls = agentToolCalls(message);
+  const trace = agentTraceEvents(message);
   const promptCalls = Array.isArray(message?.meta?.prompt_context_tool_calls)
     ? message.meta.prompt_context_tool_calls
     : [];
-  if (!promptCalls.length) return '';
-  const rows = promptCalls.map((call) => {
-    const summary = summarizeAgentToolResult(call?.result);
-    return `
-      <details class="ai-activity-step">
-        <summary>
-          <span class="ai-activity-step-kind">Context</span>
-          <span class="ai-activity-step-main">
-            <span class="ai-agent-tool-name">${escapeHtml(call?.name || 'context')}</span>
-          </span>
-          <span class="ai-agent-tool-status">${escapeHtml(summary || 'available')}</span>
-        </summary>
-        <div class="ai-activity-step-body">
-          <div class="ai-activity-block">
-            <div class="ai-activity-block-label">Injected result</div>
-            <pre>${prettyAgentJson(call?.result)}</pre>
-          </div>
-        </div>
-      </details>
-    `;
-  }).join('');
-  return `
-    <section class="ai-activity-section">
-      <div class="ai-activity-section-title">Context used</div>
-      <div class="ai-activity-step-list">${rows}</div>
-    </section>
-  `;
-}
+  const fallbackError = String(message?.meta?.agent_tool_fallback_error || '').trim();
+  if (!calls.length && !trace.length && !promptCalls.length && !fallbackError) return '';
 
-function renderAgentTraceChips(message) {
-  const trace = agentTraceEvents(message);
-  const chips = trace.map((event) => {
-    if (!event || typeof event !== 'object') return '';
-    if (event.type === 'agent_iteration_start') {
-      return `<span class="ai-activity-chip">Iteration ${escapeHtml(String(event.iteration || '?'))}</span>`;
+  const runStart = trace.find((e) => e?.type === 'agent_run_start');
+  const runEnd = trace.find((e) => e?.type === 'agent_run_end');
+  const iterations = distinctAgentIterations(message);
+  const nodes = [];
+
+  // Agent run start node
+  const runMeta = [runStart?.provider, runStart?.model].filter(Boolean);
+  nodes.push(`<div class="ai-flow-node ai-flow-node-start">
+    <span class="ai-flow-label">Agent run${runMeta.length ? `<span class="ai-flow-meta"> · ${escapeHtml(runMeta.join(' · '))}</span>` : ''}</span>
+  </div>`);
+
+  // Context preamble node (rendered before iteration 1 until ADR 0029 removes the duplicate)
+  if (promptCalls.length) {
+    const rows = promptCalls.map((call, index) => {
+      const summary = summarizeAgentToolResult(call?.result);
+      return `
+        <details class="ai-activity-step" data-activity-kind="context" data-context-index="${index}">
+          <summary>
+            <span class="ai-activity-step-kind">Context</span>
+            <span class="ai-activity-step-main">
+              <span class="ai-agent-tool-name">${escapeHtml(call?.name || 'context')}</span>
+            </span>
+            <span class="ai-agent-tool-status">${escapeHtml(summary || 'available')}</span>
+          </summary>
+          <div class="ai-activity-step-body">
+            <div class="ai-activity-block">
+              <div class="ai-activity-block-label">Injected result</div>
+              <pre>${prettyAgentJson(call?.result)}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }).join('');
+    nodes.push(`<div class="ai-flow-node ai-flow-node-context">
+      <span class="ai-flow-label">Context used</span>
+      <div class="ai-flow-tool-list">${rows}</div>
+    </div>`);
+  }
+
+  // Iteration nodes with nested tool cards
+  if (iterations.length) {
+    iterations.forEach((n) => {
+      const iterCalls = calls
+        .map((call, index) => ({ call, index }))
+        .filter(({ call }) => Number(call.iteration) === n);
+      const toolHtml = iterCalls.map(({ call, index }) => renderAgentFlowToolCard(call, index)).join('');
+      nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+        <span class="ai-flow-label">Iteration ${n}</span>
+        ${toolHtml
+          ? `<div class="ai-flow-tool-list">${toolHtml}</div>`
+          : '<span class="ai-flow-empty">no tools</span>'}
+      </div>`);
+    });
+    const orphaned = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => !Number.isFinite(Number(call.iteration)) || Number(call.iteration) <= 0);
+    if (orphaned.length) {
+      const toolHtml = orphaned.map(({ call, index }) => renderAgentFlowToolCard(call, index)).join('');
+      nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+        <div class="ai-flow-tool-list">${toolHtml}</div>
+      </div>`);
     }
-    if (event.type === 'agent_run_end') {
-      return `<span class="ai-activity-chip">Done · ${escapeHtml(String(event.stop_reason || 'complete'))}</span>`;
-    }
-    if (event.type === 'agent_run_start') {
-      return `<span class="ai-activity-chip">Agent run</span>`;
-    }
-    return '';
-  }).filter(Boolean).join('');
-  if (!chips) return '';
-  return `
-    <section class="ai-activity-section">
-      <div class="ai-activity-section-title">Run trace</div>
-      <div class="ai-activity-chip-row">${chips}</div>
-    </section>
-  `;
+  } else if (calls.length) {
+    const toolHtml = calls.map((call, index) => renderAgentFlowToolCard(call, index)).join('');
+    nodes.push(`<div class="ai-flow-node ai-flow-node-iteration">
+      <div class="ai-flow-tool-list">${toolHtml}</div>
+    </div>`);
+  }
+
+  // Done node
+  if (runEnd) {
+    const stopReason = runEnd.stop_reason || 'complete';
+    nodes.push(`<div class="ai-flow-node ai-flow-node-end">
+      <span class="ai-flow-label">Done · ${escapeHtml(stopReason)}</span>
+    </div>`);
+  }
+
+  // Fallback error node
+  if (fallbackError) {
+    nodes.push(`<div class="ai-flow-node ai-flow-node-error">
+      <span class="ai-flow-label">Fallback</span>
+      <span class="ai-flow-empty">${escapeHtml(fallbackError)}</span>
+    </div>`);
+  }
+
+  return `<div class="ai-flow">${nodes.join('')}</div>`;
 }
 
 function renderAgentActivityDisclosure(message, options = {}) {
@@ -1067,8 +1179,10 @@ function renderAgentActivityDisclosure(message, options = {}) {
   const stateLabel = pending
     ? (calls.length ? 'Live' : 'Starting')
     : (calls.length ? 'Complete' : 'Recorded');
-  const toolRows = renderAgentToolRows(message);
   const openAttr = isMessageActivityOpen(message.id, pending) ? ' open' : '';
+  const flowContent = renderAgentFlow(message);
+  const panelContent = flowContent
+    || (pending ? '<div class="ai-activity-note">Waiting for the first tool call.</div>' : '');
 
   return `
     <details class="ai-activity-disclosure ai-activity-${escapeHtml(status)}${pending ? ' ai-activity-live' : ''}" data-message-disclosure="activity" data-message-id="${escapeHtml(message.id)}"${openAttr}>
@@ -1092,20 +1206,7 @@ function renderAgentActivityDisclosure(message, options = {}) {
         </span>
       </summary>
       <div class="ai-activity-panel">
-        ${renderAgentTraceChips(message)}
-        ${toolRows
-          ? `<section class="ai-activity-section">
-              <div class="ai-activity-section-title">Tools used</div>
-              <div class="ai-activity-step-list">${toolRows}</div>
-            </section>`
-          : (pending ? '<div class="ai-activity-note">Waiting for the first tool call.</div>' : '')}
-        ${renderPromptContextRows(message)}
-        ${fallbackError
-          ? `<section class="ai-activity-section">
-              <div class="ai-activity-section-title">Fallback</div>
-              <div class="ai-activity-note">${escapeHtml(fallbackError)}</div>
-            </section>`
-          : ''}
+        ${panelContent}
       </div>
     </details>
   `;
@@ -2198,7 +2299,29 @@ function updateMessageListScrollIntent() {
   saveSessionScrollState();
 }
 
+// Stream events can fire many times per network chunk (one per token delta plus
+// tool/trace events), all processed synchronously in a tight loop. Rendering on
+// every one rebuilds the full message DOM repeatedly and blocks the main thread
+// — freezing the UI and restarting the thinking animation each time. Coalesce
+// those into at most one render per animation frame so the browser stays
+// responsive and CSS animations can actually paint.
+let _coalescedRenderHandle = null;
+
+function scheduleRenderMessages() {
+  if (_coalescedRenderHandle !== null) return;
+  _coalescedRenderHandle = requestAnimationFrame(() => {
+    _coalescedRenderHandle = null;
+    renderMessages();
+  });
+}
+
 function renderMessages(options = {}) {
+  // A direct render supersedes any frame we had queued; drop it to avoid an
+  // extra rebuild painting a stale intermediate state on top of this one.
+  if (_coalescedRenderHandle !== null) {
+    cancelAnimationFrame(_coalescedRenderHandle);
+    _coalescedRenderHandle = null;
+  }
   const preserveScroll = Boolean(options.preserveScroll);
   const forceScrollBottom = Boolean(options.forceScrollBottom);
   const restoreScrollTop = Number.isFinite(options.restoreScrollTop)
@@ -2578,9 +2701,11 @@ function handleAiStreamEvent(sessionId, eventData) {
   } else if (eventData.type === 'error') {
     throw new Error(String(eventData.detail || 'Chat streaming failed.'));
   }
-  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI
+  // Only re-render if this session is currently viewed — avoids clobbering the active session's UI.
+  // Coalesced to one render per frame so a burst of deltas in a single network chunk doesn't
+  // block the main thread (see scheduleRenderMessages).
   if (aiState.activeSession?.id === sessionId) {
-    renderMessages();
+    scheduleRenderMessages();
   }
   if (autoSpeakMessageId) {
     speakAiMessage(autoSpeakMessageId).catch((error) => setAiStatus(error.message, 'warn'));
@@ -3392,7 +3517,7 @@ function bindLayoutResizer() {
 }
 
 function clampShellHeight(value) {
-  return Math.max(AI_SHELL_HEIGHT_MIN, Math.min(AI_SHELL_HEIGHT_MAX, Number(value) || 680));
+  return Math.max(AI_SHELL_HEIGHT_MIN, Number(value) || 680);
 }
 
 function setShellHeight(height, persist = true) {
@@ -3456,7 +3581,7 @@ function bindHeightResizer() {
     event.preventDefault();
     const currentHeight = Number(aiEls.heightResizer.getAttribute('aria-valuenow')) || 680;
     if (event.key === 'Home') setShellHeight(AI_SHELL_HEIGHT_MIN);
-    else if (event.key === 'End') setShellHeight(AI_SHELL_HEIGHT_MAX);
+    else if (event.key === 'End') setShellHeight(document.documentElement.scrollHeight);
     else setShellHeight(currentHeight + (event.key === 'ArrowDown' ? 32 : -32));
   });
 }
@@ -3600,7 +3725,10 @@ function bindAi() {
     const session = aiState.activeSession;
     if (!session) return;
     const includeDiagnostics = Boolean(event.shiftKey || event.altKey);
-    const md = buildChatMarkdown(session, { includeDiagnostics });
+    const md = buildChatMarkdown(session, {
+      includeDiagnostics,
+      activityStateByMessageId: readActivityStateByMessageIdFromDom(aiEls.messageList),
+    });
     if (!md.trim()) {
       setAiStatus('Nothing to copy yet.', 'warn');
       return;
@@ -3710,13 +3838,16 @@ function bindAi() {
 }
 
 async function initAi() {
+  const isMissionConsole = document.body.dataset.page === 'mission-console';
   window.GCSCommon?.initShell({
-    page: 'ai',
-    title: 'AI Chat',
-    subtitle: 'Provider-backed chat sessions for testing configured LLMs.',
+    page: isMissionConsole ? 'mission-console' : 'ai',
+    title: isMissionConsole ? 'Mission Console' : 'AI Chat',
+    subtitle: isMissionConsole
+      ? 'Prototype console combining replay sessions, mission map, and AI agent chat.'
+      : 'Provider-backed chat sessions for testing configured LLMs.',
   });
   const intro = document.querySelector('[data-page-intro]');
-  if (intro && !intro.querySelector('.ai-intro-grid')) {
+  if (!isMissionConsole && intro && !intro.querySelector('.ai-intro-grid')) {
     intro.innerHTML = `
       <div class="ai-intro-grid">
         <div class="ai-intro-main">

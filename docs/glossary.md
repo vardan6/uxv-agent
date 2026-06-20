@@ -152,6 +152,12 @@ sim build → Autonomous, real-rover build → Strict. Runtime configurable via
 [decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md),
 which supersedes the historical two-approval model.
 
+## Mission Console
+
+The primary GCS operator workspace for mission-focused work. It brings replay
+session context, the mission map, Mission management, and AI Session chat into a
+single page while preserving each surface's existing behavior and ownership.
+
 ## Model Routing
 
 The mapping from AI purpose (General Chat, Mission Planner, Rover Intent

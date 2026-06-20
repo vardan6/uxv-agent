@@ -6,6 +6,11 @@ Status date: 2026-06-01.
 
 Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. The Mission Planner Modernization work (ADRs [0021](../../cross-cutting/decisions/0021-mission-lifecycle.md)/[0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md)/[0023](../../cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md), Phases 1–6) has since landed on `feat/gps-master-coordinate-frame`: external controller link (pymavlink + MAVSDK adapters with health/read/write/clear), a relocatable behavior-tree executor that uploads nav segments to the FC, GPS-master WGS84 coordinate truth, the flat-Mission lifecycle UI, and a real 2D basemap render mode. Replay still uses its separate `static/replay.js` surface; video transport hardening remains a later slice. For live phase/slice status see `roadmap.md`.
 
+Mission Console is now the main browser entry point. `/` redirects to
+`/mission-console`; the previous manual-control dashboard remains available at
+`/dashboard`. The console is a composition layer over existing surfaces, not a
+second implementation of replay, Missions, or AI Session behavior.
+
 ## Table of Contents
 
 - [Scope](#scope)
@@ -86,6 +91,15 @@ For the HTTP and WebSocket surface, see [design.md](./design.md).
 
 ## Browser Workflow
 
+Mission-focused workflow starts in Mission Console:
+
+1. browser loads `/mission-console`
+2. replay sessions are listed from the existing replay API
+3. `MapWidget` renders the mission map and Missions surface
+4. AI Session chat reuses the existing `/ai` frontend/runtime behavior
+
+Manual driving still uses the dashboard:
+
 1. browser loads the dashboard
 2. browser opens WebSocket to the GCS
 3. browser receives the current runtime snapshot
@@ -136,6 +150,21 @@ Current AI Chat behavior:
   in [design/intent-plan-cleanup.md](./intent-plan-cleanup.md)
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
+
+### AI chat frontend layout
+
+The `/ai` chat layout is owned by `static/ai.html`, `static/ai.js`, and
+`static/style.css`. Its sessions/sidebar resizer should follow the lighter
+`MapWidget` list-resizer pattern: keep the usable hit target, make the visible
+divider narrow and low contrast, and let the adjacent panel own any subtle
+border. Do not fork resize semantics away from the current AI chat behavior:
+saved sidebar width, pointer capture, ARIA separator values, keyboard arrow
+resizing, and the mobile rule that hides the divider must keep working.
+
+Visual cleanup of the chat workspace should be CSS-first unless a behavior bug
+requires JavaScript. It must not touch AI session/message storage, provider
+routing, streaming/retry/stop behavior, source controls, or `MapWidget`
+mission/map behavior.
 
 ## Map Widget
 

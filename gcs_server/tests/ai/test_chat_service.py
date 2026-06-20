@@ -42,10 +42,10 @@ class _FakeRegistry:
 
     def build_langchain_tools(self, runtime, context_snapshot, *, timezone_name="", permissions=None):
         self.context_snapshots.append(context_snapshot)
-        return [_FakeTool("query_objects_in_front")]
+        return [_FakeTool("query_map_objects")]
 
     def definitions(self):
-        return [_FakeDefinition("query_objects_in_front")]
+        return [_FakeDefinition("query_map_objects")]
 
 
 class _FakeBoundModel:
@@ -124,7 +124,7 @@ def test_agent_tool_binding_disables_strict_mode_for_optional_tool_args() -> Non
     assert runtime is not None
     assert len(model.bind_calls) == 1
     assert model.bind_calls[0]["kwargs"] == {"strict": False}
-    assert [tool.name for tool in model.bind_calls[0]["tools"]] == ["query_objects_in_front"]
+    assert [tool.name for tool in model.bind_calls[0]["tools"]] == ["query_map_objects"]
     assert registry.context_snapshots[0]["__agent_run_mode"] == "agent"
 
 
