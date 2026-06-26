@@ -116,10 +116,12 @@ Recommended compression order:
 
 1. keep base description + operation/mode/action values
 2. keep required arguments and compact return-shape summary
-3. trim or omit always-on `upstream_from_tools`
-4. trim or omit always-on `next_tools`
+3. trim or omit always-on `upstream_from_tools` — **done** (2026-06-24): omitted
+   from `_tool_runtime_description`, retained in `TOOL_CONTRACTS`/`/capabilities`
+4. trim or omit always-on `next_tools` — **done** (2026-06-24, same slice)
 5. compress verbose `returns` branch maps into top-level summaries when the
-   branch detail is already clear elsewhere
+   branch detail is already clear elsewhere — still gated on the live
+   tool-chaining checklist confirmation for steps 3–4
 
 Do **not** "optimize" by removing contracts entirely. For dispatcher tools that
 would trade token savings for weaker discoverability and higher invalid-call

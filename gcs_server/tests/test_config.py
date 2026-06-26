@@ -20,6 +20,7 @@ def test_optional_config_getters_do_not_mutate_raw_when_keys_are_missing() -> No
     assert config.ai_settings == {}
     assert config.llm_providers == []
     assert config.model_routing == {}
+    assert config.osd_presets == []
     assert raw == {
         "mqtt": {},
         "video": {},

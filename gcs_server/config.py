@@ -6,9 +6,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+VIDEO_OSD_LINE_IDS = ("position", "speed_heading", "gps", "power", "camera")
+VIDEO_OSD_CORNERS = ("top-right", "top-left", "bottom-right", "bottom-left")
+DEFAULT_VIDEO_OSD_PRESETS: list[dict[str, Any]] = [
+    {
+        "id": "default",
+        "name": "Default Overlay",
+        "lines": ["position", "speed_heading", "gps", "power", "camera"],
+        "corner": "top-right",
+        "opacity": 0.92,
+        "compact": False,
+    }
+]
+
 DEFAULT_GCS_SETTINGS: dict[str, Any] = {
     "mqtt": {},
     "video": {},
+    "osd_presets": copy.deepcopy(DEFAULT_VIDEO_OSD_PRESETS),
     "gcs": {},
     "key_bindings": {},
     "simulation": {},
@@ -89,6 +103,44 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def normalize_osd_presets(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return copy.deepcopy(DEFAULT_VIDEO_OSD_PRESETS)
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        preset_id = str(item.get("id") or f"preset-{index + 1}").strip() or f"preset-{index + 1}"
+        if preset_id in seen_ids:
+            preset_id = f"{preset_id}-{index + 1}"
+        seen_ids.add(preset_id)
+        seen_lines: set[str] = set()
+        raw_lines = item.get("lines")
+        lines = []
+        if isinstance(raw_lines, list):
+            for line in raw_lines:
+                line_id = str(line).strip()
+                if line_id in VIDEO_OSD_LINE_IDS and line_id not in seen_lines:
+                    seen_lines.add(line_id)
+                    lines.append(line_id)
+        corner = str(item.get("corner") or "top-right").strip()
+        try:
+            opacity = float(item.get("opacity", 0.92))
+        except (TypeError, ValueError):
+            opacity = 0.92
+        normalized.append({
+            "id": preset_id,
+            "name": str(item.get("name") or "Untitled Preset").strip() or "Untitled Preset",
+            "lines": lines,
+            "corner": corner if corner in VIDEO_OSD_CORNERS else "top-right",
+            "opacity": round(min(1.0, max(0.2, opacity)), 2),
+            "compact": bool(item.get("compact", False)),
+        })
+    return normalized
+
+
 @dataclass(slots=True)
 class AppConfig:
     raw: dict[str, Any]
@@ -105,6 +157,13 @@ class AppConfig:
     @property
     def gcs(self) -> dict[str, Any]:
         return self.raw["gcs"]
+
+    @property
+    def osd_presets(self) -> list[dict[str, Any]]:
+        presets = self.raw.get("osd_presets")
+        if presets is None:
+            return []
+        return normalize_osd_presets(presets)
 
     @property
     def key_bindings(self) -> dict[str, list[str]]:

@@ -50,6 +50,9 @@ from gcs_server.routers.llm import _repair_stored_secret_refs
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
+# Greenfield operator console (ADR 0030): Vite builds here; served under /app
+# with an SPA fallback. /api + /ws remain the backend contract for all clients.
+WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
 
 
 def _resolve_gcs_data_path(path: object) -> Path:
@@ -104,6 +107,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if (WEBAPP_DIR / "assets").is_dir():
+    app.mount("/app/assets", StaticFiles(directory=WEBAPP_DIR / "assets"), name="webapp-assets")
 app.include_router(replay_router_module.router)
 app.include_router(settings_router_module.router)
 app.include_router(llm_router_module.router)
@@ -118,7 +123,7 @@ app.include_router(rag_router_module.router)
 async def add_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/dashboard") or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/ai") or path.startswith("/mission-console") or path.startswith("/static/"):
+    if path == "/" or path.startswith("/dashboard") or path.startswith("/setup/") or path.startswith("/settings") or path.startswith("/ai") or path.startswith("/mission-console") or path.startswith("/static/") or path == "/app" or (path.startswith("/app/") and not path.startswith("/app/assets/")):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -272,7 +277,13 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             message = await websocket.receive_json()
             msg_type = message.get("type")
-            if msg_type == "control":
+            op = message.get("op")
+            topic = message.get("topic")
+            if op == "subscribe" and isinstance(topic, str):
+                await runtime.ws_manager.subscribe(client_id, topic)
+            elif op == "unsubscribe" and isinstance(topic, str):
+                await runtime.ws_manager.unsubscribe(client_id, topic)
+            elif msg_type == "control":
                 ok = await runtime.control_service.set_buttons(client_id, message.get("buttons", {}))
                 if not ok:
                     await runtime.ws_manager.send(client_id, {
@@ -304,6 +315,43 @@ async def mqtt_setup_page() -> RedirectResponse:
 @app.get("/replay")
 async def replay_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "replay.html")
+
+
+def _webapp_index() -> FileResponse:
+    index = WEBAPP_DIR / "index.html"
+    if not index.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="Operator console build missing. Run `npm run build` in frontend/.",
+        )
+    return FileResponse(index)
+
+
+def _webapp_file(name: str) -> FileResponse:
+    target = WEBAPP_DIR / name
+    if not target.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Operator console asset missing: {name}. Run `npm run build` in frontend/.",
+        )
+    return FileResponse(target)
+
+
+@app.get("/app")
+async def operator_console_index() -> FileResponse:
+    return _webapp_index()
+
+
+@app.get("/app/popout.html")
+async def operator_console_popout() -> FileResponse:
+    return _webapp_file("popout.html")
+
+
+@app.get("/app/{path:path}")
+async def operator_console_spa(path: str) -> FileResponse:
+    # SPA fallback: client-side routes resolve to index.html. Real build assets
+    # are served by the /app/assets static mount, which takes precedence.
+    return _webapp_index()
 
 
 if __name__ == "__main__":

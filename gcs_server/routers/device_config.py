@@ -126,7 +126,13 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="broker_port must be positive")
     if updated["control_hz"] <= 0:
         raise HTTPException(status_code=400, detail="control_hz must be positive")
-    updated["rover_availability"] = _rover_availability_policy_from_mqtt(updated)
+    rover_availability_payload = mqtt_payload.get("rover_availability")
+    if rover_availability_payload is not None and not isinstance(rover_availability_payload, dict):
+        raise HTTPException(status_code=400, detail="mqtt.rover_availability must be an object")
+    updated["rover_availability"] = _rover_availability_policy_from_mqtt({
+        **updated,
+        **({"rover_availability": rover_availability_payload} if rover_availability_payload is not None else {}),
+    })
 
     runtime.config.raw.setdefault("mqtt", {}).update(updated)
     save_config(runtime.config)
@@ -154,7 +160,7 @@ async def set_video_mode(request: Request) -> JSONResponse:
     save_config(runtime.config)
 
     modes = await runtime.state_store.set_video_modes(enabled, ingest_mode, delivery_mode)
-    await runtime.ws_manager.broadcast({"type": "video_mode", "data": modes})
+    await runtime.ws_manager.broadcast({"type": "video", "data": modes})
     return JSONResponse({"ok": True, "video": modes})
 
 

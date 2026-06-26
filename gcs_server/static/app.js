@@ -698,7 +698,7 @@ function connectSocket() {
       void syncBrowserControlState();
     } else if (msg.type === 'video_frame') {
       updateVideoFrame(msg.data);
-    } else if (msg.type === 'video_mode') {
+    } else if (msg.type === 'video' || msg.type === 'video_mode') {
       updateVideoMode(msg.data);
     } else if (msg.type === 'error') {
       state.controlActivationPending = false;

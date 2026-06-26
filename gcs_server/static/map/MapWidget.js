@@ -197,6 +197,9 @@ export class MapWidget {
     this._infoBarGps = null;
     this._infoBarSel = null;
     this._statusBar = opts.statusBar || null;
+    this._replayPathLayer = null;
+    this._replayTrackVisible = true;
+    this._liveRoverVisible = true;
   }
 
   mount() {
@@ -417,6 +420,8 @@ export class MapWidget {
     this._sceneObjectsLayer = null;
     this._gridLayer?.remove();
     this._gridLayer = null;
+    this._replayPathLayer?.remove();
+    this._replayPathLayer = null;
     this._overlayCacheByMissionId.clear();
     if (this._editStateSubscriber) {
       editState.unsubscribe(this._editStateSubscriber);
@@ -441,6 +446,10 @@ export class MapWidget {
     this._basemapPanel?.invalidateSize();
   }
 
+  getLeafletMap() {
+    return this._map;
+  }
+
   setSessionId(sessionId) {
     const nextSessionId = sessionId || '';
     if (nextSessionId !== this._sessionId) {
@@ -460,6 +469,130 @@ export class MapWidget {
     }
     this._pollExecutionState().catch(() => {});
     this.refresh();
+  }
+
+  /**
+   * Push a static replay track onto this map (R5a).
+   * Each point is {@link ReplayPathPoint}-shaped: `position` (scene metres x/y)
+   * takes precedence; `gps` is converted via `georefOrigin` when scene coords are
+   * absent. Points with neither usable source are skipped (GPS-only sessions
+   * without an origin produce an empty track by design).
+   *
+   * @param {{ position: {x:number,y:number,z:number}|null, gps: {lat:number,lon:number}|null }[]} points
+   * @param {{ lat: number, lon: number } | null} georefOrigin
+   */
+  setReplayPath(points, georefOrigin = null) {
+    this.setReplayTracks([{ points, georefOrigin, color: '#3b82f6', visible: true }]);
+  }
+
+  /**
+   * Render multiple session tracks at once (R8 — multi-session per map). Each
+   * track is `{ points, color?, visible?, georefOrigin? }`; points share the
+   * `setReplayPath` shape (scene-metres primary, GPS fallback via georefOrigin).
+   * Replaces whatever was drawn before. The global `_replayTrackVisible` toggle
+   * and the per-track `visible` flag both gate a track.
+   */
+  setReplayTracks(tracks = []) {
+    if (!this._map) return;
+    this._clearReplayPathLayer();
+
+    const layer = L.layerGroup();
+    let drew = false;
+    for (const track of tracks) {
+      if (track.visible === false) continue;
+      const latlngs = this._replayPointsToLatLngs(track.points || [], track.georefOrigin || null);
+      if (!latlngs.length) continue;
+      L.polyline(latlngs, {
+        color: track.color || '#3b82f6',
+        weight: 2.5,
+        opacity: 0.85,
+      }).addTo(layer);
+      drew = true;
+    }
+
+    if (!drew) return;
+    this._replayPathLayer = layer;
+    if (this._replayTrackVisible) layer.addTo(this._map);
+  }
+
+  _replayPointsToLatLngs(points, georefOrigin = null) {
+    const METRES_PER_DEG = 111320.0;
+    const latlngs = [];
+    for (const pt of points) {
+      if (pt.position) {
+        latlngs.push([pt.position.y, pt.position.x]);
+      } else if (pt.gps && georefOrigin) {
+        const cosLat = Math.cos(georefOrigin.lat * Math.PI / 180);
+        const sceneX = (pt.gps.lon - georefOrigin.lon) * METRES_PER_DEG * cosLat;
+        const sceneY = (pt.gps.lat - georefOrigin.lat) * METRES_PER_DEG;
+        latlngs.push([sceneY, sceneX]);
+      }
+    }
+    return latlngs;
+  }
+
+  clearReplayPath() {
+    this._clearReplayPathLayer();
+  }
+
+  /**
+   * Move the current-frame marker to the point at `index` in the path array.
+   * Points use the same shape as `setReplayPath` (scene-metres primary, GPS
+   * fallback deferred until georef origin is wired).
+   */
+  setReplayFrame(index, points) {
+    if (!this._map || !points?.length) return;
+    const safeIndex = Math.max(0, Math.min(index, points.length - 1));
+    const pt = points[safeIndex];
+    let latlng = null;
+    if (pt.position) {
+      latlng = [pt.position.y, pt.position.x];
+    }
+    if (!latlng) {
+      this.clearReplayFrame();
+      return;
+    }
+    if (!this._replayFrameMarker) {
+      this._replayFrameMarker = L.circleMarker(latlng, {
+        radius: 7,
+        color: '#ffffff',
+        fillColor: '#3b82f6',
+        fillOpacity: 1,
+        weight: 2,
+        className: 'current-frame-icon',
+      }).addTo(this._map);
+    } else {
+      this._replayFrameMarker.setLatLng(latlng);
+    }
+    this._replayFrameMarker.bringToFront();
+  }
+
+  clearReplayFrame() {
+    if (this._replayFrameMarker) {
+      this._replayFrameMarker.remove();
+      this._replayFrameMarker = null;
+    }
+  }
+
+  setReplayTrackVisible(visible) {
+    this._replayTrackVisible = visible;
+    if (this._replayPathLayer) {
+      if (visible) this._replayPathLayer.addTo(this._map);
+      else this._replayPathLayer.remove();
+    }
+  }
+
+  setLiveRoverVisible(visible) {
+    this._liveRoverVisible = visible;
+    this._vehicleLayer?.setVisible(visible);
+  }
+
+  _clearReplayPathLayer() {
+    if (this._replayPathLayer) {
+      this._replayPathLayer.remove();
+      this._replayPathLayer = null;
+    }
+    this.clearReplayFrame();
   }
 
   async refresh() {
@@ -2121,12 +2254,12 @@ export class MapWidget {
     const head = document.createElement('div');
     head.className = 'map-widget-head';
     const title = document.createElement('h2');
+    title.className = 'map-widget-map-title';
     title.textContent = 'Mission Map';
     const sessionPill = document.createElement('span');
     sessionPill.className = 'pill warn map-widget-session-pill';
     sessionPill.textContent = this._sessionId || 'No session';
     this._sessionPillEl = sessionPill;
-    head.append(title, sessionPill);
 
     const shell = document.createElement('div');
     shell.className = 'map-widget-shell';
@@ -2397,6 +2530,14 @@ export class MapWidget {
     }
     this._layerBar = layerBar;
 
+    const mapTitleGroup = document.createElement('div');
+    mapTitleGroup.className = 'map-widget-map-title-group';
+    mapTitleGroup.append(title, sessionPill);
+
+    const mapTopBar = document.createElement('div');
+    mapTopBar.className = 'map-widget-map-topbar';
+    mapTopBar.append(mapTitleGroup, layerBar);
+
     const fitToolbar = document.createElement('div');
     fitToolbar.className = 'map-overlay-card map-fit-actions map-fit-toolbar';
     fitToolbar.setAttribute('aria-label', 'Fit view');
@@ -2440,7 +2581,7 @@ export class MapWidget {
     mapWrap.append(mapEl, emptyState, editBanner, selectionPanelWrap, marqueeEl, ctrlRight, infoBar, authoringToolbarDock);
     const mapCol = document.createElement('div');
     mapCol.className = 'map-widget-map-col';
-    mapCol.append(layerBar, mapWrap);
+    mapCol.append(mapTopBar, mapWrap);
     shell.append(listEl, listResizer, mapCol);
 
     // Context menu (absolute-positioned inside container)
@@ -2480,7 +2621,7 @@ export class MapWidget {
     elevationEl.className = 'map-elevation-panel';
     this._elevationEl = elevationEl;
 
-    this._container.append(head, shell, elevationEl, confirmModal);
+    this._container.append(shell, elevationEl, confirmModal);
 
     // Keyboard help overlay (<dialog> appended to container by constructor)
     this._keyboardHelp = new KeyboardHelpOverlay(this._container);

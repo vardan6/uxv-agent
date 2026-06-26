@@ -223,7 +223,11 @@ class MQTTRuntime:
             return
         if modes.get("delivery_mode") != "websocket_mjpeg":
             return
-        await self._ws_manager.broadcast({"type": "video_frame", "data": frame})
+        topic = "video/default"
+        await self._ws_manager.broadcast_to_subscribers(
+            topic,
+            {"type": "video_frame", "topic": topic, "data": frame},
+        )
 
     def _schedule(self, coroutine) -> None:
         if self._loop is None:

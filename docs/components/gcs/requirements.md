@@ -96,7 +96,7 @@ status and navigation.
 
 ### What The Operator Sees
 
-- **Camera feed**: a live JPEG stream of the rover's POV camera, delivered through the MQTT → WebSocket bootstrap path. A status indicator shows whether the feed is fresh.
+- **Camera feed**: a live JPEG stream of the rover's POV camera, delivered through the MQTT → WebSocket bootstrap path. A status indicator shows whether the feed is fresh. A Video widget may also render a preset-driven telemetry OSD overlay on top of the frame.
 - **Telemetry panel**: rover speed, heading, deterministic virtual GPS position, current camera mode (POV / follow), power readings, and freshness state.
 - **Controller status**: an indicator showing whether *this* browser holds the controller lock or whether someone else does.
 - **Broker status**: connection state to the MQTT broker, including last activity time.
@@ -190,6 +190,27 @@ Edit MQTT broker host, port, topic prefix, and topic names. Saving applies live 
 
 Choose video mode flags. Changes are persisted and broadcast to all connected browsers.
 
+### OSD Tab
+
+Manage **named OSD presets** for live video widgets.
+
+The operator can:
+
+- create, rename, duplicate, and delete OSD preset instances
+- configure which built-in telemetry lines a preset shows
+- choose the line order and screen corner used by a preset
+- adjust basic presentation controls needed for readability, such as compactness or opacity
+
+The first milestone keeps the OSD model **structured, not free-form**. Presets are
+assembled from a fixed catalog of built-in runtime lines (position, speed/heading,
+GPS, power, camera/runtime freshness). Arbitrary scripting, custom expression
+languages, and pixel-perfect drag layout are out of scope for this stage.
+
+Each **Video widget instance** can apply one saved preset independently, or show no
+OSD at all. The applied preset is part of that widget's own saved view state, so it
+travels with the Workspace layout. Editing a preset updates every Video widget that
+currently uses that preset.
+
 ### Appearance Tab
 
 Theme and display settings for the dashboard.
@@ -249,11 +270,13 @@ Each embedding model retains its own index collection in Qdrant. Switching model
 
 Export and import selected settings sections. The operator chooses which sections to include via checkboxes:
 
-- connectivity
+- MQTT
+- simulation
 - video
 - appearance
+- AI settings
 - LLM providers
-- model routing
+- model routing rules
 
 Important behavior:
 

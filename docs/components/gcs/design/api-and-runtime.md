@@ -66,9 +66,17 @@ multi-instance coordination design.
 
 Current browser updates are delivered over WebSocket.
 
-Telemetry, broker status, controller state, and video updates should continue
-to be projected from backend-owned runtime state rather than letting browsers
-infer those facts from independent broker reads.
+Telemetry, broker status, controller state, and video mode metadata should
+continue to be projected from backend-owned runtime state rather than letting
+browsers infer those facts from independent broker reads. Video mode changes are
+broadcast as `{type:"video", data:{enabled, ingest_mode, delivery_mode}}`; the
+initial snapshot also includes `video.latest_frame` for bootstrap display.
+
+High-volume push streams (video frames) are subscription-gated: the client sends
+`{op:"subscribe"|"unsubscribe", topic}` over the WS connection; the server pushes
+only to subscribers. Cheap topics (telemetry, broker, controller, video metadata)
+stay broadcast. See `gcs_server/ws.py` and operator-console.md §Per-client WS
+subscription protocol.
 
 ## Settings Model
 

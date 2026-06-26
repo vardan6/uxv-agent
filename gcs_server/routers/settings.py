@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-from gcs_server.config import save_config
+from gcs_server.config import normalize_osd_presets, save_config
 from gcs_server.provider_normalizers import (
     _normalize_ai_settings,
     _normalize_provider,
@@ -62,7 +62,17 @@ def _selected_sections(payload: dict[str, Any]) -> list[str]:
     raw_sections = payload.get("sections", [])
     if not isinstance(raw_sections, list):
         raise HTTPException(status_code=400, detail="sections must be a list")
-    allowed = {"mqtt", "simulation", "video", "appearance", "mission_lifecycle", "ai_settings", "llm_providers", "model_routing"}
+    allowed = {
+        "mqtt",
+        "simulation",
+        "video",
+        "osd_presets",
+        "appearance",
+        "mission_lifecycle",
+        "ai_settings",
+        "llm_providers",
+        "model_routing",
+    }
     sections = []
     for raw_section in raw_sections:
         section = str(raw_section)
@@ -94,6 +104,8 @@ def _settings_export_payload(config: Any, sections: list[str]) -> dict[str, Any]
         out["simulation"] = dict(config.simulation)
     if "video" in sections:
         out["video"] = dict(config.video)
+    if "osd_presets" in sections:
+        out["osd_presets"] = config.osd_presets
     if "appearance" in sections:
         out["appearance"] = dict(config.raw.get("appearance", {})) if isinstance(config.raw.get("appearance"), dict) else {}
     if "mission_lifecycle" in sections:
@@ -130,6 +142,11 @@ def _apply_settings_sections(config: Any, payload: dict[str, Any], sections: lis
             if isinstance(video, dict):
                 config.raw["video"] = dict(video)
                 applied.append("video")
+        if "osd_presets" in sections:
+            osd_presets = _extract_section_payload(payload, "osd_presets")
+            if isinstance(osd_presets, list):
+                config.raw["osd_presets"] = normalize_osd_presets(osd_presets)
+                applied.append("osd_presets")
         if "appearance" in sections:
             appearance = _extract_section_payload(payload, "appearance")
             if isinstance(appearance, dict):
@@ -166,6 +183,25 @@ def _apply_settings_sections(config: Any, payload: dict[str, Any], sections: lis
         config.raw.update(snapshot)
         raise
     return applied
+
+
+@router.get("/api/video-osd-presets")
+async def get_video_osd_presets(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    return {"osd_presets": runtime.config.osd_presets}
+
+
+@router.put("/api/video-osd-presets")
+async def put_video_osd_presets(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    payload = await request.json()
+    presets_payload = payload.get("osd_presets") if isinstance(payload, dict) else None
+    if not isinstance(presets_payload, list):
+        raise HTTPException(status_code=400, detail="osd_presets must be a list")
+    runtime.config.raw["osd_presets"] = normalize_osd_presets(presets_payload)
+    save_config(runtime.config)
+    await runtime.ws_manager.broadcast({"type": "video_osd_presets", "data": runtime.config.osd_presets})
+    return JSONResponse({"ok": True, "osd_presets": runtime.config.osd_presets})
 
 
 @router.post("/api/settings/export")
@@ -259,9 +295,12 @@ async def apply_settings_sections(request: Request) -> JSONResponse:
         await runtime.ws_manager.broadcast({"type": "simulation_config", "data": simulation})
     if "video" in applied:
         video = runtime.config.video
-        await runtime.state_store.set_video_modes(
+        modes = await runtime.state_store.set_video_modes(
             bool(video.get("enabled", True)),
             str(video.get("ingest_mode", "mqtt_frames")),
             str(video.get("delivery_mode", "websocket_mjpeg")),
         )
+        await runtime.ws_manager.broadcast({"type": "video", "data": modes})
+    if "osd_presets" in applied:
+        await runtime.ws_manager.broadcast({"type": "video_osd_presets", "data": runtime.config.osd_presets})
     return JSONResponse({"ok": True, "applied_sections": applied})

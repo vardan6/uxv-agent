@@ -8,6 +8,7 @@ export class LiveVehicleLayer {
     this._marker = null;
     this._ws = null;
     this._active = false;
+    this._visible = true;
     this._lastPosition = null; // {x, y, z} scene metres, or null if unknown
   }
 
@@ -46,7 +47,13 @@ export class LiveVehicleLayer {
     });
   }
 
+  setVisible(visible) {
+    this._visible = visible;
+    if (!visible) this._hideMarker();
+  }
+
   _updateMarker(telemetry) {
+    if (!this._visible) return;
     const pos = telemetry?.position;
     if (typeof pos?.x !== 'number' || typeof pos?.y !== 'number') {
       this._hideMarker();

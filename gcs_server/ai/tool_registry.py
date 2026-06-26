@@ -2314,19 +2314,17 @@ def _tool_runtime_description(definition: ToolDefinition) -> str:
     contract = definition.contract if isinstance(definition.contract, dict) else {}
     inputs = contract.get("inputs")
     required = contract.get("required_inputs")
-    upstream = contract.get("upstream_from_tools")
     returns = contract.get("returns")
-    downstream = contract.get("next_tools")
+    # `upstream_from_tools` and `next_tools` are intentionally omitted from the
+    # model-facing runtime description (P3 compact-projection, conservative first
+    # slice). Both fields remain in TOOL_CONTRACTS for operator/debug surfaces
+    # (e.g. /capabilities); only the always-on schema text is trimmed here.
     if isinstance(inputs, dict) and inputs:
         lines.append(f"Inputs: {_format_contract_mapping(inputs)}.")
     if isinstance(required, list) and required:
         lines.append(f"Required inputs: {', '.join(str(item) for item in required)}.")
-    if isinstance(upstream, list) and upstream:
-        lines.append(f"Upstream sources: {', '.join(str(item) for item in upstream)}.")
     if isinstance(returns, dict) and returns:
         lines.append(f"Returns: {_format_contract_mapping(returns)}.")
-    if isinstance(downstream, list) and downstream:
-        lines.append(f"Next tools: {', '.join(str(item) for item in downstream)}.")
     return "\n".join(line for line in lines if line).strip()
 
 

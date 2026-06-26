@@ -72,7 +72,7 @@ its chat thread).
 
 Backend always *holds* data (snapshot/pull always works), but high-volume push
 streams (video, per camera) are **subscribed per mounted widget** — `ws_manager`
-is broadcast-only today and gains per-client subscriptions. Cheap data
+holds per-client topic sets (built Slice 5; see `gcs_server/ws.py`). Cheap data
 (telemetry, broker) may still broadcast. *Availability* is unconditional;
 *streaming* is opt-in. Multi-camera makes this mandatory, not optional.
 

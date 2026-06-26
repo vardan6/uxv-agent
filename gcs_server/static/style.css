@@ -4424,16 +4424,10 @@ code {
 }
 
 .map-widget-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--line);
+  display: none;
 }
 
-.map-widget-head h2 {
+.map-widget-map-title {
   margin: 0;
   color: var(--text);
   font-size: 1.3rem;
@@ -4443,7 +4437,7 @@ code {
 }
 
 .map-widget-session-pill {
-  max-width: min(260px, 46%);
+  max-width: min(260px, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5296,15 +5290,33 @@ code {
   overflow: hidden;
 }
 
+.map-widget-map-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+}
+
+.map-widget-map-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .map-layer-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px 6px;
-  padding: 5px 10px;
+  padding: 0;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+  margin-left: auto;
 }
 
 .map-layer-bar label {
@@ -5647,6 +5659,19 @@ code {
 
   .map-widget-map-col {
     min-height: 420px;
+  }
+
+  .map-widget-map-topbar {
+    flex-wrap: wrap;
+  }
+
+  .map-widget-map-title-group {
+    width: 100%;
+  }
+
+  .map-layer-bar {
+    justify-content: flex-start;
+    margin-left: 0;
   }
 }
 

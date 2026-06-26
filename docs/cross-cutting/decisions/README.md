@@ -30,3 +30,6 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0027](./0027-soft-constraint-route-scoring-for-pattern-planning.md) | Soft-Constraint Route Scoring For Operator-Drawn Pattern Planning |
 | [0028](./0028-rag-project-docs-first-consumer-qdrant.md) | RAG Ships: `project_docs` Is The First Consumer, On A Qdrant Sidecar |
 | [0029](./0029-lazy-context-injection.md) | Lazy Context Injection: Agent Calls Live-State Tools On Demand, No Server-Side Pre-Injection |
+| [0030](./0030-greenfield-operator-console-frontend.md) | Greenfield Operator Console Frontend (Vite + TypeScript + React + dockview) |
+| [0031](./0031-headless-full-architecture-and-frontend-data-layer.md) | Headless Full Architecture, Two-Tier State, And A Single Frontend Data Layer |
+| [0032](./0032-per-map-replay-state-and-active-target-transport.md) | Per-Map Replay State And Active-Target Transport |
