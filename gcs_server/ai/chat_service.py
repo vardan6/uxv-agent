@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any, Callable, Iterator
 
-from .agent_loop import AgentInvokeResult, AgentLoopRuntime, AgentToolRuntime
+from .agent_loop import AgentInvokeResult, AgentLoopRuntime
 from .provider_registry import resolve_intent_provider, resolve_provider
 from .session_store import AISessionStore
 from .smalltalk_patterns import MAX_SMALLTALK_CHARS, SMALLTALK_SET, normalize_for_smalltalk
@@ -497,25 +497,6 @@ class AIChatService:
         run_mode: str = "agent",
     ) -> Iterator[dict[str, Any]]:
         yield from self._agent_loop.stream_tool_events(
-            model,
-            messages=messages,
-            context_snapshot=context_snapshot,
-            prompt_tool_calls=prompt_tool_calls,
-            tool_context=tool_context,
-            run_mode=run_mode,
-        )
-
-    def _prepare_agent_tool_runtime(
-        self,
-        model: Any,
-        *,
-        messages: list[dict[str, Any]],
-        context_snapshot: dict[str, Any] | None,
-        prompt_tool_calls: list[dict[str, Any]],
-        tool_context: dict[str, Any] | None = None,
-        run_mode: str = "agent",
-    ) -> AgentToolRuntime | None:
-        return self._agent_loop.prepare_tool_runtime(
             model,
             messages=messages,
             context_snapshot=context_snapshot,

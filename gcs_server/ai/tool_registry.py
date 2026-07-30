@@ -233,29 +233,6 @@ class ToolRegistry:
             )
         return tools
 
-    def invoke(
-        self,
-        name: str,
-        args: dict[str, Any],
-        runtime: Any,
-        context_snapshot: dict[str, Any],
-        timezone_name: str = "",
-        permissions: set[str] | None = None,
-    ) -> dict[str, Any]:
-        definition = self._definitions.get(str(name or "").strip())
-        if definition is None:
-            return {"ok": False, "error": f"tool '{name}' is not available"}
-        invocation_context = self._invocation_context(runtime, context_snapshot, timezone_name, permissions)
-        if definition.permission in DISABLED_PERMISSIONS:
-            return {"ok": False, "error": f"tool permission '{definition.permission}' is not enabled"}
-        if definition.permission not in invocation_context.permissions:
-            return {"ok": False, "error": f"tool permission '{definition.permission}' is not allowed"}
-        try:
-            result = definition.handler(invocation_context, **(args if isinstance(args, dict) else {}))
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        return result if isinstance(result, dict) else {"ok": True, "result": result}
-
     def _build_definitions(self) -> dict[str, ToolDefinition]:
         def tool(
             name: str,

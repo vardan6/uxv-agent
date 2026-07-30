@@ -113,7 +113,7 @@ def test_agent_tool_binding_disables_strict_mode_for_optional_tool_args() -> Non
     service = AIChatService(store=None, tool_registry=registry)
     model = _FakeModel()
     with _fake_langchain_messages():
-        runtime = service._prepare_agent_tool_runtime(
+        runtime = service._agent_loop.prepare_tool_runtime(
             model,
             messages=[{"role": "user", "content": "what is ahead"}],
             context_snapshot=None,
