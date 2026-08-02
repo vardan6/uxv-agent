@@ -87,6 +87,72 @@ class MissionRevisionRepository:
         ).fetchone()
         return str(row["active_revision_id"] or "") if row else None
 
+    def get_operation_status(self, operation_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, status FROM ai_mission_operations WHERE id = ?",
+            (operation_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_operation(self, operation_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM ai_mission_operations WHERE id = ?", (operation_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_revision_provenance(self, revision_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT provenance_json FROM ai_mission_revisions WHERE id = ?",
+            (revision_id,),
+        ).fetchone()
+        return _load_json(row["provenance_json"]) if row else None
+
+    def get_current_operation_with_revision(
+        self, *, session_id: str = ""
+    ) -> dict[str, Any] | None:
+        """Latest operation (by `updated_at`), left-joined to its active revision.
+
+        Distinct row shape from `_REVISION_SELECT` (aliases `o.status` as
+        `operation_status`, includes no `operation_*` prefix on revision
+        columns) — used only by `get_current_mission_state`.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(session_id or "").strip():
+            clauses.append("o.session_id = ?")
+            params.append(str(session_id).strip())
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        row = self._conn.execute(
+            f"""
+            SELECT
+              o.id AS operation_id,
+              o.session_id,
+              o.source_message_id,
+              o.status AS operation_status,
+              o.active_revision_id,
+              o.policy_json,
+              o.created_at AS operation_created_at,
+              o.updated_at AS operation_updated_at,
+              r.id AS revision_id,
+              r.draft_id,
+              r.status AS revision_status,
+              r.mission_json,
+              r.intent_json,
+              r.validation_json,
+              r.review_context_json,
+              r.created_at AS revision_created_at,
+              r.updated_at AS revision_updated_at,
+              r.rejected_at
+            FROM ai_mission_operations o
+            LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
+            {where}
+            ORDER BY o.updated_at DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return dict(row) if row else None
+
     def get_active_revision_fields(
         self, operation_ids: list[str]
     ) -> dict[str, dict[str, Any]]:

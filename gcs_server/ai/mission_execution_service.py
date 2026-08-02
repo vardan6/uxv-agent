@@ -691,11 +691,9 @@ class MissionExecutionService:
         parent_op = str(parent_operation_id or "").strip()
 
         with self._connect() as conn:
+            repo = MissionRevisionRepository(conn)
             if parent_op:
-                op_row = conn.execute(
-                    "SELECT id, status FROM ai_mission_operations WHERE id = ?",
-                    (parent_op,),
-                ).fetchone()
+                op_row = repo.get_operation_status(parent_op)
                 if op_row is None or str(op_row["status"] or "") == "executing":
                     # Fall through to creating a new operation when the parent is
                     # missing or currently executing (safety invariant: no mutation
@@ -704,26 +702,13 @@ class MissionExecutionService:
 
             if parent_op:
                 operation_id = parent_op
-                parent_op_row = conn.execute(
-                    "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
-                    (parent_op,),
-                ).fetchone()
-                parent_revision_id = str(
-                    (parent_op_row["active_revision_id"] if parent_op_row else "") or ""
-                )
+                parent_revision_id = repo.get_operation_active_revision_id(parent_op) or ""
                 # ADR 0019 §Enforcement — backend-independent guard: block AI
                 # edit_in_place over operator-authored or operator-edited waypoints
                 # unless the operator has explicitly confirmed the replacement.
                 if parent_revision_id and not allow_provenance_override:
-                    prov_row = conn.execute(
-                        "SELECT provenance_json FROM ai_mission_revisions WHERE id = ?",
-                        (parent_revision_id,),
-                    ).fetchone()
-                    if prov_row:
-                        try:
-                            prov: dict[str, str] = json.loads(prov_row["provenance_json"] or "{}")
-                        except (json.JSONDecodeError, TypeError):
-                            prov = {}
+                    prov = repo.get_revision_provenance(parent_revision_id)
+                    if prov:
                         _OPERATOR_PROV = {"user", "ai+edited"}
                         if any(v in _OPERATOR_PROV for v in prov.values()):
                             raise ValueError(
@@ -1603,7 +1588,7 @@ class MissionExecutionService:
         """Send HOLD to the FC adapter and mark the operation paused in the DB.
 
         Called by the API layer after the executor thread has been parked via
-        ``MissionExecutionSessions.request_pause()``.  Adapter errors are
+        ``MissionExecutionSessions.pause_for_mission()``.  Adapter errors are
         returned rather than raised so the caller can decide whether to roll
         back the in-memory pause.
         """
@@ -1744,42 +1729,10 @@ class MissionExecutionService:
         }
 
     def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if str(session_id or "").strip():
-            clauses.append("o.session_id = ?")
-            params.append(str(session_id).strip())
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
-            row = conn.execute(
-                f"""
-                SELECT
-                  o.id AS operation_id,
-                  o.session_id,
-                  o.source_message_id,
-                  o.status AS operation_status,
-                  o.active_revision_id,
-                  o.policy_json,
-                  o.created_at AS operation_created_at,
-                  o.updated_at AS operation_updated_at,
-                  r.id AS revision_id,
-                  r.draft_id,
-                  r.status AS revision_status,
-                  r.mission_json,
-                  r.intent_json,
-                  r.validation_json,
-                  r.review_context_json,
-                  r.created_at AS revision_created_at,
-                  r.updated_at AS revision_updated_at,
-                  r.rejected_at
-                FROM ai_mission_operations o
-                LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
-                {where}
-                ORDER BY o.updated_at DESC
-                LIMIT 1
-                """,
-                params,
-            ).fetchone()
+            row = MissionRevisionRepository(conn).get_current_operation_with_revision(
+                session_id=session_id
+            )
         if row is None:
             return {
                 "active": False,
@@ -1880,9 +1833,7 @@ class MissionExecutionService:
             return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
 
         with self._connect() as conn:
-            op_row = conn.execute(
-                "SELECT * FROM ai_mission_operations WHERE id = ?", (operation_id,)
-            ).fetchone()
+            op_row = MissionRevisionRepository(conn).get_operation(operation_id)
         if op_row is None:
             return {"ok": False, "status": "operation_not_found", "error": "operation not found"}
 
@@ -2054,10 +2005,7 @@ class MissionExecutionService:
         operation_id = source_operation_id
         parent_revision_id = str(revision.get("id") or "").strip()
 
-        source_operation = conn.execute(
-            "SELECT * FROM ai_mission_operations WHERE id = ?",
-            (source_operation_id,),
-        ).fetchone()
+        source_operation = MissionRevisionRepository(conn).get_operation(source_operation_id)
         if source_operation is None:
             return None
 

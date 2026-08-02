@@ -78,6 +78,33 @@ only to subscribers. Cheap topics (telemetry, broker, controller, video metadata
 stay broadcast. See `gcs_server/ws.py` and operator-console.md §Per-client WS
 subscription protocol.
 
+### Async Work, Backpressure, And Supervision
+
+The event-loop thread owns only short state transitions and network coordination.
+Synchronous SQLite, filesystem, analytics, provider, and CPU-heavy work must run
+outside it. Persisted high-rate data is submitted to a bounded single-writer or
+bounded worker path; it does not perform a database transaction inline with
+telemetry, control, or WebSocket handling.
+
+Ingress and delivery are explicitly bounded:
+
+- telemetry and video use a latest-value/coalescing policy when consumers fall
+  behind; low-rate control and lifecycle messages are lossless or fail visibly;
+- each WebSocket has an independent bounded outbound queue and writer, so one
+  slow client cannot serialize or delay another;
+- AI streams use bounded queues, cancellation that reaches the provider when
+  supported, and a separate bounded capacity from ordinary AI calls.
+
+Application-owned background work is retained in a runtime supervisor. It records
+completion and exceptions, has a named shutdown policy, and is drained or
+cooperatively cancelled during lifespan shutdown. Cross-thread submissions retain
+their futures long enough to surface exceptions. RAG jobs follow the same
+supervision contract rather than being detached tasks.
+
+Mission-executor continuity is a separate safety policy under ADR 0023: browser
+disconnect never decides execution, while intentional GCS-server shutdown and
+GCS-process failure are handled according to the explicitly selected policy.
+
 ## Settings Model
 
 Settings remain config-backed rather than route-backed.
