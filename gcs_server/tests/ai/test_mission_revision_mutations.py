@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from ai.controller_mission_adapter import ControllerMissionAdapterState, ControllerMissionInstallResult
-from ai.migrations import apply_ai_store_migrations
 from ai.mission_export_service import MissionExportService
 from ai.mission_execution_service import MissionExecutionService
 
@@ -55,13 +53,7 @@ class _SuccessfulInstallAdapter:
         )
 
 
-def _make_service(adapter=None) -> tuple[MissionExecutionService, Path]:
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
-    tmp.close()
-    db_path = Path(tmp.name)
-    with sqlite3.connect(db_path) as conn:
-        apply_ai_store_migrations(conn)
-        conn.commit()
+def _make_service(db_path: Path, adapter=None) -> tuple[MissionExecutionService, Path]:
     return MissionExecutionService(db_path, controller_adapter=adapter), db_path
 
 
@@ -88,8 +80,8 @@ def _make_proposal(svc: MissionExecutionService, *, n_waypoints: int = 3) -> dic
 
 # --- migration: new columns exist ---
 
-def test_migration_adds_client_version_and_provenance() -> None:
-    _, db_path = _make_service()
+def test_migration_adds_client_version_and_provenance(mission_db_path: Path) -> None:
+    _, db_path = _make_service(db_path=mission_db_path)
     with sqlite3.connect(db_path) as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(ai_mission_revisions)").fetchall()}
     assert "client_version" in cols
@@ -98,8 +90,8 @@ def test_migration_adds_client_version_and_provenance() -> None:
 
 # --- create_client_revision ---
 
-def test_create_client_revision_happy_path() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_happy_path(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
     operation_id = proposal["operation_id"]
 
@@ -116,8 +108,8 @@ def test_create_client_revision_happy_path() -> None:
     assert len(rev["mission"]["waypoints"]) == 2
 
 
-def test_create_client_revision_assigns_user_provenance() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_assigns_user_provenance(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
 
     result = svc.create_client_revision(
@@ -130,22 +122,22 @@ def test_create_client_revision_assigns_user_provenance() -> None:
     assert all(v == "user" for v in provenance.values())
 
 
-def test_create_client_revision_missing_operation_id() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_missing_operation_id(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     result = svc.create_client_revision(operation_id="", waypoints=[{"x": 0.0, "y": 0.0, "z": 0.0}])
     assert result["ok"] is False
     assert result["status"] == "invalid_request"
 
 
-def test_create_client_revision_unknown_operation() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_unknown_operation(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     result = svc.create_client_revision(operation_id="nonexistent", waypoints=[])
     assert result["ok"] is False
     assert result["status"] == "operation_not_found"
 
 
-def test_create_client_revision_invalid_waypoint() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_invalid_waypoint(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
     result = svc.create_client_revision(
         operation_id=proposal["operation_id"],
@@ -155,8 +147,8 @@ def test_create_client_revision_invalid_waypoint() -> None:
     assert result["status"] == "invalid_waypoint"
 
 
-def test_create_client_revision_sets_active_revision() -> None:
-    svc, _ = _make_service()
+def test_create_client_revision_sets_active_revision(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
     operation_id = proposal["operation_id"]
 
@@ -172,8 +164,8 @@ def test_create_client_revision_sets_active_revision() -> None:
 
 # --- update_waypoint ---
 
-def test_update_waypoint_happy_path() -> None:
-    svc, _ = _make_service()
+def test_update_waypoint_happy_path(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=3)
     rev_id = proposal["id"]
 
@@ -188,8 +180,8 @@ def test_update_waypoint_happy_path() -> None:
     assert wps[1]["y"] == pytest.approx(88.0, abs=1e-3)
 
 
-def test_update_waypoint_provenance_changes_ai_to_ai_edited() -> None:
-    svc, _ = _make_service()
+def test_update_waypoint_provenance_changes_ai_to_ai_edited(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -199,8 +191,8 @@ def test_update_waypoint_provenance_changes_ai_to_ai_edited() -> None:
     assert "ai+edited" in provenance.values()
 
 
-def test_update_waypoint_version_conflict() -> None:
-    svc, _ = _make_service()
+def test_update_waypoint_version_conflict(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -210,8 +202,8 @@ def test_update_waypoint_version_conflict() -> None:
     assert result["status"] == "version_conflict"
 
 
-def test_update_waypoint_out_of_range() -> None:
-    svc, _ = _make_service()
+def test_update_waypoint_out_of_range(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
 
     result = svc.update_waypoint(proposal["id"], 5, point={"x": 1.0, "y": 1.0, "z": 0.0}, expected_version=0)
@@ -220,8 +212,8 @@ def test_update_waypoint_out_of_range() -> None:
     assert result["status"] == "invalid_index"
 
 
-def test_update_waypoint_locked_on_exported_revision() -> None:
-    svc, _ = _make_service()
+def test_update_waypoint_locked_on_exported_revision(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
     svc.mark_revision_exported_by_revision_id(
         proposal["id"],
@@ -234,8 +226,8 @@ def test_update_waypoint_locked_on_exported_revision() -> None:
     assert result["status"] == "revision_locked"
 
 
-def test_mark_revision_exported_by_revision_id() -> None:
-    svc, _ = _make_service()
+def test_mark_revision_exported_by_revision_id(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
 
     updated = svc.mark_revision_exported_by_revision_id(
@@ -248,8 +240,8 @@ def test_mark_revision_exported_by_revision_id() -> None:
     assert updated["mission"]["mission_export"]["file_path"] == "/tmp/test.plan"
 
 
-def test_export_service_accepts_revision_payload() -> None:
-    svc, tmp_path = _make_service()
+def test_export_service_accepts_revision_payload(mission_db_path: Path) -> None:
+    svc, tmp_path = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc)
 
     result = MissionExportService(missions_dir=tmp_path.parent).export(proposal)
@@ -261,8 +253,8 @@ def test_export_service_accepts_revision_payload() -> None:
 
 # --- insert_waypoint ---
 
-def test_insert_waypoint_appends_when_after_index_is_negative() -> None:
-    svc, _ = _make_service()
+def test_insert_waypoint_appends_when_after_index_is_negative(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -275,8 +267,8 @@ def test_insert_waypoint_appends_when_after_index_is_negative() -> None:
     assert wps[-1]["x"] == pytest.approx(7.0, abs=1e-3)
 
 
-def test_insert_waypoint_gets_user_provenance() -> None:
-    svc, _ = _make_service()
+def test_insert_waypoint_gets_user_provenance(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=1)
 
     result = svc.insert_waypoint(
@@ -288,8 +280,8 @@ def test_insert_waypoint_gets_user_provenance() -> None:
     assert provenance[new_wp_id] == "user"
 
 
-def test_insert_waypoint_increments_version() -> None:
-    svc, _ = _make_service()
+def test_insert_waypoint_increments_version(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=1)
 
     result = svc.insert_waypoint(
@@ -300,8 +292,8 @@ def test_insert_waypoint_increments_version() -> None:
 
 # --- delete_waypoint ---
 
-def test_delete_waypoint_removes_correct_index() -> None:
-    svc, _ = _make_service()
+def test_delete_waypoint_removes_correct_index(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=3)
     rev_id = proposal["id"]
 
@@ -315,8 +307,8 @@ def test_delete_waypoint_removes_correct_index() -> None:
     assert orig_wps[1] not in remaining_ids
 
 
-def test_delete_waypoint_removes_provenance_entry() -> None:
-    svc, _ = _make_service()
+def test_delete_waypoint_removes_provenance_entry(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -327,8 +319,8 @@ def test_delete_waypoint_removes_provenance_entry() -> None:
     assert target_id not in result["revision"]["provenance"]
 
 
-def test_delete_waypoint_out_of_range() -> None:
-    svc, _ = _make_service()
+def test_delete_waypoint_out_of_range(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=1)
 
     result = svc.delete_waypoint(proposal["id"], 5, expected_version=0)
@@ -338,8 +330,8 @@ def test_delete_waypoint_out_of_range() -> None:
 
 # --- overlay includes provenance ---
 
-def test_overlay_includes_provenance_field() -> None:
-    svc, _ = _make_service()
+def test_overlay_includes_provenance_field(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -349,8 +341,8 @@ def test_overlay_includes_provenance_field() -> None:
     assert all(f["provenance"] == "ai" for f in waypoint_features)
 
 
-def test_overlay_reflects_updated_provenance() -> None:
-    svc, _ = _make_service()
+def test_overlay_reflects_updated_provenance(mission_db_path: Path) -> None:
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     rev_id = proposal["id"]
 
@@ -362,7 +354,7 @@ def test_overlay_reflects_updated_provenance() -> None:
     assert "ai+edited" in provenances
 
 
-def test_execute_revision_creates_rebased_revision_on_stale_controller_version() -> None:
+def test_execute_revision_creates_rebased_revision_on_stale_controller_version(mission_db_path: Path) -> None:
     live_waypoints = [{"id": "live-wp-1", "x": 50.0, "y": 60.0, "z": 0.0}]
     live_mission = {
         "goal": "controller live mission",
@@ -385,7 +377,7 @@ def test_execute_revision_creates_rebased_revision_on_stale_controller_version()
             plan={"fileType": "Plan"},
         )
     )
-    svc, db_path = _make_service(adapter=adapter)
+    svc, db_path = _make_service(adapter=adapter, db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     export_result = MissionExportService(missions_dir=db_path.parent).export(proposal)
     assert export_result["ok"] is True
@@ -405,9 +397,9 @@ def test_execute_revision_creates_rebased_revision_on_stale_controller_version()
     assert rebased["review_context"]["rebase"]["base_revision_id"] == "mission-rev-live123"
 
 
-def test_execute_revision_auto_exports_proposed_revision() -> None:
+def test_execute_revision_auto_exports_proposed_revision(mission_db_path: Path) -> None:
     adapter = _SuccessfulInstallAdapter()
-    svc, _ = _make_service(adapter=adapter)
+    svc, _ = _make_service(adapter=adapter, db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
 
     result = svc.execute_revision(proposal["id"])
@@ -424,10 +416,10 @@ def test_execute_revision_auto_exports_proposed_revision() -> None:
 
 # --- ADR 0019 backend provenance guard ---
 
-def test_create_proposal_blocks_edit_in_place_over_operator_waypoints() -> None:
+def test_create_proposal_blocks_edit_in_place_over_operator_waypoints(mission_db_path: Path) -> None:
     # Simulate: AI proposal → operator edits a waypoint (ai+edited) → AI tries
     # edit_in_place without operator confirmation → backend must block it.
-    svc, _ = _make_service()
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     operation_id = proposal["operation_id"]
     rev_id = proposal["id"]
@@ -454,9 +446,9 @@ def test_create_proposal_blocks_edit_in_place_over_operator_waypoints() -> None:
         )
 
 
-def test_create_proposal_allows_edit_in_place_with_override() -> None:
+def test_create_proposal_allows_edit_in_place_with_override(mission_db_path: Path) -> None:
     # Same setup, but with allow_provenance_override=True (operator confirmed).
-    svc, _ = _make_service()
+    svc, _ = _make_service(db_path=mission_db_path)
     proposal = _make_proposal(svc, n_waypoints=2)
     operation_id = proposal["operation_id"]
     rev_id = proposal["id"]

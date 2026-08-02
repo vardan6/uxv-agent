@@ -11,34 +11,6 @@ BOOTSTRAP_NAME = "bootstrap_existing_ai_sessions_schema"
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
 
-def _migration_001_create_ai_mission_drafts(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ai_mission_drafts (
-          id TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          source_message_id TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL,
-          intent_json TEXT NOT NULL DEFAULT '{}',
-          target_resolution_json TEXT NOT NULL DEFAULT '{}',
-          draft_json TEXT NOT NULL DEFAULT '{}',
-          validation_json TEXT NOT NULL DEFAULT '{}',
-          created_at REAL NOT NULL,
-          updated_at REAL NOT NULL,
-          approved_at REAL,
-          rejected_at REAL,
-          approval_note TEXT NOT NULL DEFAULT ''
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_session ON ai_mission_drafts(session_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_status ON ai_mission_drafts(status, updated_at DESC)"
-    )
-
-
 def _migration_003_create_ai_mission_execution_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -233,31 +205,6 @@ def _migration_011_restore_mission_execution_tables(conn: sqlite3.Connection) ->
     # Migration 10 (adr_0021_flat_missions, applied from master) dropped these
     # tables, but this branch still uses them. Recreate them if absent so the
     # server starts cleanly against a DB that has version 10 stamped.
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ai_mission_drafts (
-          id TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          source_message_id TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL,
-          intent_json TEXT NOT NULL DEFAULT '{}',
-          target_resolution_json TEXT NOT NULL DEFAULT '{}',
-          draft_json TEXT NOT NULL DEFAULT '{}',
-          validation_json TEXT NOT NULL DEFAULT '{}',
-          created_at REAL NOT NULL,
-          updated_at REAL NOT NULL,
-          approved_at REAL,
-          rejected_at REAL,
-          approval_note TEXT NOT NULL DEFAULT ''
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_session ON ai_mission_drafts(session_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ai_mission_drafts_status ON ai_mission_drafts(status, updated_at DESC)"
-    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ai_mission_operations (
@@ -498,7 +445,6 @@ def _migration_020_create_operational_constraints(conn: sqlite3.Connection) -> N
 
 
 MIGRATIONS: tuple[Migration, ...] = (
-    (1, "create_ai_mission_drafts", _migration_001_create_ai_mission_drafts),
     (2, "add_ai_session_meta_json", _migration_002_add_ai_session_meta_json),
     (3, "create_ai_mission_execution_tables", _migration_003_create_ai_mission_execution_tables),
     (4, "create_ai_mission_controller_tables", _migration_004_create_ai_mission_controller_tables),

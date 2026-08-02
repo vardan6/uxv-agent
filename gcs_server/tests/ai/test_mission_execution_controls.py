@@ -3,15 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 from starlette.requests import Request
 
-from ai.migrations import apply_ai_store_migrations
 from ai.mission_execution_service import MissionExecutionService
 from routers.ai import pause_mission_endpoint, resume_mission_endpoint, stop_mission_endpoint
+from tests.runtime_stub import make_stub_runtime
 
 
 class _RecordingControllerAdapter:
@@ -114,18 +113,9 @@ class _FakeService:
         return {"ok": True, "status": "aborted", "operation_id": operation_id}
 
 
-def _make_db() -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
-    tmp.close()
-    db_path = Path(tmp.name)
-    with sqlite3.connect(db_path) as conn:
-        apply_ai_store_migrations(conn)
-        conn.commit()
-    return db_path
-
-
-def _make_service_with_operation(*, adapter: _RecordingControllerAdapter) -> tuple[MissionExecutionService, str, Path]:
-    db_path = _make_db()
+def _make_service_with_operation(
+    *, adapter: _RecordingControllerAdapter, db_path: Path
+) -> tuple[MissionExecutionService, str, Path]:
     svc = MissionExecutionService(db_path, controller_adapter=adapter)
     proposal = svc.create_proposal(
         session_id="sess-1",
@@ -165,9 +155,9 @@ def _request(runtime: object, path: str, method: str = "POST") -> Request:
     return Request(scope)
 
 
-def test_pause_mission_updates_operation_status_after_adapter_hold() -> None:
+def test_pause_mission_updates_operation_status_after_adapter_hold(mission_db_path: Path) -> None:
     adapter = _RecordingControllerAdapter()
-    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter)
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
 
     result = svc.pause_mission(operation_id)
 
@@ -176,9 +166,9 @@ def test_pause_mission_updates_operation_status_after_adapter_hold() -> None:
     assert _operation_status(db_path, operation_id) == "paused"
 
 
-def test_pause_mission_returns_adapter_error_without_db_mutation() -> None:
+def test_pause_mission_returns_adapter_error_without_db_mutation(mission_db_path: Path) -> None:
     adapter = _RecordingControllerAdapter(pause_error=RuntimeError("hold failed"))
-    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter)
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
     before = _operation_status(db_path, operation_id)
 
     result = svc.pause_mission(operation_id)
@@ -188,9 +178,9 @@ def test_pause_mission_returns_adapter_error_without_db_mutation() -> None:
     assert _operation_status(db_path, operation_id) == before
 
 
-def test_resume_mission_updates_operation_status_after_adapter_auto() -> None:
+def test_resume_mission_updates_operation_status_after_adapter_auto(mission_db_path: Path) -> None:
     adapter = _RecordingControllerAdapter()
-    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter)
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
 
     result = svc.resume_mission(operation_id)
 
@@ -199,9 +189,9 @@ def test_resume_mission_updates_operation_status_after_adapter_auto() -> None:
     assert _operation_status(db_path, operation_id) == "running"
 
 
-def test_abort_mission_updates_operation_status_after_adapter_hold() -> None:
+def test_abort_mission_updates_operation_status_after_adapter_hold(mission_db_path: Path) -> None:
     adapter = _RecordingControllerAdapter()
-    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter)
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
 
     result = svc.abort_mission(operation_id)
 
@@ -215,7 +205,7 @@ def test_pause_endpoint_rolls_back_session_pause_when_service_pause_fails() -> N
     operation_id = "op-1"
     sessions = _FakeSessions()
     service = _FakeService(pause_ok=False)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, operation_id),
@@ -235,7 +225,7 @@ def test_resume_endpoint_rolls_back_session_resume_when_service_resume_fails() -
     operation_id = "op-1"
     sessions = _FakeSessions()
     service = _FakeService(resume_ok=False)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, operation_id),
@@ -257,7 +247,7 @@ def test_stop_endpoint_forwards_abort_to_service_without_rollback() -> None:
     operation_id = "op-1"
     sessions = _FakeSessions()
     service = _FakeService()
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, operation_id),

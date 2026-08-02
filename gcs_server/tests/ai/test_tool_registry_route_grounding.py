@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ai.tool_registry import ToolInvocationContext, ToolRegistry
+from tests.runtime_stub import make_stub_runtime
 
 
 class _FakeRoadGraph:
@@ -16,7 +17,7 @@ class _FakeRoadGraph:
 
 def _context() -> ToolInvocationContext:
     return ToolInvocationContext(
-        runtime=SimpleNamespace(),
+        runtime=make_stub_runtime(),
         context_snapshot={},
         timezone_name="",
         permissions=frozenset(),

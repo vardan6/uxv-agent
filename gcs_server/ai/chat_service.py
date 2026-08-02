@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
 from .agent_loop import AgentInvokeResult, AgentLoopRuntime
@@ -239,21 +240,18 @@ class AIChatService:
         run_mode: str = "chat",
         tool_context: dict[str, Any] | None = None,
     ) -> Iterator[str]:
-        clean_run_mode = _normalize_run_mode(run_mode)
-        prompt_messages = _fit_messages_to_budget(messages)
-        bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
-        effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
+        setup = _prepare_chat_turn(messages, context_snapshot, run_mode)
+        clean_run_mode = setup.run_mode
+        prompt_messages = setup.prompt_messages
+        bypass_for_smalltalk = setup.bypass_for_smalltalk
+        effective_context_snapshot = setup.effective_context_snapshot
         prompt_tool_calls: list[dict[str, Any]] = []
         agent_tooling_error: str | None = None
-        should_try_tools = (
-            not bypass_for_smalltalk
-            and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot))
-        )
-        if should_try_tools:
+        if setup.should_try_tools:
             started = time.perf_counter()
             agent_result = None
             try:
-                for agent_event in self._stream_agent_with_tools_events(
+                for agent_event in self._agent_loop.stream_tool_events(
                     model,
                     messages=prompt_messages,
                     context_snapshot=context_snapshot,
@@ -278,8 +276,6 @@ class AIChatService:
                     # post-loop fallback content (e.g. repeated-tool-failure messages)
                     # still reaches the client via the assistant_message event below,
                     # which replaces the pending bubble wholesale.
-                    _ctx_meta = _context_meta(context_snapshot)
-                    _rag_cits = _rag_citations_from_tool_calls(agent_result.tool_calls)
                     assistant_message = self._store.add_message(
                         session_id,
                         role="assistant",
@@ -287,23 +283,14 @@ class AIChatService:
                         provider_id=provider_id,
                         model_id=model_id,
                         latency_ms=int((time.perf_counter() - started) * 1000),
-                        meta={
-                            "run_mode": clean_run_mode,
-                            "tool_calls": agent_result.tool_calls,
-                            "agent_trace": agent_result.trace_events,
-                            "agent_trace_id": agent_result.trace_id,
-                            "data_access_manifest": agent_result.data_access_manifest,
-                            "prompt_context_tool_calls": prompt_tool_calls,
-                            "agent_permissions": _agent_permissions(clean_run_mode),
-                            "agent_stop_reason": agent_result.stop_reason,
-                            "agent_iterations": agent_result.iterations,
-                            "agent_smalltalk_bypass": bypass_for_smalltalk,
-                            "agent_tool_fallback_error": agent_tooling_error,
-                            "response_metadata": agent_result.response_metadata,
-                            "usage_metadata": agent_result.usage_metadata,
-                            **_ctx_meta,
-                            "retrieval_citations": list(_ctx_meta.get("retrieval_citations") or []) + _rag_cits,
-                        },
+                        meta=_agent_success_meta(
+                            agent_result,
+                            run_mode=clean_run_mode,
+                            prompt_tool_calls=prompt_tool_calls,
+                            context_snapshot=context_snapshot,
+                            bypass_for_smalltalk=bypass_for_smalltalk,
+                            agent_tooling_error=agent_tooling_error,
+                        ),
                     )
                     yield _json_line({"type": "assistant_message", "message": assistant_message})
                     return
@@ -388,16 +375,17 @@ class AIChatService:
         run_mode: str = "chat",
         tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        clean_run_mode = _normalize_run_mode(run_mode)
-        prompt_messages = _fit_messages_to_budget(messages)
-        bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
-        effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
+        setup = _prepare_chat_turn(messages, context_snapshot, run_mode)
+        clean_run_mode = setup.run_mode
+        prompt_messages = setup.prompt_messages
+        bypass_for_smalltalk = setup.bypass_for_smalltalk
+        effective_context_snapshot = setup.effective_context_snapshot
         prompt_tool_calls: list[dict[str, Any]] = []
         agent_tooling_error: str | None = None
-        if (not bypass_for_smalltalk) and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot)):
+        if setup.should_try_tools:
             started = time.perf_counter()
             try:
-                agent_result = self._try_invoke_agent_with_tools(
+                agent_result = self._agent_loop.invoke_with_tools(
                     model,
                     messages=prompt_messages,
                     context_snapshot=context_snapshot,
@@ -410,8 +398,6 @@ class AIChatService:
                 # Keep the request alive by falling back to plain invoke.
                 agent_tooling_error = str(exc)
             if agent_result is not None:
-                _ctx_meta = _context_meta(context_snapshot)
-                _rag_cits = _rag_citations_from_tool_calls(agent_result.tool_calls)
                 return self._store.add_message(
                     session_id,
                     role="assistant",
@@ -419,23 +405,14 @@ class AIChatService:
                     provider_id=provider_id,
                     model_id=model_id,
                     latency_ms=int((time.perf_counter() - started) * 1000),
-                    meta={
-                        "run_mode": clean_run_mode,
-                        "tool_calls": agent_result.tool_calls,
-                        "agent_trace": agent_result.trace_events,
-                        "agent_trace_id": agent_result.trace_id,
-                        "data_access_manifest": agent_result.data_access_manifest,
-                        "prompt_context_tool_calls": prompt_tool_calls,
-                        "agent_permissions": _agent_permissions(clean_run_mode),
-                        "agent_stop_reason": agent_result.stop_reason,
-                        "agent_iterations": agent_result.iterations,
-                        "agent_smalltalk_bypass": bypass_for_smalltalk,
-                        "agent_tool_fallback_error": agent_tooling_error,
-                        "response_metadata": agent_result.response_metadata,
-                        "usage_metadata": agent_result.usage_metadata,
-                        **_ctx_meta,
-                        "retrieval_citations": list(_ctx_meta.get("retrieval_citations") or []) + _rag_cits,
-                    },
+                    meta=_agent_success_meta(
+                        agent_result,
+                        run_mode=clean_run_mode,
+                        prompt_tool_calls=prompt_tool_calls,
+                        context_snapshot=context_snapshot,
+                        bypass_for_smalltalk=bypass_for_smalltalk,
+                        agent_tooling_error=agent_tooling_error,
+                    ),
                 )
         langchain_messages = _to_langchain_messages(
             prompt_messages,
@@ -467,44 +444,6 @@ class AIChatService:
             },
         )
 
-    def _try_invoke_agent_with_tools(
-        self,
-        model: Any,
-        *,
-        messages: list[dict[str, Any]],
-        context_snapshot: dict[str, Any] | None,
-        prompt_tool_calls: list[dict[str, Any]],
-        tool_context: dict[str, Any] | None = None,
-        run_mode: str = "agent",
-    ) -> AgentInvokeResult | None:
-        return self._agent_loop.invoke_with_tools(
-            model,
-            messages=messages,
-            context_snapshot=context_snapshot,
-            prompt_tool_calls=prompt_tool_calls,
-            tool_context=tool_context,
-            run_mode=run_mode,
-        )
-
-    def _stream_agent_with_tools_events(
-        self,
-        model: Any,
-        *,
-        messages: list[dict[str, Any]],
-        context_snapshot: dict[str, Any] | None,
-        prompt_tool_calls: list[dict[str, Any]],
-        tool_context: dict[str, Any] | None = None,
-        run_mode: str = "agent",
-    ) -> Iterator[dict[str, Any]]:
-        yield from self._agent_loop.stream_tool_events(
-            model,
-            messages=messages,
-            context_snapshot=context_snapshot,
-            prompt_tool_calls=prompt_tool_calls,
-            tool_context=tool_context,
-            run_mode=run_mode,
-        )
-
 
 def _tool_context_with_session(tool_context: dict[str, Any] | None, session_id: str) -> dict[str, Any]:
     """Augment tool_context with session_id so the agent loop can scope its tool-result cache."""
@@ -512,6 +451,72 @@ def _tool_context_with_session(tool_context: dict[str, Any] | None, session_id: 
     if session_id and not base.get("session_id"):
         base["session_id"] = session_id
     return base
+
+
+@dataclass(slots=True)
+class _ChatTurnSetup:
+    run_mode: str
+    prompt_messages: list[dict[str, Any]]
+    bypass_for_smalltalk: bool
+    effective_context_snapshot: dict[str, Any] | None
+    should_try_tools: bool
+
+
+def _prepare_chat_turn(
+    messages: list[dict[str, Any]],
+    context_snapshot: dict[str, Any] | None,
+    run_mode: str,
+) -> _ChatTurnSetup:
+    """Shared setup for both the blocking and streaming chat-turn entry points.
+
+    The two entry points diverge after this point (DB write timing, interrupt
+    handling on the fallback path), so only the identical prefix is shared here.
+    """
+    clean_run_mode = _normalize_run_mode(run_mode)
+    prompt_messages = _fit_messages_to_budget(messages)
+    bypass_for_smalltalk = clean_run_mode == "agent" and _is_trivial_agent_smalltalk(prompt_messages)
+    effective_context_snapshot = None if bypass_for_smalltalk else context_snapshot
+    should_try_tools = (
+        not bypass_for_smalltalk
+        and (clean_run_mode == "agent" or _should_use_read_only_tools(prompt_messages, context_snapshot))
+    )
+    return _ChatTurnSetup(
+        run_mode=clean_run_mode,
+        prompt_messages=prompt_messages,
+        bypass_for_smalltalk=bypass_for_smalltalk,
+        effective_context_snapshot=effective_context_snapshot,
+        should_try_tools=should_try_tools,
+    )
+
+
+def _agent_success_meta(
+    agent_result: AgentInvokeResult,
+    *,
+    run_mode: str,
+    prompt_tool_calls: list[dict[str, Any]],
+    context_snapshot: dict[str, Any] | None,
+    bypass_for_smalltalk: bool,
+    agent_tooling_error: str | None,
+) -> dict[str, Any]:
+    ctx_meta = _context_meta(context_snapshot)
+    rag_cits = _rag_citations_from_tool_calls(agent_result.tool_calls)
+    return {
+        "run_mode": run_mode,
+        "tool_calls": agent_result.tool_calls,
+        "agent_trace": agent_result.trace_events,
+        "agent_trace_id": agent_result.trace_id,
+        "data_access_manifest": agent_result.data_access_manifest,
+        "prompt_context_tool_calls": prompt_tool_calls,
+        "agent_permissions": _agent_permissions(run_mode),
+        "agent_stop_reason": agent_result.stop_reason,
+        "agent_iterations": agent_result.iterations,
+        "agent_smalltalk_bypass": bypass_for_smalltalk,
+        "agent_tool_fallback_error": agent_tooling_error,
+        "response_metadata": agent_result.response_metadata,
+        "usage_metadata": agent_result.usage_metadata,
+        **ctx_meta,
+        "retrieval_citations": list(ctx_meta.get("retrieval_citations") or []) + rag_cits,
+    }
 
 
 def _resolve_provider_for_session(

@@ -32,7 +32,6 @@ def test_bootstrap_existing_ai_sessions_schema_without_rewriting_rows() -> None:
     session = conn.execute("SELECT title FROM ai_sessions WHERE id = 's1'").fetchone()
     version_names = [(row["version"], row["name"]) for row in rows]
     assert (BOOTSTRAP_VERSION, BOOTSTRAP_NAME) in version_names
-    assert (1, "create_ai_mission_drafts") in version_names
     assert (2, "add_ai_session_meta_json") in version_names
     assert (5, "add_revision_mutation_fields") in version_names
     assert session["title"] == "Existing"
@@ -71,7 +70,6 @@ def test_empty_migration_table_is_bootstrapped_when_ai_tables_exist() -> None:
     assert rows[0]["name"] == BOOTSTRAP_NAME
     assert rows[0]["applied_at"] >= before
     version_names = [(row["version"], row["name"]) for row in rows[1:]]
-    assert (1, "create_ai_mission_drafts") in version_names
     assert (2, "add_ai_session_meta_json") in version_names
     assert (5, "add_revision_mutation_fields") in version_names
 

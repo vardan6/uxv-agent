@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .coordinate_frame import Origin, load_scene_origin
+from .migrations import apply_ai_store_migrations
+from .mission_revision_repository import MissionRevisionRepository
 
 
 # Provenance of a Mission (ADR 0021 §2), distinct from ADR 0022's
@@ -124,6 +126,19 @@ class MissionStore:
 
     def __init__(self, db_path: str | Path):
         self._db_path = Path(db_path)
+        # `:memory:` is private per-connection in sqlite3, so `_connect()`'s
+        # usual open-per-call pattern would hand each caller a fresh, empty
+        # database. Cache one connection for the store's lifetime instead —
+        # this is what lets tests use a `:memory:` fixture instead of a
+        # tempfile on disk. A file-backed store assumes the app's shared
+        # migration runner already bootstrapped the schema; a `:memory:`
+        # store has no other owner, so it bootstraps itself.
+        self._memory_conn: sqlite3.Connection | None = None
+        if str(db_path) == ":memory:":
+            self._memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._memory_conn.row_factory = sqlite3.Row
+            apply_ai_store_migrations(self._memory_conn)
+            self._memory_conn.commit()
 
     def create_mission(
         self,
@@ -337,23 +352,23 @@ class MissionStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT m.*,
-                       COALESCE(r.id, '') AS active_revision_id,
-                       COALESCE(r.status, '') AS active_revision_status,
-                       COALESCE(r.mission_json, '{}') AS active_revision_mission_json
-                FROM missions m
-                LEFT JOIN ai_mission_operations o ON o.id = m.active_operation_id
-                LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
-                WHERE m.created_by_user_id = ?
-                ORDER BY m.created_at DESC
+                SELECT * FROM missions
+                WHERE created_by_user_id = ?
+                ORDER BY created_at DESC
                 LIMIT ?
                 """,
                 (str(user_id or ""), max(1, int(limit))),
             ).fetchall()
+            active_fields = MissionRevisionRepository(conn).get_active_revision_fields(
+                [str(row["active_operation_id"] or "") for row in rows]
+            )
         missions: list[dict[str, Any]] = []
         for row in rows:
             mission = dict(row)
-            active_revision_mission_json = mission.pop("active_revision_mission_json", None)
+            fields = active_fields.get(str(mission.get("active_operation_id") or ""), {})
+            mission["active_revision_id"] = fields.get("active_revision_id", "")
+            mission["active_revision_status"] = fields.get("active_revision_status", "")
+            active_revision_mission_json = fields.get("active_revision_mission_json")
             mission["vehicle_profile_id"] = _vehicle_profile_id_from_mission_json(
                 active_revision_mission_json
             )
@@ -428,22 +443,12 @@ class MissionStore:
         if not operation_id:
             return {}
         with self._connect() as conn:
-            op = conn.execute(
-                "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
-                (operation_id,),
-            ).fetchone()
-            if op is None:
-                return {}
-            revision_id = str(op["active_revision_id"] or "")
+            repo = MissionRevisionRepository(conn)
+            revision_id = repo.get_operation_active_revision_id(operation_id)
             if not revision_id:
                 return {}
-            rev = conn.execute(
-                "SELECT mission_json FROM ai_mission_revisions WHERE id = ?",
-                (revision_id,),
-            ).fetchone()
-        if rev is None:
-            return {}
-        return _load_json(rev["mission_json"])
+            revision = repo.get_revision(revision_id)
+        return revision["mission"] if revision else {}
 
     def get_active_revision_id(self, mission_id: str) -> str | None:
         """Resolve a Mission to its active revision id: mission -> active
@@ -461,13 +466,10 @@ class MissionStore:
         if not operation_id:
             return ""
         with self._connect() as conn:
-            op = conn.execute(
-                "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
-                (operation_id,),
-            ).fetchone()
-        if op is None:
-            return ""
-        return str(op["active_revision_id"] or "")
+            revision_id = MissionRevisionRepository(conn).get_operation_active_revision_id(
+                operation_id
+            )
+        return revision_id or ""
 
     def delete_mission(self, mission_id: str) -> bool:
         # The per-user counter is not rewound, so the deleted Mission's
@@ -514,6 +516,9 @@ class MissionStore:
 
     @contextmanager
     def _connect(self):
+        if self._memory_conn is not None:
+            yield self._memory_conn
+            return
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:

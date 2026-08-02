@@ -7,6 +7,7 @@ from typing import Any
 
 from gcs_server.config import AppConfig
 from gcs_server.routers import device_config, settings
+from gcs_server.tests.runtime_stub import make_stub_runtime
 
 
 class FakeStateStore:
@@ -82,7 +83,7 @@ def _config() -> AppConfig:
 
 
 def _runtime() -> SimpleNamespace:
-    return SimpleNamespace(
+    return make_stub_runtime(
         config=_config(),
         state_store=FakeStateStore(),
         ws_manager=FakeWebSocketManager(),

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import math
-import sqlite3
-import tempfile
 from pathlib import Path
 
 from ai.coordinate_frame import Origin, local_to_wgs84
-from ai.migrations import apply_ai_store_migrations
 from ai.mission_execution_service import (
     SOFT_BLOCKAGE_PENALTY_PER_M,
     SOFT_CORRIDOR_PENALTY_PER_M,
@@ -22,16 +19,6 @@ class _FakeStore:
 
     def list_constraints(self) -> list[dict]:
         return self._constraints
-
-
-def _make_db() -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
-    tmp.close()
-    db_path = Path(tmp.name)
-    with sqlite3.connect(db_path) as conn:
-        apply_ai_store_migrations(conn)
-        conn.commit()
-    return db_path
 
 
 def _point(x: float, y: float) -> dict[str, float]:
@@ -54,8 +41,8 @@ def _constraint(*, kind: str, rule: str, corners_local: list[tuple[float, float]
     }
 
 
-def test_survey_soft_corridor_scoring_prefers_vertical_candidate() -> None:
-    svc = MissionExecutionService(_make_db())
+def test_survey_soft_corridor_scoring_prefers_vertical_candidate(mission_db_path: Path) -> None:
+    svc = MissionExecutionService(mission_db_path)
     soft_corridor = _constraint(
         kind="allowed_corridor",
         rule="soft",
@@ -82,8 +69,8 @@ def test_survey_soft_corridor_scoring_prefers_vertical_candidate() -> None:
     assert math.isclose(soft_cost["total_cost"], 140.0 + 118.0 * SOFT_CORRIDOR_PENALTY_PER_M)
 
 
-def test_corridor_returns_soft_blockage_metadata() -> None:
-    svc = MissionExecutionService(_make_db())
+def test_corridor_returns_soft_blockage_metadata(mission_db_path: Path) -> None:
+    svc = MissionExecutionService(mission_db_path)
     soft_blockage = _constraint(
         kind="blockage",
         rule="soft",

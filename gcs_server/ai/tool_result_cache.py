@@ -20,28 +20,16 @@ import threading
 import time
 from typing import Any
 
-
-# Tools whose output is stable across calls within a session.
-# Excludes: live-state queries (rover pose, telemetry, sensor freshness),
-# pose-dependent spatial queries, route planners (depend on current pose),
-# and any mutating tool.
-CACHEABLE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "get_scene_summary",
-        "query_replay_sessions",
-        "analyze_replay_sessions",
-        "query_ai_memory",
-        "list_data_surfaces",
-        "query_settings",
-    }
-)
+from .tool_registry import cacheable_tool_names, tool_cache_ttl_s
 
 
-# Per-tool TTL (seconds). Default 300s; shorter for tools that may drift.
-_TOOL_TTL_SECONDS: dict[str, int] = {
-    "query_settings": 60,
-    "query_ai_memory": 30,
-}
+# Tools whose output is stable across calls within a session (O9: derived from
+# each tool's ToolMeta.cacheable declaration in tool_registry.py, not a second
+# independent list). Excludes: live-state queries (rover pose, telemetry,
+# sensor freshness), pose-dependent spatial queries, route planners (depend on
+# current pose), and any mutating tool.
+CACHEABLE_TOOL_NAMES: frozenset[str] = cacheable_tool_names()
+
 _DEFAULT_TTL_SECONDS = 300
 
 
@@ -103,7 +91,7 @@ class ToolResultCache:
             return
         if not _is_cacheable_result(tool_result):
             return
-        ttl = _TOOL_TTL_SECONDS.get(tool_name, _DEFAULT_TTL_SECONDS)
+        ttl = tool_cache_ttl_s(tool_name, default=_DEFAULT_TTL_SECONDS)
         key = self._key(session_id, tool_name, tool_args)
         with self._lock:
             self._entries[key] = (time.time() + ttl, tool_result)

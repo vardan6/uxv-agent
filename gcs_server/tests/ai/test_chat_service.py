@@ -32,16 +32,17 @@ class _FakeDefinition:
         self.name = name
         self.permission = permission
         self.tier = 0
-        self.required_scopes = frozenset()
         self.side_effects = frozenset()
 
 
 class _FakeRegistry:
     def __init__(self):
         self.context_snapshots: list[dict] = []
+        self.run_modes: list[str] = []
 
-    def build_langchain_tools(self, runtime, context_snapshot, *, timezone_name="", permissions=None):
+    def build_langchain_tools(self, runtime, context_snapshot, *, timezone_name="", permissions=None, run_mode=""):
         self.context_snapshots.append(context_snapshot)
+        self.run_modes.append(run_mode)
         return [_FakeTool("query_map_objects")]
 
     def definitions(self):
@@ -125,7 +126,7 @@ def test_agent_tool_binding_disables_strict_mode_for_optional_tool_args() -> Non
     assert len(model.bind_calls) == 1
     assert model.bind_calls[0]["kwargs"] == {"strict": False}
     assert [tool.name for tool in model.bind_calls[0]["tools"]] == ["query_map_objects"]
-    assert registry.context_snapshots[0]["__agent_run_mode"] == "agent"
+    assert registry.run_modes[0] == "agent"
 
 
 def test_empty_agent_result_falls_back_to_plain_streaming() -> None:

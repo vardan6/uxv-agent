@@ -26,7 +26,6 @@ class PolicyDecision:
     tool_name: str
     permission: str
     tier: int
-    required_scopes: tuple[str, ...]
     side_effects: tuple[str, ...]
 
     def as_trace_dict(self) -> dict[str, Any]:
@@ -37,7 +36,6 @@ class PolicyDecision:
             "tool_name": self.tool_name,
             "permission": self.permission,
             "tier": self.tier,
-            "required_scopes": list(self.required_scopes),
             "side_effects": list(self.side_effects),
         }
 
@@ -56,7 +54,6 @@ class PolicyEngine:
         definition: ToolDefinition | None,
         tool_name: str,
         available_permissions: frozenset[str],
-        granted_scopes: frozenset[str] | None = None,
         run_mode: str = "agent",
     ) -> PolicyDecision:
         if definition is None:
@@ -76,12 +73,6 @@ class PolicyEngine:
                 definition,
             )
 
-        required_scopes = definition.required_scopes
-        active_scopes = granted_scopes or frozenset()
-        if required_scopes and not required_scopes.issubset(active_scopes):
-            missing = sorted(required_scopes.difference(active_scopes))
-            return self._deny(definition.name, f"missing required scopes: {', '.join(missing)}", definition)
-
         return PolicyDecision(
             action="allow",
             reason="allowed by current policy",
@@ -89,7 +80,6 @@ class PolicyEngine:
             tool_name=definition.name,
             permission=definition.permission,
             tier=definition.tier,
-            required_scopes=tuple(sorted(definition.required_scopes)),
             side_effects=tuple(sorted(definition.side_effects)),
         )
 
@@ -106,6 +96,5 @@ class PolicyEngine:
             tool_name=tool_name,
             permission=definition.permission if definition else "",
             tier=int(definition.tier) if definition else -1,
-            required_scopes=tuple(sorted(definition.required_scopes)) if definition else (),
             side_effects=tuple(sorted(definition.side_effects)) if definition else (),
         )
