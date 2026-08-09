@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ai.tool_registry import ToolInvocationContext, ToolRegistry
+from tests.runtime_stub import make_stub_runtime
 
 
 class _FakeMissionStore:
@@ -84,13 +85,13 @@ def test_pause_tool_rolls_back_session_pause_when_service_pause_fails() -> None:
     mission_id = "mission-1"
     sessions = _FakeSessions()
     service = _FakeService(pause_ok=False)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, "op-1"),
     )
 
-    result = ToolRegistry()._pause_mission_execution(_context(runtime), mission_id)
+    result = ToolRegistry()._control_mission_execution(_context(runtime), "pause", mission_id)
 
     assert result["ok"] is False
     assert result["status"] == "adapter_error"
@@ -102,13 +103,13 @@ def test_resume_tool_rolls_back_session_resume_when_service_resume_fails() -> No
     mission_id = "mission-1"
     sessions = _FakeSessions()
     service = _FakeService(resume_ok=False)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, "op-1"),
     )
 
-    result = ToolRegistry()._resume_mission_execution(_context(runtime), mission_id)
+    result = ToolRegistry()._control_mission_execution(_context(runtime), "resume", mission_id)
 
     assert result["ok"] is False
     assert result["status"] == "adapter_error"
@@ -120,13 +121,13 @@ def test_stop_tool_forwards_abort_without_session_rollback() -> None:
     mission_id = "mission-1"
     sessions = _FakeSessions()
     service = _FakeService(abort_ok=False)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, "op-1"),
     )
 
-    result = ToolRegistry()._stop_mission_execution(_context(runtime), mission_id)
+    result = ToolRegistry()._control_mission_execution(_context(runtime), "stop", mission_id)
 
     assert result["ok"] is False
     assert result["status"] == "adapter_error"
@@ -138,13 +139,13 @@ def test_pause_tool_skips_service_when_mission_has_no_active_operation() -> None
     mission_id = "mission-1"
     sessions = _FakeSessions()
     service = _FakeService()
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_execution_sessions=sessions,
         mission_execution_service=service,
         mission_store=_FakeMissionStore(mission_id, ""),
     )
 
-    result = ToolRegistry()._pause_mission_execution(_context(runtime), mission_id)
+    result = ToolRegistry()._control_mission_execution(_context(runtime), "pause", mission_id)
 
     assert result == {"ok": True, "status": "paused", "mission_id": mission_id}
     assert sessions.calls == [("pause", mission_id)]

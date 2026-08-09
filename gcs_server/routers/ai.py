@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from gcs_server.ai.agent_traces import AgentTraceStore
 from gcs_server.ai.chat_service import AIChatService, AI_CONTEXT_MESSAGE_LIMIT
 from gcs_server.ai.context_service import AIContextService
-from gcs_server.ai.data_access import build_data_access_manifest
+from gcs_server.ai.mission_control import mission_control_for
 from gcs_server.ai.retrieval import (
     build_loaded_data_refs,
     build_retrieval_citations,
@@ -23,7 +23,11 @@ from gcs_server.ai.retrieval import (
     normalize_retrieval_request,
 )
 from gcs_server.ai.session_store import normalize_source_controls
-from gcs_server.ai.tool_registry import ToolRegistry, allowed_tool_names_for_source_controls
+from gcs_server.ai.tool_registry import (
+    ToolRegistry,
+    allowed_tool_names_for_source_controls,
+    build_data_access_manifest,
+)
 from gcs_server.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
 from gcs_server.routers.llm import _redact_secret_text
 from gcs_server.runtime import AppRuntime
@@ -167,7 +171,7 @@ def _agent_trace_store(request: Request) -> AgentTraceStore:
 
 
 def _session_mission_snapshot(runtime: AppRuntime, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None or not str(session_id or "").strip():
         return (
             {"active": False, "status": "no_active_mission", "summary": "No backend-owned mission proposal is stored yet."},
@@ -296,8 +300,6 @@ def _format_tool_catalog_markdown_full(
             lines.append(f"- Inputs: {_format_contract_mapping(inputs)}")
         if isinstance(required, list) and required:
             lines.append(f"- Required inputs: `{', '.join(str(item) for item in required)}`")
-        if definition.required_scopes:
-            lines.append(f"- Required scopes: `{', '.join(sorted(definition.required_scopes))}`")
         if definition.side_effects:
             lines.append(f"- Side effects: `{', '.join(sorted(definition.side_effects))}`")
         if isinstance(upstream, list) and upstream:
@@ -764,7 +766,7 @@ async def list_missions(
     """
     runtime = _runtime(request)
     missions = runtime.mission_store.list_missions(user_id=user_id, limit=limit)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
+    sessions = runtime.mission_execution_sessions
     if sessions is not None:
         for m in missions:
             active = sessions.get_for_mission(str(m.get("id") or ""))
@@ -780,8 +782,8 @@ async def create_blank_mission(request: Request) -> JSONResponse:
     no waypoints; the operator places them by clicking on the map in add mode.
     """
     runtime = _runtime(request)
-    mission_store = getattr(runtime, "mission_store", None)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_store = runtime.mission_store
+    mission_execution = runtime.mission_execution_service
     if mission_store is None or mission_execution is None:
         raise HTTPException(status_code=503, detail="mission services unavailable")
     try:
@@ -837,7 +839,7 @@ async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
     sidebar (mirroring the planner's store_draft bridge).
     """
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -853,13 +855,13 @@ async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
         points=payload.get("points") if isinstance(payload.get("points"), list) else [],
         params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
         name=str(payload.get("name", "") or ""),
-        constraints_store=getattr(runtime, "operational_constraints_store", None),
+        constraints_store=runtime.operational_constraints_store,
     )
     if not result.get("ok"):
         return JSONResponse(result, status_code=400)
 
     operation_id = str(result.get("operation_id") or "")
-    mission_store = getattr(runtime, "mission_store", None)
+    mission_store = runtime.mission_store
     mission_id = ""
     if mission_store is not None and operation_id:
         try:
@@ -898,6 +900,37 @@ async def create_drawn_pattern_mission(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+@router.post("/api/ai/missions/draw-pattern/preview")
+async def preview_drawn_pattern_mission(request: Request) -> JSONResponse:
+    """Preview a drawn corridor/survey pattern's projected geometry (O12, ADR 0022/0031).
+
+    Same generator + soft-cost search as ``POST /api/ai/missions/draw-pattern``,
+    but nothing is persisted: the response is the WGS84-projected waypoints a
+    client would render, so widgets stop duplicating the corridor/survey math
+    to draw a live preview.
+    """
+    runtime = _runtime(request)
+    mission_execution = runtime.mission_execution_service
+    if mission_execution is None:
+        raise HTTPException(status_code=503, detail="mission execution service unavailable")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    result = mission_execution.preview_drawn_pattern(
+        pattern=str(payload.get("pattern", "") or ""),
+        points=payload.get("points") if isinstance(payload.get("points"), list) else [],
+        params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
+        constraints_store=runtime.operational_constraints_store,
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
 @router.post("/api/ai/missions/{mission_id}/geofence")
 async def set_mission_geofence(mission_id: str, request: Request) -> JSONResponse:
     """Operator-drawn geofence → fenced revision on an existing Mission (Phase 5).
@@ -909,8 +942,8 @@ async def set_mission_geofence(mission_id: str, request: Request) -> JSONRespons
     the fence.
     """
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
-    mission_store = getattr(runtime, "mission_store", None)
+    mission_execution = runtime.mission_execution_service
+    mission_store = runtime.mission_store
     if mission_execution is None or mission_store is None:
         raise HTTPException(status_code=503, detail="mission services unavailable")
     try:
@@ -971,7 +1004,7 @@ async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
     / awaiting confirmation for that Mission.
     """
     runtime = _runtime(request)
-    mission_store = getattr(runtime, "mission_store", None)
+    mission_store = runtime.mission_store
     if mission_store is None:
         raise HTTPException(status_code=503, detail="mission store unavailable")
     mid = str(mission_id or "").strip()
@@ -981,7 +1014,7 @@ async def delete_mission(mission_id: str, request: Request) -> JSONResponse:
     status = str((mission.get("activeRevisionStatus") or mission.get("active_revision_status") or "")).strip()
     if status == "executing":
         return JSONResponse({"ok": False, "error": "cannot delete a mission that is currently executing"}, status_code=409)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
+    sessions = runtime.mission_execution_sessions
     active = sessions.get_for_mission(mid) if sessions is not None else None
     active_status = str(getattr(active, "status", "") or "").strip()
     if active_status in {"armed", "awaiting_confirm", "running"}:
@@ -1004,7 +1037,7 @@ async def rename_mission_endpoint(mission_id: str, request: Request) -> JSONResp
     """Update a flat Mission. PATCH with {name} to rename and/or {color} to set
     the persisted per-Mission colour override (empty string clears it)."""
     runtime = _runtime(request)
-    mission_store = getattr(runtime, "mission_store", None)
+    mission_store = runtime.mission_store
     if mission_store is None:
         raise HTTPException(status_code=503, detail="mission store unavailable")
     try:
@@ -1361,31 +1394,6 @@ async def create_mission_draft(session_id: str, request: Request) -> JSONRespons
     )
 
 
-@router.get("/api/ai/mission-drafts")
-async def list_mission_drafts(
-    request: Request,
-    session_id: str | None = None,
-    status: str | None = None,
-    limit: int = 50,
-) -> JSONResponse:
-    runtime = _runtime(request)
-    drafts = runtime.mission_draft_service.list_drafts(
-        session_id=session_id,
-        status_filter=status,
-        limit=max(1, min(200, limit)),
-    )
-    return JSONResponse({"ok": True, "drafts": drafts, "count": len(drafts)})
-
-
-@router.get("/api/ai/mission-drafts/{draft_id}")
-async def get_mission_draft(draft_id: str, request: Request) -> JSONResponse:
-    runtime = _runtime(request)
-    draft = runtime.mission_draft_service.get_draft(draft_id)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="mission draft not found")
-    return JSONResponse({"ok": True, "draft": draft})
-
-
 @router.get("/api/ai/mission-revisions")
 async def list_mission_revisions(
     request: Request,
@@ -1395,7 +1403,7 @@ async def list_mission_revisions(
     limit: int = 50,
 ) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     revisions = mission_execution.list_revisions(
@@ -1410,7 +1418,7 @@ async def list_mission_revisions(
 @router.get("/api/ai/mission-revisions/current")
 async def get_current_mission_revision(request: Request, session_id: str = "") -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     state = mission_execution.get_current_mission_state(session_id=session_id)
@@ -1423,7 +1431,7 @@ async def get_current_mission_revision(request: Request, session_id: str = "") -
 @router.get("/api/ai/mission-revisions/{revision_id}")
 async def get_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     revision = mission_execution.get_revision(revision_id)
@@ -1435,7 +1443,7 @@ async def get_mission_revision(revision_id: str, request: Request) -> JSONRespon
 @router.get("/api/ai/mission-revisions/{revision_id}/overlay")
 async def get_mission_revision_overlay(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     revision = mission_execution.get_revision(revision_id)
@@ -1452,7 +1460,7 @@ async def get_mission_overlay(mission_id: str, request: Request) -> JSONResponse
     replacing the per-revision `/api/ai/mission-revisions/{id}/overlay` path.
     """
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     revision_id = runtime.mission_store.get_active_revision_id(mission_id)
@@ -1466,7 +1474,7 @@ async def get_mission_overlay(mission_id: str, request: Request) -> JSONResponse
 @router.get("/api/ai/mission-overlays/current")
 async def get_current_mission_overlay(request: Request, session_id: str = "") -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     return JSONResponse({"ok": True, "overlay": mission_execution.get_revision_overlay(session_id=session_id)})
@@ -1475,7 +1483,7 @@ async def get_current_mission_overlay(request: Request, session_id: str = "") ->
 @router.post("/api/ai/mission-revisions")
 async def create_client_mission_revision(request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1504,7 +1512,7 @@ async def create_client_mission_revision(request: Request) -> JSONResponse:
 @router.patch("/api/ai/mission-revisions/{revision_id}/waypoints/{waypoint_index}")
 async def update_mission_waypoint(revision_id: str, waypoint_index: int, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1535,7 +1543,7 @@ async def update_mission_waypoint(revision_id: str, waypoint_index: int, request
 @router.post("/api/ai/mission-revisions/{revision_id}/waypoints")
 async def insert_mission_waypoint(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1575,7 +1583,7 @@ async def delete_mission_waypoint(
     request: Request,
 ) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1614,7 +1622,7 @@ async def list_vehicle_profiles(request: Request) -> JSONResponse:
 @router.get("/api/ai/controller-mission")
 async def get_controller_mission_state(request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     return JSONResponse({"ok": True, "controller_state": mission_execution.get_controller_state()})
@@ -1623,7 +1631,7 @@ async def get_controller_mission_state(request: Request) -> JSONResponse:
 @router.get("/api/ai/controller-mission/health")
 async def get_controller_mission_health(request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     health = mission_execution.check_controller_health()
@@ -1633,7 +1641,7 @@ async def get_controller_mission_health(request: Request) -> JSONResponse:
 @router.post("/api/ai/controller-mission/clear")
 async def clear_controller_mission(request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1667,7 +1675,7 @@ async def get_execution_state(request: Request) -> JSONResponse:
     """Confirm-banner poll (ADR 0021 §1): the in-flight execution for a session,
     including the confirm-window countdown when one is awaiting confirmation."""
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
+    sessions = runtime.mission_execution_sessions
     if sessions is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     session_id = str(request.query_params.get("session_id") or "").strip()
@@ -1682,7 +1690,7 @@ async def confirm_execution(request: Request) -> JSONResponse:
     """Operator `[Play]` on the confirm banner: start the armed run if still
     within its confirm window."""
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
+    sessions = runtime.mission_execution_sessions
     if sessions is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     try:
@@ -1704,7 +1712,7 @@ async def confirm_execution(request: Request) -> JSONResponse:
 async def cancel_execution_endpoint(request: Request) -> JSONResponse:
     """Operator dismissed the confirm banner: drop the armed/awaiting run."""
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
+    sessions = runtime.mission_execution_sessions
     if sessions is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     try:
@@ -1722,84 +1730,49 @@ async def cancel_execution_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
-def _active_operation_id_for_mission(runtime: Any, mission_id: str) -> str:
-    """Look up the active_operation_id for a flat Mission so sidebar pause/resume/stop
-    can call the service (FC adapter + DB) as well as parking the executor thread."""
-    store = getattr(runtime, "mission_store", None)
-    if store is None:
-        return ""
-    mission = store.get_mission(str(mission_id or "").strip())
-    if not isinstance(mission, dict):
-        return ""
-    return str(mission.get("active_operation_id") or "").strip()
-
-
 @router.post("/api/ai/missions/{mission_id}/pause")
 async def pause_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
-    if sessions is None:
+    control = mission_control_for(runtime)
+    if control is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     mid = str(mission_id or "").strip()
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
-    result = sessions.pause_for_mission(mid)
-    if result.get("ok"):
-        svc = getattr(runtime, "mission_execution_service", None)
-        op_id = _active_operation_id_for_mission(runtime, mid)
-        if svc is not None and op_id:
-            svc_result = svc.pause_mission(op_id)
-            if not svc_result.get("ok"):
-                sessions.resume_for_mission(mid)
-                result = svc_result
+    result = control.pause(mid)
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/api/ai/missions/{mission_id}/resume")
 async def resume_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
-    if sessions is None:
+    control = mission_control_for(runtime)
+    if control is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     mid = str(mission_id or "").strip()
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
-    result = sessions.resume_for_mission(mid)
-    if result.get("ok"):
-        svc = getattr(runtime, "mission_execution_service", None)
-        op_id = _active_operation_id_for_mission(runtime, mid)
-        if svc is not None and op_id:
-            svc_result = svc.resume_mission(op_id)
-            if not svc_result.get("ok"):
-                sessions.pause_for_mission(mid)
-                result = svc_result
+    result = control.resume(mid)
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/api/ai/missions/{mission_id}/stop")
 async def stop_mission_endpoint(mission_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    sessions = getattr(runtime, "mission_execution_sessions", None)
-    if sessions is None:
+    control = mission_control_for(runtime)
+    if control is None:
         raise HTTPException(status_code=503, detail="execution sessions unavailable")
     mid = str(mission_id or "").strip()
     if not mid:
         raise HTTPException(status_code=400, detail="mission_id is required")
-    result = sessions.abort_for_mission(mid)
-    if result.get("ok"):
-        svc = getattr(runtime, "mission_execution_service", None)
-        op_id = _active_operation_id_for_mission(runtime, mid)
-        if svc is not None and op_id:
-            svc_result = svc.abort_mission(op_id)
-            if not svc_result.get("ok"):
-                result = svc_result
+    result = control.stop(mid)
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 
 @router.post("/api/ai/mission-revisions/{revision_id}/execute")
 async def execute_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:
@@ -1833,7 +1806,7 @@ async def execute_mission_revision(revision_id: str, request: Request) -> JSONRe
 @router.post("/api/ai/mission-revisions/{revision_id}/reject")
 async def reject_mission_revision(revision_id: str, request: Request) -> JSONResponse:
     runtime = _runtime(request)
-    mission_execution = getattr(runtime, "mission_execution_service", None)
+    mission_execution = runtime.mission_execution_service
     if mission_execution is None:
         raise HTTPException(status_code=503, detail="mission execution service unavailable")
     try:

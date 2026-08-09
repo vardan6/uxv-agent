@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
-from .data_access import build_data_access_manifest
 from .execution_mode import execution_tools_for_mode, resolve_execution_mode
 from .policy_engine import POLICY_DENIED_STOP_REASON, PolicyEngine
-from .tool_registry import DEFAULT_PERMISSIONS, EXECUTION
+from .tool_registry import DEFAULT_PERMISSIONS, EXECUTION, build_data_access_manifest
 from .tool_result_cache import CACHEABLE_TOOL_NAMES, ToolResultCache
 
 
@@ -78,7 +77,6 @@ class AgentToolRuntime:
     tool_message_cls: Any
     permissions: frozenset[str]
     data_access_manifest: dict[str, Any]
-    granted_scopes: frozenset[str]
     run_mode: str
     session_id: str = ""
 
@@ -132,153 +130,11 @@ class AgentLoopRuntime:
         )
         if runtime is None:
             return None
-
-        trace_id = _new_trace_id()
-        executed_tool_calls: list[dict[str, Any]] = []
-        trace_events: list[dict[str, Any]] = []
-        self._append_trace_event(trace_id, trace_events, {
-            "type": "agent_run_start",
-            "run_mode": run_mode,
-            "max_iterations": AI_AGENT_MAX_TOOL_ITERATIONS,
-            "max_repeated_tool_failures": AI_AGENT_MAX_REPEATED_TOOL_FAILURES,
-        })
-        final_response = None
-        iterations = 0
-        stop_reason = "iteration_limit"
-        consecutive_failure_signature: str | None = None
-        consecutive_failure_count = 0
-        should_stop = False
-        terminal_tool_error: dict[str, Any] | None = None
-
-        for iteration in range(1, AI_AGENT_MAX_TOOL_ITERATIONS + 1):
-            iterations = iteration
-            self._append_trace_event(trace_id, trace_events, {"type": "agent_iteration_start", "iteration": iteration})
-            try:
-                final_response = runtime.bound_model.invoke(runtime.langchain_messages)
-            except Exception as exc:
-                if self._tool_calling_unsupported(exc):
-                    return None
-                raise
-            runtime.langchain_messages.append(final_response)
-            response_tool_calls = getattr(final_response, "tool_calls", None) or []
-            if not response_tool_calls:
-                stop_reason = "final_answer"
-                break
-            for call in response_tool_calls:
-                tool_name = str(call.get("name") or "").strip()
-                tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
-                tool_call_id = str(call.get("id") or tool_name)
-                self._append_trace_event(trace_id, trace_events, {
-                    "type": "agent_tool_start",
-                    "tool_call": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "args": tool_args,
-                        "iteration": iteration,
-                    },
-                })
-                started = time.perf_counter()
-                tool_result, policy_decision = self._invoke_tool(runtime, tool_name, tool_args)
-                self._append_trace_event(trace_id, trace_events, {
-                    "type": "agent_policy_decision",
-                    "tool_call": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "args": tool_args,
-                        "iteration": iteration,
-                    },
-                    "policy_decision": policy_decision.as_trace_dict(),
-                })
-                latency_ms = int((time.perf_counter() - started) * 1000)
-                failure_signature = _tool_failure_signature(tool_name, tool_args, tool_result)
-                if failure_signature and failure_signature == consecutive_failure_signature:
-                    consecutive_failure_count += 1
-                elif failure_signature:
-                    consecutive_failure_signature = failure_signature
-                    consecutive_failure_count = 1
-                else:
-                    consecutive_failure_signature = None
-                    consecutive_failure_count = 0
-                executed_tool_calls.append(
-                    {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "args": tool_args,
-                        "result": tool_result,
-                        "iteration": iteration,
-                        "latency_ms": latency_ms,
-                        "policy_decision": policy_decision.as_trace_dict(),
-                    }
-                )
-                self._append_trace_event(trace_id, trace_events, {
-                    "type": "agent_tool_result",
-                    "tool_call": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "args": tool_args,
-                        "result": tool_result,
-                        "iteration": iteration,
-                        "latency_ms": latency_ms,
-                        "policy_decision": policy_decision.as_trace_dict(),
-                    },
-                })
-                definition = runtime.tool_definitions.get(tool_name)
-                if definition is not None and getattr(definition, "is_terminal", False):
-                    if isinstance(tool_result, dict) and tool_result.get("ok") is False:
-                        stop_reason = "terminal_tool_failed"
-                    else:
-                        stop_reason = "draft_proposed"
-                    should_stop = True
-                elif policy_decision.action != "allow":
-                    stop_reason = policy_decision.stop_reason or POLICY_DENIED_STOP_REASON
-                    should_stop = True
-                    terminal_tool_error = {
-                        "tool_name": tool_name,
-                        "error": str(tool_result.get("error") or policy_decision.reason),
-                    }
-                if consecutive_failure_count >= AI_AGENT_MAX_REPEATED_TOOL_FAILURES:
-                    stop_reason = "repeated_tool_failure"
-                    self._append_trace_event(trace_id, trace_events, {
-                        "type": "agent_repeated_tool_failure",
-                        "tool_call": {
-                            "id": tool_call_id,
-                            "name": tool_name,
-                            "args": tool_args,
-                            "iteration": iteration,
-                        },
-                        "failure_count": consecutive_failure_count,
-                    })
-                    should_stop = True
-                runtime.langchain_messages.append(
-                    runtime.tool_message_cls(
-                        content=json.dumps(tool_result, separators=(",", ":"), sort_keys=True),
-                        tool_call_id=tool_call_id,
-                        name=tool_name,
-                    )
-                )
-                if should_stop:
-                    break
-            if should_stop:
-                break
-
-        if final_response is None:
-            return None
-        self._append_trace_event(trace_id, trace_events, {
-            "type": "agent_run_end",
-            "stop_reason": stop_reason,
-            "iterations": iterations,
-            "tool_call_count": len(executed_tool_calls),
-        })
-        return self._result_from_response(
-            final_response,
-            executed_tool_calls,
-            trace_events,
-            stop_reason,
-            iterations,
-            trace_id,
-            runtime.data_access_manifest,
-            terminal_tool_error,
-        )
+        result: AgentInvokeResult | None = None
+        for event in self._run_tool_loop(runtime, streaming=False):
+            if event.get("type") == "_agent_result":
+                result = event.get("result")
+        return result
 
     def stream_tool_events(
         self,
@@ -301,13 +157,24 @@ class AgentLoopRuntime:
         if runtime is None:
             yield {"type": "_agent_result", "result": None}
             return
+        yield from self._run_tool_loop(runtime, streaming=True)
 
+    def _run_tool_loop(self, runtime: AgentToolRuntime, *, streaming: bool) -> Iterator[dict[str, Any]]:
+        """Drive one tool-calling agent run, yielding trace events plus a final ``_agent_result``.
+
+        Shared by ``invoke_with_tools`` (which drains this generator and keeps only the
+        final result) and ``stream_tool_events`` (which yields every event through to the
+        caller). ``streaming`` selects the model-turn strategy: token-by-token
+        ``assistant_delta`` events via ``_stream_model_turn`` when true, a single blocking
+        ``.invoke`` when false — a provider that streams tool calls poorly cannot regress
+        the non-streaming path.
+        """
         trace_id = _new_trace_id()
         executed_tool_calls: list[dict[str, Any]] = []
         trace_events: list[dict[str, Any]] = []
         self._append_trace_event(trace_id, trace_events, {
             "type": "agent_run_start",
-            "run_mode": run_mode,
+            "run_mode": runtime.run_mode,
             "max_iterations": AI_AGENT_MAX_TOOL_ITERATIONS,
             "max_repeated_tool_failures": AI_AGENT_MAX_REPEATED_TOOL_FAILURES,
         })
@@ -326,17 +193,20 @@ class AgentLoopRuntime:
             yield trace_events[-1]
             final_response = None
             try:
-                for turn_event in self._stream_model_turn(runtime):
-                    if turn_event.get("type") == "_turn_response":
-                        final_response = turn_event.get("response")
-                        continue
-                    yield turn_event
+                if streaming:
+                    for turn_event in self._stream_model_turn(runtime):
+                        if turn_event.get("type") == "_turn_response":
+                            final_response = turn_event.get("response")
+                            continue
+                        yield turn_event
+                else:
+                    final_response = runtime.bound_model.invoke(runtime.langchain_messages)
             except Exception as exc:
                 if self._tool_calling_unsupported(exc):
                     yield {"type": "_agent_result", "result": None}
                     return
                 raise
-            if final_response is None:
+            if streaming and final_response is None:
                 # No chunks produced (or no stream support fell back to an empty
                 # invoke); let the caller drop to plain non-tool generation.
                 yield {"type": "_agent_result", "result": None}
@@ -516,13 +386,12 @@ class AgentLoopRuntime:
         # empty arm/execute set) is what actually decides which execution tools the
         # model sees. COMMAND_STAGING stays disabled in the registry.
         permissions = frozenset(DEFAULT_PERMISSIONS | {EXECUTION})
-        tool_context_snapshot = dict(context_snapshot or {})
-        tool_context_snapshot["__agent_run_mode"] = run_mode
         tools = self._tool_registry.build_langchain_tools(
             runtime,
-            tool_context_snapshot,
+            dict(context_snapshot or {}),
             timezone_name=timezone_name,
             permissions=set(permissions),
+            run_mode=run_mode,
         )
         allowed_names = self._allowed_tool_names(context_snapshot)
         if allowed_names is not None:
@@ -533,7 +402,7 @@ class AgentLoopRuntime:
         # Strict binds neither arm nor execute; Confirm binds arm_execution;
         # Autonomous binds execute_mission; cancel/abort always bind. Execution
         # tools land with the Phase 3 executor, so this is a no-op until then.
-        execution_mode = resolve_execution_mode(getattr(runtime, "config", None)) if runtime is not None else "strict"
+        execution_mode = resolve_execution_mode(runtime.config) if runtime is not None else "strict"
         mode_bound_execution = execution_tools_for_mode(execution_mode)
         tools = [
             tool
@@ -578,7 +447,6 @@ class AgentLoopRuntime:
             tool_message_cls=ToolMessage,
             permissions=permissions,
             data_access_manifest=manifest,
-            granted_scopes=frozenset(),
             run_mode=run_mode,
             session_id=session_id,
         )
@@ -589,7 +457,6 @@ class AgentLoopRuntime:
             definition=definition,
             tool_name=tool_name,
             available_permissions=runtime.permissions,
-            granted_scopes=runtime.granted_scopes,
             run_mode=runtime.run_mode,
         )
         if policy_decision.action != "allow":
@@ -600,7 +467,6 @@ class AgentLoopRuntime:
                 definition=None,
                 tool_name=tool_name,
                 available_permissions=runtime.permissions,
-                granted_scopes=runtime.granted_scopes,
                 run_mode=runtime.run_mode,
             )
             return {"ok": False, "error": f"tool '{tool_name}' is not available"}, fallback

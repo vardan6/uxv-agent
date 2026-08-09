@@ -36,7 +36,14 @@ export class BasemapPanel {
   //
   // `session` is an optional MapSketchSession shared with the owning MapWidget.
   // If omitted, a local session is created (useful in tests / standalone use).
-  constructor(parent, { onGenerate = null, onSetGeofence = null, onCreateConstraint = null, session = null } = {}) {
+  //
+  // `onPreviewPattern({ pattern, points, params }, { signal })` (O12) is called
+  // once a survey sketch settles (vertex/heading dragend, or a spacing edit) —
+  // never per drag frame — to fetch the backend's actual generated geometry and
+  // replace the local flat-earth approximation the line was first drawn with.
+  // Optional: if omitted, the local approximation (already rendered) just stays
+  // as the only preview, same as before this existed.
+  constructor(parent, { onGenerate = null, onSetGeofence = null, onCreateConstraint = null, onPreviewPattern = null, session = null } = {}) {
     this._el = document.createElement('div');
     this._el.className = 'map-basemap-panel';
     Object.assign(this._el.style, {
@@ -55,6 +62,7 @@ export class BasemapPanel {
     this._onGenerate = onGenerate;
     this._onSetGeofence = onSetGeofence;
     this._onCreateConstraint = onCreateConstraint;
+    this._onPreviewPattern = onPreviewPattern;
 
     // Sketch state lives in MapSketchSession; this panel is the Leaflet adapter.
     this._session = session || new MapSketchSession();
@@ -83,6 +91,15 @@ export class BasemapPanel {
     // an active drag so the dragging marker is not torn down mid-gesture.
     this._vertexDragging = false;
     this._dragPolyRef = null; // primary line/polygon layer; updated live during drag
+
+    // Server-reconciled survey route preview (O12): the lawnmower line layer,
+    // first drawn from local flat-earth math, then swapped for backend-exact
+    // geometry once `_reconcileSurveyPreview` resolves. `_surveyPreviewAbort`
+    // cancels a superseded request instead of letting a stale one land after a
+    // newer sketch edit.
+    this._surveyRouteLineRef = null;
+    this._surveyPreviewAbort = null;
+    this._surveyPreviewSeq = 0;
 
     // Vertex snapping (Phase 3): nearest existing sketch vertex within SNAP_PX pixels.
     this._snapTarget = null;   // {lat, lon} | null — vertex the next click will land on
@@ -386,6 +403,11 @@ export class BasemapPanel {
     if (!this._drawLayer) this._drawLayer = L.layerGroup().addTo(this._map);
     this._drawLayer.clearLayers();
     this._dragPolyRef = null;
+    this._surveyRouteLineRef = null;
+    if (this._surveyPreviewAbort) {
+      this._surveyPreviewAbort.abort();
+      this._surveyPreviewAbort = null;
+    }
 
     const tool = this._session.tool;
     const vertices = this._session.vertices; // {lat, lon}[]
@@ -426,7 +448,8 @@ export class BasemapPanel {
         vertices[0], vertices[1], this._session.surveyHeading, this._sketchParams.spacing,
       );
       if (routeWpts.length >= 2) {
-        L.polyline(routeWpts, { color: stroke, weight: 1.5, opacity: 0.65, dashArray: '4 3' }).addTo(this._drawLayer);
+        this._surveyRouteLineRef = L.polyline(routeWpts, { color: stroke, weight: 1.5, opacity: 0.65, dashArray: '4 3' }).addTo(this._drawLayer);
+        this._reconcileSurveyPreview(vertices[0], vertices[1]);
       }
       this._updateSurveyHandle(vertices[0], vertices[1]);
     } else if ((fence || constraint) && pts.length >= 3) {
@@ -561,7 +584,9 @@ export class BasemapPanel {
 
   // Returns the lawnmower waypoints [[lat,lon],…] for a survey sketch, mirroring
   // the backend survey_pattern generator. Rotates about the rectangle centre so
-  // lines stay inside the visual polygon at any heading. Capped at 200 lines.
+  // lines stay inside the visual polygon at any heading. Uncapped, matching
+  // mission_patterns.py's survey_pattern (O11): the preview must show every
+  // line the backend will actually generate.
   _surveyRoutePreview(v1, v2, headingDeg, spacingM) {
     const { mPerDegLat, mPerDegLon } = this._mPerDeg((v1.lat + v2.lat) / 2);
     const clat = (v1.lat + v2.lat) / 2;
@@ -573,7 +598,7 @@ export class BasemapPanel {
     if (width_m <= 0 || height_m <= 0) return [];
 
     const spacing = Math.max(0.5, Number(spacingM) || 5);
-    const lineCount = Math.min(200, Math.max(1, Math.ceil(height_m / spacing)) + 1);
+    const lineCount = Math.max(1, Math.ceil(height_m / spacing)) + 1;
     const theta = (headingDeg * Math.PI) / 180;
     const cos_t = Math.cos(theta);
     const sin_t = Math.sin(theta);
@@ -599,6 +624,44 @@ export class BasemapPanel {
       }
     }
     return waypoints;
+  }
+
+  // Reconcile the just-drawn local survey preview against the backend's actual
+  // generated geometry (O12). Called once per settled edit (vertex/heading
+  // dragend, spacing change) from `_refreshDrawLayer` — never per drag frame,
+  // since `_onPreviewPattern` is a network call. A superseded request is
+  // aborted via `_surveyPreviewAbort`/`_surveyPreviewSeq` so a slow response
+  // from an earlier edit can never overwrite a newer one.
+  _reconcileSurveyPreview(v1, v2) {
+    if (typeof this._onPreviewPattern !== 'function') return;
+    const seq = ++this._surveyPreviewSeq;
+    const controller = new AbortController();
+    this._surveyPreviewAbort = controller;
+    const payload = {
+      pattern: 'survey',
+      points: [{ lat: v1.lat, lon: v1.lon }, { lat: v2.lat, lon: v2.lon }],
+      params: {
+        altitude_m: 0,
+        line_spacing_m: this._sketchParams.spacing,
+        heading_deg: this._session.surveyHeading,
+      },
+    };
+    Promise.resolve(this._onPreviewPattern(payload, { signal: controller.signal }))
+      .then((result) => {
+        // Stale if a newer edit started, the sketch moved on, or the route
+        // layer this response would update was already torn down.
+        if (seq !== this._surveyPreviewSeq) return;
+        if (this._session.tool !== 'survey' || !this._surveyRouteLineRef) return;
+        if (!result || result.ok !== true || !Array.isArray(result.points)) return;
+        const latlngs = result.points
+          .filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon))
+          .map((p) => [p.lat, p.lon]);
+        if (latlngs.length >= 2) this._surveyRouteLineRef.setLatLngs(latlngs);
+      })
+      .catch(() => {
+        // Network/abort error: the local approximation already rendered stays
+        // as the preview rather than blocking or clearing anything.
+      });
   }
 
   // Creates or repositions the draggable orientation handle for a survey sketch.

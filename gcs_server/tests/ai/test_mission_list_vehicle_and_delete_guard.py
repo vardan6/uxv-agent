@@ -2,27 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
-import tempfile
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 from starlette.requests import Request
 
-from ai.migrations import apply_ai_store_migrations
 from ai.mission_store import MissionStore
 from routers.ai import delete_mission
+from tests.runtime_stub import make_stub_runtime
 
 
-def _make_store() -> tuple[MissionStore, Path]:
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
-    tmp.close()
-    db_path = Path(tmp.name)
-    with sqlite3.connect(db_path) as conn:
-        apply_ai_store_migrations(conn)
-        conn.commit()
-    return MissionStore(db_path), db_path
+def _make_store() -> MissionStore:
+    return MissionStore(":memory:")
 
 
 def _request(runtime: object, path: str) -> Request:
@@ -38,11 +29,11 @@ def _request(runtime: object, path: str) -> Request:
 
 
 def test_list_missions_surfaces_vehicle_profile_id_from_active_revision() -> None:
-    store, db_path = _make_store()
+    store = _make_store()
     mission = store.create_mission(user_id="", name="Survey route", origin="manual")
     now = time.time()
 
-    with sqlite3.connect(db_path) as conn:
+    with store._connect() as conn:
         conn.execute(
             """
             INSERT INTO ai_mission_operations (
@@ -72,7 +63,7 @@ def test_list_missions_surfaces_vehicle_profile_id_from_active_revision() -> Non
 
 
 def test_list_missions_derives_waypoint_count_from_active_revision() -> None:
-    store, db_path = _make_store()
+    store = _make_store()
     mission = store.create_mission(user_id="", name="Tree mission", origin="manual")
     now = time.time()
 
@@ -98,7 +89,7 @@ def test_list_missions_derives_waypoint_count_from_active_revision() -> None:
         }
     }
 
-    with sqlite3.connect(db_path) as conn:
+    with store._connect() as conn:
         conn.execute(
             """
             INSERT INTO ai_mission_operations (
@@ -128,7 +119,7 @@ def test_list_missions_derives_waypoint_count_from_active_revision() -> None:
 
 
 def test_list_missions_derives_waypoint_count_from_direct_waypoints_payload() -> None:
-    store, db_path = _make_store()
+    store = _make_store()
     mission = store.create_mission(user_id="", name="Editable mission", origin="manual")
     now = time.time()
 
@@ -145,7 +136,7 @@ def test_list_missions_derives_waypoint_count_from_direct_waypoints_payload() ->
         "assumptions": [],
     }
 
-    with sqlite3.connect(db_path) as conn:
+    with store._connect() as conn:
         conn.execute(
             """
             INSERT INTO ai_mission_operations (
@@ -175,7 +166,7 @@ def test_list_missions_derives_waypoint_count_from_direct_waypoints_payload() ->
 
 
 def test_list_missions_derives_waypoint_count_from_route_artifact_summary() -> None:
-    store, db_path = _make_store()
+    store = _make_store()
     mission = store.create_mission(user_id="", name="Artifact mission", origin="manual")
     now = time.time()
 
@@ -187,7 +178,7 @@ def test_list_missions_derives_waypoint_count_from_route_artifact_summary() -> N
         ],
     }
 
-    with sqlite3.connect(db_path) as conn:
+    with store._connect() as conn:
         conn.execute(
             """
             INSERT INTO ai_mission_operations (
@@ -217,10 +208,10 @@ def test_list_missions_derives_waypoint_count_from_route_artifact_summary() -> N
 
 
 def test_delete_mission_rejects_armed_execution() -> None:
-    store, _ = _make_store()
+    store = _make_store()
     mission = store.create_mission(user_id="", name="Protected mission", origin="manual")
     mission_id = str(mission["id"])
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         mission_store=store,
         mission_execution_sessions=SimpleNamespace(
             get_for_mission=lambda mid: SimpleNamespace(status="awaiting_confirm") if mid == mission_id else None

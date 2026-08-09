@@ -50,6 +50,12 @@ reflected in telemetry.
 The current MQTT-frame to WebSocket-MJPEG video delivery path. Functional
 for development and demos, but not the intended long-term media transport.
 
+## Browser Loss
+
+Loss, refresh, or navigation of an operator browser connection while the GCS
+server remains running. It does not stop [Server-Owned Execution](#server-owned-execution).
+Avoid the ambiguous term "web app crash".
+
 ## Chat Mode
 
 A simpler `/ai` mode for plain conversation. No tools, no approval gates.
@@ -137,6 +143,17 @@ telemetry. Renamed from "Dashboard". Pairs with the [Mission Console](#mission-c
 
 Ground Control Station — the FastAPI + browser application in
 `gcs_server/` that operators use to monitor and control the rover.
+
+## GCS Process Failure
+
+An unplanned termination of the GCS server process that hosts
+[Server-Owned Execution](#server-owned-execution). Distinct from
+[Browser Loss](#browser-loss) and [Intentional GCS Shutdown](#intentional-gcs-shutdown).
+
+## Intentional GCS Shutdown
+
+An operator- or deployment-initiated stop of the running GCS server process.
+Distinct from [Browser Loss](#browser-loss) and [GCS Process Failure](#gcs-process-failure).
 
 ## Headless (Full Architecture)
 
@@ -274,6 +291,13 @@ kind." Backed by the scene manifest and rover pose.
 
 The simulator's outbound publishing rule. Values: `auto` (publish only
 when an active GCS is fresh), `force_on`, `force_off`.
+
+## Server-Owned Execution
+
+An active Mission execution whose lifecycle belongs to the GCS server rather
+than an operator browser. Its browser-loss, intentional-shutdown, and
+process-failure policy is defined by
+[ADR 0023](./cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md).
 
 ## Tool Registry
 

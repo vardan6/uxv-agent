@@ -80,6 +80,28 @@ export async function createDrawnPattern({ pattern, points, params = {}, name = 
   }
 }
 
+// POST /api/ai/missions/draw-pattern/preview (O12): server-computed WGS84
+// preview geometry from the same corridor/survey generator `createDrawnPattern`
+// persists — so authoring UI can render backend-accurate geometry instead of a
+// second, drift-prone client-side reimplementation. Nothing is persisted.
+// Pass `signal` to cancel a superseded preview request (e.g. on the next drag).
+export async function previewDrawnPattern({ pattern, points, params = {} } = {}, { signal } = {}) {
+  try {
+    const res = await fetch('/api/ai/missions/draw-pattern/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pattern, points, params }),
+      signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
+  } catch (err) {
+    if (err?.name === 'AbortError') return { ok: false, aborted: true };
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
+
 // Author or clear a Mission's inclusion geofence (Phase 5). `polygon` is the
 // drawn WGS84 fence ({lat, lon} vertices, >= 3); pass `clear: true` to remove it.
 export async function setMissionGeofence(missionId, { polygon = [], clear = false, sessionId = '' } = {}) {

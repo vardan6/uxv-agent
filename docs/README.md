@@ -35,6 +35,7 @@ This directory is the source of truth for project docs. The live surface is inte
 | [glossary.md](./glossary.md) | Shared project vocabulary |
 | [STYLE.md](./STYLE.md) | Documentation conventions and archive rules |
 | [snapshots/README.md](./snapshots/README.md) | Dated point-in-time reports of what a subsystem currently implements — not specs, no authority |
+| [reviews/README.md](./reviews/README.md) | Dated review output (architecture, code, audits) — findings not decisions, consumed then archived |
 
 ## Archive
 

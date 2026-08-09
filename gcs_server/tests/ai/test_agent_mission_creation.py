@@ -15,6 +15,7 @@ from ai.tool_registry import (
     allowed_tool_names_for_source_controls,
     _sample_scene_ground_height,
 )
+from tests.runtime_stub import make_stub_runtime
 
 
 def _context(runtime: object, *, run_mode: str) -> ToolInvocationContext:
@@ -62,7 +63,7 @@ def test_agent_proposal_creates_durable_mission_and_revision(tmp_path) -> None:
         conn.commit()
     mission_store = MissionStore(db_path)
     mission_execution = MissionExecutionService(db_path)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         config=SimpleNamespace(simulation={"backend": "3d-env"}),
         mission_store=mission_store,
         mission_execution_service=mission_execution,
@@ -92,7 +93,7 @@ def test_agent_proposal_creates_durable_mission_and_revision(tmp_path) -> None:
 
 def test_planner_proposal_remains_unpersisted_until_store_node() -> None:
     result = ToolRegistry()._propose_mission_draft(
-        _context(SimpleNamespace(), run_mode="planner"),
+        _context(make_stub_runtime(), run_mode="planner"),
         intent={"intent_type": "navigate"},
         draft=_draft(),
     )
@@ -125,7 +126,7 @@ def test_agent_creates_mission_from_supplied_waypoints(tmp_path) -> None:
         conn.commit()
     mission_store = MissionStore(db_path)
     mission_execution = MissionExecutionService(db_path)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         config=SimpleNamespace(simulation={"backend": "3d-env"}),
         mission_store=mission_store,
         mission_execution_service=mission_execution,
@@ -165,7 +166,7 @@ def test_agent_creates_mission_from_supplied_waypoints(tmp_path) -> None:
 
 def test_supplied_waypoints_reject_declared_count_mismatch() -> None:
     result = ToolRegistry()._create_mission_from_waypoints(
-        _context(SimpleNamespace(), run_mode="agent"),
+        _context(make_stub_runtime(), run_mode="agent"),
         waypoints=[{"x": 1, "y": 2, "z": 3}],
         route_metadata={"waypoint_count": 2},
     )
@@ -182,7 +183,7 @@ def test_agent_creates_mission_from_supplied_waypoints_without_z_by_sampling_gro
         conn.commit()
     mission_store = MissionStore(db_path)
     mission_execution = MissionExecutionService(db_path)
-    runtime = SimpleNamespace(
+    runtime = make_stub_runtime(
         config=SimpleNamespace(simulation={"backend": "3d-env"}),
         mission_store=mission_store,
         mission_execution_service=mission_execution,

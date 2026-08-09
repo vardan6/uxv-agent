@@ -7,10 +7,11 @@ from types import SimpleNamespace
 from starlette.requests import Request
 
 from routers.ai import get_active_vehicle_profile, list_vehicle_profiles
+from tests.runtime_stub import make_stub_runtime
 
 
 def _request(path: str) -> Request:
-    app = SimpleNamespace(state=SimpleNamespace(runtime=SimpleNamespace()))
+    app = SimpleNamespace(state=SimpleNamespace(runtime=make_stub_runtime()))
     scope = {
         "type": "http",
         "method": "GET",

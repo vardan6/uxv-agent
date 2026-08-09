@@ -22,6 +22,7 @@ from .coordinate_frame import Origin, load_scene_origin, local_to_wgs84, wgs84_t
 from .migrations import apply_ai_store_migrations
 from . import mission_patterns, mission_tree, polygon_geometry
 from .mission_export_service import MissionExportService
+from .mission_revision_repository import MissionRevisionRepository
 from .mission_safety import parse_geofence
 from .vehicle_profile import get_active_profile
 
@@ -690,11 +691,9 @@ class MissionExecutionService:
         parent_op = str(parent_operation_id or "").strip()
 
         with self._connect() as conn:
+            repo = MissionRevisionRepository(conn)
             if parent_op:
-                op_row = conn.execute(
-                    "SELECT id, status FROM ai_mission_operations WHERE id = ?",
-                    (parent_op,),
-                ).fetchone()
+                op_row = repo.get_operation_status(parent_op)
                 if op_row is None or str(op_row["status"] or "") == "executing":
                     # Fall through to creating a new operation when the parent is
                     # missing or currently executing (safety invariant: no mutation
@@ -703,26 +702,13 @@ class MissionExecutionService:
 
             if parent_op:
                 operation_id = parent_op
-                parent_op_row = conn.execute(
-                    "SELECT active_revision_id FROM ai_mission_operations WHERE id = ?",
-                    (parent_op,),
-                ).fetchone()
-                parent_revision_id = str(
-                    (parent_op_row["active_revision_id"] if parent_op_row else "") or ""
-                )
+                parent_revision_id = repo.get_operation_active_revision_id(parent_op) or ""
                 # ADR 0019 §Enforcement — backend-independent guard: block AI
                 # edit_in_place over operator-authored or operator-edited waypoints
                 # unless the operator has explicitly confirmed the replacement.
                 if parent_revision_id and not allow_provenance_override:
-                    prov_row = conn.execute(
-                        "SELECT provenance_json FROM ai_mission_revisions WHERE id = ?",
-                        (parent_revision_id,),
-                    ).fetchone()
-                    if prov_row:
-                        try:
-                            prov: dict[str, str] = json.loads(prov_row["provenance_json"] or "{}")
-                        except (json.JSONDecodeError, TypeError):
-                            prov = {}
+                    prov = repo.get_revision_provenance(parent_revision_id)
+                    if prov:
                         _OPERATOR_PROV = {"user", "ai+edited"}
                         if any(v in _OPERATOR_PROV for v in prov.values()):
                             raise ValueError(
@@ -803,26 +789,24 @@ class MissionExecutionService:
             conn.commit()
         return self.get_revision(revision_id) or {}
 
-    def create_drawn_pattern_mission(
+    def _build_drawn_pattern(
         self,
         *,
-        session_id: str,
         pattern: str,
         points: list[dict[str, Any]],
-        params: dict[str, Any] | None = None,
-        name: str = "",
-        constraints_store: Any = None,
+        params: dict[str, Any] | None,
+        constraints_store: Any,
     ) -> dict[str, Any]:
-        """Build a new Mission from an operator-drawn pattern (Phase 4 authoring).
+        """Shared geometry generation for drawn corridor/survey patterns.
 
-        The operator sketches geometry on the WGS84 basemap; ``points`` are the
-        drawn ``{lat, lon}`` vertices. We convert them to the local metre frame
-        through the Mission origin (ADR 0022), run the corridor/survey generator
-        (which works in metres), and persist the resulting nav subtree as a new
-        proposal. ``create_proposal`` stamps WGS84 truth back onto every leaf, so
-        the conversion round-trips through one origin and cannot drift.
+        Validates the drawn WGS84 ``points``, converts to the local metre frame
+        through a fresh Mission origin (ADR 0022), and runs the corridor/survey
+        generator plus (for survey) the 4-heading soft-cost candidate search.
+        Used by both :meth:`create_drawn_pattern_mission` (persists) and
+        :meth:`preview_drawn_pattern` (projects back to WGS84, no persistence),
+        so the preview can never drift from what get created.
 
-        Returns ``{"ok": True, "revision": {...}, "operation_id": ...}`` or
+        Returns ``{"ok": True, "kind", "node", "origin", "soft_cost"}`` or
         ``{"ok": False, "error": ...}``; never raises on bad input.
         """
         kind = str(pattern or "").strip().lower()
@@ -951,6 +935,40 @@ class MissionExecutionService:
             if violation:
                 return {"ok": False, "error": violation}
 
+        return {"ok": True, "kind": kind, "node": node, "origin": origin, "soft_cost": soft_cost}
+
+    def create_drawn_pattern_mission(
+        self,
+        *,
+        session_id: str,
+        pattern: str,
+        points: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
+        name: str = "",
+        constraints_store: Any = None,
+    ) -> dict[str, Any]:
+        """Build a new Mission from an operator-drawn pattern (Phase 4 authoring).
+
+        The operator sketches geometry on the WGS84 basemap; ``points`` are the
+        drawn ``{lat, lon}`` vertices. We convert them to the local metre frame
+        through the Mission origin (ADR 0022), run the corridor/survey generator
+        (which works in metres), and persist the resulting nav subtree as a new
+        proposal. ``create_proposal`` stamps WGS84 truth back onto every leaf, so
+        the conversion round-trips through one origin and cannot drift.
+
+        Returns ``{"ok": True, "revision": {...}, "operation_id": ...}`` or
+        ``{"ok": False, "error": ...}``; never raises on bad input.
+        """
+        built = self._build_drawn_pattern(
+            pattern=pattern, points=points, params=params, constraints_store=constraints_store
+        )
+        if not built.get("ok"):
+            return built
+        kind = built["kind"]
+        node = built["node"]
+        origin = built["origin"]
+        soft_cost = built["soft_cost"]
+
         mission_name = str(name or "").strip() or f"{kind.capitalize()} pattern"
         draft_id = f"draft-draw-{uuid.uuid4().hex[:12]}"
         draft_payload = {
@@ -975,6 +993,45 @@ class MissionExecutionService:
             "operation_id": str(revision.get("operation_id") or ""),
             "origin_datum": origin.as_dict(),
             "soft_cost": soft_cost,
+        }
+
+    def preview_drawn_pattern(
+        self,
+        *,
+        pattern: str,
+        points: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
+        constraints_store: Any = None,
+    ) -> dict[str, Any]:
+        """Preview a drawn corridor/survey pattern without persisting a Mission.
+
+        Runs the same generator + soft-cost search as
+        :meth:`create_drawn_pattern_mission`, then projects the resulting
+        nav-leaf waypoints back to WGS84 (ADR 0022) so a client can render
+        exactly what the backend would generate (ADR 0031: one data layer,
+        widgets render what they're given) instead of duplicating the
+        corridor/survey math locally.
+
+        Returns ``{"ok": True, "points": [{"lat", "lon"}, ...], "line_count",
+        "origin_datum", "soft_cost"}`` or ``{"ok": False, "error": ...}``;
+        never raises on bad input.
+        """
+        built = self._build_drawn_pattern(
+            pattern=pattern, points=points, params=params, constraints_store=constraints_store
+        )
+        if not built.get("ok"):
+            return built
+        node = built["node"]
+        origin = built["origin"]
+        wgs84_points = [
+            {"lat": lat, "lon": lon} for lat, lon in _collect_nav_waypoints_wgs84(node, origin)
+        ]
+        return {
+            "ok": True,
+            "points": wgs84_points,
+            "line_count": len(wgs84_points),
+            "origin_datum": origin.as_dict(),
+            "soft_cost": built["soft_cost"],
         }
 
     def set_operation_geofence(
@@ -1040,43 +1097,11 @@ class MissionExecutionService:
 
     def get_revision(self, revision_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                  r.*,
-                  o.session_id AS operation_session_id,
-                  o.source_message_id AS operation_source_message_id,
-                  o.status AS operation_status,
-                  o.policy_json AS operation_policy_json,
-                  o.active_revision_id AS operation_active_revision_id
-                FROM ai_mission_revisions r
-                JOIN ai_mission_operations o ON o.id = r.operation_id
-                WHERE r.id = ?
-                """,
-                (revision_id,),
-            ).fetchone()
-        return _revision_row_to_dict(row) if row else None
+            return MissionRevisionRepository(conn).get_revision(revision_id)
 
     def get_revision_by_draft_id(self, draft_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                  r.*,
-                  o.session_id AS operation_session_id,
-                  o.source_message_id AS operation_source_message_id,
-                  o.status AS operation_status,
-                  o.policy_json AS operation_policy_json,
-                  o.active_revision_id AS operation_active_revision_id
-                FROM ai_mission_revisions r
-                JOIN ai_mission_operations o ON o.id = r.operation_id
-                WHERE r.draft_id = ?
-                ORDER BY r.created_at DESC
-                LIMIT 1
-                """,
-                (draft_id,),
-            ).fetchone()
-        return _revision_row_to_dict(row) if row else None
+            return MissionRevisionRepository(conn).get_revision_by_draft_id(draft_id)
 
     def list_revisions(
         self,
@@ -1086,38 +1111,13 @@ class MissionExecutionService:
         status_filter: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if session_id is not None and str(session_id).strip():
-            clauses.append("o.session_id = ?")
-            params.append(str(session_id).strip())
-        if operation_id is not None and str(operation_id).strip():
-            clauses.append("r.operation_id = ?")
-            params.append(str(operation_id).strip())
-        if status_filter is not None and str(status_filter).strip():
-            clauses.append("r.status = ?")
-            params.append(str(status_filter).strip())
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        params.append(max(1, int(limit)))
         with self._connect() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT
-                  r.*,
-                  o.session_id AS operation_session_id,
-                  o.source_message_id AS operation_source_message_id,
-                  o.status AS operation_status,
-                  o.policy_json AS operation_policy_json,
-                  o.active_revision_id AS operation_active_revision_id
-                FROM ai_mission_revisions r
-                JOIN ai_mission_operations o ON o.id = r.operation_id
-                {where}
-                ORDER BY r.created_at DESC
-                LIMIT ?
-                """,
-                params,
-            ).fetchall()
-        return [_revision_row_to_dict(row) for row in rows]
+            return MissionRevisionRepository(conn).list_revisions(
+                session_id=session_id,
+                operation_id=operation_id,
+                status_filter=status_filter,
+                limit=limit,
+            )
 
     def get_current_revision(self, *, session_id: str = "") -> dict[str, Any] | None:
         state = self.get_current_mission_state(session_id=session_id)
@@ -1588,7 +1588,7 @@ class MissionExecutionService:
         """Send HOLD to the FC adapter and mark the operation paused in the DB.
 
         Called by the API layer after the executor thread has been parked via
-        ``MissionExecutionSessions.request_pause()``.  Adapter errors are
+        ``MissionExecutionSessions.pause_for_mission()``.  Adapter errors are
         returned rather than raised so the caller can decide whether to roll
         back the in-memory pause.
         """
@@ -1729,42 +1729,10 @@ class MissionExecutionService:
         }
 
     def get_current_mission_state(self, *, session_id: str = "") -> dict[str, Any]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if str(session_id or "").strip():
-            clauses.append("o.session_id = ?")
-            params.append(str(session_id).strip())
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
-            row = conn.execute(
-                f"""
-                SELECT
-                  o.id AS operation_id,
-                  o.session_id,
-                  o.source_message_id,
-                  o.status AS operation_status,
-                  o.active_revision_id,
-                  o.policy_json,
-                  o.created_at AS operation_created_at,
-                  o.updated_at AS operation_updated_at,
-                  r.id AS revision_id,
-                  r.draft_id,
-                  r.status AS revision_status,
-                  r.mission_json,
-                  r.intent_json,
-                  r.validation_json,
-                  r.review_context_json,
-                  r.created_at AS revision_created_at,
-                  r.updated_at AS revision_updated_at,
-                  r.rejected_at
-                FROM ai_mission_operations o
-                LEFT JOIN ai_mission_revisions r ON r.id = o.active_revision_id
-                {where}
-                ORDER BY o.updated_at DESC
-                LIMIT 1
-                """,
-                params,
-            ).fetchone()
+            row = MissionRevisionRepository(conn).get_current_operation_with_revision(
+                session_id=session_id
+            )
         if row is None:
             return {
                 "active": False,
@@ -1865,9 +1833,7 @@ class MissionExecutionService:
             return {"ok": False, "status": "invalid_request", "error": "operation_id is required"}
 
         with self._connect() as conn:
-            op_row = conn.execute(
-                "SELECT * FROM ai_mission_operations WHERE id = ?", (operation_id,)
-            ).fetchone()
+            op_row = MissionRevisionRepository(conn).get_operation(operation_id)
         if op_row is None:
             return {"ok": False, "status": "operation_not_found", "error": "operation not found"}
 
@@ -2039,10 +2005,7 @@ class MissionExecutionService:
         operation_id = source_operation_id
         parent_revision_id = str(revision.get("id") or "").strip()
 
-        source_operation = conn.execute(
-            "SELECT * FROM ai_mission_operations WHERE id = ?",
-            (source_operation_id,),
-        ).fetchone()
+        source_operation = MissionRevisionRepository(conn).get_operation(source_operation_id)
         if source_operation is None:
             return None
 
@@ -2099,22 +2062,7 @@ class MissionExecutionService:
                 now,
             ),
         )
-        row = conn.execute(
-            """
-            SELECT
-              r.*,
-              o.session_id AS operation_session_id,
-              o.source_message_id AS operation_source_message_id,
-              o.status AS operation_status,
-              o.policy_json AS operation_policy_json,
-              o.active_revision_id AS operation_active_revision_id
-            FROM ai_mission_revisions r
-            JOIN ai_mission_operations o ON o.id = r.operation_id
-            WHERE r.id = ?
-            """,
-            (rebased_revision_id,),
-        ).fetchone()
-        return _revision_row_to_dict(row) if row else None
+        return MissionRevisionRepository(conn).get_revision(rebased_revision_id)
 
     def update_waypoint(
         self,
@@ -2526,24 +2474,3 @@ class MissionExecutionService:
             yield conn
         finally:
             conn.close()
-
-
-def _revision_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    out = dict(row)
-    for field in (
-        "mission_json",
-        "intent_json",
-        "target_resolution_json",
-        "validation_json",
-        "review_context_json",
-        "operation_policy_json",
-        "provenance_json",
-    ):
-        key = field.removesuffix("_json")
-        out[key] = _load_json(out.pop(field, "{}"))
-    out["session_id"] = out.pop("operation_session_id", "")
-    out["source_message_id"] = out.pop("operation_source_message_id", "")
-    out["operation_status"] = out.get("operation_status", "")
-    out["active_revision_id"] = out.pop("operation_active_revision_id", "")
-    out.setdefault("client_version", 0)
-    return out

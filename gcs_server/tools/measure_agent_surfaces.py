@@ -15,14 +15,14 @@ from ai.context_service import (
     _CONTEXT_BUDGET_CHARS_MIN,
     _CONTEXT_BUDGET_CHARS_MAX,
 )
-from ai.data_access import build_data_access_manifest
 from ai.execution_mode import execution_tools_for_mode
 from ai.tool_registry import (
     EXECUTION,
     DEFAULT_PERMISSIONS,
-    _OPTIONAL_TOOL_NAMES_BY_SOURCE,
+    _TOOL_META,
     ToolRegistry,
     allowed_tool_names_for_source_controls,
+    build_data_access_manifest,
 )
 
 _CHARS_PER_TOKEN = 4  # rough estimate used throughout
@@ -37,7 +37,7 @@ def _surface_1(registry: ToolRegistry) -> None:
     registered = len(defs)
 
     def_sc: dict[str, bool] = {}
-    all_sc = {key: True for key in _OPTIONAL_TOOL_NAMES_BY_SOURCE}
+    all_sc = {meta.source_control: True for meta in _TOOL_META.values() if meta.source_control}
 
     allowed_default = allowed_tool_names_for_source_controls(def_sc)
     allowed_all = allowed_tool_names_for_source_controls(all_sc)
@@ -91,7 +91,7 @@ def _build_tools(
 def _surface_2(registry: ToolRegistry) -> None:
     try:
         def_sc: dict[str, bool] = {}
-        all_sc = {key: True for key in _OPTIONAL_TOOL_NAMES_BY_SOURCE}
+        all_sc = {meta.source_control: True for meta in _TOOL_META.values() if meta.source_control}
         allowed_default = allowed_tool_names_for_source_controls(def_sc)
         allowed_all = allowed_tool_names_for_source_controls(all_sc)
 
@@ -115,7 +115,7 @@ def _surface_3_4(registry: ToolRegistry) -> None:
     from ai.chat_service import _data_access_manifest_prompt, _tool_catalog_prompt
 
     def_sc: dict[str, bool] = {}
-    all_sc = {key: True for key in _OPTIONAL_TOOL_NAMES_BY_SOURCE}
+    all_sc = {meta.source_control: True for meta in _TOOL_META.values() if meta.source_control}
     allowed_default = allowed_tool_names_for_source_controls(def_sc)
     allowed_all = allowed_tool_names_for_source_controls(all_sc)
 

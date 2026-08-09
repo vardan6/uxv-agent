@@ -6,7 +6,6 @@ from pathlib import Path
 
 from gcs_server.ai.controller_mission_adapter_factory import build_controller_mission_adapter
 from gcs_server.ai.coordinate_frame import Origin
-from gcs_server.ai.mission_draft_service import MissionDraftService
 from gcs_server.ai.mission_execution_service import MissionExecutionService
 from gcs_server.ai.mission_execution_session import MissionExecutionSessions
 from gcs_server.ai.mission_store import MissionStore
@@ -52,7 +51,6 @@ class AppRuntime:
     replay_store: ReplayStore
     replay_analytics: ReplayAnalyticsService
     ai_store: AISessionStore
-    mission_draft_service: MissionDraftService
     mission_execution_service: MissionExecutionService
     mission_store: MissionStore
     operational_constraints_store: OperationalConstraintsStore
@@ -82,7 +80,6 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         config.logging.get("ai_sessions_db_path", "data/gcs_ai_sessions.sqlite3")
     )
     ai_store = AISessionStore(db_path=ai_sessions_db_path)
-    mission_draft_service = MissionDraftService(db_path=ai_sessions_db_path)
     mission_store = MissionStore(db_path=ai_sessions_db_path)
     operational_constraints_store = OperationalConstraintsStore(db_path=ai_sessions_db_path)
     controller_mission_adapter = build_controller_mission_adapter(
@@ -144,7 +141,6 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
         replay_store=replay_store,
         replay_analytics=replay_analytics,
         ai_store=ai_store,
-        mission_draft_service=mission_draft_service,
         mission_execution_service=mission_execution_service,
         mission_store=mission_store,
         operational_constraints_store=operational_constraints_store,

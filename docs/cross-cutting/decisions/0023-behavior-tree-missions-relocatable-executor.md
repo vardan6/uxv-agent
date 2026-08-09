@@ -48,6 +48,12 @@ execute missions and drive the rover."
    `cancel_execution` / `abort`, and `expected_controller_version` apply to
    starting and supervising the executor.
 
+5. **Intentional GCS shutdown is an explicit safety action when server-owned
+   execution is active.** The GCS warns the operator, identifies the active
+   Mission, and requires confirmation before shutdown proceeds. Browser/UI loss
+   does not invoke this action. The confirmed post-action and bounded shutdown
+   sequence are specified by the follow-up policy work.
+
 ## Consequences
 
 - The product is now an autonomy-executing GCS, not just a mission uploader. The
@@ -100,6 +106,16 @@ execute missions and drive the rover."
 
 ## Open Questions
 
+- **Failure-domain and shutdown policy.** Browser/UI disconnect must not stop a
+  server-owned execution. Decide, per build target, what an *intentional GCS
+  server shutdown* does to an active mission (for example: require an operator
+  choice and then abort-and-hold, or refuse shutdown until a bounded handoff is
+  complete), and whether that policy is configurable in Mission Lifecycle
+  settings. A GCS **process crash** cannot continue this server-resident executor:
+  its process is gone. Reliable continuation after that failure needs a
+  supervisor/restart-and-reconciliation design or the already-planned onboard /
+  companion-computer executor, not a UI setting. Browser crash/refresh is a
+  different failure domain and must leave the GCS executor running.
 - Tree specification format (custom JSON vs. an existing BT XML dialect) and
   whether it is human-editable, AI-authored, or both.
 - Real-rover link-loss policy when the executor is still server-side.

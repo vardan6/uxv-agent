@@ -94,7 +94,6 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'plan_route_between',
   'generate_pattern_subtree',
   'set_mission_geofence',
-  'export_mission',
   'parse_rover_intent',
   'create_mission_from_waypoints',
   'propose_mission_draft',
@@ -105,7 +104,6 @@ const AI_MISSION_ACTION_TOOL_NAMES = new Set([
   'create_mission_from_waypoints',
   'propose_mission_draft',
   'set_mission_geofence',
-  'export_mission',
   'arm_execution',
   'execute_mission',
   'cancel_execution',
@@ -186,12 +184,12 @@ const AI_AGENT_TOOL_DEFINITIONS = [
   {
     name: 'plan_route_around_group',
     permission: 'planning',
-    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the rover and back. Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the rover and back. Returns a route summary and waypoints. Next step is propose_mission_draft, which persists and exports the Mission. Does not upload.',
   },
   {
     name: 'plan_route_between',
     permission: 'planning',
-    description: 'Compute a road-graph route between two resolved targets (Dijkstra). Returns a route summary and waypoints. Next step is propose_mission_draft, then export_mission after approval. Does not upload.',
+    description: 'Compute a road-graph route between two resolved targets (Dijkstra). Returns a route summary and waypoints. Next step is propose_mission_draft, which persists and exports the Mission. Does not upload.',
   },
   {
     name: 'generate_pattern_subtree',
@@ -202,11 +200,6 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     name: 'set_mission_geofence',
     permission: 'planning',
     description: 'Set or clear an inclusion geofence on an existing Mission by mission_id. Pass a polygon of WGS84 vertices, optional rally_points and alt bounds, or clear=true to remove. Appends an approval-required revision; the fence uploads to the FC when the mission is armed/executed.',
-  },
-  {
-    name: 'export_mission',
-    permission: 'planning',
-    description: 'Convert a mission draft (by draft_id from propose_mission_draft) to a QGC-compatible .plan file. Returns file_path, waypoint_count, and the plan structure.',
   },
   {
     name: 'parse_rover_intent',

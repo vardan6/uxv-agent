@@ -7,13 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import json
-import re as _re
 
 from gcs_server.ai.context_service import AIContextService
-from gcs_server.ai.data_access import build_data_access_manifest
 from gcs_server.ai.intent_service import IntentService as _IntentService
-from gcs_server.ai.mission_draft_service import MissionDraftService, validate_draft_payload
+from gcs_server.ai.mission_draft_service import validate_draft_payload
 from gcs_server.ai.mission_execution_session import build_mission_executor
+from gcs_server.ai.mission_control import mission_control_for
 from gcs_server.ai.mission_export_service import MissionExportService
 from gcs_server.ai import mission_patterns
 from gcs_server.ai.mission_tree import MissionTreeError, flatten_navigable_segments, parse_tree
@@ -128,13 +127,50 @@ class ToolDefinition:
     description: str
     permission: str
     tier: int
-    required_scopes: frozenset[str]
     side_effects: frozenset[str]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     handler: Callable[..., Any]
     contract: dict[str, Any] = field(default_factory=dict)
     is_terminal: bool = False
+    surface: str = ""
+
+
+@dataclass(frozen=True)
+class ToolMeta:
+    """Single per-tool declaration (O9): the source every other tool-facing
+    surface (LangChain schema, contract text, data-access manifest, cache
+    list, always-allowed/source-gated sets) derives from, instead of each
+    surface re-listing tool names independently."""
+
+    name: str
+    description: str
+    permission: str
+    handler: Callable[..., Any]
+    side_effects: frozenset[str] = frozenset()
+    is_terminal: bool = False
+    inputs: dict[str, Any] = field(default_factory=dict)
+    required_inputs: tuple[str, ...] = ()
+    returns: dict[str, Any] = field(default_factory=dict)
+    upstream_from_tools: tuple[str, ...] = ()
+    next_tools: tuple[str, ...] = ()
+    surface: str = ""
+    always_allowed: bool = False
+    source_control: str | None = None
+    cacheable: bool = False
+    cache_ttl_s: int | None = None
+
+    @property
+    def contract(self) -> dict[str, Any]:
+        if not (self.inputs or self.required_inputs or self.returns or self.upstream_from_tools or self.next_tools):
+            return {}
+        return {
+            "inputs": dict(self.inputs),
+            "required_inputs": list(self.required_inputs),
+            "upstream_from_tools": list(self.upstream_from_tools),
+            "returns": dict(self.returns),
+            "next_tools": list(self.next_tools),
+        }
 
 
 @dataclass(frozen=True)
@@ -149,52 +185,74 @@ class ToolInvocationContext:
     run_mode: str = ""
 
 
-_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
-    "list_data_surfaces",
-    "get_current_rover_state",
-    "get_runtime_context",
-    "get_scene_summary",
-    "query_map_objects",
-    "resolve_spatial_target",
-    "get_current_mission_state",
-    "plan_route_around_group",
-    "plan_route_between",
-    "generate_pattern_subtree",
-    "set_mission_geofence",
-    "export_mission",
-    "parse_rover_intent",
-    "create_mission_from_waypoints",
-    "propose_mission_draft",
-    "resolve_mission_reference",
-})
-
-_OPTIONAL_TOOL_NAMES_BY_SOURCE = {
-    "project_docs": frozenset({
-        "search_project_docs",
-    }),
-    "replay_reports": frozenset({
-        "query_replay_sessions",
-        "analyze_replay_sessions",
-    }),
-    "ai_chat_history": frozenset({
-        "query_ai_memory",
-    }),
-    "settings_config": frozenset({
-        "query_settings",
-    }),
-    "sensor_context": frozenset({
-        "get_sensor_status",
-    }),
-}
-
-
 def allowed_tool_names_for_source_controls(source_controls: dict[str, Any] | None) -> set[str]:
     clean = normalize_source_controls(source_controls)
-    allowed = set(_ALWAYS_ALLOWED_TOOL_NAMES)
-    for key, tool_names in _OPTIONAL_TOOL_NAMES_BY_SOURCE.items():
-        if clean.get(key):
-            allowed.update(tool_names)
+    allowed = {meta.name for meta in _TOOL_META.values() if meta.always_allowed}
+    for meta in _TOOL_META.values():
+        if meta.source_control and clean.get(meta.source_control):
+            allowed.add(meta.name)
     return allowed
+
+
+def cacheable_tool_names() -> frozenset[str]:
+    return frozenset(meta.name for meta in _TOOL_META.values() if meta.cacheable)
+
+
+def tool_cache_ttl_s(name: str, default: int = 300) -> int:
+    meta = _TOOL_META.get(name)
+    if meta is None or meta.cache_ttl_s is None:
+        return default
+    return meta.cache_ttl_s
+
+
+_DATA_SURFACES: tuple[tuple[str, str, str, str], ...] = (
+    # (surface_name, description, access, initial_context)
+    ("system_capabilities", "Discovery of available bounded data surfaces and source-control gating for this session.", "tool", "manifest_only"),
+    ("current_rover_state", "Latest telemetry snapshot and freshness metadata.", "tool", "summary"),
+    ("terrain_scene", "Terrain/map objects and deterministic spatial geometry.", "tool", "scene_summary_only"),
+    ("mission_state", "Current mission placeholder and mission-related state available to read-only AI flows.", "tool", "summary"),
+    ("replay_sessions", "Recorded sessions, telemetry, events, paths, and metrics.", "tool", "manifest_only"),
+    ("ai_chat_history", "Saved AI chat sessions and messages.", "tool", "manifest_only"),
+    ("settings", "Safe GCS settings sections plus LLM provider and routing metadata.", "tool", "manifest_only"),
+    ("video_perception", "Metadata-only sensor/video status for the current runtime; raw frames and detections remain unavailable in this phase.", "tool", "video_metadata_only"),
+    ("route_planning", "Road-graph route planning. Compute drivable routes over the terrain road network for a mission draft.", "tool", "manifest_only"),
+)
+
+
+def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_names: set[str] | None = None) -> dict[str, Any]:
+    allowed = set(allowed_tool_names or [])
+    restrict = allowed_tool_names is not None
+    by_surface: dict[str, list[Any]] = {}
+    for definition in tool_definitions:
+        surface = str(getattr(definition, "surface", "") or "")
+        if surface:
+            by_surface.setdefault(surface, []).append(definition)
+
+    def _tool_entry(definition: Any) -> dict[str, Any]:
+        enabled = not restrict or definition.name in allowed
+        return {
+            "name": definition.name,
+            "permission": definition.permission,
+            "tier": int(getattr(definition, "tier", 0)),
+            "side_effects": sorted(str(item) for item in getattr(definition, "side_effects", ()) or ()),
+            "enabled": enabled,
+        }
+
+    def _surface(name: str, description: str, access: str, initial_context: str) -> dict[str, Any]:
+        entries = [_tool_entry(definition) for definition in by_surface.get(name, [])]
+        enabled_entries = [entry for entry in entries if entry.get("enabled")]
+        return {
+            "name": name,
+            "description": description,
+            "access": access,
+            "initial_context": initial_context,
+            "tool_names": [entry["name"] for entry in entries],
+            "enabled_tool_names": [entry["name"] for entry in enabled_entries],
+            "tools": entries,
+            "enabled": bool(enabled_entries) if entries else access != "tool",
+        }
+
+    return {"data_surfaces": [_surface(*surface) for surface in _DATA_SURFACES]}
 
 
 class ToolRegistry:
@@ -213,13 +271,14 @@ class ToolRegistry:
         context_snapshot: dict[str, Any],
         timezone_name: str = "",
         permissions: set[str] | None = None,
+        run_mode: str = "",
     ) -> list[Any]:
         try:
             from langchain_core.tools import StructuredTool
         except ImportError as exc:
             raise RuntimeError("LangChain core tools are not installed. Install gcs_server/requirements-gcs.txt.") from exc
 
-        invocation_context = self._invocation_context(runtime, context_snapshot, timezone_name, permissions)
+        invocation_context = self._invocation_context(runtime, context_snapshot, timezone_name, permissions, run_mode)
         tools = []
         for definition in self.definitions():
             if not self._is_allowed(definition, invocation_context.permissions):
@@ -233,264 +292,23 @@ class ToolRegistry:
             )
         return tools
 
-    def invoke(
-        self,
-        name: str,
-        args: dict[str, Any],
-        runtime: Any,
-        context_snapshot: dict[str, Any],
-        timezone_name: str = "",
-        permissions: set[str] | None = None,
-    ) -> dict[str, Any]:
-        definition = self._definitions.get(str(name or "").strip())
-        if definition is None:
-            return {"ok": False, "error": f"tool '{name}' is not available"}
-        invocation_context = self._invocation_context(runtime, context_snapshot, timezone_name, permissions)
-        if definition.permission in DISABLED_PERMISSIONS:
-            return {"ok": False, "error": f"tool permission '{definition.permission}' is not enabled"}
-        if definition.permission not in invocation_context.permissions:
-            return {"ok": False, "error": f"tool permission '{definition.permission}' is not allowed"}
-        try:
-            result = definition.handler(invocation_context, **(args if isinstance(args, dict) else {}))
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        return result if isinstance(result, dict) else {"ok": True, "result": result}
-
     def _build_definitions(self) -> dict[str, ToolDefinition]:
-        def tool(
-            name: str,
-            description: str,
-            permission: str,
-            handler: Callable[..., Any],
-            *,
-            required_scopes: frozenset[str] | None = None,
-            side_effects: frozenset[str] | None = None,
-            is_terminal: bool = False,
-        ) -> ToolDefinition:
-            return ToolDefinition(
-                name=name,
-                description=description,
-                permission=permission,
-                tier=_permission_tier(permission),
-                required_scopes=required_scopes or frozenset(),
-                side_effects=side_effects or frozenset(),
-                input_schema={},
-                output_schema={},
-                handler=handler,
-                is_terminal=is_terminal,
+        definitions = {}
+        for name, meta in _TOOL_META.items():
+            definitions[name] = ToolDefinition(
+                name=meta.name,
+                description=meta.description,
+                permission=meta.permission,
+                tier=_permission_tier(meta.permission),
+                side_effects=meta.side_effects,
+                input_schema=dict(meta.inputs),
+                output_schema=dict(meta.returns),
+                handler=meta.handler.__get__(self, ToolRegistry),
+                contract=meta.contract,
+                is_terminal=meta.is_terminal,
+                surface=meta.surface,
             )
-
-        definitions = [
-            tool(
-                "list_data_surfaces",
-                "List every bounded data surface available to this session, show which source controls currently enable them, and identify the exact tools that can load each surface. Call this first when you need to discover where replay history, AI chat history, settings/config, or sensor metadata can be retrieved from.",
-                READ_ONLY,
-                self._list_data_surfaces,
-            ),
-            tool(
-                "get_current_rover_state",
-                "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.",
-                READ_ONLY,
-                self._get_current_rover_state,
-            ),
-            tool(
-                "get_scene_summary",
-                "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.",
-                READ_ONLY,
-                self._get_scene_summary,
-            ),
-            tool(
-                "get_runtime_context",
-                "Get the current runtime environment: MQTT broker connection (host, port, state), controller link state, video delivery config, simulation backend settings, map config, and active replay session id. Call this when the operator asks about connectivity, MQTT configuration, broker status, video pipeline, or simulation parameters.",
-                READ_ONLY,
-                self._get_runtime_context,
-            ),
-            tool(
-                "query_map_objects",
-                "Query map objects by spatial mode. mode='front': objects in a forward cone (fov_deg, max_distance_m). mode='near': objects within radius_m. mode='by_kind': all objects whose kind matches kind=. mode='left' or mode='right': lateral flank objects (angle_width_deg, max_distance_m). mode='nearest': closest objects overall (limit, optional max_distance_m). Optional kinds filters by object kind for positional modes. For all positional modes, pass position or coordinates and optionally heading_deg to query from a hypothetical pose instead of live telemetry. Falls back to last_known_replay_state when live telemetry is stale.",
-                READ_ONLY,
-                self._query_map_objects,
-            ),
-            tool("resolve_spatial_target", "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.", PLANNING, self._resolve_spatial_target),
-            tool("get_current_mission_state", "Get the current mission state. This is read-only.", READ_ONLY, self._get_current_mission_state),
-            tool(
-                "query_replay_sessions",
-                "Query replay session data by operation. operation='current': active replay session summary. operation='telemetry': recent telemetry samples (seconds, limit, optional session_id for a specific session). operation='list': enumerate sessions with started_at/ended_at/counts (limit, order). operation='resolve': resolve a natural-language selector like 'latest 5 sessions' or 'all sessions' into explicit session_ids (selector, timezone_name). operation='summary': session metadata by session_id. operation='path': downsampled path points for session_id (downsample, limit). operation='events': search runtime events within a session (session_id, optional event_type/text/limit). Call 'list' or 'resolve' first when you need session_ids.",
-                ANALYSIS,
-                self._query_replay_sessions,
-            ),
-            tool(
-                "analyze_replay_sessions",
-                "Analyze replay session data by metric operation. operation='metrics': compute analytics for session_id — duration_s, path_length_m, net_displacement_m, max_distance_from_start_m (refresh to recompute). operation='compare': compare multiple sessions by session_ids — per-session summaries and metrics for ranking and answering longest/furthest questions. operation='aggregate': aggregate across a natural-language selector or explicit session_ids — totals, averages, built-in longest/latest/furthest summaries, ranked top-N (selector, session_ids, timezone_name, top_n). Travel distance = path_length_m; furthest from start = max_distance_from_start_m. Resolve session_ids first with query_replay_sessions(operation='resolve') when needed.",
-                ANALYSIS,
-                self._analyze_replay_sessions,
-            ),
-            tool(
-                "query_ai_memory",
-                "Query AI chat session history by operation. operation='list': list saved sessions with metadata, message counts, archival state, and last-message previews (limit, include_archived, archived_only, optional query filter). operation='search': search saved messages by text across sessions or within one (query required, limit, session_id, role). operation='get': load a bounded message window from one session (session_id, limit, before_message_id, role; omit session_id to use the current session). Call 'list' first to discover session_ids, or 'search' to locate a specific message.",
-                ANALYSIS,
-                self._query_ai_memory,
-            ),
-            tool(
-                "query_settings",
-                "Query GCS settings and LLM provider configuration by operation. operation='summary': compact settings overview — section names, settings_path, and key non-secret configuration summaries. operation='section': one settings section by name (section required; supported: mqtt, key_bindings, video, gcs, simulation, map, mission_lifecycle, ai_settings, settings_path). operation='provider': safe LLM provider and model-routing metadata — enabled providers, active chat-provider resolution, and routing rules. Never exposes secrets.",
-                READ_ONLY,
-                self._query_settings,
-            ),
-            tool(
-                "get_sensor_status",
-                "Get metadata-only sensor and video status, including telemetry freshness, camera freshness, configured video delivery, and current perception limitations. Use this for questions about whether the agent can currently see live camera data or rely on sensor freshness. This tool does not expose raw frames, detections, or vision inference output.",
-                READ_ONLY,
-                self._get_sensor_status,
-            ),
-            tool(
-                "search_project_docs",
-                "Search the project's own documentation — requirements, design docs, ADRs, glossary, and operational notes — for grounded, citeable context. Returns the most relevant doc chunks with their file path, heading path, similarity score, and a citation ref. Use this when the operator asks how the system is designed, why a decision was made, what an ADR or requirement says, or for definitions of project terms. Pass a focused natural-language query and optionally limit (default 5). Available only when the project_docs source control is enabled.",
-                ANALYSIS,
-                self._search_project_docs,
-            ),
-            tool(
-                "plan_route_around_group",
-                "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id — do not pass it to export_mission. Next step is propose_mission_draft with these waypoints to create a draft; then export_mission(draft_id) after approval. Does not upload to the flight controller.",
-                PLANNING,
-                self._plan_route_around_group,
-            ),
-            tool(
-                "plan_route_between",
-                "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id — do not pass it to export_mission. Next step is propose_mission_draft with these waypoints to create a draft; then export_mission(draft_id) after approval. Does not upload.",
-                PLANNING,
-                self._plan_route_between,
-            ),
-            tool(
-                "generate_pattern_subtree",
-                "Use when the operator asks the vehicle to follow a path repeatedly or to systematically cover an area, instead of hand-listing waypoints. 'corridor' densifies an ordered polyline into evenly-spaced waypoints (optionally back-and-forth for multiple passes); 'survey' fills a rectangle with a lawnmower (boustrophedon) sweep. Pass 'pattern' ('corridor'|'survey') and 'params' in local scene metres (x=east, y=north, z=up). corridor params: path (list of {x,y}, >=2), spacing_m, altitude_m, optional passes. survey params: width_m, height_m, line_spacing_m, altitude_m, optional origin_xy ({x,y}) and heading_deg. Returns a navigation subtree as 'tree' (a nav_leaf, or a sequence of nav_leaf passes) plus waypoint_count — set it as the draft's 'tree' (or splice it into a larger tree) in propose_mission_draft. Does not upload; pair with export_mission after approval.",
-                PLANNING,
-                self._generate_pattern_subtree,
-            ),
-            tool(
-                "set_mission_geofence",
-                "Use when the operator wants to fence a mission to a safe area — 'keep it inside this boundary', 'add a geofence', or 'clear the fence'. Sets an inclusion geofence on an existing flat Mission (by mission_id): waypoints must stay inside the polygon, and the flight controller enforces it authoritatively while the executor also refuses any breaching mission before driving. Pass 'mission_id' and 'polygon' as a list of at least three {lat, lon} WGS84 vertices (the stored truth); optional 'rally_points' (list of {lat, lon, alt}) are safe-return points, and optional 'min_alt'/'max_alt' bound altitude in metres. Pass clear=true to remove the fence. Appends a new (approval-required) revision; does not upload by itself — the fence uploads to the FC when the mission is armed/executed.",
-                PLANNING,
-                self._set_mission_geofence,
-            ),
-            tool(
-                "export_mission",
-                "Convert a mission draft to a QGC-compatible .plan file saved under data/missions/<draft_id>.plan. The draft_id is the id returned by propose_mission_draft — NOT a route_hash from plan_route_* (those only fingerprint waypoints). If draft_id is unknown, the result lists available_drafts for this session. Returns file_path, waypoint_count, and the plan structure.",
-                PLANNING,
-                self._export_mission,
-                side_effects=frozenset({"writes_file"}),
-            ),
-            # ── Planner loop tools (Phase 5) ──────────────────────────────────
-            tool(
-                "parse_rover_intent",
-                "Parse the operator's mission request into a structured RoverIntent. Call this first in the planner loop to extract intent_type, target, requested_actions, constraints, and missing_information. Pass the original user prompt and the compact context_summary from retrieve_initial_context.",
-                READ_ONLY,
-                self._parse_rover_intent,
-            ),
-            tool(
-                "lazy_load_replay",
-                "Load the active replay session summary for the current request. Returns replay_summary with the most recent session metadata. Call this when the operator's request references prior missions, replay sessions, or recorded data. Available only when replay_reports source control is enabled.",
-                READ_ONLY,
-                self._lazy_load_replay,
-            ),
-            tool(
-                "lazy_load_ai_memory",
-                "Load the AI chat history summary for the current session. Returns chat_history_summary with a bounded view of recent AI conversation context. Call this when the operator references earlier discussions or prior planning sessions.",
-                READ_ONLY,
-                self._lazy_load_ai_memory,
-            ),
-            tool(
-                "lazy_load_settings",
-                "Load the GCS settings summary for the current request. Returns settings_summary with safe configuration metadata. Call this when the operator references configuration, provider routing, or enabled capabilities.",
-                READ_ONLY,
-                self._lazy_load_settings,
-            ),
-            tool(
-                "lazy_load_sensor",
-                "Load sensor and telemetry freshness status. Returns telemetry_fresh and camera_fresh flags. Call this when the operator's request depends on live sensor availability or to flag staleness constraints in the mission draft.",
-                READ_ONLY,
-                self._lazy_load_sensor,
-            ),
-            tool(
-                "create_mission_from_waypoints",
-                "Create an operator-visible Mission directly from supplied local-coordinate waypoints. Use this when the operator provides an explicit route in any text or structured format. Extract the route into a waypoints array of {x, y, z} objects and pass optional route metadata such as waypoint_count, path_length_m, or route_hash. The tool validates the structured data and persists the same durable Mission revision used by the map and mission sidebar. This is a terminal planning action; it does not execute or export the mission.",
-                PLANNING,
-                self._create_mission_from_waypoints,
-                is_terminal=True,
-            ),
-            tool(
-                "propose_mission_draft",
-                "Submit the final mission draft and create the operator-visible Mission. Terminal planning action — call after parse_rover_intent and optional route-planning tools. In Agent chat, success persists a durable Mission revision and flat Mission row, returning mission_id; the Mission then appears on the map and in the mission sidebar. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
-                PLANNING,
-                self._propose_mission_draft,
-                is_terminal=True,
-            ),
-            tool(
-                "resolve_mission_reference",
-                "Resolve an operator's reference to an existing Mission into a concrete mission id before editing it. Pass the operator's exact phrasing as 'reference' — an index ('#26', 'mission 26'), a name ('the orchard sweep'), or a pronoun ('it', 'this mission'). Resolution order is index → exact name → fuzzy name → pronoun (most-recent Mission of the current chat). Returns status 'resolved' with the mission (use mission.id as source_mission_id), 'ambiguous' with candidates to disambiguate with the operator, or 'not_found'. Call this before propose_mission_draft with clone_and_edit/edit_in_place when the operator refers to a mission you do not already have an id for.",
-                READ_ONLY,
-                self._resolve_mission_reference,
-            ),
-            # ── Execution tools (ADR 0021 §1 / ADR 0023 Phase 3) ──────────────
-            # Bound per execution mode by agent_loop: Strict binds neither
-            # arm_execution nor execute_mission; Confirm binds arm_execution;
-            # Autonomous binds execute_mission; cancel_execution/abort always bind.
-            tool(
-                "arm_execution",
-                "Confirm-mode only: arm a Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
-                EXECUTION,
-                self._arm_execution,
-                side_effects=frozenset({"drives_rover"}),
-            ),
-            tool(
-                "execute_mission",
-                "Autonomous-mode only: run a Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
-                EXECUTION,
-                self._execute_mission,
-                side_effects=frozenset({"drives_rover"}),
-            ),
-            tool(
-                "cancel_execution",
-                "Stop a pending or running mission for this session. For an armed/awaiting-confirm run (Confirm mode before the operator confirms) this cancels it so a later banner confirm cannot still start it; for a run already executing it cooperatively aborts the behavior tree between node steps. Always available regardless of execution mode. Returns the execution status snapshot.",
-                EXECUTION,
-                self._cancel_execution,
-            ),
-            tool(
-                "abort",
-                "Immediately abort the mission currently executing for this session. Cooperatively stops the running behavior tree at the next node-step boundary. Always available regardless of execution mode. Use this as the emergency-stop for AI-driven execution.",
-                EXECUTION,
-                self._abort_execution,
-            ),
-            # ── Mission-keyed pause / resume / stop (B.4) ────────────────────
-            # Works on any active execution regardless of who started it
-            # (operator via sidebar or AI via execute_mission). Does NOT
-            # require a session-owned execution — only a mission_id.
-            tool(
-                "control_mission",
-                "Pause, resume, or stop a running mission by its mission id. "
-                "action must be one of: 'pause' (park at FC level until resumed), "
-                "'resume' (continue after a pause), or 'stop' (cooperatively halt "
-                "the behavior tree at the next node-step boundary). Works whether "
-                "the mission was started by the operator (sidebar) or by AI "
-                "(execute_mission). Use resolve_mission_reference first if you only "
-                "have a name or index, not the id.",
-                EXECUTION,
-                self._control_mission_execution,
-            ),
-            # ── Session adapter override (Phase E) ────────────────────────────
-            tool(
-                "set_session_adapter",
-                "Override the FC adapter used for mission execution in this chat session only. "
-                "adapter_type must be one of: 'file_sink' (write uploads to data/fc_sink/), "
-                "'json_file' (default dev adapter), 'mavlink' (real FC via MAVLink, uses configured URL), "
-                "'mavsdk' (real FC via MAVSDK, uses configured URL), or 'default' (clear override — revert to global config adapter). "
-                "The override is session-scoped: it reverts automatically when the session ends and never changes the persisted config.",
-                EXECUTION,
-                self._set_session_adapter,
-            ),
-        ]
-        with_contracts = [_with_tool_contract(definition) for definition in definitions]
-        return {definition.name: definition for definition in with_contracts}
+        return definitions
 
     def _invocation_context(
         self,
@@ -498,6 +316,7 @@ class ToolRegistry:
         context_snapshot: dict[str, Any],
         timezone_name: str,
         permissions: set[str] | None,
+        run_mode: str = "",
     ) -> ToolInvocationContext:
         allowed = DEFAULT_PERMISSIONS if permissions is None else frozenset(permissions)
         return ToolInvocationContext(
@@ -508,7 +327,7 @@ class ToolRegistry:
             source_controls=_snapshot_source_controls(context_snapshot),
             session_id=_snapshot_session_id(context_snapshot),
             user_id=_snapshot_user_id(context_snapshot),
-            run_mode=_snapshot_run_mode(context_snapshot),
+            run_mode=str(run_mode or "").strip().lower(),
         )
 
     def _callable_for(self, definition: ToolDefinition, invocation_context: ToolInvocationContext) -> Callable[..., Any]:
@@ -1294,112 +1113,6 @@ class ToolRegistry:
             geofence=geofence,
         )
 
-    def _export_mission(
-        self,
-        context: ToolInvocationContext,
-        draft_id: str,
-    ) -> dict[str, Any]:
-        clean_id = str(draft_id or "").strip()
-        if not clean_id:
-            return {"ok": False, "error": "draft_id is required"}
-        store = getattr(context.runtime, "ai_store", None)
-        if store is None:
-            return {"ok": False, "error": "AI store is not available"}
-        draft_service = MissionDraftService(store.db_path)
-        draft, recovery = self._resolve_export_draft(
-            draft_service, clean_id, session_id=context.session_id
-        )
-        if draft is None:
-            return recovery
-        # Auto-bridge may have resolved a different id than the caller passed.
-        clean_id = str(draft.get("id") or clean_id)
-        profile = get_active_profile()
-        rover = self._rover_snapshot(context)
-        pos = rover.get("position") or {}
-        gps = rover.get("gps") or {}
-        home: dict[str, float] | None = None
-        if gps.get("lat") and gps.get("lon"):
-            home = {
-                "latitude": float(gps["lat"]),
-                "longitude": float(gps["lon"]),
-                "altitude": float(gps.get("alt") or 0.0),
-            }
-        result = self._exporter.export(draft, profile=profile, home_position=home)
-        if result.get("ok"):
-            updated = draft_service.mark_exported(clean_id, export_result=result)
-            if updated is not None:
-                result["draft_status"] = updated.get("status", "")
-                result["mission_export"] = (updated.get("draft") or {}).get("mission_export") or {}
-            if recovery is not None:
-                # Auto-bridge recovered the draft from a non-draft id (e.g. a route_hash).
-                result["resolved_via"] = recovery.get("resolved_via")
-                result["resolved_draft_id"] = clean_id
-        return result
-
-    @staticmethod
-    def _looks_like_route_hash(value: str) -> bool:
-        """A bare 12-char hex string with no ``draft`` prefix is a route_hash,
-        not a draft id. Draft ids are always prefixed (``ai-draft-``,
-        ``draft-draw-``, ``draft-fence-``). See :func:`_route_hash`."""
-        return bool(_re.fullmatch(r"[0-9a-f]{12}", value or "")) and "draft" not in value
-
-    def _resolve_export_draft(
-        self,
-        draft_service: "MissionDraftService",
-        requested_id: str,
-        *,
-        session_id: str,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        """Resolve the id passed to ``export_mission`` into a stored draft.
-
-        Returns ``(draft, recovery)``. On a direct hit ``recovery`` is ``None``.
-        When the id is not a draft but auto-bridges to a session draft (e.g. the
-        planner handed back a ``route_hash`` instead of the ``draft_id``),
-        ``recovery`` carries ``resolved_via`` describing the bridge. When nothing
-        resolves, ``draft`` is ``None`` and ``recovery`` is a directed error.
-        """
-        direct = draft_service.get_draft(requested_id)
-        if direct is not None:
-            return direct, None
-
-        session_drafts = draft_service.list_drafts(session_id=session_id, limit=20)
-
-        # Auto-bridge: a route_hash matches the route_artifacts of a session draft.
-        if self._looks_like_route_hash(requested_id):
-            for row in session_drafts:
-                payload = row.get("draft") or {}
-                artifacts = payload.get("route_artifacts") or []
-                for art in artifacts:
-                    if isinstance(art, dict) and str(art.get("route_hash") or "") == requested_id:
-                        return row, {"resolved_via": "route_hash->draft"}
-
-        # No permissive "sole draft" fallback: a route_hash miss must surface the
-        # directed error below rather than silently exporting an unrelated draft
-        # (ADR 0022/0023 pre-merge safety). Only an exact draft_id or an exact
-        # route_hash->artifact match writes a .plan.
-        available = [
-            {"draft_id": r.get("id"), "status": r.get("status")}
-            for r in session_drafts
-        ]
-        if self._looks_like_route_hash(requested_id):
-            hint = (
-                f"'{requested_id}' is a route_hash, not a draft_id. A route_hash only "
-                "fingerprints waypoints — it is not a persisted draft. Call "
-                "propose_mission_draft with the route waypoints first to create a draft, "
-                "then call export_mission with the returned draft_id."
-            )
-        else:
-            hint = (
-                f"draft '{requested_id}' not found. Create one with propose_mission_draft "
-                "then export it with the returned draft_id."
-            )
-        return None, {
-            "ok": False,
-            "error": hint,
-            "next_tool": "propose_mission_draft",
-            "available_drafts": available,
-        }
-
     # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
 
     def _parse_rover_intent(
@@ -1915,70 +1628,13 @@ class ToolRegistry:
     def _control_mission_execution(
         self, context: ToolInvocationContext, action: str, mission_id: str
     ) -> dict[str, Any]:
-        actions = {
-            "pause": self._pause_mission_execution,
-            "resume": self._resume_mission_execution,
-            "stop": self._stop_mission_execution,
-        }
-        handler = actions.get(action)
+        control = mission_control_for(context.runtime)
+        if control is None:
+            return {"ok": False, "error": "execution sessions are not available"}
+        handler = {"pause": control.pause, "resume": control.resume, "stop": control.stop}.get(action)
         if handler is None:
             return {"ok": False, "error": f"unknown action '{action}'; must be pause, resume, or stop"}
-        return handler(context, mission_id)
-
-    def _pause_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
-        sessions = getattr(context.runtime, "mission_execution_sessions", None)
-        if sessions is None:
-            return {"ok": False, "error": "execution sessions are not available"}
-        result = sessions.pause_for_mission(mission_id)
-        if result.get("ok"):
-            svc = getattr(context.runtime, "mission_execution_service", None)
-            op_id = _operation_id_for_mission(context.runtime, mission_id)
-            if svc is not None and op_id:
-                svc_result = svc.pause_mission(op_id)
-                if not svc_result.get("ok"):
-                    sessions.resume_for_mission(mission_id)
-                    result = svc_result
-        return result
-
-    def _resume_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
-        sessions = getattr(context.runtime, "mission_execution_sessions", None)
-        if sessions is None:
-            return {"ok": False, "error": "execution sessions are not available"}
-        result = sessions.resume_for_mission(mission_id)
-        if result.get("ok"):
-            svc = getattr(context.runtime, "mission_execution_service", None)
-            op_id = _operation_id_for_mission(context.runtime, mission_id)
-            if svc is not None and op_id:
-                svc_result = svc.resume_mission(op_id)
-                if not svc_result.get("ok"):
-                    sessions.pause_for_mission(mission_id)
-                    result = svc_result
-        return result
-
-    def _stop_mission_execution(self, context: ToolInvocationContext, mission_id: str) -> dict[str, Any]:
-        sessions = getattr(context.runtime, "mission_execution_sessions", None)
-        if sessions is None:
-            return {"ok": False, "error": "execution sessions are not available"}
-        result = sessions.abort_for_mission(mission_id)
-        if result.get("ok"):
-            svc = getattr(context.runtime, "mission_execution_service", None)
-            op_id = _operation_id_for_mission(context.runtime, mission_id)
-            if svc is not None and op_id:
-                svc_result = svc.abort_mission(op_id)
-                if not svc_result.get("ok"):
-                    result = svc_result
-        return result
-
-
-def _operation_id_for_mission(runtime: Any, mission_id: str) -> str:
-    """Return the active_operation_id for a flat Mission, or '' if unavailable."""
-    store = getattr(runtime, "mission_store", None)
-    if store is None:
-        return ""
-    mission = store.get_mission(str(mission_id or "").strip())
-    if not isinstance(mission, dict):
-        return ""
-    return str(mission.get("active_operation_id") or "").strip()
+        return handler(mission_id)
 
 
 def _resolve_confirm_timeout_s(runtime: Any) -> int:
@@ -2094,12 +1750,6 @@ def _snapshot_user_id(context_snapshot: dict[str, Any] | None) -> str:
     if not isinstance(meta, dict):
         return ""
     return str(meta.get("user_id") or "").strip()
-
-
-def _snapshot_run_mode(context_snapshot: dict[str, Any] | None) -> str:
-    if not isinstance(context_snapshot, dict):
-        return ""
-    return str(context_snapshot.get("__agent_run_mode") or "").strip().lower()
 
 
 def _has_pose_and_heading(rover: dict[str, Any]) -> bool:
@@ -2290,23 +1940,6 @@ def _compact_text(value: Any, *, limit: int) -> str:
     return f"{text[:limit].rstrip()}..."
 
 
-def _with_tool_contract(definition: ToolDefinition) -> ToolDefinition:
-    contract = TOOL_CONTRACTS.get(definition.name, {})
-    if not contract:
-        return definition
-    return ToolDefinition(
-        name=definition.name,
-        description=definition.description,
-        permission=definition.permission,
-        tier=definition.tier,
-        required_scopes=definition.required_scopes,
-        side_effects=definition.side_effects,
-        input_schema=dict(contract.get("inputs") or {}),
-        output_schema=dict(contract.get("returns") or {}),
-        handler=definition.handler,
-        contract=contract,
-        is_terminal=definition.is_terminal,
-    )
 
 
 def _tool_runtime_description(definition: ToolDefinition) -> str:
@@ -2317,8 +1950,8 @@ def _tool_runtime_description(definition: ToolDefinition) -> str:
     returns = contract.get("returns")
     # `upstream_from_tools` and `next_tools` are intentionally omitted from the
     # model-facing runtime description (P3 compact-projection, conservative first
-    # slice). Both fields remain in TOOL_CONTRACTS for operator/debug surfaces
-    # (e.g. /capabilities); only the always-on schema text is trimmed here.
+    # slice). Both fields remain on the ToolMeta declaration for operator/debug
+    # surfaces (e.g. /capabilities); only the always-on schema text is trimmed here.
     if isinstance(inputs, dict) and inputs:
         lines.append(f"Inputs: {_format_contract_mapping(inputs)}.")
     if isinstance(required, list) and required:
@@ -2342,38 +1975,94 @@ def _permission_tier(permission: str) -> int:
     }.get(str(permission or "").strip(), 0)
 
 
-TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
-    "list_data_surfaces": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"data_surfaces": "surface[]", "source_controls": "object", "planned_sources": "object[]"},
-        "next_tools": ["query_settings", "query_ai_memory", "query_replay_sessions", "get_sensor_status"],
-    },
-    "get_current_rover_state": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {
+def _meta(
+    name: str,
+    description: str,
+    permission: str,
+    handler: Callable[..., Any],
+    *,
+    side_effects: frozenset[str] | None = None,
+    is_terminal: bool = False,
+    inputs: dict[str, Any] | None = None,
+    required_inputs: tuple[str, ...] = (),
+    returns: dict[str, Any] | None = None,
+    upstream_from_tools: tuple[str, ...] = (),
+    next_tools: tuple[str, ...] = (),
+    surface: str = "",
+    always_allowed: bool = False,
+    source_control: str | None = None,
+    cacheable: bool = False,
+    cache_ttl_s: int | None = None,
+) -> ToolMeta:
+    return ToolMeta(
+        name=name,
+        description=description,
+        permission=permission,
+        handler=handler,
+        side_effects=side_effects or frozenset(),
+        is_terminal=is_terminal,
+        inputs=inputs or {},
+        required_inputs=required_inputs,
+        returns=returns or {},
+        upstream_from_tools=upstream_from_tools,
+        next_tools=next_tools,
+        surface=surface,
+        always_allowed=always_allowed,
+        source_control=source_control,
+        cacheable=cacheable,
+        cache_ttl_s=cache_ttl_s,
+    )
+
+
+# O9: single per-tool declaration. Every other tool-facing surface (LangChain
+# schema, contract text on /capabilities, the data-access manifest, the
+# result-result cache list, and the always-allowed/source-gated name sets)
+# derives from this table instead of re-listing tool names independently.
+_TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
+    _meta(
+        "list_data_surfaces",
+        "List every bounded data surface available to this session, show which source controls currently enable them, and identify the exact tools that can load each surface. Call this first when you need to discover where replay history, AI chat history, settings/config, or sensor metadata can be retrieved from.",
+        READ_ONLY,
+        ToolRegistry._list_data_surfaces,
+        surface="system_capabilities",
+        always_allowed=True,
+        cacheable=True,
+        returns={"data_surfaces": "surface[]", "source_controls": "object", "planned_sources": "object[]"},
+        next_tools=("query_settings", "query_ai_memory", "query_replay_sessions", "get_sensor_status"),
+    ),
+    _meta(
+        "get_current_rover_state",
+        "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.",
+        READ_ONLY,
+        ToolRegistry._get_current_rover_state,
+        surface="current_rover_state",
+        always_allowed=True,
+        returns={
             "position": "object{x,y,z} | {}",
             "heading_deg": "number | null",
             "telemetry_fresh": "boolean",
             "last_known_replay_state": "object | null",
         },
-        "next_tools": ["query_map_objects", "resolve_spatial_target"],
-    },
-    "get_scene_summary": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"object_kinds": "object{kind->count}", "spawn": "object{x,y,z}", "object_count": "number"},
-        "next_tools": ["query_map_objects", "resolve_spatial_target"],
-    },
-    "get_runtime_context": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {
+        next_tools=("query_map_objects", "resolve_spatial_target"),
+    ),
+    _meta(
+        "get_scene_summary",
+        "Get the current terrain scene summary, including bounds, road count, object count, object kinds, spawn point, and site name. Use this before object queries when the operator asks what exists on the map or in the loaded scene.",
+        READ_ONLY,
+        ToolRegistry._get_scene_summary,
+        surface="terrain_scene",
+        always_allowed=True,
+        cacheable=True,
+        returns={"object_kinds": "object{kind->count}", "spawn": "object{x,y,z}", "object_count": "number"},
+        next_tools=("query_map_objects", "resolve_spatial_target"),
+    ),
+    _meta(
+        "get_runtime_context",
+        "Get the current runtime environment: MQTT broker connection (host, port, state), controller link state, video delivery config, simulation backend settings, map config, and active replay session id. Call this when the operator asks about connectivity, MQTT configuration, broker status, video pipeline, or simulation parameters.",
+        READ_ONLY,
+        ToolRegistry._get_runtime_context,
+        always_allowed=True,
+        returns={
             "broker": "object{host,port,connected,...}",
             "controller": "object",
             "video": "object",
@@ -2381,10 +2070,15 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "map": "object",
             "replay_session_id": "string | null",
         },
-        "next_tools": [],
-    },
-    "query_map_objects": {
-        "inputs": {
+    ),
+    _meta(
+        "query_map_objects",
+        "Query map objects by spatial mode. mode='front': objects in a forward cone (fov_deg, max_distance_m). mode='near': objects within radius_m. mode='by_kind': all objects whose kind matches kind=. mode='left' or mode='right': lateral flank objects (angle_width_deg, max_distance_m). mode='nearest': closest objects overall (limit, optional max_distance_m). Optional kinds filters by object kind for positional modes. For all positional modes, pass position or coordinates and optionally heading_deg to query from a hypothetical pose instead of live telemetry. Falls back to last_known_replay_state when live telemetry is stale.",
+        READ_ONLY,
+        ToolRegistry._query_map_objects,
+        surface="terrain_scene",
+        always_allowed=True,
+        inputs={
             "mode": "string (front|near|by_kind|left|right|nearest)",
             "kinds": "string[]",
             "kind": "string (required for mode=by_kind)",
@@ -2397,37 +2091,42 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "radius_m": "number",
             "limit": "integer",
         },
-        "required_inputs": ["mode"],
-        "upstream_from_tools": ["get_current_rover_state (pose/heading/replay fallback)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"],
-        "returns": {"available": "boolean", "objects": "object[]", "reason": "string?"},
-        "next_tools": ["resolve_spatial_target"],
-    },
-    "resolve_spatial_target": {
-        "inputs": {"target": "string | object{description,kind,side,min_distance_m,max_distance_m,relative_bearing_deg,position,coordinates,heading_deg}"},
-        "required_inputs": ["target"],
-        "upstream_from_tools": ["get_current_rover_state", "operator-provided coordinates/heading", "get_scene_summary", "query_map_objects results"],
-        "returns": {"available": "boolean", "candidates": "object[]", "selected": "object|null", "needs_clarification": "boolean"},
-        "next_tools": [],
-    },
-    "get_current_mission_state": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": [],
-        "returns": {"active": "boolean", "status": "string", "summary": "string"},
-        "next_tools": ["control_mission"],
-    },
-    "control_mission": {
-        "inputs": {
-            "action": "string (pause|resume|stop) — non-emergency execution control; use abort for emergency stop",
-            "mission_id": "string — durable flat Mission id of the running execution",
-        },
-        "required_inputs": ["action", "mission_id"],
-        "upstream_from_tools": ["get_current_mission_state (active mission_id and status)"],
-        "returns": {"ok": "boolean", "error": "string?"},
-        "next_tools": ["get_current_mission_state"],
-    },
-    "query_replay_sessions": {
-        "inputs": {
+        required_inputs=("mode",),
+        upstream_from_tools=("get_current_rover_state (pose/heading/replay fallback)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"),
+        returns={"available": "boolean", "objects": "object[]", "reason": "string?"},
+        next_tools=("resolve_spatial_target",),
+    ),
+    _meta(
+        "resolve_spatial_target",
+        "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.",
+        PLANNING,
+        ToolRegistry._resolve_spatial_target,
+        surface="terrain_scene",
+        always_allowed=True,
+        inputs={"target": "string | object{description,kind,side,min_distance_m,max_distance_m,relative_bearing_deg,position,coordinates,heading_deg}"},
+        required_inputs=("target",),
+        upstream_from_tools=("get_current_rover_state", "operator-provided coordinates/heading", "get_scene_summary", "query_map_objects results"),
+        returns={"available": "boolean", "candidates": "object[]", "selected": "object|null", "needs_clarification": "boolean"},
+    ),
+    _meta(
+        "get_current_mission_state",
+        "Get the current mission state. This is read-only.",
+        READ_ONLY,
+        ToolRegistry._get_current_mission_state,
+        surface="mission_state",
+        always_allowed=True,
+        returns={"active": "boolean", "status": "string", "summary": "string"},
+        next_tools=("control_mission",),
+    ),
+    _meta(
+        "query_replay_sessions",
+        "Query replay session data by operation. operation='current': active replay session summary. operation='telemetry': recent telemetry samples (seconds, limit, optional session_id for a specific session). operation='list': enumerate sessions with started_at/ended_at/counts (limit, order). operation='resolve': resolve a natural-language selector like 'latest 5 sessions' or 'all sessions' into explicit session_ids (selector, timezone_name). operation='summary': session metadata by session_id. operation='path': downsampled path points for session_id (downsample, limit). operation='events': search runtime events within a session (session_id, optional event_type/text/limit). Call 'list' or 'resolve' first when you need session_ids.",
+        ANALYSIS,
+        ToolRegistry._query_replay_sessions,
+        surface="replay_sessions",
+        source_control="replay_reports",
+        cacheable=True,
+        inputs={
             "operation": "string (current|telemetry|list|resolve|summary|path|events)",
             "session_id": "string (required for summary/path/events; optional for telemetry)",
             "selector": "string (required for resolve; e.g. 'latest 5 sessions', 'all sessions')",
@@ -2439,9 +2138,9 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "text": "string (for events)",
             "seconds": "integer (for telemetry)",
         },
-        "required_inputs": ["operation"],
-        "upstream_from_tools": ["query_replay_sessions(operation='list'|'resolve') for session_ids", "get_current_replay_summary via operation='current'"],
-        "returns": {
+        required_inputs=("operation",),
+        upstream_from_tools=("query_replay_sessions(operation='list'|'resolve') for session_ids", "get_current_replay_summary via operation='current'"),
+        returns={
             "current": "{session_id, telemetry_count, runtime_event_count}",
             "telemetry": "{result: telemetry_sample[]}",
             "list": "{sessions: session_summary[], count}",
@@ -2450,10 +2149,17 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "path": "{session_id, point_count, points: path_point[]}",
             "events": "{events: event[], count}",
         },
-        "next_tools": ["analyze_replay_sessions", "query_map_objects"],
-    },
-    "analyze_replay_sessions": {
-        "inputs": {
+        next_tools=("analyze_replay_sessions", "query_map_objects"),
+    ),
+    _meta(
+        "analyze_replay_sessions",
+        "Analyze replay session data by metric operation. operation='metrics': compute analytics for session_id — duration_s, path_length_m, net_displacement_m, max_distance_from_start_m (refresh to recompute). operation='compare': compare multiple sessions by session_ids — per-session summaries and metrics for ranking and answering longest/furthest questions. operation='aggregate': aggregate across a natural-language selector or explicit session_ids — totals, averages, built-in longest/latest/furthest summaries, ranked top-N (selector, session_ids, timezone_name, top_n). Travel distance = path_length_m; furthest from start = max_distance_from_start_m. Resolve session_ids first with query_replay_sessions(operation='resolve') when needed.",
+        ANALYSIS,
+        ToolRegistry._analyze_replay_sessions,
+        surface="replay_sessions",
+        source_control="replay_reports",
+        cacheable=True,
+        inputs={
             "operation": "string (metrics|compare|aggregate)",
             "session_id": "string (required for metrics)",
             "session_ids": "string[] (required for compare; optional for aggregate)",
@@ -2462,17 +2168,24 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "refresh": "boolean (for metrics)",
             "top_n": "integer (for aggregate)",
         },
-        "required_inputs": ["operation"],
-        "upstream_from_tools": ["query_replay_sessions(operation='resolve'|'list') for session_ids"],
-        "returns": {
+        required_inputs=("operation",),
+        upstream_from_tools=("query_replay_sessions(operation='resolve'|'list') for session_ids",),
+        returns={
             "metrics": "{path_length_m, duration_s, max_distance_from_start_m, net_displacement_m}",
             "compare": "{sessions: comparison_row[], best_by_metric: object}",
             "aggregate": "{totals: object, averages: object, top_sessions: session_metric[]}",
         },
-        "next_tools": [],
-    },
-    "query_ai_memory": {
-        "inputs": {
+    ),
+    _meta(
+        "query_ai_memory",
+        "Query AI chat session history by operation. operation='list': list saved sessions with metadata, message counts, archival state, and last-message previews (limit, include_archived, archived_only, optional query filter). operation='search': search saved messages by text across sessions or within one (query required, limit, session_id, role). operation='get': load a bounded message window from one session (session_id, limit, before_message_id, role; omit session_id to use the current session). Call 'list' first to discover session_ids, or 'search' to locate a specific message.",
+        ANALYSIS,
+        ToolRegistry._query_ai_memory,
+        surface="ai_chat_history",
+        source_control="ai_chat_history",
+        cacheable=True,
+        cache_ttl_s=30,
+        inputs={
             "operation": "string (list|search|get)",
             "query": "string (required for search; optional title/preview filter for list)",
             "session_id": "string (for search/get; omit on get to use the current session)",
@@ -2482,125 +2195,201 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "role": "string (for search/get)",
             "before_message_id": "string (for get pagination)",
         },
-        "required_inputs": ["operation"],
-        "upstream_from_tools": ["query_ai_memory(operation='list') for session_ids", "query_ai_memory(operation='search') to locate a message"],
-        "returns": {
+        required_inputs=("operation",),
+        upstream_from_tools=("query_ai_memory(operation='list') for session_ids", "query_ai_memory(operation='search') to locate a message"),
+        returns={
             "list": "{sessions: ai_session_summary[], count, current_session_id}",
             "search": "{matches: ai_message_match[], count}",
             "get": "{messages: ai_message[], count, truncated}",
         },
-        "next_tools": [],
-    },
-    "query_settings": {
-        "inputs": {
+    ),
+    _meta(
+        "query_settings",
+        "Query GCS settings and LLM provider configuration by operation. operation='summary': compact settings overview — section names, settings_path, and key non-secret configuration summaries. operation='section': one settings section by name (section required; supported: mqtt, key_bindings, video, gcs, simulation, map, mission_lifecycle, ai_settings, settings_path). operation='provider': safe LLM provider and model-routing metadata — enabled providers, active chat-provider resolution, and routing rules. Never exposes secrets.",
+        READ_ONLY,
+        ToolRegistry._query_settings,
+        surface="settings",
+        source_control="settings_config",
+        cacheable=True,
+        cache_ttl_s=60,
+        inputs={
             "operation": "string (summary|section|provider)",
             "section": "string (required for section; one of mqtt, key_bindings, video, gcs, simulation, map, mission_lifecycle, ai_settings, settings_path)",
         },
-        "required_inputs": ["operation"],
-        "upstream_from_tools": ["query_settings(operation='summary') for section names"],
-        "returns": {
+        required_inputs=("operation",),
+        upstream_from_tools=("query_settings(operation='summary') for section names",),
+        returns={
             "summary": "{settings_path, section_names: string[], summary: object}",
             "section": "{section, value: object|string, available: boolean}",
             "provider": "{providers: object[], model_routing: object, active_chat_provider: object|null}",
         },
-        "next_tools": [],
-    },
-    "get_sensor_status": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["get_current_rover_state"],
-        "returns": {"telemetry_fresh": "boolean", "camera_fresh": "boolean", "video": "object", "perception_available": "boolean"},
-        "next_tools": [],
-    },
-    "plan_route_around_group": {
-        "inputs": {"group_id": "string — one of known_groups; e.g. 'plant_a', 'plant_b', 'connector', 'building', 'start_hub'"},
-        "required_inputs": ["group_id"],
-        "upstream_from_tools": ["get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"],
-        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)", "known_groups": "string[]"},
-        "next_tools": ["propose_mission_draft (with waypoints) -> export_mission (after approval)"],
-    },
-    "plan_route_between": {
-        "inputs": {"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
-        "required_inputs": ["goal_target"],
-        "upstream_from_tools": ["get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"],
-        "returns": {"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)"},
-        "next_tools": ["propose_mission_draft (with waypoints) -> export_mission (after approval)"],
-    },
-    "export_mission": {
-        "inputs": {"draft_id": "string — the draft_id returned by propose_mission_draft (NOT a route_hash)"},
-        "required_inputs": ["draft_id"],
-        "upstream_from_tools": ["plan_route_around_group or plan_route_between (to populate draft waypoints)", "approval interrupt (draft must be approved before calling)"],
-        "returns": {"ok": "boolean", "file_path": "string", "waypoint_count": "integer", "vehicle_type": "integer", "plan": "object"},
-        "next_tools": [],
-    },
-    "parse_rover_intent": {
-        "inputs": {
+    ),
+    _meta(
+        "get_sensor_status",
+        "Get metadata-only sensor and video status, including telemetry freshness, camera freshness, configured video delivery, and current perception limitations. Use this for questions about whether the agent can currently see live camera data or rely on sensor freshness. This tool does not expose raw frames, detections, or vision inference output.",
+        READ_ONLY,
+        ToolRegistry._get_sensor_status,
+        surface="video_perception",
+        source_control="sensor_context",
+        upstream_from_tools=("get_current_rover_state",),
+        returns={"telemetry_fresh": "boolean", "camera_fresh": "boolean", "video": "object", "perception_available": "boolean"},
+    ),
+    _meta(
+        "search_project_docs",
+        "Search the project's own documentation — requirements, design docs, ADRs, glossary, and operational notes — for grounded, citeable context. Returns the most relevant doc chunks with their file path, heading path, similarity score, and a citation ref. Use this when the operator asks how the system is designed, why a decision was made, what an ADR or requirement says, or for definitions of project terms. Pass a focused natural-language query and optionally limit (default 5). Available only when the project_docs source control is enabled.",
+        ANALYSIS,
+        ToolRegistry._search_project_docs,
+        source_control="project_docs",
+        inputs={"query": "string — natural-language search query", "limit": "integer (default 5)"},
+        required_inputs=("query",),
+        returns={"available": "boolean", "status": "string", "results": "doc_chunk[]", "citations": "citation[]"},
+    ),
+    _meta(
+        "plan_route_around_group",
+        "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id. Next step is propose_mission_draft with these waypoints — it persists and exports the Mission. Does not upload to the flight controller.",
+        PLANNING,
+        ToolRegistry._plan_route_around_group,
+        surface="route_planning",
+        always_allowed=True,
+        inputs={"group_id": "string — one of known_groups; e.g. 'plant_a', 'plant_b', 'connector', 'building', 'start_hub'"},
+        required_inputs=("group_id",),
+        upstream_from_tools=("get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"),
+        returns={"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)", "known_groups": "string[]"},
+        next_tools=("propose_mission_draft (with waypoints)",),
+    ),
+    _meta(
+        "plan_route_between",
+        "Use when the operator asks the vehicle to drive from one resolved target to another — 'drive to charger 1', 'go to the second plantation entrance'. Resolves both targets via resolve_spatial_target, snaps to the road graph, and runs Dijkstra. Returns a compact route summary and full waypoints. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id. Next step is propose_mission_draft with these waypoints — it persists and exports the Mission. Does not upload.",
+        PLANNING,
+        ToolRegistry._plan_route_between,
+        surface="route_planning",
+        always_allowed=True,
+        inputs={"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
+        required_inputs=("goal_target",),
+        upstream_from_tools=("get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"),
+        returns={"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)"},
+        next_tools=("propose_mission_draft (with waypoints)",),
+    ),
+    _meta(
+        "generate_pattern_subtree",
+        "Use when the operator asks the vehicle to follow a path repeatedly or to systematically cover an area, instead of hand-listing waypoints. 'corridor' densifies an ordered polyline into evenly-spaced waypoints (optionally back-and-forth for multiple passes); 'survey' fills a rectangle with a lawnmower (boustrophedon) sweep. Pass 'pattern' ('corridor'|'survey') and 'params' in local scene metres (x=east, y=north, z=up). corridor params: path (list of {x,y}, >=2), spacing_m, altitude_m, optional passes. survey params: width_m, height_m, line_spacing_m, altitude_m, optional origin_xy ({x,y}) and heading_deg. Returns a navigation subtree as 'tree' (a nav_leaf, or a sequence of nav_leaf passes) plus waypoint_count — set it as the draft's 'tree' (or splice it into a larger tree) in propose_mission_draft. Does not upload by itself.",
+        PLANNING,
+        ToolRegistry._generate_pattern_subtree,
+        always_allowed=True,
+        inputs={
+            "pattern": "string (corridor|survey)",
+            "params": "object — corridor: {path, spacing_m, altitude_m, passes?}; survey: {width_m, height_m, line_spacing_m, altitude_m, origin_xy?, heading_deg?}",
+        },
+        required_inputs=("pattern", "params"),
+        returns={"ok": "boolean", "pattern": "string", "tree": "object (nav_leaf or sequence of nav_leaf passes)", "waypoint_count": "integer"},
+        next_tools=("propose_mission_draft (with tree)",),
+    ),
+    _meta(
+        "set_mission_geofence",
+        "Use when the operator wants to fence a mission to a safe area — 'keep it inside this boundary', 'add a geofence', or 'clear the fence'. Sets an inclusion geofence on an existing flat Mission (by mission_id): waypoints must stay inside the polygon, and the flight controller enforces it authoritatively while the executor also refuses any breaching mission before driving. Pass 'mission_id' and 'polygon' as a list of at least three {lat, lon} WGS84 vertices (the stored truth); optional 'rally_points' (list of {lat, lon, alt}) are safe-return points, and optional 'min_alt'/'max_alt' bound altitude in metres. Pass clear=true to remove the fence. Appends a new (approval-required) revision; does not upload by itself — the fence uploads to the FC when the mission is armed/executed.",
+        PLANNING,
+        ToolRegistry._set_mission_geofence,
+        always_allowed=True,
+        inputs={
+            "mission_id": "string — durable flat Mission id",
+            "polygon": "object[]{lat,lon} — at least 3 WGS84 vertices (required unless clear=true)",
+            "rally_points": "object[]{lat,lon,alt} (optional)",
+            "min_alt": "number (optional)",
+            "max_alt": "number (optional)",
+            "clear": "boolean — remove the fence instead of setting one",
+        },
+        required_inputs=("mission_id",),
+        upstream_from_tools=("propose_mission_draft or create_mission_from_waypoints (mission_id)",),
+        returns={"ok": "boolean", "error": "string?"},
+    ),
+    # ── Planner loop tools (Phase 5) ──────────────────────────────────
+    _meta(
+        "parse_rover_intent",
+        "Parse the operator's mission request into a structured RoverIntent. Call this first in the planner loop to extract intent_type, target, requested_actions, constraints, and missing_information. Pass the original user prompt and the compact context_summary from retrieve_initial_context.",
+        READ_ONLY,
+        ToolRegistry._parse_rover_intent,
+        always_allowed=True,
+        inputs={
             "prompt": "string — original operator mission request",
             "context_summary": "string — compact planning context summary (optional)",
         },
-        "required_inputs": ["prompt"],
-        "upstream_from_tools": ["operator mission request", "compact mission-planning context summary"],
-        "returns": {"ok": "boolean", "intent": "object", "parse_errors": "string[]"},
-        "next_tools": [
+        required_inputs=("prompt",),
+        upstream_from_tools=("operator mission request", "compact mission-planning context summary"),
+        returns={"ok": "boolean", "intent": "object", "parse_errors": "string[]"},
+        next_tools=(
             "lazy_load_replay",
             "lazy_load_ai_memory",
             "lazy_load_settings",
             "lazy_load_sensor",
             "resolve_spatial_target",
             "propose_mission_draft",
-        ],
-    },
-    "lazy_load_replay": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["source_controls.replay_reports", "parse_rover_intent (when the request references prior missions or recorded data)"],
-        "returns": {"ok": "boolean", "replay_summary": "object", "available": "boolean"},
-        "next_tools": ["propose_mission_draft"],
-    },
-    "lazy_load_ai_memory": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["source_controls.ai_chat_history", "parse_rover_intent (when the request references earlier discussions)"],
-        "returns": {"ok": "boolean", "chat_history_summary": "object", "available": "boolean"},
-        "next_tools": ["propose_mission_draft"],
-    },
-    "lazy_load_settings": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["source_controls.settings_config", "parse_rover_intent (when the request depends on configuration or provider routing)"],
-        "returns": {"ok": "boolean", "settings_summary": "object", "available": "boolean"},
-        "next_tools": ["propose_mission_draft"],
-    },
-    "lazy_load_sensor": {
-        "inputs": {},
-        "required_inputs": [],
-        "upstream_from_tools": ["source_controls.sensor_context", "parse_rover_intent (when the request depends on live telemetry or camera freshness)"],
-        "returns": {
-            "ok": "boolean",
-            "telemetry_fresh": "boolean | null",
-            "camera_fresh": "boolean | null",
-            "available": "boolean",
-        },
-        "next_tools": ["propose_mission_draft"],
-    },
-    "create_mission_from_waypoints": {
-        "inputs": {
+        ),
+    ),
+    _meta(
+        "lazy_load_replay",
+        "Load the active replay session summary for the current request. Returns replay_summary with the most recent session metadata. Call this when the operator's request references prior missions, replay sessions, or recorded data. Available only when replay_reports source control is enabled.",
+        READ_ONLY,
+        ToolRegistry._lazy_load_replay,
+        upstream_from_tools=("source_controls.replay_reports", "parse_rover_intent (when the request references prior missions or recorded data)"),
+        returns={"ok": "boolean", "replay_summary": "object", "available": "boolean"},
+        next_tools=("propose_mission_draft",),
+    ),
+    _meta(
+        "lazy_load_ai_memory",
+        "Load the AI chat history summary for the current session. Returns chat_history_summary with a bounded view of recent AI conversation context. Call this when the operator references earlier discussions or prior planning sessions.",
+        READ_ONLY,
+        ToolRegistry._lazy_load_ai_memory,
+        upstream_from_tools=("source_controls.ai_chat_history", "parse_rover_intent (when the request references earlier discussions)"),
+        returns={"ok": "boolean", "chat_history_summary": "object", "available": "boolean"},
+        next_tools=("propose_mission_draft",),
+    ),
+    _meta(
+        "lazy_load_settings",
+        "Load the GCS settings summary for the current request. Returns settings_summary with safe configuration metadata. Call this when the operator references configuration, provider routing, or enabled capabilities.",
+        READ_ONLY,
+        ToolRegistry._lazy_load_settings,
+        upstream_from_tools=("source_controls.settings_config", "parse_rover_intent (when the request depends on configuration or provider routing)"),
+        returns={"ok": "boolean", "settings_summary": "object", "available": "boolean"},
+        next_tools=("propose_mission_draft",),
+    ),
+    _meta(
+        "lazy_load_sensor",
+        "Load sensor and telemetry freshness status. Returns telemetry_fresh and camera_fresh flags. Call this when the operator's request depends on live sensor availability or to flag staleness constraints in the mission draft.",
+        READ_ONLY,
+        ToolRegistry._lazy_load_sensor,
+        upstream_from_tools=("source_controls.sensor_context", "parse_rover_intent (when the request depends on live telemetry or camera freshness)"),
+        returns={"ok": "boolean", "telemetry_fresh": "boolean | null", "camera_fresh": "boolean | null", "available": "boolean"},
+        next_tools=("propose_mission_draft",),
+    ),
+    _meta(
+        "create_mission_from_waypoints",
+        "Create an operator-visible Mission directly from supplied local-coordinate waypoints. Use this when the operator provides an explicit route in any text or structured format. Extract the route into a waypoints array of {x, y, z} objects and pass optional route metadata such as waypoint_count, path_length_m, or route_hash. The tool validates the structured data and persists the same durable Mission revision used by the map and mission sidebar. This is a terminal planning action; it does not execute or export the mission.",
+        PLANNING,
+        ToolRegistry._create_mission_from_waypoints,
+        is_terminal=True,
+        always_allowed=True,
+        inputs={
             "waypoints": "object[] — ordered local-coordinate points with numeric x, y, z",
             "goal": "string — concise Mission name/goal (optional)",
             "route_metadata": "object — optional waypoint_count, path_length_m, route_hash, or source metadata",
         },
-        "required_inputs": ["waypoints"],
-        "upstream_from_tools": ["operator-supplied route", "plan_route_around_group", "plan_route_between"],
-        "returns": {
+        required_inputs=("waypoints",),
+        upstream_from_tools=("operator-supplied route", "plan_route_around_group", "plan_route_between"),
+        returns={
             "ok": "boolean",
             "draft": "mission_draft",
             "mission_id": "string — durable flat Mission id in Agent mode",
             "mission_revision_id": "string — persisted revision id in Agent mode",
         },
-        "next_tools": [],
-    },
-    "propose_mission_draft": {
-        "inputs": {
+    ),
+    _meta(
+        "propose_mission_draft",
+        "Submit the final mission draft and create the operator-visible Mission. Terminal planning action — call after parse_rover_intent and optional route-planning tools. In Agent chat, success persists a durable Mission revision and flat Mission row, returning mission_id; the Mission then appears on the map and in the mission sidebar. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
+        PLANNING,
+        ToolRegistry._propose_mission_draft,
+        is_terminal=True,
+        always_allowed=True,
+        inputs={
             "intent": "object — from parse_rover_intent.intent",
             "target_resolution": "object — from resolve_spatial_target (optional)",
             "rover_position": "object — rover position override (optional)",
@@ -2610,9 +2399,9 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "mission_edit_mode": "create | clone_and_edit | edit_in_place",
             "source_mission_id": "string — existing flat Mission id for clone/edit operations (optional)",
         },
-        "required_inputs": ["intent"],
-        "upstream_from_tools": ["parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"],
-        "returns": {
+        required_inputs=("intent",),
+        upstream_from_tools=("parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"),
+        returns={
             "ok": "boolean",
             "draft": "mission_draft",
             "repairs": "string[]",
@@ -2620,6 +2409,99 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
             "mission_id": "string — durable flat Mission id in Agent mode",
             "mission_revision_id": "string — persisted revision id in Agent mode",
         },
-        "next_tools": [],
-    },
-}
+    ),
+    _meta(
+        "resolve_mission_reference",
+        "Resolve an operator's reference to an existing Mission into a concrete mission id before editing it. Pass the operator's exact phrasing as 'reference' — an index ('#26', 'mission 26'), a name ('the orchard sweep'), or a pronoun ('it', 'this mission'). Resolution order is index → exact name → fuzzy name → pronoun (most-recent Mission of the current chat). Returns status 'resolved' with the mission (use mission.id as source_mission_id), 'ambiguous' with candidates to disambiguate with the operator, or 'not_found'. Call this before propose_mission_draft with clone_and_edit/edit_in_place when the operator refers to a mission you do not already have an id for.",
+        READ_ONLY,
+        ToolRegistry._resolve_mission_reference,
+        always_allowed=True,
+        inputs={"reference": "string — index ('#26', 'mission 26'), a name, or a pronoun ('it', 'this mission')"},
+        required_inputs=("reference",),
+        returns={"ok": "boolean", "status": "resolved|ambiguous|not_found", "reason": "string?", "mission": "object|null", "candidates": "object[]"},
+        next_tools=("propose_mission_draft (clone_and_edit/edit_in_place)",),
+    ),
+    # ── Execution tools (ADR 0021 §1 / ADR 0023 Phase 3) ──────────────
+    # Bound per execution mode by agent_loop: Strict binds neither
+    # arm_execution nor execute_mission; Confirm binds arm_execution;
+    # Autonomous binds execute_mission; cancel_execution/abort always bind.
+    _meta(
+        "arm_execution",
+        "Confirm-mode only: arm a Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
+        EXECUTION,
+        ToolRegistry._arm_execution,
+        side_effects=frozenset({"drives_rover"}),
+        inputs={"mission_id": "string — durable flat Mission id"},
+        required_inputs=("mission_id",),
+        upstream_from_tools=("propose_mission_draft or create_mission_from_waypoints (mission_id)",),
+        returns={"ok": "boolean", "armed": "boolean", "expires_at": "string?", "error": "string?"},
+        next_tools=("cancel_execution", "control_mission"),
+    ),
+    _meta(
+        "execute_mission",
+        "Autonomous-mode only: run a Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
+        EXECUTION,
+        ToolRegistry._execute_mission,
+        side_effects=frozenset({"drives_rover"}),
+        inputs={"mission_id": "string — durable flat Mission id"},
+        required_inputs=("mission_id",),
+        upstream_from_tools=("propose_mission_draft or create_mission_from_waypoints (mission_id)",),
+        returns={"ok": "boolean", "error": "string?"},
+        next_tools=("abort", "cancel_execution", "control_mission"),
+    ),
+    _meta(
+        "cancel_execution",
+        "Stop a pending or running mission for this session. For an armed/awaiting-confirm run (Confirm mode before the operator confirms) this cancels it so a later banner confirm cannot still start it; for a run already executing it cooperatively aborts the behavior tree between node steps. Always available regardless of execution mode. Returns the execution status snapshot.",
+        EXECUTION,
+        ToolRegistry._cancel_execution,
+        upstream_from_tools=("arm_execution or execute_mission (active run)",),
+        returns={"ok": "boolean", "error": "string?"},
+    ),
+    _meta(
+        "abort",
+        "Immediately abort the mission currently executing for this session. Cooperatively stops the running behavior tree at the next node-step boundary. Always available regardless of execution mode. Use this as the emergency-stop for AI-driven execution.",
+        EXECUTION,
+        ToolRegistry._abort_execution,
+        upstream_from_tools=("execute_mission (active run)",),
+        returns={"ok": "boolean", "error": "string?"},
+    ),
+    # ── Mission-keyed pause / resume / stop (B.4) ────────────────────
+    # Works on any active execution regardless of who started it
+    # (operator via sidebar or AI via execute_mission). Does NOT
+    # require a session-owned execution — only a mission_id.
+    _meta(
+        "control_mission",
+        "Pause, resume, or stop a running mission by its mission id. "
+        "action must be one of: 'pause' (park at FC level until resumed), "
+        "'resume' (continue after a pause), or 'stop' (cooperatively halt "
+        "the behavior tree at the next node-step boundary). Works whether "
+        "the mission was started by the operator (sidebar) or by AI "
+        "(execute_mission). Use resolve_mission_reference first if you only "
+        "have a name or index, not the id.",
+        EXECUTION,
+        ToolRegistry._control_mission_execution,
+        inputs={
+            "action": "string (pause|resume|stop) — non-emergency execution control; use abort for emergency stop",
+            "mission_id": "string — durable flat Mission id of the running execution",
+        },
+        required_inputs=("action", "mission_id"),
+        upstream_from_tools=("get_current_mission_state (active mission_id and status)",),
+        returns={"ok": "boolean", "error": "string?"},
+        next_tools=("get_current_mission_state",),
+    ),
+    # ── Session adapter override (Phase E) ────────────────────────────
+    _meta(
+        "set_session_adapter",
+        "Override the FC adapter used for mission execution in this chat session only. "
+        "adapter_type must be one of: 'file_sink' (write uploads to data/fc_sink/), "
+        "'json_file' (default dev adapter), 'mavlink' (real FC via MAVLink, uses configured URL), "
+        "'mavsdk' (real FC via MAVSDK, uses configured URL), or 'default' (clear override — revert to global config adapter). "
+        "The override is session-scoped: it reverts automatically when the session ends and never changes the persisted config.",
+        EXECUTION,
+        ToolRegistry._set_session_adapter,
+        inputs={"adapter_type": "string (file_sink|json_file|mavlink|mavsdk|default)"},
+        required_inputs=("adapter_type",),
+        returns={"ok": "boolean", "adapter": "string", "note": "string?"},
+    ),
+]}
+

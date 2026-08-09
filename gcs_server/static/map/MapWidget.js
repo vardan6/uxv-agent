@@ -1,4 +1,4 @@
-import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, pauseMission, resumeMission, stopMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
+import { getCurrentOverlay, getMissionOverlay, listMissions, executeMission, pauseMission, resumeMission, stopMission, getControllerState, getExecutionState, confirmExecution, cancelExecution, createDrawnPattern, previewDrawnPattern, setMissionGeofence, createMission, deleteMission, renameMission, setMissionColor } from './data/missionApi.js';
 import { getRevision, createClientRevision, updateWaypoint, insertWaypoint, deleteWaypoint } from './data/missionMutationApi.js';
 import { getActiveVehicleProfile, listVehicleProfiles } from './data/vehicleProfileApi.js';
 import { fetchSceneMap, makeSampler } from './data/terrainApi.js';
@@ -2441,6 +2441,7 @@ export class MapWidget {
       onGenerate: (sketch) => this._handleDrawnPattern(sketch),
       onSetGeofence: (fence) => this._handleSetGeofence(fence),
       onCreateConstraint: (constraint) => this._handleCreateConstraint(constraint),
+      onPreviewPattern: (sketch, opts) => previewDrawnPattern(sketch, opts),
       session: this._sketchSession,
     });
 

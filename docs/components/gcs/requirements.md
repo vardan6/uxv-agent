@@ -406,6 +406,13 @@ Throughout the UI, indicators distinguish:
 
 The operator should treat stale telemetry as suspect — the rover may not actually be where the dashboard shows.
 
+### Runtime Responsiveness And Recovery
+
+- Control handling, telemetry freshness, and operator Stop actions must remain responsive while replay persistence, analytics, RAG ingestion, or AI provider work is slow.
+- A slow or disconnected browser must not delay other browser clients or cause unbounded retention of telemetry, video, or AI-stream data. High-rate live data may be coalesced to the newest value; the operator-facing state remains explicitly fresh, stale, or absent.
+- Long-running operator jobs and streams must expose a terminal status, bounded resource use, and a defined cancellation/shutdown outcome. Background failures must be observable to operators and service logs.
+- Browser refresh, navigation, or WebSocket loss must not by itself stop a server-owned mission execution. An intentional GCS-server shutdown while one is active must warn, identify the active Mission, and require explicit operator confirmation. The recovery contract after a GCS-server process failure is defined by ADR 0023; neither policy is inferred from browser connection state.
+
 ### Single-Operator Assumption
 
 The current GCS is single-instance. Multi-browser use within one GCS works (focus determines who drives), but multi-GCS deployment is not fully defined yet.

@@ -21,7 +21,9 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+Clock = Callable[[], float]
 
 from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
 from gcs_server.ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
@@ -50,9 +52,9 @@ def build_mission_executor(
     root = parse_mission_content(mission_content)
 
     if mode is None:
-        mode = resolve_execution_mode(getattr(runtime, "config", None))
+        mode = resolve_execution_mode(runtime.config)
 
-    service = getattr(runtime, "mission_execution_service", None)
+    service = runtime.mission_execution_service
     if service is None:
         raise RuntimeError("runtime has no mission_execution_service; cannot drive the controller")
 
@@ -123,11 +125,15 @@ class ActiveExecution:
     confirm_timeout_s: int = 0
     confirm_deadline: float = 0.0
 
+    # Injected so confirm-window expiry is deterministic under test; defaults to
+    # the real wall clock for production use.
+    clock: Clock = field(default=time.time, repr=False)
+
     def confirm_remaining_s(self) -> float:
         """Seconds left in the confirm window (0 once past the deadline)."""
         if self.status != "awaiting_confirm" or self.confirm_deadline <= 0:
             return 0.0
-        return max(0.0, self.confirm_deadline - time.time())
+        return max(0.0, self.confirm_deadline - self.clock())
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -150,7 +156,8 @@ class MissionExecutionSessions:
     is refused so two trees never drive the rover concurrently.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Clock = time.time) -> None:
+        self._clock = clock
         self._lock = threading.Lock()
         self._by_session: dict[str, ActiveExecution] = {}
         self._adapter_overrides: dict[str, ControllerMissionAdapter] = {}
@@ -212,6 +219,7 @@ class MissionExecutionSessions:
                 mission_id=str(mission_id or ""),
                 mode=str(mode or ""),
                 status="armed" if getattr(executor, "_armed", False) else "prepared",
+                clock=self._clock,
             )
             self._by_session[key] = active
             return active
@@ -267,7 +275,7 @@ class MissionExecutionSessions:
             return {"ok": False, "error": "no prepared execution for this session"}
         active.executor.arm()
         active.confirm_timeout_s = int(timeout_s)
-        active.confirm_deadline = time.time() + float(timeout_s)
+        active.confirm_deadline = self._clock() + float(timeout_s)
         active.status = "awaiting_confirm"
         active.detail = ""
         return {"ok": True, **active.snapshot()}
@@ -303,26 +311,6 @@ class MissionExecutionSessions:
         if active is None:
             return {"ok": False, "error": "no execution for this session"}
         active.executor.request_abort()
-        return {"ok": True, **active.snapshot()}
-
-    def request_pause(self, session_id: str) -> dict[str, Any]:
-        active = self.get(session_id)
-        if active is None:
-            return {"ok": False, "error": "no execution for this session"}
-        if not (active.thread and active.thread.is_alive()):
-            return {"ok": False, "error": "execution is not running", **active.snapshot()}
-        active.executor.request_pause()
-        active.status = "paused"
-        return {"ok": True, **active.snapshot()}
-
-    def resume(self, session_id: str) -> dict[str, Any]:
-        active = self.get(session_id)
-        if active is None:
-            return {"ok": False, "error": "no execution for this session"}
-        if active.status != "paused":
-            return {"ok": False, "error": f"execution is not paused (status: {active.status})", **active.snapshot()}
-        active.executor.resume()
-        active.status = "running"
         return {"ok": True, **active.snapshot()}
 
     # --- Mission-keyed variants (sidebar routes never expose session_id) ------
