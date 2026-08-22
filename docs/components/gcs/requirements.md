@@ -51,7 +51,18 @@ operator's point of view:
   telemetry, replay sessions, replay playback, status bar. Each can be added from
   an **Add Widget** palette.
 - **Free-form layout:** move any widget anywhere; snap/dock to any edge; split;
-  group as tabs; or **float** a widget over the workspace.
+  stack as tabs; or **float** a widget over the workspace.
+- **Widget Groups:** the operator can create a named rectangular container that
+  holds **several widgets visible at once** in their own arrangement, and move,
+  dock, or resize that container **as a single unit** with its internal
+  arrangement preserved. A Widget Group is distinct from a **tab stack**, where
+  only one widget is visible at a time. A Group carries its own header (title,
+  rename, close, and an "add widget" control) and is visually distinguishable
+  from ordinary panel chrome so it reads as a container.
+- **Compact chrome:** panel tab bars must not dominate the workspace at the
+  ~12-widget scale, while still identifying each widget and remaining draggable
+  for docking. Non-goal: vertical/side-mounted tab bars — see
+  [ADR 0033](../../cross-cutting/decisions/0033-workspace-chrome-density-and-widget-groups.md).
 - **Popout windows:** a widget can be ejected into a **separate OS window**,
   draggable anywhere including another monitor (e.g. a minimal video or drive
   window beside the operator). This is desktop-only.

@@ -114,6 +114,99 @@ replay UI is the first realization of this pattern — per-map replay view state
 an active-target singleton transport are specified in
 [ADR 0032](../../../cross-cutting/decisions/0032-per-map-replay-state-and-active-target-transport.md).
 
+## Chrome density and stacking policy
+
+Cost is charged **per dockview group, not per widget**: one tab bar serves a whole
+stack. Twelve widgets spread across twelve solo groups pays the strip twelve times
+for tabs that are never used as tabs. Three settings follow from that:
+
+- Tab bar height is pinned via `--dv-tabs-and-actions-container-height: 22px` in
+  the `.quiet-dockview` block (`frontend/src/index.css`), down from dockview's
+  stock 35px.
+- `singleTabMode="fullwidth"` on `DockviewReact`, so a solo panel's tab spans its
+  group and reads as a title bar rather than a stub tab beside dead space.
+- **Stacking policy for curated layouts:** widgets the operator *monitors
+  continuously* get solo groups; widgets *consulted one at a time* share a stack.
+  Mission = Map solo, AI Chat solo, and Telemetry + Replay Sessions + Notes
+  stacked. Driving = Video solo, Drive Controls + Telemetry stacked. Natural
+  stacks for palette-added widgets: Settings + LLM Provider + Config I/O, and the
+  replay triad (Sessions + Records + Controls).
+
+Rejected chrome alternatives and their reasoning are in
+[ADR 0033](../../../cross-cutting/decisions/0033-workspace-chrome-density-and-widget-groups.md).
+
+Changing the curated seeds does not migrate Workspaces the operator already
+saved; they adopt the new grouping only via the existing "reset a curated
+default" path.
+
+## Widget Groups (nested docks)
+
+A **Widget Group** is a panel whose content is *another* `DockviewReact` instance.
+It is not dockview's `DockviewGroupPanel` — that is a **tab stack** (one panel
+visible at a time), and in operator-facing copy those are called "tabs", never
+"groups". In code the container is `NestedDockPanel` so the names cannot collide.
+
+Nesting is what buys the behavior: the outer dock treats the Group as one opaque
+panel, so docking, snapping, splitting, and resizing all work unchanged, and the
+inner arrangement survives a move because the subtree never unmounts.
+
+- **Depth 1.** A Widget Group cannot contain a Widget Group.
+- **Inner layout is proportional, not absolute.** On move the Group keeps its
+  relative splits and stretches to the new rectangle. Preserving absolute pixel
+  sizes breaks as soon as a wide Group is docked into a narrow column.
+- **Minimum size** via `setConstraints` (~360×240) so a populated Group cannot be
+  squeezed into an unusable sliver.
+- **Tab stacks are still allowed inside a Group**, with the same 22px chrome.
+- **An emptied Group persists.** Dragging out the last widget leaves a
+  drop-here placeholder; the Group closes only when the operator closes it.
+- **Singleton rules stay workspace-global.** `multiInstance: false` widgets
+  (Drive Controls, Settings, the replay triad) are not duplicable by placing one
+  inside a Group.
+- **Edge groups are still excluded** — the structural-group restriction above
+  applies to Widget Groups too.
+
+### Catalog seam
+
+`dockviewComponents` is derived from `WIDGET_CATALOG` (`widgets/catalog.tsx`), and
+ADR 0031 §4 forbids hardcoded shell panels, so the Group must register as a
+catalog entry to exist at all — but it is a container, not a widget. `WidgetCatalogEntry`
+gains `isContainer: true`; **Add Widget** filters those out and a separate **Add
+Group** action instantiates them.
+
+### Serialization must recurse
+
+Each Group's inner `toJSON` lives in that panel's `params`, which means the
+top-level walk is no longer sufficient. `prepareLayoutForRestore`
+(`shell/layoutRestore.ts`) prunes panels whose `contentComponent` is missing from
+the catalog by walking `grid.root` only; without recursion into nested layouts, a
+widget removed from the catalog survives inside a Group and breaks restore. The
+same recursion applies to `WorkspaceStore` save.
+
+### Compact mode flattens Groups
+
+`compactWorkspacePanels` (`shell/compactWorkspace.ts`) already ignores the grid and
+flattens `layout.panels`, so the stacking policy above is a no-op on small screens.
+A Group must not surface there as one opaque entry hosting a nested dock inside a
+mobile stack: compact mode resolves a Group into its member widgets, so Groups are
+invisible on touch/small screens. Consistent with §Mobile constraint.
+
+### Cross-boundary drag is deferred
+
+Each dockview instance owns its DnD scope, so dragging a widget from the outer dock
+*into* a Group, or between two Groups, needs explicit `showDndOverlay`/`onDidDrop`
+wiring and a shared drag payload. Groups ship first populated by their header's
+"add widget" control; whole Groups drag normally in the outer dock from the start.
+The deferral is safe because the DnD work is purely additive — it touches drop
+handlers only, not the container, header, catalog flag, constraints, or
+serialization format.
+
+**Prerequisite invariant for that later slice:** every widget's view state must
+live in its dockview panel `params` and be fully serializable (as §Workspaces
+already requires). Moving a widget across a dock boundary is then remove-and-re-add
+with `params` carried over. A widget holding state in a closure or module-level
+singleton instead will silently lose it on a cross-boundary move — Video, Drive
+Controls, and AI Chat are the ones to verify, since they hold live connections.
+
 ## Workspaces (layout profiles)
 
 A **Workspace** is a named saved layout (dockview `toJSON`/`fromJSON`). Persistence
