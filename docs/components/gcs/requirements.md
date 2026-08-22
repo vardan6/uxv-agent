@@ -58,7 +58,9 @@ operator's point of view:
   arrangement preserved. A Widget Group is distinct from a **tab stack**, where
   only one widget is visible at a time. A Group carries its own header (title,
   rename, close, and an "add widget" control) and is visually distinguishable
-  from ordinary panel chrome so it reads as a container.
+  from ordinary panel chrome so it reads as a container. A Group cannot be
+  placed inside another Group, and Groups do not appear on compact/small
+  screens — the operator sees their member widgets directly.
 - **Compact chrome:** panel tab bars must not dominate the workspace at the
   ~12-widget scale, while still identifying each widget and remaining draggable
   for docking. Non-goal: vertical/side-mounted tab bars — see

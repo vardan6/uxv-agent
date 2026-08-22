@@ -128,9 +128,11 @@ for tabs that are never used as tabs. Three settings follow from that:
 - **Stacking policy for curated layouts:** widgets the operator *monitors
   continuously* get solo groups; widgets *consulted one at a time* share a stack.
   Mission = Map solo, AI Chat solo, and Telemetry + Replay Sessions + Notes
-  stacked. Driving = Video solo, Drive Controls + Telemetry stacked. Natural
-  stacks for palette-added widgets: Settings + LLM Provider + Config I/O, and the
-  replay triad (Sessions + Records + Controls).
+  stacked. Driving = Video solo, Drive Controls + Telemetry stacked. Intended
+  stacks for palette-added widgets — Settings + LLM Provider + Config I/O, and
+  the replay triad (Sessions + Records + Controls) — are **not implemented**:
+  `addWidget` calls `addPanel` with no `position`, so palette widgets land in the
+  active group. Roadmap UI5 either implements the pairing or drops the claim.
 
 Rejected chrome alternatives and their reasoning are in
 [ADR 0033](../../../cross-cutting/decisions/0033-workspace-chrome-density-and-widget-groups.md).
@@ -161,9 +163,12 @@ inner arrangement survives a move because the subtree never unmounts.
   drop-here placeholder; the Group closes only when the operator closes it.
 - **Singleton rules stay workspace-global.** `multiInstance: false` widgets
   (Drive Controls, Settings, the replay triad) are not duplicable by placing one
-  inside a Group.
-- **Edge groups are still excluded** — the structural-group restriction above
-  applies to Widget Groups too.
+  inside a Group. This is not free: both palettes must count **recursively**
+  across the outer layout and every Group's inner layout, since neither dock's
+  `toJSON` sees the other's panels.
+- **Edge groups are still excluded** — the normal-vs-edge-group restriction in
+  the callout above applies to Widget Groups too. ("Group" alone means a Widget
+  Group; dockview's own groups are "tab stacks" or "edge groups".)
 
 ### Catalog seam
 
@@ -171,24 +176,49 @@ inner arrangement survives a move because the subtree never unmounts.
 ADR 0031 §4 forbids hardcoded shell panels, so the Group must register as a
 catalog entry to exist at all — but it is a container, not a widget. `WidgetCatalogEntry`
 gains `isContainer: true`; **Add Widget** filters those out and a separate **Add
-Group** action instantiates them.
+Group** action instantiates them. The container's component key is
+**`workspace.group`**. Two derived maps in `widgets/catalog.tsx` carry the rule:
+`WIDGET_ENTRIES` (non-container entries — what both palettes offer) and
+`nestedDockviewComponents` (what a Group's inner dock can render). Depth 1 is
+enforced by the inner dock simply not having a `workspace.group` component.
+Anything else that must distinguish a container should test `isContainer` rather
+than string-match the key.
 
-### Serialization must recurse
+### Serialization recurses in both directions
 
-Each Group's inner `toJSON` lives in that panel's `params`, which means the
-top-level walk is no longer sufficient. `prepareLayoutForRestore`
-(`shell/layoutRestore.ts`) prunes panels whose `contentComponent` is missing from
-the catalog by walking `grid.root` only; without recursion into nested layouts, a
-widget removed from the catalog survives inside a Group and breaks restore. The
-same recursion applies to `WorkspaceStore` save.
+A Group's inner `toJSON` lives in that panel's `params.layout`, invisible to the
+outer `grid.root` walk. Both directions need handling:
+
+- **Write.** The inner dock's `onDidLayoutChange` calls
+  `outerPanelApi.updateParameters({ layout })`, which mutates the outer layout and
+  so triggers the outer `onDidLayoutChange` autosave (`Workspace.tsx`). Without
+  that hop, an inner rearrangement fires no outer event and is lost on reload —
+  the outer dock has no idea anything moved.
+- **Read.** `prepareLayoutForRestore` (`shell/layoutRestore.ts`) prunes panels
+  whose `contentComponent` is missing from the catalog; it recurses into each
+  `params.layout` and merges the inner `droppedPanels` into the same restore
+  banner. Inner layouts must be pruned against `nestedDockviewComponents`, not the
+  outer map, or a nested `workspace.group` survives the prune and then fails to
+  render.
+- **An empty inner layout is preserved, not deleted** — that is how "an emptied
+  Group persists" survives a round-trip. Restore pruning must not treat an empty
+  Group as garbage.
+
+Pruning is not free of side effects: it collapses single-child branches and nulls
+an empty root, so it must not run on layouts that need no pruning at all — the
+no-drops case is expected to reach `fromJSON` verbatim, which is what surfaces a
+genuinely corrupt layout as "Could not restore".
 
 ### Compact mode flattens Groups
 
-`compactWorkspacePanels` (`shell/compactWorkspace.ts`) already ignores the grid and
-flattens `layout.panels`, so the stacking policy above is a no-op on small screens.
-A Group must not surface there as one opaque entry hosting a nested dock inside a
-mobile stack: compact mode resolves a Group into its member widgets, so Groups are
-invisible on touch/small screens. Consistent with §Mobile constraint.
+`compactWorkspacePanels` (`shell/compactWorkspace.ts`) ignores the grid and
+flattens `layout.panels`, so the stacking policy above is a no-op on small
+screens — but a Group is a panel too, and would otherwise surface as one opaque
+entry hosting a nested dock inside a mobile stack. It therefore recurses: a Group
+entry is replaced by its member widgets and never rendered itself, so Groups are
+invisible on touch/small screens. Consistent with §Mobile constraint. Anything
+derived from the compact list (e.g. `compactMapPanelIds`) sees Group members as
+ordinary panels.
 
 ### Cross-boundary drag is deferred
 
@@ -206,6 +236,22 @@ already requires). Moving a widget across a dock boundary is then remove-and-re-
 with `params` carried over. A widget holding state in a closure or module-level
 singleton instead will silently lose it on a cross-boundary move — Video, Drive
 Controls, and AI Chat are the ones to verify, since they hold live connections.
+
+**Depth 1 needs a second guard there.** Today it holds only because no palette
+offers a container; a drop path is a second way in, so the drop handler must
+reject a `isContainer` payload over a Group's overlay.
+
+### Undecided (roadmap UI2c / UI4)
+
+Two behaviors are deliberately unspecified rather than silently implied by the
+current code:
+
+- **Closing a populated Group.** The header's close calls `outerPanelApi.close()`,
+  which destroys member widgets and their `params` with no confirm and no
+  eviction. Whether that is the intended contract is a HITL decision.
+- **Popout and Groups.** Popping out a Group would put a nested dock in a second
+  document, and a widget *inside* a Group has no popout path, since the popout
+  action reads the outer dock's active panel. Both directions are open.
 
 ## Workspaces (layout profiles)
 

@@ -13,11 +13,18 @@ shell, hot-path rule), [ADR 0031](./0031-headless-full-architecture-and-frontend
 The console now carries ~12 catalog widgets. Two operator complaints, one
 structural cause.
 
-1. **Tab bars eat the workspace.** dockview's stock tab bar is 35px and the
-   curated layouts add each panel with `direction: "right"`, so nearly every panel
-   sits in its own group and pays a full strip for a single tab that occupies ~15%
-   of its width. The layouts use tabs without using stacking — all cost, no
-   benefit.
+1. **Tab bars eat the workspace.** dockview's stock tab bar is 35px, and panels
+   pay it per group whether or not the group holds more than one tab — a solo
+   panel spends a full strip on a stub tab occupying ~15% of its width.
+
+   > **Correction (2026-08-22, plan review).** This section originally read "the
+   > curated layouts add each panel with `direction: "right"`, so nearly every
+   > panel sits in its own group". That described the test helper
+   > (`workspaceDefaultLayouts.test.tsx`), not the shipped defaults: the curated
+   > layouts are serialized grids in `workspaceStore.ts` and already used some
+   > stacking (mission and driving were two leaves each). The real cost driver is
+   > solo curated leaves plus palette-added widgets against a 35px strip. The
+   > decision below is unaffected.
 
 2. **There is no way to move several widgets together.** The operator wants a
    rectangle holding several *simultaneously visible* widgets that docks and moves
@@ -95,10 +102,16 @@ a time. They do not satisfy the requirement.
 
 - `WidgetCatalogEntry` gains `isContainer`; the Add Widget palette must filter it,
   and a distinct Add Group action instantiates it.
-- Layout serialization becomes recursive. `prepareLayoutForRestore` and
-  `WorkspaceStore` save must descend into each Group's inner layout in panel
-  `params`, or a widget dropped from the catalog survives inside a Group and
-  breaks restore.
+- Layout serialization becomes recursive **in both directions**. Restore must
+  descend into each Group's inner layout in panel `params`, or a widget dropped
+  from the catalog survives inside a Group and breaks restore. Save is the
+  subtler half: the outer dock emits no event when an inner dock changes, so the
+  Group must push its inner `toJSON` back into its own panel `params` to reach
+  the autosave at all.
+- Every workspace-global rule that used to be a single flat walk becomes a
+  recursive one — singleton counting, compact flattening, restore pruning, and
+  dropped-panel reporting. That is four traversals of one structure; they belong
+  in one shared walker (roadmap UI2s) rather than four hand-rolled copies.
 - Compact/mobile mode must flatten Groups into their member widgets; a nested dock
   inside a mobile stack is not a usable surface.
 - The invariant that all widget view state lives in serializable panel `params`
