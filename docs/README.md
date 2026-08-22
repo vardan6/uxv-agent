@@ -41,7 +41,7 @@ This directory is the source of truth for project docs. The live surface is inte
 
 Older plans, superseded designs, review output, and handoff notes live under [archive/](./archive/). Archive content is for traceability, not for the current source of truth.
 
-Retired status-hub entry points remain at [current-state.md](./current-state.md) and [roadmap.md](./roadmap.md) as compatibility stubs pointing to canonical docs and archived snapshots.
+The former `docs/current-state.md` and `docs/roadmap.md` status hubs were retired 2026-05-26 and removed outright 2026-08-22; their content lives in [archive/cross-cutting/2026-05-26-current-state-retired.md](./archive/cross-cutting/2026-05-26-current-state-retired.md) and [archive/cross-cutting/2026-05-26-product-roadmap-retired.md](./archive/cross-cutting/2026-05-26-product-roadmap-retired.md). Use root [`roadmap.md`](../roadmap.md) and `docs/components/*/design.md` for current status.
 
 ## Reading Order
 

@@ -29,6 +29,19 @@ sockets themselves.
   only adds/removes subscribers to an existing key.
 - **Uniform access:** widgets see both tiers through the same hook surface; they do
   not know telemetry is WS and missions are REST.
+- **Shared request helpers:** `data/apiClient.ts` owns `apiFetch`, `fetchJson`, and
+  `jsonHeaders`. `fetchJson` reads an error body exactly once — attempting `json()`
+  then `text()` on the same response throws `Body is unusable` and masks the real
+  error.
+
+### Whole-map endpoints must merge on write
+
+`PUT /api/model-routing` replaces the entire routing map server-side; there is no
+partial-update endpoint and no concurrency token. Any panel editing one purpose
+must therefore merge its patch onto routing re-read at save time
+(`data/llmSettings.ts` — `saveModelRouting`), never PUT a mount-time snapshot, or
+it silently discards purposes another panel changed. Same rule applies to any
+future endpoint that replaces a whole document.
 
 ### Per-client WS subscription protocol (ADR 0031 §5)
 
