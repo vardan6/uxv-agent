@@ -76,7 +76,10 @@ Replay state is split into three tiers, and per-view attributes are keyed by map
   is set by dockview active-group change and by the sidebar loading a session into
   the active map (the active-target pattern anticipated in `operator-console.md`).
   Tracking the active map is new shell infrastructure in `Workspace.tsx`; replay is
-  its first consumer.
+  its first consumer. In compact layout (narrow viewports, no dockview focus
+  concept — a scrollable card stack instead of dockable panes), `activeMapId` is
+  set by `useCompactActiveMap`'s `IntersectionObserver` instead: whichever map
+  card is most visible in the scrolled viewport wins (FE5, 2026-08-22).
 
 - **The cursor stays off the React render hot path.** `MapWidgetPanel` subscribes to
   its own `replayStore` slice and pushes paths/frames into the legacy `MapWidget`

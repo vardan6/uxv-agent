@@ -305,3 +305,21 @@ Check:
 - `video.delivery_mode == websocket_mjpeg`
 - broker connectivity
 - whether simulator publish policy is currently allowing outbound data
+
+### Frontend Vitest Is Slow, Not Hanging (WSL)
+
+A full `frontend/` `npm test` costs 60–68s under WSL (environment setup
+dominates); a single file is ~30s. Focused runs do complete — batch
+verification into one run at the end of a change instead of after each edit.
+
+### `rtk` And Frontend Tooling
+
+- `rtk` cannot parse Vitest output (`[RTK:PASSTHROUGH] vitest parser: All
+  parsing tiers failed`) and swallows it entirely for single-file runs — use
+  `rtk proxy npx vitest run <file>` to see results.
+- The `rtk` git proxy has intermittently returned the **wrong commit's** data
+  and flattens merge commits. Use `git cat-file -p` raw object reads for any
+  ancestry-critical work.
+- Vite dev-server `EPIPE`/`ECONNRESET` websocket proxy logs are benign.
+- React `act(...)` warnings in a Vitest run are harness noise if the targeted
+  suite and `npm run build` are both green — not a real signal on their own.
