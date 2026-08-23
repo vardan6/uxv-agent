@@ -137,9 +137,11 @@ defaulting to dockview's active group made every added widget a tab — so a
 Widget Group could only ever show one widget at a time, defeating its purpose.
 `palettePlacement` (`frontend/src/shell/panelPlacement.ts`) is the single
 convention both docks use: split off the dock's active panel, `right` when the
-dock is wider than tall and `below` otherwise. Splitting the short axis is what
-drives panes under the Group's 360×240 minimum, which is why direction follows
-the aspect ratio rather than being fixed.
+dock is wider than tall and `below` otherwise. A Widget Group's **Add Widget**
+menu can override that automatic choice with `left`, `right`, `top`, or
+`bottom`, so an operator can compose multiple visible panes without first
+dragging a tab. Splitting the short axis is what drives panes under the Group's
+360×240 minimum, which is why it remains the automatic default.
 
 Stacking stays reachable as a deliberate operator gesture — drag a panel onto a
 tab strip. The earlier plan to hardcode curated palette pairings (Settings + LLM
