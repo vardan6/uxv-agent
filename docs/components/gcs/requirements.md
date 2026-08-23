@@ -66,6 +66,15 @@ operator's point of view:
   screens — the operator sees their member widgets directly. Closing a
   populated Group destroys its member widgets after a confirmation prompt —
   there is no partial/evict option.
+- **Moving widgets between containers:** the operator can move a widget from the
+  main workspace into a Widget Group, out of a Group, and between two Groups —
+  including into a Group that is currently **empty**, so dragging out the last
+  widget is always recoverable. Where the widget will land must be visible
+  *before* the drop: the receiving container highlights the exact target region.
+  A move never destroys the widget — if the destination refuses it, it stays
+  where it was. Every such move is also reachable **without dragging**, from a
+  menu on the widget itself; that menu is the only path in or out of a
+  **popout window**, since a drag cannot cross OS windows.
 - **Group templates:** the operator can save a Group's widget composition and
   arrangement as a named, reusable template (not its live content — a saved
   template starts each widget fresh) and apply a saved template later to
