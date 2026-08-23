@@ -128,11 +128,24 @@ for tabs that are never used as tabs. Three settings follow from that:
 - **Stacking policy for curated layouts:** widgets the operator *monitors
   continuously* get solo groups; widgets *consulted one at a time* share a stack.
   Mission = Map solo, AI Chat solo, and Telemetry + Replay Sessions + Notes
-  stacked. Driving = Video solo, Drive Controls + Telemetry stacked. Intended
-  stacks for palette-added widgets — Settings + LLM Provider + Config I/O, and
-  the replay triad (Sessions + Records + Controls) — are **not implemented**:
-  `addWidget` calls `addPanel` with no `position`, so palette widgets land in the
-  active group. Roadmap UI5 either implements the pairing or drops the claim.
+  stacked. Driving = Video solo, Drive Controls + Telemetry stacked.
+
+### Palette-added widgets split, they do not stack
+
+Curated seeds are hand-authored, but a palette add has no authored intent, and
+defaulting to dockview's active group made every added widget a tab — so a
+Widget Group could only ever show one widget at a time, defeating its purpose.
+`palettePlacement` (`frontend/src/shell/panelPlacement.ts`) is the single
+convention both docks use: split off the dock's active panel, `right` when the
+dock is wider than tall and `below` otherwise. Splitting the short axis is what
+drives panes under the Group's 360×240 minimum, which is why direction follows
+the aspect ratio rather than being fixed.
+
+Stacking stays reachable as a deliberate operator gesture — drag a panel onto a
+tab strip. The earlier plan to hardcode curated palette pairings (Settings + LLM
+Provider + Config I/O; the replay triad) is **dropped**: it guessed at intent the
+operator can express in one drag, and it would have needed a second placement
+rule alongside this one.
 
 Rejected chrome alternatives and their reasoning are in
 [ADR 0033](../../../cross-cutting/decisions/0033-workspace-chrome-density-and-widget-groups.md).
@@ -158,6 +171,9 @@ inner arrangement survives a move because the subtree never unmounts.
   sizes breaks as soon as a wide Group is docked into a narrow column.
 - **Minimum size** via `setConstraints` (~360×240) so a populated Group cannot be
   squeezed into an unusable sliver.
+- **A Group shows several widgets at once.** The inner dock is a full
+  `DockviewReact`, so split panes, edge snapping and resizing work inside a Group
+  exactly as they do in the outer dock; see §Palette-added widgets split.
 - **Tab stacks are still allowed inside a Group**, with the same 22px chrome.
 - **An emptied Group persists.** Dragging out the last widget leaves a
   drop-here placeholder; the Group closes only when the operator closes it.
@@ -220,38 +236,102 @@ invisible on touch/small screens. Consistent with §Mobile constraint. Anything
 derived from the compact list (e.g. `compactMapPanelIds`) sees Group members as
 ordinary panels.
 
-### Cross-boundary drag is deferred
+### Cross-boundary drag (decided, roadmap UI3)
 
 Each dockview instance owns its DnD scope, so dragging a widget from the outer dock
 *into* a Group, or between two Groups, needs explicit `showDndOverlay`/`onDidDrop`
 wiring and a shared drag payload. Groups ship first populated by their header's
 "add widget" control; whole Groups drag normally in the outer dock from the start.
-The deferral is safe because the DnD work is purely additive — it touches drop
+The deferral was safe because the DnD work is purely additive — it touches drop
 handlers only, not the container, header, catalog flag, constraints, or
 serialization format.
 
-**Prerequisite invariant for that later slice:** every widget's view state must
+**Prerequisite invariant verified 2026-08-23.** Every widget's view state must
 live in its dockview panel `params` and be fully serializable (as §Workspaces
-already requires). Moving a widget across a dock boundary is then remove-and-re-add
-with `params` carried over. A widget holding state in a closure or module-level
-singleton instead will silently lose it on a cross-boundary move — Video, Drive
-Controls, and AI Chat are the ones to verify, since they hold live connections.
+already requires), since a cross-boundary move is remove-and-re-add with `params`
+carried over:
 
-**Depth 1 needs a second guard there.** Today it holds only because no palette
-offers a container; a drop path is a second way in, so the drop handler must
-reject a `isContainer` payload over a Group's overlay.
+- **Video** — clean. State is `params` (`osdPresetId`) plus a re-subscribable
+  websocket topic; nothing held in a closure survives that matters.
+- **Drive Controls** — clean, and takes no `params` at all: its live state is a
+  module-level Zustand store, unaffected by the widget's own mount/unmount.
+- **AI Chat** — clean except one accepted gap: an in-flight streaming response's
+  abort handle (`abortRef`) is a local ref, lost on unmount. Dragging an AI Chat
+  widget across a boundary mid-stream silently drops the client's ability to
+  cancel that stream and glitches the "typing" indicator until the next
+  `sessionQuery` refetch reconciles it — the stream itself keeps running and its
+  result still arrives server-side. Accepted as a rare, non-data-destructive edge
+  case rather than gating a generic DnD system on mid-stream detection.
 
-### Undecided (roadmap UI2c / UI4)
+**Depth 1 guard.** Today it holds only because no palette offers a container; the
+drop path is a second way in, so `onDidDrop` must reject an `isContainer` payload
+over a Group's overlay. Rejection happens **at drop time** (a "not-allowed" cursor
+via the guard), not by blocking pickup — the drag payload doesn't know its
+destination until hover, and blocking pickup would also block the legitimate case
+of dragging a Group around the outer dock.
 
-Two behaviors are deliberately unspecified rather than silently implied by the
-current code:
+### Closing a populated Group (decided, roadmap UI2c)
 
-- **Closing a populated Group.** The header's close calls `outerPanelApi.close()`,
-  which destroys member widgets and their `params` with no confirm and no
-  eviction. Whether that is the intended contract is a HITL decision.
-- **Popout and Groups.** Popping out a Group would put a nested dock in a second
-  document, and a widget *inside* a Group has no popout path, since the popout
-  action reads the outer dock's active panel. Both directions are open.
+The header's `×` stays destructive: it calls `outerPanelApi.close()`, which
+destroys member widgets and their `params`, gated by a confirm dialog ("Close
+Group and N widgets?"). No eviction path — members are not moved back to the
+outer dock. Rejected: evicting members back into the outer dock's grid slot,
+because the app is about to grow a Group-templates feature (below) that makes
+losing a Group's *arrangement* cheap to recover from (save it as a template
+first), so eviction's main benefit — not losing widget composition — is
+redundant with a feature already being built.
+
+### Group templates (roadmap UI6/UI7)
+
+A **Group template** is a named, reusable snapshot of a Group's composition —
+member widget types and their inner layout/sizes — **not** their live content
+(a saved Notes template starts empty each time it's applied; content is
+instance state, not template state). Stored client-side only, in a new store
+separate from `WorkspaceStore` (below): the two share the same
+`SerializedDockview`-subtree serialize/apply code but are different lists,
+since `WorkspaceStore` already owns the whole-workspace list's lifecycle
+(active pointer, default-workspace reset) and grafting a second entry *kind*
+into it would force every consumer to filter by tag.
+
+- **Save.** Triggered from the Group header menu ("Save as template"),
+  alongside the existing rename/add-widget/close actions. Requires a name;
+  saving under a name that already exists shows a confirm dialog ("Template
+  'X' already exists — overwrite?") and overwrites the existing entry in place
+  on confirm, or cancels the save on decline. No silent overwrite, no
+  auto-suffixed duplicates.
+- **Apply.** Always creates a brand-new Group, appended to the current tab
+  with the same default placement `Add Group` already uses today — never
+  overwrites an existing Group. Surfaced alongside the existing Add
+  Group/Add Widget palette.
+- **Delete.** Requires a confirm dialog ("Delete template 'X'? This can't be
+  undone").
+- **Management surface (rename, browse).** Deferred past the first slice —
+  save+apply from existing menus covers the primary loop; a dedicated
+  templates list/editor is follow-up work once that loop is validated.
+- **Whole-workspace templates are not a separate mechanism.** The
+  "generalize to whole-tab, not just Groups" instinct is already satisfied by
+  `WorkspaceStore` itself — a curated/duplicated Workspace *is* a whole-layout
+  template (see §Workspaces, "Curated default Workspaces"). No second store is
+  needed at that level; only the Group-scoped case is new.
+
+### Popout and Groups (decided, roadmap UI4)
+
+- **Popping out a whole Group is intentional, supported behavior.** Verified
+  2026-08-23: `addPopoutGroup` reparents the group's live DOM element into the
+  new window (`popoutContainer.appendChild(group.element)`) rather than
+  mounting a fresh React tree, so a Group's nested `DockviewReact` instance
+  keeps running unchanged after popout — no special-casing needed.
+- **A widget popping out *from inside* a Group has no dedicated action, and
+  none is being built.** The two-step path — drag the widget out via UI3,
+  then use the existing popout action on the outer dock — already reaches
+  the same result, so a bespoke "popout this nested panel" code path would
+  duplicate UI3's remove-and-re-add logic for no new capability. This makes
+  UI4 depend on UI3 shipping first for that direction, even though whole-Group
+  popout itself has no such dependency.
+- **Non-goal: cross-window drag.** Once a Group is popped out, dragging a
+  widget between that window and the main window is out of scope — the same
+  category of exotic that justified deferring in-window cross-boundary drag
+  (UI3) until after UI2 shipped.
 
 ## Workspaces (layout profiles)
 

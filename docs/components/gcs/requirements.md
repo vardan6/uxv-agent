@@ -51,7 +51,10 @@ operator's point of view:
   telemetry, replay sessions, replay playback, status bar. Each can be added from
   an **Add Widget** palette.
 - **Free-form layout:** move any widget anywhere; snap/dock to any edge; split;
-  stack as tabs; or **float** a widget over the workspace.
+  stack as tabs; or **float** a widget over the workspace. A widget added from
+  the palette **splits** the current pane rather than joining a tab stack, so
+  newly added widgets are visible immediately; stacking is an explicit gesture
+  (drag onto a tab strip). This applies identically inside a Widget Group.
 - **Widget Groups:** the operator can create a named rectangular container that
   holds **several widgets visible at once** in their own arrangement, and move,
   dock, or resize that container **as a single unit** with its internal
@@ -60,7 +63,14 @@ operator's point of view:
   rename, close, and an "add widget" control) and is visually distinguishable
   from ordinary panel chrome so it reads as a container. A Group cannot be
   placed inside another Group, and Groups do not appear on compact/small
-  screens — the operator sees their member widgets directly.
+  screens — the operator sees their member widgets directly. Closing a
+  populated Group destroys its member widgets after a confirmation prompt —
+  there is no partial/evict option.
+- **Group templates:** the operator can save a Group's widget composition and
+  arrangement as a named, reusable template (not its live content — a saved
+  template starts each widget fresh) and apply a saved template later to
+  create a new Group elsewhere in the workspace. Saving under an existing
+  name prompts to overwrite; deleting a template prompts for confirmation.
 - **Compact chrome:** panel tab bars must not dominate the workspace at the
   ~12-widget scale, while still identifying each widget and remaining draggable
   for docking. Non-goal: vertical/side-mounted tab bars — see
