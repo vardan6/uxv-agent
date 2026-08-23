@@ -238,15 +238,53 @@ invisible on touch/small screens. Consistent with §Mobile constraint. Anything
 derived from the compact list (e.g. `compactMapPanelIds`) sees Group members as
 ordinary panels.
 
-### Cross-boundary drag (decided, roadmap UI3)
+### Cross-boundary drag (roadmap UI3, UI8, UI9)
 
 Each dockview instance owns its DnD scope, so dragging a widget from the outer dock
 *into* a Group, or between two Groups, needs explicit `showDndOverlay`/`onDidDrop`
-wiring and a shared drag payload. Groups ship first populated by their header's
-"add widget" control; whole Groups drag normally in the outer dock from the start.
-The deferral was safe because the DnD work is purely additive — it touches drop
-handlers only, not the container, header, catalog flag, constraints, or
-serialization format.
+wiring and a shared drag payload (`widgets/crossBoundaryDnd.ts`). Groups ship first
+populated by their header's "add widget" control; whole Groups drag normally in the
+outer dock from the start. The deferral was safe because the DnD work is purely
+additive — it touches drop handlers only, not the container, header, catalog flag,
+constraints, or serialization format.
+
+**The bridge alone is not enough (UI8).** Dockview's *root* drop target refuses
+any drag whose `viewId` belongs to another dock and never fires the unhandled
+event, so container edges and — decisively — **empty** docks cannot receive a
+cross-boundary drop, while pane targets can. That is why a custom overlay layer
+exists for those two zones; full analysis and rejected alternatives in
+[ADR 0034](../../cross-cutting/decisions/0034-cross-container-drop-targets.md).
+
+- **Zone precedence.** Innermost dock under the cursor wins; within a dock the
+  outer **24px rim** wins over the pane beneath it, matching the `dndEdges`
+  `activationSize` the nested dock already uses. No modifier-key cycling.
+- **Empty Group.** The whole body is one center zone with a full-body highlight;
+  the panel is added with no `position`. The "Add widgets to this group"
+  placeholder stays `pointer-events-none` and purely decorative — the layer above
+  it owns the events.
+- **The transfer is transactional.** A cross-boundary move is remove-and-re-add
+  across two APIs, so it adds to the destination *first* and removes from the
+  source only on success. On failure the widget stays put (with a
+  `console.error`); there is no toast surface in the shell and a silent no-op
+  leaves the operator looking at an unmoved widget, which explains itself.
+- **Singleton rules are not re-checked on a move.** `multiInstance: false` is a
+  workspace-*global* cap (§Widget Groups) and a move cannot breach a global cap —
+  it removes the source. Re-running the palette check here would reject legal
+  moves and make the invariant read as per-container, which it is not.
+- **Panel ids are opaque.** A widget keeps its id when it crosses into a Group,
+  despite the Group's `groupId.component.…` minting convention. Nothing parses
+  ids (`layoutWalk.ts`, `Workspace.tsx` treat them as keys), so re-minting would
+  only churn React keys and any id-addressed state.
+
+**Drop feedback and the non-drag path (UI9).** The highlighted zone carries an
+in-zone label, `Move "<widget title>" → <container>` (the Group's title, or
+"Main workspace"), suppressed for same-dock drags so ordinary rearranging stays
+quiet. Every move is also reachable without a drag: right-click a panel tab →
+**Move to →** destination (Main workspace / each open Group / New Group) → dock
+edge, reusing `DOCK_EDGE_OPTIONS` and `palettePlacement` with "Auto" as default.
+This follows the IDE convention (pointer selects the target and its preview;
+explicit commands are the accessible, recoverable alternative) and is the *only*
+mechanism for popout windows — see §Popout and Groups.
 
 **Prerequisite invariant verified 2026-08-23.** Every widget's view state must
 live in its dockview panel `params` and be fully serializable (as §Workspaces
@@ -267,10 +305,18 @@ carried over:
 
 **Depth 1 guard.** Today it holds only because no palette offers a container; the
 drop path is a second way in, so `onDidDrop` must reject an `isContainer` payload
-over a Group's overlay. Rejection happens **at drop time** (a "not-allowed" cursor
-via the guard), not by blocking pickup — the drag payload doesn't know its
-destination until hover, and blocking pickup would also block the legitimate case
-of dragging a Group around the outer dock.
+over a Group's overlay. Rejection happens **at drop time**, not by blocking pickup
+— the drag payload doesn't know its destination until hover, and blocking pickup
+would also block the legitimate case of dragging a Group around the outer dock.
+
+> **Refined 2026-08-23 (UI8).** Drop-time rejection alone is not enough: the
+> accept-side hook fires first and accepted unconditionally, so a Group dragged
+> over a Group painted a valid-looking overlay and *then* silently did nothing.
+> The accept hook must also refuse a container payload over a nested dock, so no
+> overlay appears and the browser shows a no-drop cursor. The `onDidDrop` guard
+> stays as the belt-and-braces check. Absence of an overlay is the standard,
+> instantly-readable signal; a bespoke "not allowed" overlay with a reason is
+> disproportionate for a gesture attempted roughly once.
 
 ### Closing a populated Group (decided, roadmap UI2c)
 
@@ -330,10 +376,13 @@ into it would force every consumer to filter by tag.
   duplicate UI3's remove-and-re-add logic for no new capability. This makes
   UI4 depend on UI3 shipping first for that direction, even though whole-Group
   popout itself has no such dependency.
-- **Non-goal: cross-window drag.** Once a Group is popped out, dragging a
-  widget between that window and the main window is out of scope — the same
-  category of exotic that justified deferring in-window cross-boundary drag
-  (UI3) until after UI2 shipped.
+- **Non-goal: cross-window drag — and it is not merely deferred.** Once a Group
+  is popped out, dragging a widget between that window and the main window is
+  impossible in the browser: a native HTML5 drag ends when it leaves the window,
+  so no overlay work can rescue the gesture. The **Move to →** tab menu
+  (§Cross-boundary drag, UI9) is therefore not a fallback for popouts — it is
+  *the* mechanism, which is what raises that menu from accessibility nicety to
+  load-bearing.
 
 ## Workspaces (layout profiles)
 
