@@ -45,7 +45,7 @@ future endpoint that replaces a whole document.
 
 ### Per-client WS subscription protocol (ADR 0031 §5)
 
-Built (Slice 5). `ws_manager` (`gcs_server/ws.py`) holds per-client topic sets.
+`ws_manager` (`gcs_server/ws.py`) holds per-client topic sets.
 Client sends `{op:"subscribe"|"unsubscribe", topic}` (e.g. `video/<cameraId>`);
 server pushes high-volume streams only via `broadcast_to_subscribers`. Cheap topics
 (telemetry, broker, controller) stay broadcast. A reference-counted subscription
@@ -238,17 +238,17 @@ invisible on touch/small screens. Consistent with §Mobile constraint. Anything
 derived from the compact list (e.g. `compactMapPanelIds`) sees Group members as
 ordinary panels.
 
-### Cross-boundary drag (roadmap UI3, UI8, UI9)
+### Cross-boundary drag
 
 Each dockview instance owns its DnD scope, so dragging a widget from the outer dock
 *into* a Group, or between two Groups, needs explicit `showDndOverlay`/`onDidDrop`
-wiring and a shared drag payload (`widgets/crossBoundaryDnd.ts`). Groups ship first
-populated by their header's "add widget" control; whole Groups drag normally in the
-outer dock from the start. The deferral was safe because the DnD work is purely
-additive — it touches drop handlers only, not the container, header, catalog flag,
-constraints, or serialization format.
+wiring and a shared drag payload (`widgets/crossBoundaryDnd.ts`). Groups can be
+populated through their header's "add widget" control, and whole Groups drag
+normally within the outer dock. Cross-boundary behavior is isolated to drop
+handlers and does not alter the container, header, catalog flag, constraints, or
+serialization format.
 
-**The bridge alone is not enough (UI8).** Dockview's *root* drop target refuses
+**The bridge alone is not enough.** Dockview's *root* drop target refuses
 any drag whose `viewId` belongs to another dock and never fires the unhandled
 event, so container edges and — decisively — **empty** docks cannot receive a
 cross-boundary drop, while pane targets can. That is why a custom overlay layer
@@ -276,7 +276,7 @@ exists for those two zones; full analysis and rejected alternatives in
   ids (`layoutWalk.ts`, `Workspace.tsx` treat them as keys), so re-minting would
   only churn React keys and any id-addressed state.
 
-**Drop feedback and the non-drag path (UI9).** The highlighted zone carries an
+**Drop feedback and the non-drag path.** The highlighted zone carries an
 in-zone label, `Move "<widget title>" → <container>` (the Group's title, or
 "Main workspace"), suppressed for same-dock drags so ordinary rearranging stays
 quiet. Every move is also reachable without a drag: right-click a panel tab →
@@ -286,7 +286,21 @@ This follows the IDE convention (pointer selects the target and its preview;
 explicit commands are the accessible, recoverable alternative) and is the *only*
 mechanism for popout windows — see §Popout and Groups.
 
-**Prerequisite invariant verified 2026-08-23.** Every widget's view state must
+The menu reads its destinations from the same registry the drop layer
+hit-tests, so both paths always agree on which docks exist. Three rules narrow
+that list:
+
+- **A panel's own dock is not a destination** — a drag already rearranges within
+  one dock — **except when the panel sits in a popout**, where the entry is the
+  only way back and is served by `panel.api.moveTo` against a sibling grid group
+  rather than a remove-and-re-add.
+- **A Group's tab is offered only the outer dock**, since Groups never nest.
+  Same rule, same reason as the drop path's container refusal.
+- **New Group** creates the Group with its inner layout already seeded in
+  `params.layout` (a one-panel `SerializedDockview`), so the move never has to
+  wait for the new nested dock to mount and register itself.
+
+**Widget-state invariant.** Every widget's view state must
 live in its dockview panel `params` and be fully serializable (as §Workspaces
 already requires), since a cross-boundary move is remove-and-re-add with `params`
 carried over:
@@ -309,27 +323,38 @@ over a Group's overlay. Rejection happens **at drop time**, not by blocking pick
 — the drag payload doesn't know its destination until hover, and blocking pickup
 would also block the legitimate case of dragging a Group around the outer dock.
 
-> **Refined 2026-08-23 (UI8).** Drop-time rejection alone is not enough: the
-> accept-side hook fires first and accepted unconditionally, so a Group dragged
-> over a Group painted a valid-looking overlay and *then* silently did nothing.
-> The accept hook must also refuse a container payload over a nested dock, so no
-> overlay appears and the browser shows a no-drop cursor. The `onDidDrop` guard
-> stays as the belt-and-braces check. Absence of an overlay is the standard,
-> instantly-readable signal; a bespoke "not allowed" overlay with a reason is
-> disproportionate for a gesture attempted roughly once.
+Drop-time rejection alone is not enough: the accept-side hook fires first, so a
+Group dragged over a Group could otherwise paint a valid-looking overlay and
+then silently do nothing. The accept hook must also refuse a container payload
+over a nested dock, so no overlay appears and the browser shows a no-drop cursor.
+The `onDidDrop` guard stays as the belt-and-braces check. Absence of an overlay
+is the standard, instantly-readable signal; a bespoke "not allowed" overlay
+with a reason is disproportionate for a gesture attempted roughly once.
 
-### Closing a populated Group (decided, roadmap UI2c)
+Refusing the nested accept/drop hooks must also prevent the ancestor Dockview
+from interpreting the pointer as a normal outer-pane drop and restacking the
+source Group. The cross-boundary wrapper therefore swallows an active container
+drag whenever its coordinates lie over a descendant dock marked
+`acceptsContainers=false`, even if Dockview's native drop surface has replaced
+`event.target`.
+
+The outer native content target can exclude the nested wrapper from the event
+path over an occupied center. Cross-boundary wrappers therefore register their
+DOM node and API; the ancestor capture handler resolves the innermost dock by
+coordinates and retains the rendered group's active panel as the drop reference.
+
+### Closing a populated Group
 
 The header's `×` stays destructive: it calls `outerPanelApi.close()`, which
 destroys member widgets and their `params`, gated by a confirm dialog ("Close
 Group and N widgets?"). No eviction path — members are not moved back to the
 outer dock. Rejected: evicting members back into the outer dock's grid slot,
-because the app is about to grow a Group-templates feature (below) that makes
+because Group templates (below) make
 losing a Group's *arrangement* cheap to recover from (save it as a template
 first), so eviction's main benefit — not losing widget composition — is
-redundant with a feature already being built.
+redundant.
 
-### Group templates (roadmap UI6/UI7)
+### Group templates
 
 A **Group template** is a named, reusable snapshot of a Group's composition —
 member widget types and their inner layout/sizes — **not** their live content
@@ -353,34 +378,32 @@ into it would force every consumer to filter by tag.
   Group/Add Widget palette.
 - **Delete.** Requires a confirm dialog ("Delete template 'X'? This can't be
   undone").
-- **Management surface (rename, browse).** Deferred past the first slice —
-  save+apply from existing menus covers the primary loop; a dedicated
-  templates list/editor is follow-up work once that loop is validated.
+- **Management surface (rename, browse).** Not part of this design. Save, apply,
+  and delete are exposed through existing menus; no dedicated templates
+  list/editor is specified.
 - **Whole-workspace templates are not a separate mechanism.** The
   "generalize to whole-tab, not just Groups" instinct is already satisfied by
   `WorkspaceStore` itself — a curated/duplicated Workspace *is* a whole-layout
   template (see §Workspaces, "Curated default Workspaces"). No second store is
   needed at that level; only the Group-scoped case is new.
 
-### Popout and Groups (decided, roadmap UI4)
+### Popout and Groups
 
-- **Popping out a whole Group is intentional, supported behavior.** Verified
-  2026-08-23: `addPopoutGroup` reparents the group's live DOM element into the
+- **Popping out a whole Group is intentional, supported behavior.**
+  `addPopoutGroup` reparents the group's live DOM element into the
   new window (`popoutContainer.appendChild(group.element)`) rather than
   mounting a fresh React tree, so a Group's nested `DockviewReact` instance
   keeps running unchanged after popout — no special-casing needed.
-- **A widget popping out *from inside* a Group has no dedicated action, and
-  none is being built.** The two-step path — drag the widget out via UI3,
+- **A widget popping out *from inside* a Group has no dedicated action.** The
+  two-step path — drag the widget out,
   then use the existing popout action on the outer dock — already reaches
   the same result, so a bespoke "popout this nested panel" code path would
-  duplicate UI3's remove-and-re-add logic for no new capability. This makes
-  UI4 depend on UI3 shipping first for that direction, even though whole-Group
-  popout itself has no such dependency.
+  duplicate the cross-boundary remove-and-re-add logic for no new capability.
 - **Non-goal: cross-window drag — and it is not merely deferred.** Once a Group
   is popped out, dragging a widget between that window and the main window is
   impossible in the browser: a native HTML5 drag ends when it leaves the window,
   so no overlay work can rescue the gesture. The **Move to →** tab menu
-  (§Cross-boundary drag, UI9) is therefore not a fallback for popouts — it is
+  (§Cross-boundary drag) is therefore not a fallback for popouts — it is
   *the* mechanism, which is what raises that menu from accessibility nicety to
   load-bearing.
 
@@ -400,7 +423,7 @@ is built now (consistent with requirements §No Authentication Yet).
 **Per-tab active workspace.** The named-workspace *library* is shared across a
 browser origin (`localStorage`), but the *active-workspace pointer* is per tab
 (`sessionStorage`), so each tab/window holds a different workspace and restores it
-on refresh (incl. hard refresh). See roadmap workstream W1.
+on refresh (including hard refresh).
 
 **Per-widget state travels with the Workspace.** A saved Workspace restores not only
 panel positions but each widget's own view state — map view/zoom and active layer
@@ -477,7 +500,7 @@ Vite output dir served by FastAPI as static assets with an SPA `index.html`
 fallback for client routes; `/api` and `/ws` remain the backend contract for all
 clients (web, future CLI, mobile).
 
-Concrete seam (Slice 1): the app is mounted under **`/app`** with a `base: "/app/"`
+The app is mounted under **`/app`** with a `base: "/app/"`
 Vite build that emits to **`gcs_server/webapp/`** (gitignored). `app.py` static-mounts
 `/app/assets` and falls back any other `/app/*` to `index.html`. Dev runs the Vite
 server proxying `/api` + `/ws` to the Python app.

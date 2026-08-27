@@ -45,9 +45,10 @@ cannot be cleared while hovering a foreign dock.
 
 ## Decision
 
-**Render our own drop-target overlay for the two zones dockview refuses —
-container edges and empty docks — and leave dockview's native pane targets
-alone.**
+**Render our own drop-target overlay for cross-container drops.** It owns the
+zones dockview refuses (container edges and empty docks) and, after browser
+evidence showed an ancestor native target stealing nested occupied centers, it
+also routes occupied-center drops to the actual pane under the pointer.
 
 - Zone resolution is a pure function of rectangle + pointer, unit-tested
   independently of the DOM.
@@ -60,6 +61,9 @@ alone.**
   lights up is what tells the operator the move crosses a container.
 - The transfer itself is transactional: add to the destination first, remove
   from the source only on success.
+- Wrappers register their API and resolve the innermost dock by coordinates.
+  An occupied center retains the rendered group's active panel as its reference,
+  so a multi-pane inner dock cannot silently receive the panel in the wrong group.
 
 ## Rejected alternatives
 
@@ -68,11 +72,11 @@ alone.**
   then drive its internal `_onMove` with a `groupId` that does not exist in the
   destination dock. It also depends on private internals that a patch release
   can move.
-- **Replace dockview's cross-boundary targets entirely with one custom layer
-  owning all five zones.** More consistent in principle, but it re-implements
-  working behavior (pane targets already bridge correctly) and would drift from
-  dockview's own overlay geometry. Still the natural end state if the two
-  systems ever look inconsistent in practice.
+- **Initially leave occupied pane centers entirely native.** Browser smoke
+  disproved that the native and custom layers coexist reliably when nested:
+  the outer content target can cover the inner pane and exclude its wrapper
+  from the event path. The custom bridge now owns only foreign-dock centers;
+  ordinary same-Dockview moves remain native.
 - **Modifier-key cycling between overlapping containers.** The defect is
   discoverability, not ambiguity resolution: with a visible highlight and the
   innermost-wins rule the target is determined, and the non-drag "Move to →"
@@ -86,8 +90,36 @@ alone.**
 - A cross-boundary drop path exists that dockview does not know about, so future
   dockview upgrades must be smoke-tested against edge and empty-Group drops
   specifically — the pane path may keep working while these break.
-- jsdom cannot validate any of this (zero-size rects, no HTML5 drag lifecycle).
-  Regression cover is the pure resolver's unit tests plus a handler-wiring test;
-  proving the real gesture needs browser automation, which is **not** stood up.
-  Recorded as a known gap in roadmap UI8 rather than papered over with a jsdom
-  test that asserts against fabricated coordinates.
+- jsdom cannot validate the real gesture (zero-size rects, no HTML5 drag
+  lifecycle). Regression cover is the pure resolver plus handler-wiring tests;
+  Chromium smoke is the authoritative gesture evidence. The current matrix is
+  recorded in
+  [the UI8 browser smoke report](../../reviews/ui8-browser-smoke-2026-08-23.md).
+- The dock registry this decision introduced for hit-testing is now also the
+  source of destinations for the non-drag "Move to →" menu, so it has two
+  consumers: a dock that fails to register loses both its cross-boundary drops
+  and its place in that menu.
+
+## Implementation status — 2026-08-24
+
+The edge and empty-dock layer, destination-first transaction, and nested
+container refusal are implemented. Browser smoke passes cross-boundary root
+edges in both orientations, inner edges in both orientations, empty Group,
+Group-to-Group leaf transfer, Group-over-Group refusal, and popout reachability.
+
+The refusal required one implementation refinement beyond the original
+decision: declining a Group payload in the nested dock was insufficient because
+the ancestor Dockview could steal the same gesture and restack the source Group.
+Refusing nested docks are now marked in the DOM, and the ancestor
+cross-boundary wrapper blocks a container drag by coordinate even when
+Dockview's native drop surface obscures the underlying event target.
+
+## Implementation refinement — 2026-08-27
+
+Browser event tracing confirmed that the outer group's content drop surface can
+become `event.target` across nested content, excluding the inner wrapper from
+the event path. The wrappers now coordinate through a module-local DOM/API
+registry. The ancestor capture handler selects the innermost registered dock by
+pointer coordinates and routes an occupied center to the active panel of the
+rendered group under that point. Chromium verified that an outer Notes panel
+became a tab beside Clock in the same inner pane. UI8 is complete.
