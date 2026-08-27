@@ -1,10 +1,11 @@
 # GCS — Design
 
-Status date: 2026-06-01.
-
 **How** the GCS is built — runtime model, browser workflow, MQTT integration, AI chat model, settings, file layout, and current limitations. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and operator-visible behavior; this doc wins on implementation specifics.
 
-Status note: the GCS is the most complete component. The AI workspace (`/ai`) is fully implemented for Chat and read-only Agent modes, direct mission review/editing on `MapWidget`, and backend-owned mission revision execution with stale-state recovery. The Mission Planner Modernization work (ADRs [0021](../../cross-cutting/decisions/0021-mission-lifecycle.md)/[0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md)/[0023](../../cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md), Phases 1–6) has since landed on `feat/gps-master-coordinate-frame`: external controller link (pymavlink + MAVSDK adapters with health/read/write/clear), a relocatable behavior-tree executor that uploads nav segments to the FC, GPS-master WGS84 coordinate truth, the flat-Mission lifecycle UI, and a real 2D basemap render mode. Replay still uses its separate `static/replay.js` surface; video transport hardening remains a later slice. For live phase/slice status see `roadmap.md`.
+The mission architecture is governed by ADRs
+[0021](../../cross-cutting/decisions/0021-mission-lifecycle.md),
+[0022](../../cross-cutting/decisions/0022-gps-master-coordinate-frame.md), and
+[0023](../../cross-cutting/decisions/0023-behavior-tree-missions-relocatable-executor.md).
 
 Mission Console is now the main browser entry point. `/` redirects to
 `/mission-console`; the previous manual-control dashboard remains available at
@@ -79,7 +80,7 @@ It is responsible for:
 - mission-draft storage and approval/reject flow with two-approval model
 - Agent mission-authoring through shared planning tools: planner loop inside the normal Agent runtime, deterministic mission validation/storage, and normal chat responses instead of planner-only interrupt cards
 
-Current execution-boundary status:
+Execution-boundary design:
 
 - the universal agent remains the product center
 - mission drafts remain the planning artifact for now
@@ -154,10 +155,11 @@ Current AI Chat behavior:
 - LLM provider configuration comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - Agent mode is wired through `ToolRegistry`; tools cover rover state, scene summary, object queries, mission state, and replay analytics
-- a separate terminal AI CLI is planned as a thin client over the existing
-  `/api/ai/...` backend surface; see [design/ai-cli.md](./design/ai-cli.md)
-- cleanup planning for removing legacy `/intent` and `/plan` entry points lives
-  in [design/intent-plan-cleanup.md](./intent-plan-cleanup.md)
+- terminal clients use the same `/api/ai/...` backend surface; the original CLI
+  delivery plan is retained only as
+  [historical context](../../archive/gcs/2026-06-16-ai-cli-plan.md)
+- the removal history for legacy `/intent` and `/plan` entry points is retained
+  in the [archive](../../archive/gcs/2026-06-17-intent-plan-cleanup.md)
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 
@@ -207,7 +209,7 @@ For the map widget design spec and phase 1A–1E delivery plan, see [design.md](
 
 For AI context and intent parsing, see [design.md](./design.md).
 
-Current status of follow-on map work:
+Map integration boundaries:
 
 - the mission elevation profile panel is implemented on `/ai`
 - the replay page still renders through `static/replay.js`, not through `MapWidget`
