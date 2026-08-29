@@ -1,19 +1,12 @@
 # AI Agent — Design
 
-Status date: 2026-06-14.
-
 **How** the AI agent is built — interfaces, file layout, runtime boundaries, the mission-execution lifecycle, route planning, mission export, the vehicle-profile abstraction, the phase plan, and rollback. Implementation-flexible companion to [requirements.md](./requirements.md). The requirements doc wins on product intent and fixed decisions; this doc wins on implementation specifics; [design.md](./design.md) wins on diagrams only.
 
-Status note (implementation reality):
-
-- `AgentLoopRuntime` is implemented and powers Agent chat.
-- The visible `/ai` Agent can inspect state and author durable Missions through the shared planning tools. A successful terminal proposal persists the canonical revision plus flat Mission row before the assistant response completes, so the normal chat text and map/sidebar object are produced by the same turn.
-- Agent chat now owns the live planning flow directly through shared planning tools.
-- The planner-loop is the planning core; the superseded deterministic-DAG middle has been removed (Phase 6 done).
-- `mission_execution` exists as an in-process subsystem with canonical revision storage, overlay/state APIs, durable controller mission snapshot state, compare-and-swap version checks, mutation/execute APIs, and a local execution-transition adapter.
-- Canonical mission storage and approval/execution writes now flow through `mission_execution`. Real external controller transport has since landed (ADR 0023 Phases 1–3): a `ControllerMissionAdapter` with pymavlink + MAVSDK backends, and a relocatable behavior-tree executor driving nav segments to the FC, gated by the ADR 0021 execution modes. The AI execution tools (`arm_execution`/`execute_mission`/`cancel_execution`/`abort`) are bound per mode. See `roadmap.md` for live status.
-
-This document is **expected to evolve** as implementation lands. File names, phase ordering, and runtime interface shapes can be updated in place through normal review.
+The planner loop is the planning core. `mission_execution` owns canonical
+revision storage, overlay/state APIs, durable controller mission snapshots,
+compare-and-swap version checks, mutation/execute APIs, and controller adapters.
+ADR 0021 defines execution modes; ADR 0023 defines controller transport and the
+relocatable behavior-tree executor.
 
 ## Table of Contents
 
@@ -293,7 +286,14 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
 - **Tool calls are sequential in v1.** Determinism over throughput for mission-authoring and safety-gated flows. `allow_parallel_tool_calls` is a future config knob.
 - **Terminal actions are tools, not free-form output.** `propose_mission_draft` is the planning exit signal; its args schema is the mission draft schema. Strictly stronger than parsing free-form JSON.
 - **No execution tools bound to the model.** `_bind_role_tools` reads from `ToolRegistry` with `permissions ⊆ DEFAULT_PERMISSIONS`.
-- **High baseline input-token usage is expected in Agent mode, but is being reduced under explicit scope.** The fixed overhead from system safety instructions, tool catalog/binding, and compact context injection is intentional; short prompts can still produce multi-thousand input-token runs. **Do not optimize away this baseline casually.** Token-baseline reduction is governed by a tiered plan (ADR 0029 and roadmap "Agent Tool-Schema Optimization") driven by the rule that **lazy loading wins only for rarely-needed data and loses for usually-needed data** (an extra round-trip plus the data sent late). Tier 1 (remove duplicated injection, lazy-load rarely-needed `runtime` config, compact rendering, consolidate near-duplicate tool schemas) is quality-neutral or quality-positive and needs no eval gate. Removing usually-needed state (rover/scene/mission) or per-intent schema pruning is Tier 3 and **must** stay behind the golden-question eval set. All tiers must preserve safety guardrails, tool reliability, and operator-facing answer quality.
+- **High baseline input-token usage is expected in Agent mode.** The fixed
+  overhead from system safety instructions, tool catalog/binding, and compact
+  context injection is intentional. ADR 0029 governs token reduction: lazy
+  loading is appropriate for rarely needed data and counterproductive for
+  usually needed data. Removing usually needed rover, scene, or mission state,
+  or pruning schemas per intent, requires the golden-question evaluation gate.
+  Every optimization must preserve safety guardrails, tool reliability, and
+  operator-facing answer quality.
 - **Narrow greeting fast-path is allowed.** A trivial small-talk bypass may skip tool-loop/context injection for short greeting-only prompts in Agent mode, but it must remain strict and must not trigger for rover-state, map-object, mission, telemetry, or replay intent.
 
 ### Runtime interfaces
@@ -1111,7 +1111,7 @@ Near-term migration order:
 3. introduce `mission_execution` as the authoritative mission lifecycle owner ✅ (in-process, local adapter)
 4. switch the planning shell from direct draft ownership to proposal handoff ownership ✅
 5. add immediate overlay payloads from stored revisions ✅
-6. add the first real controller adapter path with upload, verification, rollback, and mission-version checks (next slice)
+6. use controller adapters with upload, verification, rollback, and mission-version checks
 
 Phases are sequenced by what they unlock. Any phase can move based on product priority.
 
@@ -1166,21 +1166,21 @@ Phases are sequenced by what they unlock. Any phase can move based on product pr
 
 ## Pre-Execution Readiness Checklist
 
-Before any tier-3+ work starts, **all** must hold:
+Before tier-3+ capabilities are enabled, **all** of these invariants must hold:
 
-- [x] Agent loop extraction (Phase 1) complete and stable.
-- [x] Planning-shell planner path (Phase 5–6) preserves existing draft behavior.
-- [x] Stop reasons and trace IDs stored for every run.
-- [x] Tool permissions enforced outside prompts.
-- [x] Policy engine seam exists.
-- [x] Source controls and data manifest exist.
-- [ ] Command staging has a separate ADR / spec.
-- [ ] Execution approval is explicitly separate from draft approval.
-- [ ] E-stop path designed outside the planner loop.
-- [ ] Replay / shadow mode blocks side-effecting tools.
-- [ ] Voice approvals fail closed.
-- [ ] Operator grants have TTL and revocation.
-- [ ] Eval harness exists and passes 7+ consecutive days on the planner path.
+- the agent loop is isolated behind a stable runtime boundary;
+- the planner path preserves draft behavior;
+- stop reasons and trace IDs are stored for every run;
+- tool permissions are enforced outside prompts;
+- a policy-engine seam exists;
+- source controls and a data manifest exist;
+- command staging has a separate ADR or specification;
+- execution approval is explicitly separate from draft approval;
+- the E-stop path is designed outside the planner loop;
+- replay and shadow modes block side-effecting tools;
+- voice approvals fail closed;
+- operator grants have TTL and revocation;
+- the evaluation harness passes seven consecutive days on the planner path.
 - [ ] Policy engine ≥ 90% coverage on declared policies.
 - [ ] Replay produces structurally-equivalent runs for ≥ 95% of sampled production traces.
 - [ ] E-stop latency ≤ 200 ms across UI, voice, API, hardware.

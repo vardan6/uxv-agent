@@ -1,8 +1,5 @@
 # Map Authoring Toolbar
 
-Status: All phases (1–5) shipped; operational constraints (Phase 4) implemented and accepted 2026-06-09.
-Date: 2026-06-06 (updated 2026-06-09)
-
 This note is the canonical design for the bottom-of-canvas **map authoring
 toolbar** on `/ai`. It incorporates the accepted taxonomy, terminology,
 one-active-tool model, transaction model, cross-view architecture, and phased

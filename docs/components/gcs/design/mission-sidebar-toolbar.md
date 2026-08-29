@@ -1,8 +1,5 @@
 # Mission Sidebar Toolbar
 
-Status: implemented (browser smoke pending) — design decisions resolved 2026-06-07
-Date: 2026-06-06
-
 This note defines the intended layout and behavior for the mission-sidebar
 header and the control bar immediately above the Mission rows on `/ai`.
 

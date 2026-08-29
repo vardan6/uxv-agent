@@ -51,7 +51,41 @@ operator's point of view:
   telemetry, replay sessions, replay playback, status bar. Each can be added from
   an **Add Widget** palette.
 - **Free-form layout:** move any widget anywhere; snap/dock to any edge; split;
-  group as tabs; or **float** a widget over the workspace.
+  stack as tabs; or **float** a widget over the workspace. A widget added from
+  the palette **splits** the current pane rather than joining a tab stack, so
+  newly added widgets are visible immediately; stacking is an explicit gesture
+  (drag onto a tab strip). This applies identically inside a Widget Group.
+- **Widget Groups:** the operator can create a named rectangular container that
+  holds **several widgets visible at once** in their own arrangement, and move,
+  dock, or resize that container **as a single unit** with its internal
+  arrangement preserved. A Widget Group is distinct from a **tab stack**, where
+  only one widget is visible at a time. A Group has **no header of its own**:
+  its title, close, rename, "add widget" and "save template" controls all live
+  on the Group's tab and its right-click menu, so the container spends no
+  vertical space on duplicate chrome. Its body is still visually distinguishable
+  from ordinary panel chrome so it reads as a container. A Group cannot be
+  placed inside another Group, and Groups do not appear on compact/small
+  screens — the operator sees their member widgets directly. Closing a
+  populated Group destroys its member widgets after a confirmation prompt —
+  there is no partial/evict option.
+- **Moving widgets between containers:** the operator can move a widget from the
+  main workspace into a Widget Group, out of a Group, and between two Groups —
+  including into a Group that is currently **empty**, so dragging out the last
+  widget is always recoverable. Where the widget will land must be visible
+  *before* the drop: the receiving container highlights the exact target region.
+  A move never destroys the widget — if the destination refuses it, it stays
+  where it was. Every such move is also reachable **without dragging**, from a
+  menu on the widget itself; that menu is the only path in or out of a
+  **popout window**, since a drag cannot cross OS windows.
+- **Group templates:** the operator can save a Group's widget composition and
+  arrangement as a named, reusable template (not its live content — a saved
+  template starts each widget fresh) and apply a saved template later to
+  create a new Group elsewhere in the workspace. Saving under an existing
+  name prompts to overwrite; deleting a template prompts for confirmation.
+- **Compact chrome:** panel tab bars must not dominate the workspace at the
+  ~12-widget scale, while still identifying each widget and remaining draggable
+  for docking. Non-goal: vertical/side-mounted tab bars — see
+  [ADR 0033](../../cross-cutting/decisions/0033-workspace-chrome-density-and-widget-groups.md).
 - **Popout windows:** a widget can be ejected into a **separate OS window**,
   draggable anywhere including another monitor (e.g. a minimal video or drive
   window beside the operator). This is desktop-only.

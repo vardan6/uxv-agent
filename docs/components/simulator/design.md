@@ -349,18 +349,6 @@ The new simulator should support headless or minimally interactive execution ear
 
 ---
 
-## Phase Roadmap
-
-| Phase | Status | Summary |
-|---|---|---|
-| Phase 1 — Foundations and contracts | **Mostly implemented in GCS** | config-backed backend identity, SQLite replay, replay APIs, first Leaflet map, normalized telemetry; remaining: finalize coordinate/site model |
-| Phase 2 — GCS map, logging, replay | **Partially implemented** | GCS-side logging, replay APIs, and replay page in place; live dashboard map and simulator-side logging still remain |
-| Phase 3 — `rover-sim-next` first working backend | **Scaffold only** | `rover-sim-next/` scaffold exists; real simulator functionality still pending |
-| Phase 4 — Modular asset pipeline | **Not started** | authoritative CAD/asset import, modular world composition |
-| Phase 5 — Synchronized video and long-term evolution | **Not started** | synchronized video recording/playback, timing for full `3d-env` replacement |
-
----
-
 ## Decisions Summary
 
 | Decision | Choice |

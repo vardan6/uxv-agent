@@ -33,3 +33,4 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0030](./0030-greenfield-operator-console-frontend.md) | Greenfield Operator Console Frontend (Vite + TypeScript + React + dockview) |
 | [0031](./0031-headless-full-architecture-and-frontend-data-layer.md) | Headless Full Architecture, Two-Tier State, And A Single Frontend Data Layer |
 | [0032](./0032-per-map-replay-state-and-active-target-transport.md) | Per-Map Replay State And Active-Target Transport |
+| [0033](./0033-workspace-chrome-density-and-widget-groups.md) | Workspace Chrome Density And Widget Groups |

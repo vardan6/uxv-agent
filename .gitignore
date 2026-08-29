@@ -43,3 +43,6 @@ tts_service/models/*
 tts-services-edit/models/*
 !tts-services-edit/models/.gitkeep
 ArduPilot-SITL/
+
+# Playwright MCP browser-automation scratch (console logs, page snapshots)
+.playwright-mcp/
