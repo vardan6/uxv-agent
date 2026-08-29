@@ -137,8 +137,8 @@ defaulting to dockview's active group made every added widget a tab — so a
 Widget Group could only ever show one widget at a time, defeating its purpose.
 `palettePlacement` (`frontend/src/shell/panelPlacement.ts`) is the single
 convention both docks use: split off the dock's active panel, `right` when the
-dock is wider than tall and `below` otherwise. A Widget Group's **Add Widget**
-menu can override that automatic choice with `left`, `right`, `top`, or
+dock is wider than tall and `below` otherwise. A Widget Group's **+ Widget**
+menu (on the Group tab) can override that automatic choice with `left`, `right`, `top`, or
 `bottom`, so an operator can compose multiple visible panes without first
 dragging a tab. Splitting the short axis is what drives panes under the Group's
 360×240 minimum, which is why it remains the automatic default.
@@ -243,9 +243,9 @@ ordinary panels.
 Each dockview instance owns its DnD scope, so dragging a widget from the outer dock
 *into* a Group, or between two Groups, needs explicit `showDndOverlay`/`onDidDrop`
 wiring and a shared drag payload (`widgets/crossBoundaryDnd.ts`). Groups can be
-populated through their header's "add widget" control, and whole Groups drag
+populated through the **+ Widget** item on their tab menu, and whole Groups drag
 normally within the outer dock. Cross-boundary behavior is isolated to drop
-handlers and does not alter the container, header, catalog flag, constraints, or
+handlers and does not alter the container, catalog flag, constraints, or
 serialization format.
 
 **The bridge alone is not enough.** Dockview's *root* drop target refuses
@@ -282,6 +282,15 @@ in-zone label, `Move "<widget title>" → <container>` (the Group's title, or
 quiet. Every move is also reachable without a drag: right-click a panel tab →
 **Move to →** destination (Main workspace / each open Group / New Group) → dock
 edge, reusing `DOCK_EDGE_OPTIONS` and `palettePlacement` with "Auto" as default.
+On a Group's tab the same menu also carries every action the Group itself
+needs — **Rename group…**, **+ Widget** (the Group's palette, with the same
+dock-edge choice as a move) and **Save template…**, and the tab's `×` runs the
+Group's close confirmation. A Group therefore renders **no header of its own**:
+a second chrome row under the tab spent vertical space on a duplicate title and
+read as a stray horizontal rule rather than an affordance. The tab menu reaches
+the Group's inner dock through the `widgets/groupActions.ts` registry, keyed by
+the outer panel id — the tab lives in the outer dock and cannot see the inner
+api directly.
 This follows the IDE convention (pointer selects the target and its preview;
 explicit commands are the accessible, recoverable alternative) and is the *only*
 mechanism for popout windows — see §Popout and Groups.
@@ -345,7 +354,8 @@ coordinates and retains the rendered group's active panel as the drop reference.
 
 ### Closing a populated Group
 
-The header's `×` stays destructive: it calls `outerPanelApi.close()`, which
+The Group tab's `×` stays destructive: `MoveToTab` overrides the default close
+action for containers so it calls `outerPanelApi.close()`, which
 destroys member widgets and their `params`, gated by a confirm dialog ("Close
 Group and N widgets?"). No eviction path — members are not moved back to the
 outer dock. Rejected: evicting members back into the outer dock's grid slot,
@@ -366,8 +376,8 @@ since `WorkspaceStore` already owns the whole-workspace list's lifecycle
 (active pointer, default-workspace reset) and grafting a second entry *kind*
 into it would force every consumer to filter by tag.
 
-- **Save.** Triggered from the Group header menu ("Save as template"),
-  alongside the existing rename/add-widget/close actions. Requires a name;
+- **Save.** Triggered from the Group tab menu ("Save template…"),
+  alongside the existing add-widget/rename actions. Requires a name;
   saving under a name that already exists shows a confirm dialog ("Template
   'X' already exists — overwrite?") and overwrites the existing entry in place
   on confirm, or cancels the save on decline. No silent overwrite, no

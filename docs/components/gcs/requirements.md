@@ -59,8 +59,10 @@ operator's point of view:
   holds **several widgets visible at once** in their own arrangement, and move,
   dock, or resize that container **as a single unit** with its internal
   arrangement preserved. A Widget Group is distinct from a **tab stack**, where
-  only one widget is visible at a time. A Group carries its own header (title,
-  rename, close, and an "add widget" control) and is visually distinguishable
+  only one widget is visible at a time. A Group has **no header of its own**:
+  its title, close, rename, "add widget" and "save template" controls all live
+  on the Group's tab and its right-click menu, so the container spends no
+  vertical space on duplicate chrome. Its body is still visually distinguishable
   from ordinary panel chrome so it reads as a container. A Group cannot be
   placed inside another Group, and Groups do not appear on compact/small
   screens — the operator sees their member widgets directly. Closing a
