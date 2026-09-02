@@ -443,7 +443,7 @@ Layers (each independent):
 - **Input guardrails** — unsafe requests, prompt injection, out-of-scope robot requests, ambiguous motion, low STT confidence.
 - **Tool guardrails** — permission tier, grant scope, source controls, freshness, side effects, budget, rate limits, vehicle-profile binding.
 - **Output guardrails** — no false execution claims, no secret leakage, no ungrounded live-state claims, clear uncertainty when data is stale.
-- **Workflow guardrails** — mission drafting is non-executing; staging and execution require separate approvals. `export_mission(draft_id)` is allowed only when `draft.lifecycle == approved`.
+- **Workflow guardrails** — mission drafting creates a reviewable Mission revision but is non-executing; plan serialisation happens during proposal creation, while staging and execution require separate approvals.
 - **Execution guardrails** — future commands validate geofence, controller lock, telemetry freshness, obstacle policy, mission state, operator grant.
 
 Phase-3 footprint: thin wrapper around the current permission filter. Same behavior, but the seam exists so future tiers do not require rewriting the loop. Traces emit `agent_policy_decision` events; blocked calls stop with `policy_denied`.
@@ -600,7 +600,6 @@ Registered when `planner_kind == "road_graph"`:
 
 - `plan_route_around_group(group_id)` — wraps `route_to_then_around_then_back`.
 - `plan_route_between(start_target, goal_target)` (also `plan_route_to(goal_target, start_target=None)`) — resolves targets via `SpatialQueryService.resolve_spatial_target`, snaps to graph, runs Dijkstra. `start_target=None` uses current rover pose from live telemetry; stale or absent pose (older than `pose_max_age_s`, default 5.0) returns a structured `pose_unavailable` error.
-- `export_mission(draft_id)` — output-tier. `PolicyEngine` permits only when `draft.lifecycle == approved`.
 - `stop_mission(reason)` — registered now as a stub so the tool is always discoverable. `PolicyEngine` does **not** gate it on draft state; aborting a non-existent mission is a no-op.
 
 Tool descriptions are production code. The first line states the trigger condition; the description also names sibling tools, payload shape, return shape, and failure modes.
@@ -640,7 +639,7 @@ Planner-tool results returned to the agent are a compact summary:
 }
 ```
 
-The full waypoint list is persisted on the Mission Draft step and fetched by the UI for map rendering and by `export_mission` for serialisation. The wire contract between agent and tools stays small and inspectable.
+The full waypoint list is persisted with the proposed Mission revision, fetched by the UI for map rendering, and serialised to a QGC plan as part of proposal creation. The wire contract between agent and tools stays small and inspectable.
 
 ### Mission Draft schema extensions
 
@@ -687,7 +686,7 @@ New sub-project Settings surface, two tabs:
 Dispatch mode is inferred by the agent from prompt context and stored on the draft.
 
 - *"calculate me a route around the second plantation"* → `plan_only`. Draft reaches `exported`; route renders on the map; agent reports the file path.
-- *"drive around the second plantation and come back"* → `plan_and_execute`. Draft still passes through the operator approval interrupt; on approve, the agent chains `export_mission` → `upload_mission` → execute (no-op until those tools land). On `plan_only` it stops after export.
+- *"drive around the second plantation and come back"* → `plan_and_execute`. The proposal persists a reviewable revision and QGC plan, then still passes through the operator approval interrupt before controller handoff and execution. On `plan_only` it stops after creating the proposal.
 - *"plan it first, show me on the map; if it looks good I'll tell you to go"* → `plan_only`, then a later user message ("yes, follow it") flips that draft's mode to `plan_and_execute` and re-enters the approval flow for the upload step.
 
 Tool descriptions must teach the agent this distinction so dispatch-mode inference is reproducible.
@@ -749,8 +748,8 @@ The `/ai` map is the authoring surface — there is no separate Missions page. C
 ### Critical files (route planning slice)
 
 - **New**: `gcs_server/ai/road_graph_service.py`, `gcs_server/ai/mission_export_service.py`, `gcs_server/ai/vehicle_profile.py`.
-- **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `export_mission`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/policy_engine.py` (gate `export_mission` on `draft.lifecycle == approved`); `gcs_server/ai/mission_draft_service.py` (extend step schema with `waypoints` + `route_summary`; add lifecycle fields); `gcs_server/scene_map.py` (expose centerlines).
-- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionDraftService` for storage + approval flow, existing `PolicyEngine` for tier gating, and the existing deterministic mission validation step.
+- **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `propose_mission_draft`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/mission_execution_service.py` (own proposal/revision storage and plan-export state); `gcs_server/ai/mission_draft_service.py` (deterministic `validate_draft_payload` helper); `gcs_server/scene_map.py` (expose centerlines).
+- **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionExecutionService` for proposal storage and approval flow, existing `PolicyEngine` for tier gating, and deterministic draft validation.
 - **Possibly bump**: `config/terrain_scene.v1.json` + `terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
 
 ## Memory Subsystem
@@ -1198,7 +1197,7 @@ Before tier-3+ capabilities are enabled, **all** of these invariants must hold:
 | `PolicyEngine` | Permission / grant / policy decision before tool execution | thin wrapper, implemented |
 | `AIContextService` | Compact current context and manifest | implemented |
 | `Planning flow` | Shared Agent runtime plus mission-authoring tools | implemented |
-| `MissionDraftService` | Store and validate draft lifecycle | implemented |
+| `validate_draft_payload` | Deterministic mission-draft validation helper | implemented in `mission_draft_service.py` |
 | `MissionExecutionService` | Authoritative mission revision / operation / controller-handoff state | implemented; real-controller adapter slice next |
 | `ProviderRegistry` | Role / purpose model routing | implemented; evolves to roles |
 | `AgentTraceStore` | JSONL trace persistence | implemented for Agent chat |
@@ -1239,9 +1238,9 @@ gcs_server/app.py                        settings flag plumbing
 gcs_server/ai/road_graph_service.py      RoadGraphService
 gcs_server/ai/mission_export_service.py  QGC .plan serializer
 gcs_server/ai/vehicle_profile.py         VehicleProfile + active selection
-gcs_server/ai/tool_registry.py           plan_route_*, export_mission, stop_mission tools
-gcs_server/ai/policy_engine.py           export_mission gated on draft.lifecycle == approved
-gcs_server/ai/mission_draft_service.py   step.waypoints, step.route_summary, lifecycle, lifecycle_history, dispatch_mode
+gcs_server/ai/tool_registry.py           plan_route_*, propose_mission_draft, stop_mission tools
+gcs_server/ai/mission_execution_service.py proposal/revision storage, approval state, export result
+gcs_server/ai/mission_draft_service.py   validate_draft_payload helper
 gcs_server/scene_map.py                  expose centerlines + metadata.group
 config/terrain_scene.v1.json             schema bump: metadata.group per road
 ```
