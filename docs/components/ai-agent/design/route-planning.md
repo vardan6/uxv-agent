@@ -82,22 +82,18 @@ Planner-tool results returned to the agent are a **compact summary** — not the
 }
 ```
 
-The full waypoint list is persisted on the Mission Draft step and fetched by the UI for map rendering and by `export_mission` for serialisation. The wire contract between agent and tools stays small and inspectable.
+The full waypoint list is persisted with the proposed Mission revision, fetched by the UI for map rendering, and serialised to a QGC plan as part of proposal creation. The wire contract between agent and tools stays small and inspectable.
 
 ### `route_hash` is not a `draft_id`
 
-`route_hash` is a content fingerprint of the waypoints (`sha1` of the rounded x,y list, 12 hex chars — `_route_hash` in `tool_registry.py`). It is **not** a persisted handle and must never be passed to `export_mission`. The pipeline has a required middle step:
+`route_hash` is a content fingerprint of the waypoints (`sha1` of the rounded x,y list, 12 hex chars — `_route_hash` in `tool_registry.py`). It is **not** a persisted handle or Mission identity. The pipeline has one terminal planning step:
 
 ```
-plan_route_* ──(waypoints)──▶ propose_mission_draft ──(draft_id)──▶ export_mission(draft_id)
-   route_hash                  creates+persists draft        after approval
+plan_route_* ──(waypoints)──▶ propose_mission_draft
+   route_hash                  creates a Mission revision and serialises its plan
 ```
 
-`plan_route_*` only computes a route; it persists nothing. Only `propose_mission_draft` creates a draft and returns the prefixed `draft_id` (`ai-draft-…`, `draft-draw-…`, `draft-fence-…`) that `export_mission` resolves via `MissionDraftService.get_draft`. Skipping `propose_mission_draft` and handing the bare `route_hash` to `export_mission` was a real planner failure mode (the export 404'd because no draft existed).
-
-**Guardrail + auto-bridge** (`_resolve_export_draft` in `tool_registry.py`). When `export_mission` gets an id that isn't a stored draft:
-- If it looks like a bare `route_hash` (12 hex, no `draft` substring), it tries to **auto-bridge** to an existing session draft by matching the hash against a draft's `route_artifacts`, and tags the result `resolved_via` / `resolved_draft_id`. It never fabricates a draft, so the ADR 0021 approval gate stays intact.
-- Otherwise it returns a directed error naming `propose_mission_draft` as the next tool plus `available_drafts` (the session's real draft ids + statuses), so the planner self-corrects instead of dead-ending.
+`plan_route_*` only computes a route; it persists nothing. `propose_mission_draft` is the terminal planning action: it creates the Mission revision and flat Mission row, returns their durable identifiers, and serialises the plan. A bare `route_hash` cannot substitute for either identifier.
 
 ## Per-waypoint defaults
 

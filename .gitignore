@@ -37,6 +37,7 @@ gcs_server/data_*/
 gcs_server/webapp/
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
 node_modules/
 .runtime/
 tts_service/models/*
