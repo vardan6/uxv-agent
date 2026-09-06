@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document captures the requirements for the simulation-platform work across the current `3d-env` simulator and any future successor path. The repository's current experimental side path is `rover-sim-next/`.
+This document captures the requirements for the current `3d-env` simulation platform. A future simulator direction requires a new ADR.
 
 Sources consolidated here:
 - `docs/archive/simulator/2026-05-16-simulator-requirements.md` (primary)
@@ -15,48 +15,27 @@ For vocabulary, see [docs/glossary.md](../../glossary.md).
 
 ## Scope
 
-These requirements apply to the current `3d-env` simulator (the working prototype) and to any future successor project beside it. The repository currently contains `rover-sim-next/` as that experimental side path.
+These requirements apply to the current `3d-env` simulator, the working prototype and only supported simulator backend.
 
 The goals are:
-- continue supporting the current working prototype during any transition
-- define a better long-term simulator platform
-- enable phased migration without breaking the existing Ground Control Station
+- preserve the working simulator and its GCS integration
+- make future simulator work an explicit, separately decided effort
 
 ---
 
 ## Core Requirements
 
-### 1. Keep The Existing System Working During Transition
+### 1. Keep The Existing System Working
 
-The existing `3d-env` simulator must keep working during the transition period.
+The existing `3d-env` simulator must remain compatible with `gcs_server` for control, telemetry, camera/video, map, and replay visualization.
 
-Any new simulator work must:
-- run in parallel with `3d-env`
-- work with the existing `gcs_server`
-- allow `gcs_server` to continue operating until the new simulator is ready to replace `3d-env`
+### 2. Future Simulator Work Requires A New Decision
 
-If needed, `gcs_server` may be updated, but compatibility with the current working system must be preserved during migration.
+No successor simulator is planned. A future effort must begin with a new ADR that defines its scope, location, and compatibility expectations.
 
-### 2. Keep Any Successor Simulator Isolated
+### 3. Preserve GCS Compatibility
 
-Any successor simulator effort should live as a separate sub-project under the `remote-rover` repository. The current candidate path is `rover-sim-next/`. That isolated path exists to:
-- improve the 3D environment and physics quality
-- improve rover/world interaction
-- improve modularity and future maintainability
-- eventually replace the current `3d-env`
-
-### 3. Preserve And Extend GCS Compatibility
-
-Any successor simulator path must work with the existing `gcs_server` MQTT contract during transition.
-
-Required compatibility surface:
-- rover control
-- telemetry flow
-- camera/video integration
-- map integration
-- replay visualization in the GCS
-
-The GCS must be able to support both `3d-env` and the active successor path until the new backend fully replaces the old one.
+The GCS accepts only the `3d-env` backend. Unsupported configured backends must fail validation rather than being mapped to `3d-env`.
 
 ---
 

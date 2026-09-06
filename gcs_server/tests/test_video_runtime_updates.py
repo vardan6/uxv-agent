@@ -5,6 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from fastapi import HTTPException
+
 from gcs_server.config import AppConfig
 from gcs_server.routers import device_config, settings
 from gcs_server.tests.runtime_stub import make_stub_runtime
@@ -128,6 +131,33 @@ def test_video_mode_route_broadcasts_runtime_video_update(monkeypatch) -> None:
             },
         }
     ]
+
+
+def test_simulation_config_route_rejects_unsupported_backend() -> None:
+    runtime = _runtime()
+
+    async def run() -> None:
+        with pytest.raises(HTTPException, match="only '3d-env' is supported") as exc_info:
+            await device_config.set_simulation_config(
+                FakeRequest(runtime, {"simulation": {"backend": "unsupported-backend"}})
+            )
+        assert exc_info.value.status_code == 400
+
+    asyncio.run(run())
+
+
+def test_settings_apply_rejects_unsupported_simulation_backend() -> None:
+    config = _config()
+
+    with pytest.raises(HTTPException, match="only '3d-env' is supported") as exc_info:
+        settings._apply_settings_sections(
+            config,
+            {"simulation": {"backend": "unsupported-backend"}},
+            ["simulation"],
+        )
+
+    assert exc_info.value.status_code == 400
+    assert config.raw["simulation"] == {}
 
 
 def test_settings_apply_video_section_broadcasts_runtime_video_update(monkeypatch) -> None:

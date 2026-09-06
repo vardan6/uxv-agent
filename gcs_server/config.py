@@ -8,6 +8,7 @@ from typing import Any
 
 VIDEO_OSD_LINE_IDS = ("position", "speed_heading", "gps", "power", "camera")
 VIDEO_OSD_CORNERS = ("top-right", "top-left", "bottom-right", "bottom-left")
+SUPPORTED_SIMULATION_BACKENDS = ("3d-env",)
 DEFAULT_VIDEO_OSD_PRESETS: list[dict[str, Any]] = [
     {
         "id": "default",
@@ -141,6 +142,19 @@ def normalize_osd_presets(value: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def normalize_simulation_config(value: Any) -> dict[str, Any]:
+    """Return the only supported simulator configuration or raise clearly."""
+    simulation = dict(value) if isinstance(value, dict) else {}
+    backend = str(simulation.get("backend", "3d-env")).strip() or "3d-env"
+    if backend not in SUPPORTED_SIMULATION_BACKENDS:
+        raise ValueError(
+            f"unsupported simulation backend {backend!r}; only '3d-env' is supported"
+        )
+    simulation["backend"] = backend
+    simulation["available_backends"] = list(SUPPORTED_SIMULATION_BACKENDS)
+    return simulation
+
+
 @dataclass(slots=True)
 class AppConfig:
     raw: dict[str, Any]
@@ -215,6 +229,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     providers = merged.get("llm_providers")
     if not isinstance(providers, list) or not providers:
         merged["llm_providers"] = copy.deepcopy(DEFAULT_LLM_PROVIDERS)
+    merged["simulation"] = normalize_simulation_config(merged.get("simulation"))
     return AppConfig(raw=merged, settings_path=settings_path)
 
 

@@ -43,7 +43,7 @@ ALWAYS_BOUND_EXECUTION_TOOLS = frozenset({"cancel_execution", "abort"})
 # Sim backends default to Autonomous; anything else (real-rover) defaults to
 # Strict. The build-time gate that *enforces* the real-rover default is an open
 # question in ADR 0021 — this is the soft default only.
-_SIM_BACKENDS = frozenset({"3d-env", "rover-sim-next", "sim", "headless"})
+_SIM_BACKENDS = frozenset({"3d-env"})
 
 
 def normalize_mode(value: Any, *, default: str = STRICT) -> str:

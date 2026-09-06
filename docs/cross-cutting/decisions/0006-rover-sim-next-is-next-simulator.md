@@ -1,7 +1,7 @@
 # 0006. `rover-sim-next` Is The Next Simulator Implementation
 
 Date: 2026-05-20
-Status: Accepted
+Status: Superseded by [0036](./0036-retire-rover-sim-next.md)
 
 ## Context
 

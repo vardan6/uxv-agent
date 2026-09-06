@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from gcs_server.config import save_config
+from gcs_server.config import normalize_simulation_config, save_config
 from gcs_server.runtime import AppRuntime
 
 router = APIRouter()
@@ -77,11 +77,14 @@ async def set_simulation_config(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="simulation object is required")
 
     current = dict(runtime.config.simulation)
-    updated = {
-        "backend": str(simulation_payload.get("backend", current.get("backend", "3d-env"))).strip() or "3d-env",
-        "backend_version": str(simulation_payload.get("backend_version", current.get("backend_version", "dev"))).strip() or "dev",
-        "available_backends": list(current.get("available_backends", ["3d-env", "rover-sim-next"])),
-    }
+    try:
+        updated = normalize_simulation_config({
+            "backend": simulation_payload.get("backend", current.get("backend", "3d-env")),
+            "backend_version": simulation_payload.get("backend_version", current.get("backend_version", "dev")),
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated["backend_version"] = str(updated["backend_version"]).strip() or "dev"
     runtime.config.raw["simulation"] = updated
     save_config(runtime.config)
     runtime.replay_store.update_backend(updated["backend"], updated["backend_version"])

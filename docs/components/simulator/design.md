@@ -5,11 +5,13 @@
 The simulator is the vehicle-side runtime of the project. It provides a simulated rover with physics and terrain interaction, a local operator view, MQTT control intake, telemetry generation, simulated camera output, and the settings and diagnostics needed during development and demos.
 
 For requirements, see [requirements.md](./requirements.md).
-Per-topic design files live under [`design/`](./design/) — terrain-scene, technical-details, rover-physics-tuning, rover-sim-next-phase-1, shadow-enhancement.
+Per-topic design files live under [`design/`](./design/) — terrain-scene, technical-details, rover-physics-tuning, shadow-enhancement.
+
+`3d-env` is the sole supported simulator backend. [ADR 0036](../../cross-cutting/decisions/0036-retire-rover-sim-next.md) requires a new decision before future simulator work begins.
 
 Sources consolidated here:
 - `docs/archive/simulator/2026-05-16-simulator-overview.md` (primary)
-- `docs/archive/simulator/2026-05-08-platform-plan.md` (transition and rover-sim-next plan)
+- `docs/archive/simulator/2026-05-08-platform-plan.md` (historical transition plan)
 - `docs/archive/simulator/2026-04-05-initial-hl-design.md` (historical context and first architectural decisions)
 - `docs/archive/simulator/2026-04-05-phase1-3D-Simulator.md` (Phase 1 scope and world redesign history)
 - `docs/archive/simulator/2026-04-05-mqtt-plan-canonical.md` (canonical Phase 2 MQTT control/telemetry contract)
@@ -28,8 +30,7 @@ Sources consolidated here:
 | GCS presence-aware publish gating | **Implemented** |
 | Settings UI (MQTT, bindings, appearance, import/export) | **Implemented** |
 | Terrain scene manifest (`terrain_scene.v1.json`) | **Implemented** |
-| `rover-sim-next` ROS 2/Gazebo scaffold | **Scaffold only** — side path in the repo, not a working backend |
-| Simulator-side replay logging | **Deferred** — until `rover-sim-next` works end-to-end |
+| Simulator-side replay logging | **Deferred** — not currently planned |
 | Authoritative CAD/asset pipeline | **Not started** |
 
 ---
@@ -44,12 +45,6 @@ The current `3d-env` simulator is built on:
 - **Bullet physics** (via Panda3D integration) — rover vehicle physics, terrain collision, object colliders
 
 This stack was chosen in the earliest design phase when the project was prototyping quickly. It remains the working baseline.
-
-The current `rover-sim-next` scaffold targets:
-- **ROS 2** — runtime and topic framework
-- **Gazebo** — physics and world simulation
-
-This choice provides a clearer migration toward robotics-oriented workflows and better long-term fit for formal robot description and world composition.
 
 ### Module Structure (`3d-env/simulator/`)
 
@@ -144,7 +139,7 @@ Topic: `{topic_prefix}/{state_topic}`
 
 Minimum telemetry fields the GCS depends on:
 - `timestamp`
-- `backend` (identifies `3d-env` or `rover-sim-next`)
+- `backend` (identifies `3d-env`)
 - `position.x`, `position.y`, `position.z`
 - `gps.lat`, `gps.lon`, `gps.alt`
 - `orientation.heading_deg`
@@ -241,49 +236,6 @@ These decisions were agreed in a grill-me session on 2026-05-15 (source: `center
 
 ---
 
-## Platform Transition Design
-
-### Transition Goal
-
-The parallel-successor strategy:
-- keep `3d-env` working
-- build `rover-sim-next` beside it using ROS 2 + Gazebo
-- preserve the current MQTT/GCS contract throughout migration
-- support both simulators from the GCS during transition
-- backend identity must be explicit (`3d-env` vs `rover-sim-next`)
-
-### Implementation Order
-
-1. Make `rover-sim-next` a working simulator backend.
-2. Connect it to `gcs_server` without breaking `3d-env`.
-3. Stabilize rover model, world model, and coordinate model.
-4. Then continue with richer map, logging, replay, and video work.
-
-This ordering satisfies requirements because logging/replay remains planned but is not treated as a prerequisite for the first usable `rover-sim-next` milestone.
-
-### `rover-sim-next` Phase 1 Scope
-
-Required:
-- ROS 2 package that actually runs (not just scaffolding)
-- Gazebo world that can launch reliably
-- rover description with wheels, chassis, and physically meaningful mass/inertia placeholders
-- MQTT control bridge into simulator actuation
-- telemetry bridge back into the existing GCS contract
-- camera path sufficient for current GCS expectations
-- site origin and map-position config values carried through the telemetry model
-- `3d-env` still works in parallel
-
-Allowed shortcuts in Phase 1:
-- simple rover, collision, and world geometry
-- practical pseudo-GPS compatibility while the full coordinate model is finalized
-- rough AI-generated assets as temporary development assets
-
-Not required for Phase 1:
-- professional CAD-derived assets
-- final media architecture
-- simulator-side replay logging
-- final polished map UI inside the main GCS page
-
 ### Asset Strategy
 
 **Development assets** (acceptable in early phases):
@@ -330,7 +282,7 @@ Architecture rules:
 - logging in both simulator side and GCS side
 - replay from logs captured at either origin
 - session model must reserve support for synchronized video without requiring redesign
-- simulator-side logging remains deferred until after `rover-sim-next` works end-to-end with the GCS
+- simulator-side logging remains deferred pending a separately approved scope
 
 First storage backend: `SQLite`.
 
@@ -353,10 +305,7 @@ The new simulator should support headless or minimally interactive execution ear
 
 | Decision | Choice |
 |---|---|
-| New simulator sub-project name | `rover-sim-next` |
-| Transition mode | parallel successor (not a cutover) |
-| Long-term simulator baseline | ROS 2 + Gazebo |
-| GCS backend selection | explicit config-backed selector |
+| Simulator backend | `3d-env` only; unsupported values are rejected |
 | Replay UI | separate GCS page |
 | Logging backend (first) | SQLite |
 | Initial capture scope | telemetry, control, events |
@@ -375,7 +324,6 @@ The new simulator should support headless or minimally interactive execution ear
 Detailed per-topic design content lives in sibling files under [`design/`](./design/). This is topic-level organization within the design tier (same stability rules as this file), not a separate tier.
 
 - [`design/rover-physics-tuning.md`](./design/rover-physics-tuning.md) — Rover Physics Tuning
-- [`design/rover-sim-next-phase-1.md`](./design/rover-sim-next-phase-1.md) — Rover Sim Next Phase 1
 - [`design/shadow-enhancement.md`](./design/shadow-enhancement.md) — Shadow Enhancement
 - [`design/technical-details.md`](./design/technical-details.md) — Technical Details
 - [`design/terrain-scene.md`](./design/terrain-scene.md) — Terrain Scene

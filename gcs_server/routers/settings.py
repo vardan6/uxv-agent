@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from gcs_server.ai.execution_mode import normalize_mission_lifecycle_settings, resolve_build_default_mode
-from gcs_server.config import normalize_osd_presets, save_config
+from gcs_server.config import normalize_osd_presets, normalize_simulation_config, save_config
 from gcs_server.provider_normalizers import (
     _normalize_ai_settings,
     _normalize_provider,
@@ -135,7 +135,10 @@ def _apply_settings_sections(config: Any, payload: dict[str, Any], sections: lis
         if "simulation" in sections:
             simulation = _extract_section_payload(payload, "simulation")
             if isinstance(simulation, dict):
-                config.raw["simulation"] = dict(simulation)
+                try:
+                    config.raw["simulation"] = normalize_simulation_config(simulation)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
                 applied.append("simulation")
         if "video" in sections:
             video = _extract_section_payload(payload, "video")

@@ -51,7 +51,7 @@
   "simulation": {
     "backend": "3d-env",
     "backend_version": "dev",
-    "available_backends": ["3d-env", "rover-sim-next"]
+    "available_backends": ["3d-env"]
   },
   "logging": {
     "replay_db_path": "data/gcs_replay.sqlite3",

@@ -10,7 +10,6 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0003](./0003-rag-scope-vs-live-context.md) | RAG Scope: Documents And Memory, Not Live State |
 | [0004](./0004-langgraph-checkpointer-choice.md) | LangGraph Planning Shell Checkpointer: MemorySaver For Now |
 | [0005](./0005-keep-3d-env-as-current-simulator.md) | Keep `3d-env` As The Current Simulator Runtime |
-| [0006](./0006-rover-sim-next-is-next-simulator.md) | `rover-sim-next` Is The Next Simulator Implementation |
 | [0007](./0007-rag-later-not-now-for-live-state.md) | RAG Is Deferred; Live State Stays Structured Only |
 | [0009](./0009-mission-execution-fold-under-ai-agent.md) | Mission Execution Lives Under `ai-agent`, Not As A Peer Component |
 | [0013](./0013-intent-parser-provider-routing-order.md) | Intent-Parser Provider Routing Order |
@@ -34,3 +33,5 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0031](./0031-headless-full-architecture-and-frontend-data-layer.md) | Headless Full Architecture, Two-Tier State, And A Single Frontend Data Layer |
 | [0032](./0032-per-map-replay-state-and-active-target-transport.md) | Per-Map Replay State And Active-Target Transport |
 | [0033](./0033-workspace-chrome-density-and-widget-groups.md) | Workspace Chrome Density And Widget Groups |
+| [0034](./0034-cross-container-drop-targets.md) | Cross-Container Drop Targets Need Our Own Overlay Layer |
+| [0036](./0036-retire-rover-sim-next.md) | Retire `rover-sim-next` |

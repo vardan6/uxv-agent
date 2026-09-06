@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from config import AppConfig
+import pytest
+
+from config import AppConfig, normalize_simulation_config
 
 
 def test_optional_config_getters_do_not_mutate_raw_when_keys_are_missing() -> None:
@@ -30,3 +32,8 @@ def test_optional_config_getters_do_not_mutate_raw_when_keys_are_missing() -> No
         "logging": {},
         "map": {},
     }
+
+
+def test_simulation_config_rejects_unsupported_backend() -> None:
+    with pytest.raises(ValueError, match="only '3d-env' is supported"):
+        normalize_simulation_config({"backend": "unsupported-backend"})
