@@ -393,6 +393,26 @@ the Operator Console. Owns no authoritative data; all top-level widgets are
 isolatable (dock/split/float/popout). Indivisible sub-parts (OSD overlay,
 chat composer) travel with their widget.
 
+## UxV
+
+Unmanned *x* Vehicle — the umbrella covering UAV (air), UGV (ground), USV
+(surface), and UUV (underwater). The project's naming family, adopted because
+the code has been vehicle-agnostic since `VehicleProfile` started modelling
+`ground`, `multirotor`, and `fixed_wing` kinds.
+
+| Name | What it is | Status |
+|---|---|---|
+| `uxv-gcs` | This system: the full private ground control station. **The repo slug is still `remote-rover`** | intended engineering name; repo rename deferred |
+| `uxv-agent` | Public repo: the AI mission-planning agent plus the [Mission Console](#mission-console) as its demo surface | name settled; repo not yet created |
+| `uxv-map` | Embeddable mission-planning map widget (`gcs_server/static/map/`) | deferred |
+| `uxv-sim` | Simulation infrastructure | proposed: no repo |
+
+⚠️ **No ADR records this yet.** The plan is
+[handoff §6a](./cross-cutting/handoff-repo-split-and-rename-2026-09-02.md); the
+search record is
+[the 2026-08-10 strategy doc](./cross-cutting/research/2026-08-10-project-naming-and-repo-split-strategy.md).
+Only `uxv-agent` and "`remote-rover` is not renamed" are settled.
+
 ## Workspace
 
 A named, saved layout arrangement of widgets (dockview `toJSON`/`fromJSON`),
