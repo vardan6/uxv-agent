@@ -8,7 +8,6 @@ Repository root:
 Main subprojects:
 - `3d-env/`
 - `gcs_server/`
-- `rover-sim-next/`
 - `tools/`
 - `config/`
 - `docs/`
@@ -155,12 +154,6 @@ Alternative helper:
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
 ./run.sh
 ```
-
-## Running `rover-sim-next`
-
-`rover-sim-next/` is currently a scaffold, not a runnable replacement simulator.
-
-Use `3d-env/` for the current working simulator until any alternative simulator path has a supported launch flow.
 
 ## Current Operational Sequence
 

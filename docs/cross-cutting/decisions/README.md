@@ -35,3 +35,4 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0033](./0033-workspace-chrome-density-and-widget-groups.md) | Workspace Chrome Density And Widget Groups |
 | [0034](./0034-cross-container-drop-targets.md) | Cross-Container Drop Targets Need Our Own Overlay Layer |
 | [0036](./0036-retire-rover-sim-next.md) | Retire `rover-sim-next` |
+| [0037](./0037-project-naming-and-directory-restructure.md) | Project Naming, Directory Convention, And Repository Restructure |

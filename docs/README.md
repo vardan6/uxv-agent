@@ -17,7 +17,7 @@ This directory is the source of truth for project docs. The live surface is inte
 | [components/README.md](./components/README.md) | One-screen index of documented components and tier completeness |
 | [components/ai-agent/README.md](./components/ai-agent/README.md) | AI agent docs: requirements, design, and implementation internals |
 | [components/gcs/README.md](./components/gcs/README.md) | GCS docs: operator workflow, runtime model, settings, replay, and AI workspace |
-| [components/simulator/README.md](./components/simulator/README.md) | Simulator docs: current `3d-env` baseline and the separate `rover-sim-next` scaffold |
+| [components/simulator/README.md](./components/simulator/README.md) | Simulator docs: the current `3d-env` baseline |
 
 ## Cross-Cutting
 

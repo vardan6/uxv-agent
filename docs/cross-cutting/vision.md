@@ -184,15 +184,12 @@ approvals — those are the actual experiments. The floor exists to make them ho
 
 ## What Remote Rover Is Today
 
-The system is built around two working applications and one separate simulator
-experiment:
+The system is built around a working simulator and Ground Control Station:
 
 - **3D Simulator** (`3d-env/`): a Panda3D + Bullet physics rover that publishes
   telemetry and camera frames over MQTT and accepts control input.
 - **Ground Control Station** (`gcs_server/`): a FastAPI + browser application operators
   use to monitor, drive, and reason about the rover.
-- **rover-sim-next** (`rover-sim-next/`): a scaffolded ROS 2 + Gazebo simulator path in
-  the repository, not part of the working runtime today.
 
 MQTT is the integration backbone between simulator and GCS.
 
@@ -217,7 +214,6 @@ vision concrete:
   mission-execution groundwork.
 - A LangGraph-based planning shell with human-in-the-loop approval.
 - Compact live context for rover, runtime, settings, map, replay, and mission state.
-- A scaffolded ROS 2 + Gazebo successor simulator path in `rover-sim-next/`.
 
 This matters: the project is not only describing a future. It already has a working
 loop where an operator interacts with a simulated robot through the same software

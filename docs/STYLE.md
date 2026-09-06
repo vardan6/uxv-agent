@@ -82,6 +82,52 @@ docs/
 - **Singular nouns by default.** `decision`, `provider`, `mode`.
 - **Tier filenames are fixed.** Always `requirements.md` and `design.md` at the component root. Per-topic design files live under `design/<topic>.md`. Never invent a third tier name.
 
+## Repository Directory And File Naming
+
+Scope: the **whole repository**, not just `docs/`. Decided in
+[ADR 0037](./cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
+
+The rule is not aesthetic. The test is: **does a language identifier ever have
+to name this thing?** Python `import X` requires a valid identifier — hyphens
+are a syntax error and a name cannot start with a digit. JS/TS imports are path
+*strings*; shell, Docker, npm, and GitHub are all strings. So only Python
+constrains directory names.
+
+| Scope | Rule |
+|---|---|
+| Directories | `kebab-case`, always |
+| Python files | `snake_case.py` (`scene_map.py`) |
+| JS modules | `camelCase.js`; `PascalCase.js` for classes/components |
+| Config / data | `kebab-case.json` |
+| `bin/` scripts | `kebab-case`, no extension |
+
+**One consistent convention repo-wide — no per-language mixing of visual
+style.** Kebab-case for every directory, with a single documented exception
+below. Two-rule schemes that switch style by language were considered and
+rejected for this reason.
+
+### The Python guard rail — the one exception
+
+Any directory Python imports must be a valid identifier. **Keep those
+single-word.** Everything Python currently imports already is: `backend`,
+`rag`, `ai`, `routers`, `tests`, `cli`, `scene`, `pipeline`, `schema`.
+
+If a **multi-word Python package** is genuinely necessary, it takes an
+underscore. That is the documented exception, and it must stay rare.
+
+Currently invoked exactly once: **`agent_core/`** — the portable agent core
+(loop, graph, registry). If it is ever published, the repo slug is
+`agent-core` and the package imports as `agent_core`, which is the standard
+Python convention and needs no further decision.
+
+Non-exceptions worth noting: `3d-env/` is hyphenated and stays that way — it is
+not an importable package, and `3d_env` would be an invalid identifier anyway
+because it starts with a digit. `mav-sim/` is safe because nothing imports
+`mav_sim` as a package; it is launched by path (`mav_sim/run.sh` does
+`cd "$DIR" && exec python app.py`). Its gRPC **proto** package is also named
+`mav_sim` (`proto/mav_sim.proto`, `mav_sim.MavSim/*` in the generated stubs) —
+that is a wire identifier and must **not** be renamed with the directory.
+
 ## File Header
 
 Every doc starts with a title and a one-paragraph summary, then the body. No frontmatter, no tier labels, no metadata block.

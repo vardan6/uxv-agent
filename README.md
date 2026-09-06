@@ -5,8 +5,6 @@ Remote Rover is a rover-control platform built around these main local applicati
 - `3d-env/`: a Panda3D-based 3D rover simulator
 - `tts_service/`: a local text-to-speech service for AI chat response playback
 
-It also contains `rover-sim-next/`, a ROS 2 + Gazebo simulator scaffold that is not part of the working runtime today.
-
 The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
 
 The system already supports the full working control loop:
@@ -46,7 +44,6 @@ remote-rover/
   gcs_server/
   3d-env/
   tts_service/
-  rover-sim-next/
   config/
   docs/
   tools/
@@ -152,4 +149,4 @@ For cross-platform launcher details, shared config behavior, and telemetry polic
 
 ## Current Status In One Paragraph
 
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. The active runtime is still `3d-env`; `rover-sim-next/` exists only as a scaffolded side path in the repository.
+The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. `3d-env` is the sole supported simulator backend.

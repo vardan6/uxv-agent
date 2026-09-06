@@ -9,4 +9,4 @@ This file stores repository-local agent workflow exceptions that supplement the 
 
 ## Scope
 
-These notes apply across this repository, including `gcs_server/`, `3d-env/`, `rover-sim-next/`, and related shared docs, unless a future note narrows the scope explicitly.
+These notes apply across this repository, including `gcs_server/`, `3d-env/`, and related shared docs, unless a future note narrows the scope explicitly.

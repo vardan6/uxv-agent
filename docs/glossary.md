@@ -41,9 +41,8 @@ operator approve / reject input before continuing a planning flow.
 
 ## Backend Identity
 
-A configuration value identifying which simulator backend (`3d-env` or
-`rover-sim-next`) is currently active. Persisted in shared config and
-reflected in telemetry.
+A configuration value identifying the `3d-env` simulator backend. Persisted
+in shared config and reflected in telemetry.
 
 ## Bootstrap Video Path
 
