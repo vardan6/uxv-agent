@@ -17,5 +17,5 @@ The sole supported simulator is **`3d-env/`**, the current Panda3D + Bullet base
 ## Code Locations
 
 - `3d-env/` — current Panda3D simulator
-- `config/terrain_scene.v1.json` — canonical scene manifest
+- `scene/scenes/terrain_scene.v1.json` — canonical scene manifest
 - `config/common.example.json` — shared MQTT/GCS config contract

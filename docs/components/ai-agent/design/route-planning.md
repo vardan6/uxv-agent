@@ -6,7 +6,7 @@ Design reference for the road-graph + route-planner-tool + QGC `.plan` exporter 
 
 ### Graph build
 
-Source: `config/terrain_scene.v1.json`. Each road carries `centerline=[start,end]`, `geometry.width`, `metadata.drivable=true`, `metadata.route_planning_cost`, and `metadata.group`.
+Source: `scene/scenes/terrain_scene.v1.json`. Each road carries `centerline=[start,end]`, `geometry.width`, `metadata.drivable=true`, `metadata.route_planning_cost`, and `metadata.group`.
 
 Build order:
 

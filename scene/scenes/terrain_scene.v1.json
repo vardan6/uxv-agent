@@ -1,8 +1,8 @@
 {
   "schema_version": "terrain-scene/v1",
   "generator": {
-    "name": "tools/generate_terrain_scene.py",
-    "legacy_source": "config/terrain_scene.json"
+    "name": "scene/pipeline/generate_terrain_scene.py",
+    "legacy_source": "scene/scenes/terrain_scene.json"
   },
   "units": {
     "linear": "m",

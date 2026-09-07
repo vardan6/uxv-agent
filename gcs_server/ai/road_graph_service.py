@@ -1,6 +1,6 @@
 """Road graph service for route planning over terrain_scene road network.
 
-Builds an undirected weighted graph from config/terrain_scene.v1.json with:
+Builds an undirected weighted graph from scene/scenes/terrain_scene.v1.json with:
   - Endpoint snap (configurable epsilon, default 0.5 m)
   - T-junction split pass (mandatory — without it the 16-road scene produces
     4+ disconnected components because connector endpoints hit road interiors)
@@ -18,7 +18,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-_SCENE_PATH = Path(__file__).resolve().parents[2] / "config" / "terrain_scene.v1.json"
+_SCENE_PATH = Path(__file__).resolve().parents[2] / "scene" / "scenes" / "terrain_scene.v1.json"
 _DEFAULT_EPSILON = 0.5
 _COST_MULTIPLIERS: dict[str, float] = {
     "preferred": 1.0,

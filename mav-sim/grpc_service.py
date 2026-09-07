@@ -1,4 +1,4 @@
-"""Minimal real gRPC server for the mav_sim MAVSDK seam.
+"""Minimal real gRPC server for the mav-sim MAVSDK seam.
 
 This is a small, self-contained service (see proto/mav_sim.proto) — not the
 official MAVSDK plugin proto set. It exists so the MAVSDK gRPC transport reports

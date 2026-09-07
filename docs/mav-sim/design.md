@@ -1,4 +1,4 @@
-# mav_sim — Design
+# mav-sim — Design
 
 ## Protocol decisions
 
@@ -6,7 +6,7 @@
 
 **Source:** MAVLink, MAVSDK, and ROS2/MAVROS documentation, confirmed 2026-06-03.
 
-The name `mav_sim` (not `mavlink_sim` or `mavlink_monitor`) reflects that the simulator
+The directory name `mav-sim` (not `mavlink-sim` or `mavlink-monitor`) reflects that the simulator
 will eventually speak multiple protocols:
 
 | Protocol | Status | Notes |
@@ -103,7 +103,7 @@ Browser (port 9010)
 
 ### Phase 5 — multi-protocol (implemented)
 
-- `transport_manager.py` is the protocol-service registry for `mav_sim`, holding three services: `mavlink_udp` (running), `mavsdk_grpc`, and `ros2_mavros`.
+- `transport_manager.py` is the protocol-service registry for `mav-sim`, holding three services: `mavlink_udp` (running), `mavsdk_grpc`, and `ros2_mavros`.
 - MAVLink UDP remains the always-on transport implementation.
 - **MAVSDK gRPC** is now a *real* `grpc.aio` server (`grpc_service.py`), gated by `config.MAVSDK_GRPC_ENABLED` (off by default). When enabled, `MavsdkGrpcService.start()` lazily imports grpc and boots the server on its own asyncio loop in a daemon thread; status flips to `running`/`error` based on liveness. `grpc` is imported lazily so the base monitor runs without grpcio installed.
 - The gRPC surface is **deliberately not** the official MAVSDK plugin proto set (that is the large C++ `mavsdk_server` API). It is a small self-contained service in `proto/mav_sim.proto` (`GetInfo`, `GetMission`, `SubscribeTelemetry`) mirroring the simulator's in-memory state so a client can connect and read/stream real data. Regenerate stubs with `python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/mav_sim.proto`.
@@ -145,7 +145,7 @@ Flash animation: CSS `@keyframes` highlight fade on the new top row (green → t
 
 ## Future: full autopilot simulator
 
-When `mav_sim` grows into a full simulator it will:
+When `mav-sim` grows into a full simulator it will:
 
 1. Complete the MAVLink handshake (send `MISSION_ACK` after upload)
 2. Track current waypoint index, advance on simulated arrival
@@ -154,5 +154,5 @@ When `mav_sim` grows into a full simulator it will:
 5. Implement MAVSDK gRPC server interface
 6. Render vehicle model on GCS map widget
 
-At that point `mav_sim` becomes a SITL-equivalent without requiring ArduPilot or PX4
+At that point `mav-sim` becomes a SITL-equivalent without requiring ArduPilot or PX4
 build toolchains.

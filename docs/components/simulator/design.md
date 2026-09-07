@@ -168,7 +168,7 @@ Current source: POV offscreen buffer capture, published as JPEG bytes.
 
 ## Terrain And Visual World
 
-The current world includes a `400 × 400` terrain area driven entirely by an explicit scene manifest at `config/terrain_scene.v1.json`.
+The current world includes a `400 × 400` terrain area driven entirely by an explicit scene manifest at `scene/scenes/terrain_scene.v1.json`.
 
 Key terrain features:
 - deterministic valley and hill shaping
@@ -190,13 +190,13 @@ The scene uses local metric coordinates as the authoritative position model:
 
 ### Terrain Source Discipline
 
-The expanded `config/terrain_scene.v1.json` is the runtime source of truth. Do not patch it directly without also updating the generator.
+The expanded `scene/scenes/terrain_scene.v1.json` is the runtime source of truth. Do not patch it directly without also updating the generator.
 
 To regenerate:
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python3 tools/generate_terrain_scene.py
-python3 tools/validate_terrain_scene.py
+python3 scene/pipeline/generate_terrain_scene.py
+python3 scene/pipeline/validate_terrain_scene.py
 ```
 
 ---
@@ -232,7 +232,7 @@ These decisions were agreed in a grill-me session on 2026-05-15 (source: `center
 
 **6. Charging Hardware Fidelity Is Secondary For Now.** The charger does not need a precise mechanical connector in the first redesign. A simple visible contact plate or bumper (~`0.25m` to `0.45m` above the apron) is sufficient for a future "touch to charge" trigger.
 
-**7. Use Source/Generator Discipline.** Do not hand-patch only `config/terrain_scene.v1.json`. Update the source (`config/terrain_scene.json` + `tools/generate_terrain_scene.py`), regenerate, validate, then test.
+**7. Use Source/Generator Discipline.** Do not hand-patch only `scene/scenes/terrain_scene.v1.json`. Update the source (`scene/scenes/terrain_scene.json` + `scene/pipeline/generate_terrain_scene.py`), regenerate, validate, then test.
 
 ---
 

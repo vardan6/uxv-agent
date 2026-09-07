@@ -8,7 +8,7 @@ Repository root:
 Main subprojects:
 - `3d-env/`
 - `gcs_server/`
-- `tools/`
+- `scene/`
 - `config/`
 - `docs/`
 
@@ -32,12 +32,12 @@ Current shared config covers:
 ## Terrain Scene Manifest
 
 Terrain and static world-object data live in:
-- `config/terrain_scene.v1.json`
+- `scene/scenes/terrain_scene.v1.json`
 
 This manifest is consumed by:
 - `3d-env/simulator/terrain.py`
 - `3d-env/simulator/main.py`
-- `gcs_server/scene_map.py`
+- `scene/scene_map.py`
 
 The manifest contains explicit final objects and terrain data. Runtime scripts should not hard-code terrain object names, object counts, coordinates, or dimensions.
 
@@ -45,8 +45,8 @@ Regenerate and validate it from the repository root when terrain definitions cha
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python3 tools/generate_terrain_scene.py
-python3 tools/validate_terrain_scene.py
+python3 scene/pipeline/generate_terrain_scene.py
+python3 scene/pipeline/validate_terrain_scene.py
 ```
 
 Detailed manifest notes:

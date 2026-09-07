@@ -1,4 +1,4 @@
-# mav_sim
+# mav-sim
 
 MAVLink simulator and monitor. Starts as a mission upload monitor with a live web UI;
 roadmap target is a full bidirectional autopilot simulator (receive missions, simulate
@@ -38,7 +38,7 @@ the MAVSDK gRPC integration point without pretending the service surface exists 
 
 ## Roadmap: full autopilot simulator
 
-Future phases will turn `mav_sim` into a full MAVLink node that:
+Future phases will turn `mav-sim` into a full MAVLink node that:
 - Responds to mission uploads with proper `MISSION_ACK` handshake
 - Simulates vehicle position and streams `GLOBAL_POSITION_INT` telemetry back to GCS
 - Renders vehicle position on the GCS map widget
@@ -59,12 +59,12 @@ Future phases will turn `mav_sim` into a full MAVLink node that:
 - **ROS2 / MAVROS** is a disabled stub (`ROS2_BRIDGE_ENABLED`); MAVROS needs a full
   ROS2 install and is advertised but not implemented.
 
-See [`docs/mav_sim/design.md`](../docs/mav_sim/design.md) for protocol and architecture decisions.
+See [`docs/mav-sim/design.md`](../docs/mav-sim/design.md) for protocol and architecture decisions.
 
 ## Structure
 
 ```
-mav_sim/
+mav-sim/
 ├── app.py          — FastAPI app + native WebSocket server (port 9010)
 ├── config.py       — port config, MAVLink settings
 ├── mavlink_listener.py  — UDP listener, packet decoder (pymavlink)

@@ -4,7 +4,7 @@
 
 The terrain scene manifest is the single source of truth for the current `3d-env` world geometry and map data.
 
-Authoritative artifact: `config/terrain_scene.v1.json` (validated against `config/terrain_scene.schema.json`).
+Authoritative artifact: `scene/scenes/terrain_scene.v1.json` (validated against `scene/schema/terrain_scene.schema.json`).
 
 ## Current Model
 
@@ -50,12 +50,12 @@ The manifest remains the composition/index file even when individual objects lat
 
 ## Source And Pipeline Discipline
 
-Do not fix terrain, charging-station geometry, roads, or colliders by only patching `config/terrain_scene.v1.json`. Treat that file as a generated runtime artifact.
+Do not fix terrain, charging-station geometry, roads, or colliders by only patching `scene/scenes/terrain_scene.v1.json`. Treat that file as a generated runtime artifact.
 
 When redesigning the start hub, charging station, flat apron, roads, or physics collision proxies:
 
 1. Update the source that owns the scene design first (currently the compact seed file plus the generator script).
-2. Regenerate `config/terrain_scene.v1.json`.
+2. Regenerate `scene/scenes/terrain_scene.v1.json`.
 3. Run the scene validator.
 4. Run the simulator and test rover driving from spawn, docking-area exit, road entry, object collision, and no floating/buried station parts.
 5. When a broader map database or BUS-style synchronization pipeline exists, run that pipeline after the source update so every map representation is rebuilt from the same source design.

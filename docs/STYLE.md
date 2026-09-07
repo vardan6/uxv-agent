@@ -123,7 +123,7 @@ Python convention and needs no further decision.
 Non-exceptions worth noting: `3d-env/` is hyphenated and stays that way — it is
 not an importable package, and `3d_env` would be an invalid identifier anyway
 because it starts with a digit. `mav-sim/` is safe because nothing imports
-`mav_sim` as a package; it is launched by path (`mav_sim/run.sh` does
+`mav_sim` as a package; it is launched by path (`mav-sim/run.sh` does
 `cd "$DIR" && exec python app.py`). Its gRPC **proto** package is also named
 `mav_sim` (`proto/mav_sim.proto`, `mav_sim.MavSim/*` in the generated stubs) —
 that is a wire identifier and must **not** be renamed with the directory.

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-python3 tools/generate_terrain_scene.py
-python3 tools/validate_terrain_scene.py
+python3 scene/pipeline/generate_terrain_scene.py
+python3 scene/pipeline/validate_terrain_scene.py
 python3 -m py_compile \
-  tools/generate_terrain_scene.py \
-  tools/validate_terrain_scene.py \
+  scene/pipeline/generate_terrain_scene.py \
+  scene/pipeline/validate_terrain_scene.py \
   3d-env/simulator/terrain.py \
   3d-env/simulator/main.py \
-  gcs_server/scene_map.py \
+  scene/scene_map.py \
   gcs_server/ai/road_graph_service.py
 
 python3 - <<'PY'
-from gcs_server.scene_map import get_scene_map_payload
+from scene.scene_map import get_scene_map_payload
 from gcs_server.ai.road_graph_service import RoadGraphService
 
 scene = get_scene_map_payload(grid_size=64)

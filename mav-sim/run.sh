@@ -9,10 +9,10 @@ if [ ! -x "$PYTHON_BIN" ]; then
   echo "Shared venv not found at $ROOT/.venv"
   echo "Create it from the repository root:"
   echo "  python3 -m venv .venv"
-  echo "  .venv/bin/python -m pip install -r mav_sim/requirements.txt"
+  echo "  .venv/bin/python -m pip install -r mav-sim/requirements.txt"
   exit 1
 fi
 
 cd "$DIR"
-echo "[mav_sim] Starting — web UI http://localhost:9010  MAVLink UDP :14550"
+echo "[mav-sim] Starting — web UI http://localhost:9010  MAVLink UDP :14550"
 exec "$PYTHON_BIN" app.py

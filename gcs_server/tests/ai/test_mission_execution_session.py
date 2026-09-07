@@ -55,3 +55,34 @@ def test_confirm_within_the_window_starts_the_run():
     assert active is not None and active.thread is not None
     active.thread.join(timeout=2.0)
     assert active.status == "succeeded"
+
+
+def test_list_active_includes_non_terminal_sessions_and_stamps_transitions():
+    now = {"t": 1000.0}
+    sessions = MissionExecutionSessions(clock=lambda: now["t"])
+    _prepared(sessions, session_id="sess-armed")
+
+    now["t"] = 1005.0
+    sessions.arm("sess-armed")
+
+    rows = sessions.list_active()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "sess-armed"
+    assert row["mission_id"] == "mission-1"
+    assert row["status"] == "armed"
+    assert row["last_transition_at"] == 1005.0
+
+
+def test_list_active_excludes_terminal_sessions():
+    now = {"t": 1000.0}
+    sessions = MissionExecutionSessions(clock=lambda: now["t"])
+    _prepared(sessions, session_id="sess-done")
+    sessions.arm_confirm("sess-done", timeout_s=5)
+
+    now["t"] += 1.0
+    result = sessions.confirm("sess-done")
+    assert result["ok"] is True
+    sessions.get("sess-done").thread.join(timeout=2.0)
+
+    assert sessions.list_active() == []

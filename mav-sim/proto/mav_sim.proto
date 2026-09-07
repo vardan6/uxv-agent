@@ -3,7 +3,7 @@ syntax = "proto3";
 // Minimal gRPC surface for the mav_sim simulator side-path.
 //
 // This is intentionally NOT the official MAVSDK protobuf API (see
-// docs/mav_sim/design.md: MAVSDK has its own large plugin proto set served by
+// docs/mav-sim/design.md: MAVSDK has its own large plugin proto set served by
 // the C++ mavsdk_server). It is a small, self-contained service that mirrors
 // the simulator's in-memory state over a real gRPC transport so that the
 // MAVSDK gRPC seam reports an actually-running server and a client can connect.

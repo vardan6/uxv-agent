@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
-LEGACY_CONFIG = ROOT / "config" / "terrain_scene.json"
-OUTPUT = ROOT / "config" / "terrain_scene.v1.json"
+ROOT = Path(__file__).resolve().parents[2]
+LEGACY_CONFIG = ROOT / "scene" / "scenes" / "terrain_scene.json"
+OUTPUT = ROOT / "scene" / "scenes" / "terrain_scene.v1.json"
 
 
 def clamp(v: float, lo: float, hi: float) -> float:
@@ -443,7 +443,7 @@ def build_scene(config: dict[str, Any]) -> dict[str, Any]:
     flat = [h for row in heights for h in row]
     return {
         "schema_version": "terrain-scene/v1",
-        "generator": {"name": "tools/generate_terrain_scene.py", "legacy_source": "config/terrain_scene.json"},
+        "generator": {"name": "scene/pipeline/generate_terrain_scene.py", "legacy_source": "scene/scenes/terrain_scene.json"},
         "units": {"linear": "m", "angular": "deg"},
         "coordinate_system": {
             "up_axis": "Z",

@@ -92,17 +92,17 @@ rejected for v1 (unstable, costly, hard to diff); LLM enrichment arrives as
 Contextual Retrieval in a later slice.
 
 **7. Update pipeline: manual and idempotent; trigger is per-source.**
-`project_docs` is pull-based — `./rag_service/bin/rag ingest` re-embeds only
+`project_docs` is pull-based — `./bin/rag ingest` re-embeds only
 changed chunks (detected via `content_hash`), making re-runs safe and cheap. No
 watcher daemon, no cron. An opt-in `git post-commit` hook (default off) is
 offered for convenience. Runtime sources (`ai_chat_history`, `mission_history`)
 will get event-driven triggers when built — there is no universal trigger.
 
 Operational surface is **thin bash, fat Python**: one dispatcher
-`rag_service/bin/rag` with five verbs — `up | down | status | ingest |
-reindex` — each a ~10-line wrapper that resolves the venv and delegates to a
-Python module. `ingest` (incremental) and `reindex` (full rebuild, for use
-after a model/dimension change) stay distinct verbs.
+`bin/rag` with lifecycle and data verbs — `up | down | status | logs | ingest |
+eval` — each a thin wrapper that resolves the venv or Compose file and delegates
+to the appropriate subsystem. `ingest` is incremental; the future `reindex`
+verb remains distinct for a full rebuild after a model or dimension change.
 
 **8. The collection is provisioned for hybrid from day 1, populated dense-first.**
 Slice 1 creates the collection with **both** dense and sparse vector configs but

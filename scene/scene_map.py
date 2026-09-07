@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCENE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "terrain_scene.v1.json"
+SCENE_CONFIG_PATH = Path(__file__).resolve().parent / "scenes" / "terrain_scene.v1.json"
 DEFAULT_GRID_SIZE = 128
 
 

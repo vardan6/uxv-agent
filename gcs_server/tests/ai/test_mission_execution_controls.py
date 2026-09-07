@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -198,6 +199,48 @@ def test_abort_mission_updates_operation_status_after_adapter_hold(mission_db_pa
     assert result == {"ok": True, "status": "aborted", "operation_id": operation_id}
     assert adapter.calls == ["stop"]
     assert _operation_status(db_path, operation_id) == "aborted"
+
+
+def test_list_active_controller_missions_joins_missions_to_non_terminal_operations(
+    mission_db_path: Path,
+) -> None:
+    adapter = _RecordingControllerAdapter()
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
+    now = time.time()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO missions (id, mission_index, name, active_operation_id, created_at, updated_at)
+            VALUES (?, 1, 'test mission', ?, ?, ?)
+            """,
+            ("mission-1", operation_id, now, now),
+        )
+        conn.commit()
+
+    rows = svc.list_active_controller_missions()
+
+    assert len(rows) == 1
+    assert rows[0]["mission_id"] == "mission-1"
+    assert rows[0]["operation_id"] == operation_id
+    assert rows[0]["status"] == _operation_status(db_path, operation_id) == "planning"
+
+
+def test_list_active_controller_missions_excludes_terminal_operations(mission_db_path: Path) -> None:
+    adapter = _RecordingControllerAdapter()
+    svc, operation_id, db_path = _make_service_with_operation(adapter=adapter, db_path=mission_db_path)
+    now = time.time()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO missions (id, mission_index, name, active_operation_id, created_at, updated_at)
+            VALUES (?, 1, 'test mission', ?, ?, ?)
+            """,
+            ("mission-1", operation_id, now, now),
+        )
+        conn.commit()
+    svc.abort_mission(operation_id)
+
+    assert svc.list_active_controller_missions() == []
 
 
 def test_pause_endpoint_rolls_back_session_pause_when_service_pause_fails() -> None:

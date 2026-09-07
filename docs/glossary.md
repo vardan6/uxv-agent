@@ -277,7 +277,7 @@ with structured-output parsing and a single repair attempt.
 
 The single source of truth for static world geometry: terrain
 heightfield, roads, spawn points, pads, solar panels, building parts,
-trees, rocks. Stored at `config/terrain_scene.v1.json`. Consumed by both
+trees, rocks. Stored at `scene/scenes/terrain_scene.v1.json`. Consumed by both
 simulator and GCS.
 
 ## SpatialQueryService
@@ -401,16 +401,17 @@ the code has been vehicle-agnostic since `VehicleProfile` started modelling
 
 | Name | What it is | Status |
 |---|---|---|
-| `uxv-gcs` | This system: the full private ground control station. **The repo slug is still `remote-rover`** | intended engineering name; repo rename deferred |
+| `remote-uxv` | This private root repository and local directory | chosen by [ADR 0037](./cross-cutting/decisions/0037-project-naming-and-directory-restructure.md); directory move is scheduled in R1 |
 | `uxv-agent` | Public repo: the AI mission-planning agent plus the [Mission Console](#mission-console) as its demo surface | name settled; repo not yet created |
-| `uxv-map` | Embeddable mission-planning map widget (`gcs_server/static/map/`) | deferred |
-| `uxv-sim` | Simulation infrastructure | proposed: no repo |
+| `uxv-map` | Earlier proposed name for the embeddable mission-planning map widget | abandoned; the package is `map/` |
+| `uxv-sim` | Earlier proposed umbrella name for simulation infrastructure | abandoned; `mav-sim/` and `3d-env/` remain independent |
 
-⚠️ **No ADR records this yet.** The plan is
-[handoff §6a](./cross-cutting/handoff-repo-split-and-rename-2026-09-02.md); the
-search record is
-[the 2026-08-10 strategy doc](./cross-cutting/research/2026-08-10-project-naming-and-repo-split-strategy.md).
-Only `uxv-agent` and "`remote-rover` is not renamed" are settled.
+The naming decision is [ADR 0037](./cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
+The current worktree remains `remote-rover` until its scheduled R1 move; that
+temporary path is not the chosen repository name. The older
+[split handoff](./cross-cutting/handoff-repo-split-and-rename-2026-09-02.md)
+and [strategy record](./cross-cutting/research/2026-08-10-project-naming-and-repo-split-strategy.md)
+retain historical reasoning only.
 
 ## Workspace
 

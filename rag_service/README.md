@@ -12,14 +12,15 @@ gracefully** without it — chat still works and `project_docs` reports
 
 - **Pulled once** from Docker Hub: the prebuilt `qdrant/qdrant` image (pinned in
   `docker-compose.yml`). We build no custom image.
-- **Local on the host**: this `bin/rag` dispatcher, chunking/ingestion (Python in
+- **Local on the host**: the repository's [`bin/rag`](../bin/rag) dispatcher,
+  chunking/ingestion (Python in
   the repo venvs), and `qdrant-client`. Vector data persists in a Docker named
   volume (`remote-rover-qdrant-storage`).
 
 ## Quick start
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/rag_service
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
 bin/rag up        # start Qdrant (pulls the image on first run)
 bin/rag status    # report readiness
 bin/rag down      # stop (data volume preserved)
@@ -66,3 +67,5 @@ Load the model in LM Studio, start its server, then:
 ```bash
 PYTHONPATH=<repo-root> <repo-root>/.venv/bin/python -m rag_service.ingest
 ```
+
+The equivalent repository command is `bin/rag ingest`.

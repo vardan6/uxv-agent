@@ -140,8 +140,8 @@ Regenerate the explicit terrain scene manifest when terrain/object definitions c
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python3 tools/generate_terrain_scene.py
-python3 tools/validate_terrain_scene.py
+python3 scene/pipeline/generate_terrain_scene.py
+python3 scene/pipeline/validate_terrain_scene.py
 ```
 
 For cross-platform launcher details, shared config behavior, and telemetry policy notes, use:

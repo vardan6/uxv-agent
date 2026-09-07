@@ -20,7 +20,7 @@ from pathlib import Path
 # 1 degree of latitude ≈ 111_320 m; 1 degree of longitude ≈ that × cos(lat).
 _METRES_PER_DEG_LAT = 111_320.0
 
-_SCENE_PATH = Path(__file__).resolve().parents[2] / "config" / "terrain_scene.v1.json"
+_SCENE_PATH = Path(__file__).resolve().parents[2] / "scene" / "scenes" / "terrain_scene.v1.json"
 
 
 @dataclass(frozen=True)

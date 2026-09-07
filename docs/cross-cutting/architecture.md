@@ -80,7 +80,7 @@ Primary responsibilities:
 ### 4. Terrain Scene Manifest
 
 Location:
-- `config/terrain_scene.v1.json`
+- `scene/scenes/terrain_scene.v1.json`
 
 Primary responsibilities:
 - define the current terrain heightfield
@@ -257,7 +257,7 @@ LLM provider config
   -> provider/model/routing summaries with secrets redacted
 ReplayStore
   -> active replay summary, recent telemetry
-scene_map.py
+scene/scene_map.py
   -> terrain bounds, roads, object geometry
 Mission execution providers
   -> current mission revision state, overlays, controller mission snapshot state
@@ -344,7 +344,7 @@ Current important modules:
 - `gcs_server/state.py`: in-memory runtime state and freshness tracking
 - `gcs_server/ws.py`: browser connection manager
 - `gcs_server/runtime.py`: service assembly and reconfiguration
-- `gcs_server/scene_map.py`: scene-map payload from `config/terrain_scene.v1.json`
+- `scene/scene_map.py`: scene-map payload from `scene/scenes/terrain_scene.v1.json`
 - `gcs_server/ai/context_service.py`: live current-context providers for AI Chat
 - `gcs_server/ai/spatial_query_service.py`: deterministic spatial/geometry query service
 - `gcs_server/ai/tool_registry.py`: permissioned per-request tool registry for Agent and mission-authoring flows

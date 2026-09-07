@@ -1676,6 +1676,35 @@ class MissionExecutionService:
         payload["controller_state"] = self.get_controller_state()
         return payload
 
+    def list_active_controller_missions(self) -> list[dict[str, Any]]:
+        """Missions whose active operation is non-terminal (AR0a).
+
+        Covers the direct-controller cutover path, which drives a Mission
+        without ever creating a :class:`MissionExecutionSessions` entry — the
+        counterpart source that inventory unions against.
+        """
+        placeholders = ",".join("?" for _ in MISSION_OPERATION_ACTIVE_STATUSES)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT m.id AS mission_id, o.id AS operation_id, o.status,
+                       o.updated_at
+                FROM missions m
+                JOIN ai_mission_operations o ON o.id = m.active_operation_id
+                WHERE o.status IN ({placeholders})
+                """,
+                tuple(MISSION_OPERATION_ACTIVE_STATUSES),
+            ).fetchall()
+        return [
+            {
+                "mission_id": row["mission_id"],
+                "operation_id": row["operation_id"],
+                "status": row["status"],
+                "last_transition_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     def clear_controller_mission(self, *, expected_controller_version: int | None = None) -> dict[str, Any]:
         """Clear the controller-owned mission (Read/Write/Clear), projecting the
         resulting idle state into the durable controller-state row."""

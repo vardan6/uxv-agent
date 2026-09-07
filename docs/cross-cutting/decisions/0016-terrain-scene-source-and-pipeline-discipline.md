@@ -5,7 +5,7 @@ Status: Accepted
 
 ## Context
 
-`config/terrain_scene.v1.json` is the authoritative runtime manifest for the `3d-env` simulator and the GCS map: terrain heightfield, road centerlines, pads, buildings, charging station, solar panels, rocks, trees, collision proxies, route-planning metadata. It is also generated from a compact seed file plus a generator script.
+`scene/scenes/terrain_scene.v1.json` is the authoritative runtime manifest for the `3d-env` simulator and the GCS map: terrain heightfield, road centerlines, pads, buildings, charging station, solar panels, rocks, trees, collision proxies, route-planning metadata. It is also generated from a compact seed file plus a generator script.
 
 When something looks wrong — a floating charger leg, a broken collider, a road junction that does not snap — the shortest fix is to open `terrain_scene.v1.json` and patch the field directly. The cost of doing that repeatedly is that the file drifts from the source design: regeneration silently undoes the patch, multiple representations diverge, and the "source of truth" claim becomes a lie.
 
@@ -13,10 +13,10 @@ A future map-synchronization layer (BUS-style pipeline, broader map database) ma
 
 ## Decision
 
-`config/terrain_scene.v1.json` is treated as a generated runtime artifact. Fixes to terrain, charging-station geometry, roads, or colliders must follow the source-and-pipeline order:
+`scene/scenes/terrain_scene.v1.json` is treated as a generated runtime artifact. Fixes to terrain, charging-station geometry, roads, or colliders must follow the source-and-pipeline order:
 
 1. Update the source that owns the scene design (currently the compact seed file plus the generator script).
-2. Regenerate `config/terrain_scene.v1.json`.
+2. Regenerate `scene/scenes/terrain_scene.v1.json`.
 3. Run the scene validator against the schema.
 4. Run the simulator and validate driving from spawn, docking-area exit, road entry, object collision, and absence of floating or buried parts.
 5. When a broader synchronization pipeline exists, run it so every derived map representation is rebuilt from the same source design.

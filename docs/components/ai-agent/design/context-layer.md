@@ -155,7 +155,7 @@ Session-specific behavior:
 ### Scene Map And Object Facts
 
 Source:
-- `config/terrain_scene.v1.json`
+- `scene/scenes/terrain_scene.v1.json`
 
 Included facts:
 - backend

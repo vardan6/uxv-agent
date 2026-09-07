@@ -236,12 +236,12 @@ Shared config also contains `key_bindings`, which the dashboard reads for browse
 
 ### Mission Lifecycle Tab
 
-See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lifecycle-tab) for the full field spec. For FC adapter protocol details and `mav_sim` integration see [`docs/mav_sim/design.md`](../../mav_sim/design.md).
+See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lifecycle-tab) for the full field spec. For FC adapter protocol details and `mav-sim` integration see [`docs/mav-sim/design.md`](../../mav-sim/design.md).
 
 ## Main Files
 
 - `app.py`: FastAPI routes and WebSocket endpoint
-- `scene_map.py`: replay scene-map payload from `config/terrain_scene.v1.json`
+- `scene/scene_map.py`: replay scene-map payload from `scene/scenes/terrain_scene.v1.json`
 - `runtime.py`: service assembly and reconfiguration
 - `mqtt_service.py`: MQTT connection, subscriptions, control publish, presence publish
 - `control.py`: held-button control loop

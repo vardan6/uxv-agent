@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SCENE = ROOT / "config" / "terrain_scene.v1.json"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SCENE = ROOT / "scene" / "scenes" / "terrain_scene.v1.json"
 
 
 def fail(message: str) -> None:

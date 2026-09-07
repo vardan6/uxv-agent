@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from gcs_server.runtime import AppRuntime
-from gcs_server.scene_map import get_scene_map_payload
+from scene.scene_map import get_scene_map_payload
 
 router = APIRouter()
 

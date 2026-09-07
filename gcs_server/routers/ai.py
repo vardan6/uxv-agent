@@ -774,6 +774,57 @@ async def list_missions(
     return {"missions": missions}
 
 
+@router.get("/api/ai/missions/active")
+async def list_active_missions(request: Request) -> dict[str, Any]:
+    """Cross-session, cross-path inventory of non-terminal Mission executions (AR0a).
+
+    Unions the per-AI-session executor registry (behavior-tree runs) with the
+    direct-controller cutover path, so a Mission driven only through the
+    latter is not silently omitted from the safety view. `session_id`/`mode`
+    are empty for a controller-cutover-only row: no executor session drove it.
+    """
+    runtime = _runtime(request)
+    sessions = runtime.mission_execution_sessions
+    execution = runtime.mission_execution_service
+    if sessions is None or execution is None:
+        return {"missions": []}
+
+    controller_health = execution.check_controller_health()
+
+    by_mission: dict[str, dict[str, Any]] = {}
+    for row in sessions.list_active():
+        mission_id = str(row.get("mission_id") or "")
+        if not mission_id:
+            continue
+        by_mission[mission_id] = {
+            "mission_id": mission_id,
+            "source": "server_executor",
+            "session_id": row.get("session_id", ""),
+            "mode": row.get("mode", ""),
+            "status": row.get("status", ""),
+            "detail": row.get("detail", ""),
+            "last_transition_at": row.get("last_transition_at", 0.0),
+            "controller_health": controller_health,
+        }
+
+    for row in execution.list_active_controller_missions():
+        mission_id = str(row.get("mission_id") or "")
+        if not mission_id or mission_id in by_mission:
+            continue
+        by_mission[mission_id] = {
+            "mission_id": mission_id,
+            "source": "controller_cutover",
+            "session_id": "",
+            "mode": "",
+            "status": row.get("status", ""),
+            "detail": "",
+            "last_transition_at": row.get("last_transition_at", 0.0),
+            "controller_health": controller_health,
+        }
+
+    return {"missions": list(by_mission.values())}
+
+
 @router.post("/api/ai/missions")
 async def create_blank_mission(request: Request) -> JSONResponse:
     """Create a blank manual Mission with an empty revision ready for waypoint placement.

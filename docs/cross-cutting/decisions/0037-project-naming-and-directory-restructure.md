@@ -32,10 +32,10 @@ Measurements that drove these decisions, verified and not to be re-derived:
   **25**. The existing vocabulary is *scene*.
 - `3d-env` appears **302 times** in tracked files, including as the config and
   wire value `"backend": "3d-env"`.
-- `mav_sim` has **zero package-level import sites**; `mav_sim/run.sh:17`
+- `mav_sim` has **zero package-level import sites**; `mav-sim/run.sh:17`
   launches it by path (`cd "$DIR" && exec python app.py`), not `python -m`.
 - `road_graph_service.py` has exactly three referents: `ai/tool_registry.py`,
-  its own test, and `tools/sync_terrain_scene.sh`.
+  its own test, and `scene/pipeline/sync_terrain_scene.sh`.
 
 ## Decision
 
@@ -73,16 +73,21 @@ is one process; `rag` and `tts` are separate processes; `map` is a package that
 leaves the repo; `scene` is data plus its pipeline; the simulators never ship to
 production but are independent OSS candidates.
 
-`scene_map.py` moves into `scene/` — it is the shared reader for all three
-consumers (agent tools, map widget, 3D env) and has zero FastAPI imports.
+`scene_map.py` moves into `scene/` — it is the backend reader for the agent
+tools and map widget, and has zero FastAPI imports. The 3D env is a separate
+consumer: `3d-env/simulator/terrain.py` opens the manifest directly. The move
+therefore updates both readers, plus the independent path logic in the terrain
+generation and validation tools; it does not standardize their access contract.
 `road_graph_service.py` **stays in `ai/`**: routing is agent behaviour, and the
 graph is derived from the scene *for one consumer*.
 
 `static/` **dissolves** into `frontend-vanilla/` and `map/`. Nothing is deleted;
 parity-triggered deletion remains a later decision inside `frontend-vanilla/`.
 
-`tools/` and root `bin/` dissolve into their owners. `xx`, `.vite/`, and the
-dangling `ArduPilot-SITL` symlink are deleted.
+`tools/` and root `bin/` dissolve into their owners. `xx` and `.vite/` are
+deleted. `ArduPilot-SITL` remains as a local-development symlink to the sibling
+clone because it is needed for future simulator work; it is not part of the
+restructure cleanup.
 
 ### Sequencing — the governing rule
 
@@ -115,7 +120,7 @@ therefore not part of PR 1 and `agent_core/` does not exist when PR 1 lands.
   there; it is not reassigned to the root.
 - The local absolute path changes from `~/Proj/remote-rover` to
   `~/Proj/remote-uxv`. The `ArduPilot-SITL` symlink targets a sibling directory
-  and is unaffected — and is being deleted regardless.
+  and remains a local-development integration pointer.
 - `3d-env` is a wire and config value, not merely a path. The directory name
   stays hyphenated so directory and contract agree. Renaming it would collide
   with [ADR 0036](./0036-retire-rover-sim-next.md), which made unsupported

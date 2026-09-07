@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Manage the Qdrant sidecar for Remote Rover RAG (ADR 0028).
-# Usage: bin/rag <up|down|status|logs>
+# Usage: bin/rag <up|down|status|logs|ingest|eval>
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/rag_service/docker-compose.yml"
+PYTHON="${RAG_PYTHON:-$REPO_ROOT/.venv/bin/python}"
+
+if [ ! -x "$PYTHON" ]; then
+  PYTHON="python3"
+fi
 
 cmd="${1:-help}"
 shift || true
@@ -28,17 +33,20 @@ case "$cmd" in
   eval)
     # Golden-question retrieval eval (spot-check, not a test). Needs Qdrant up,
     # docs ingested, and the embeddings provider reachable.
-    PY="$REPO_ROOT/.venv/bin/python"
-    [ -x "$PY" ] || PY="python3"
-    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PY" -m rag_service.eval "$@"
+    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag_service.eval "$@"
+    ;;
+  ingest)
+    # Incremental, idempotent project_docs ingestion. Docker/Qdrant must be up.
+    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag_service.ingest "$@"
     ;;
   *)
-    echo "Usage: bin/rag <up|down|status|logs|eval>"
+    echo "Usage: bin/rag <up|down|status|logs|ingest|eval>"
     echo ""
     echo "  up      Start Qdrant (detached)"
     echo "  down    Stop Qdrant"
     echo "  status  Show container status"
     echo "  logs    Tail Qdrant logs"
+    echo "  ingest  Incrementally ingest project_docs into Qdrant"
     echo "  eval    Run the project_docs golden-question retrieval eval"
     exit 1
     ;;

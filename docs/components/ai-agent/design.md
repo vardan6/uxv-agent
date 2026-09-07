@@ -581,7 +581,7 @@ Active profile is a Settings selection. Single-active assumed (one vehicle comma
 
 ### `RoadGraphService` (`gcs_server/ai/road_graph_service.py`)
 
-- On startup, loads `config/terrain_scene.v1.json` (already loaded by `scene_map.py`).
+- On startup, loads `scene/scenes/terrain_scene.v1.json` (already loaded by `scene/scene_map.py`).
 - Builds an undirected weighted graph: nodes = road endpoints, edges = road segments. Edge weight = euclidean length × cost multiplier from `metadata.route_planning_cost` (`preferred=1.0`, default `1.5`, `avoid` removed from graph).
 - Two non-naive construction steps:
   - **Endpoint snap** with a configurable epsilon (Settings: `road_graph_epsilon_m`, default ~0.5 m). The authored scene is not guaranteed to share endpoint coords exactly.
@@ -748,9 +748,9 @@ The `/ai` map is the authoring surface — there is no separate Missions page. C
 ### Critical files (route planning slice)
 
 - **New**: `gcs_server/ai/road_graph_service.py`, `gcs_server/ai/mission_export_service.py`, `gcs_server/ai/vehicle_profile.py`.
-- **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `propose_mission_draft`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/mission_execution_service.py` (own proposal/revision storage and plan-export state); `gcs_server/ai/mission_draft_service.py` (deterministic `validate_draft_payload` helper); `gcs_server/scene_map.py` (expose centerlines).
+- **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `propose_mission_draft`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/mission_execution_service.py` (own proposal/revision storage and plan-export state); `gcs_server/ai/mission_draft_service.py` (deterministic `validate_draft_payload` helper); `scene/scene_map.py` (expose centerlines).
 - **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionExecutionService` for proposal storage and approval flow, existing `PolicyEngine` for tier gating, and deterministic draft validation.
-- **Possibly bump**: `config/terrain_scene.v1.json` + `terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
+- **Possibly bump**: `scene/scenes/terrain_scene.v1.json` + `scene/schema/terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
 
 ## Memory Subsystem
 
@@ -1241,8 +1241,8 @@ gcs_server/ai/vehicle_profile.py         VehicleProfile + active selection
 gcs_server/ai/tool_registry.py           plan_route_*, propose_mission_draft, stop_mission tools
 gcs_server/ai/mission_execution_service.py proposal/revision storage, approval state, export result
 gcs_server/ai/mission_draft_service.py   validate_draft_payload helper
-gcs_server/scene_map.py                  expose centerlines + metadata.group
-config/terrain_scene.v1.json             schema bump: metadata.group per road
+scene/scene_map.py                       expose centerlines + metadata.group
+scene/scenes/terrain_scene.v1.json       schema bump: metadata.group per road
 ```
 
 ### Scaffolded; implemented later

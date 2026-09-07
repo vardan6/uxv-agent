@@ -25,6 +25,11 @@ from typing import Any, Callable, Optional
 
 Clock = Callable[[], float]
 
+# ActiveExecution.status values that will never change again.
+TERMINAL_EXECUTION_STATUSES = frozenset(
+    {"succeeded", "failed", "aborted", "cancelled", "expired", "error"}
+)
+
 from gcs_server.ai.controller_mission_adapter import ControllerMissionAdapter
 from gcs_server.ai.execution_mode import CONFIRM, STRICT, resolve_execution_mode
 from gcs_server.ai.mission_executor import MissionExecutor, NodeStatus
@@ -120,6 +125,10 @@ class ActiveExecution:
     detail: str = ""
     thread: Optional[threading.Thread] = field(default=None, repr=False)
 
+    # Set whenever ``status`` changes; feeds the active-Mission inventory
+    # (AR0a) so the safety view can show how long a Mission has sat in a state.
+    last_transition_at: float = 0.0
+
     # Confirm-mode banner (ADR 0021 §1/§6): arm_confirm records a deadline; the
     # operator must confirm before it passes, else the run expires.
     confirm_timeout_s: int = 0
@@ -145,6 +154,7 @@ class ActiveExecution:
             "confirm_timeout_s": self.confirm_timeout_s,
             "confirm_deadline": self.confirm_deadline,
             "confirm_remaining_s": round(self.confirm_remaining_s(), 2),
+            "last_transition_at": self.last_transition_at,
         }
 
 
@@ -165,6 +175,21 @@ class MissionExecutionSessions:
     def get(self, session_id: str) -> Optional[ActiveExecution]:
         with self._lock:
             return self._by_session.get(_clean(session_id))
+
+    def list_active(self) -> list[dict[str, Any]]:
+        """Snapshot of every session-registry execution not yet terminal.
+
+        Feeds the cross-session, cross-path active-Mission inventory (AR0a).
+        A Mission driven only through the direct-controller cutover path has
+        no entry here — see ``MissionExecutionService.list_active_controller_missions``.
+        """
+        with self._lock:
+            items = list(self._by_session.items())
+        return [
+            {"session_id": session_id, **active.snapshot()}
+            for session_id, active in items
+            if active.status not in TERMINAL_EXECUTION_STATUSES
+        ]
 
     def get_for_mission(self, mission_id: str) -> Optional[ActiveExecution]:
         target = _clean(mission_id)
@@ -220,6 +245,7 @@ class MissionExecutionSessions:
                 mode=str(mode or ""),
                 status="armed" if getattr(executor, "_armed", False) else "prepared",
                 clock=self._clock,
+                last_transition_at=self._clock(),
             )
             self._by_session[key] = active
             return active
@@ -235,6 +261,7 @@ class MissionExecutionSessions:
                 return {"ok": False, "error": "execution already running", **active.snapshot()}
             active.status = "running"
             active.detail = ""
+            active.last_transition_at = active.clock()
 
             def _run() -> None:
                 try:
@@ -249,6 +276,7 @@ class MissionExecutionSessions:
                 except Exception as exc:  # ExecutorStateError or seam failure
                     active.status = "error"
                     active.detail = str(exc)
+                active.last_transition_at = active.clock()
 
             thread = threading.Thread(
                 target=_run, name=f"mission-exec-{_clean(session_id)}", daemon=True
@@ -263,6 +291,7 @@ class MissionExecutionSessions:
             return {"ok": False, "error": "no prepared execution for this session"}
         active.executor.arm()
         active.status = "armed"
+        active.last_transition_at = active.clock()
         return {"ok": True, **active.snapshot()}
 
     def arm_confirm(self, session_id: str, timeout_s: int) -> dict[str, Any]:
@@ -278,6 +307,7 @@ class MissionExecutionSessions:
         active.confirm_deadline = self._clock() + float(timeout_s)
         active.status = "awaiting_confirm"
         active.detail = ""
+        active.last_transition_at = active.clock()
         return {"ok": True, **active.snapshot()}
 
     def confirm(self, session_id: str) -> dict[str, Any]:
@@ -291,6 +321,7 @@ class MissionExecutionSessions:
         if active.confirm_remaining_s() <= 0:
             active.status = "expired"
             active.detail = "confirm window elapsed"
+            active.last_transition_at = active.clock()
             return {"ok": False, "error": "confirm window elapsed", **active.snapshot()}
         return self.start(session_id)
 
@@ -304,6 +335,7 @@ class MissionExecutionSessions:
             return {"ok": False, "error": "execution already running; use abort", **active.snapshot()}
         active.status = "cancelled"
         active.confirm_deadline = 0.0
+        active.last_transition_at = active.clock()
         return {"ok": True, **active.snapshot()}
 
     def request_abort(self, session_id: str) -> dict[str, Any]:
@@ -323,6 +355,7 @@ class MissionExecutionSessions:
             return {"ok": False, "error": "execution is not running", **active.snapshot()}
         active.executor.request_pause()
         active.status = "paused"
+        active.last_transition_at = active.clock()
         return {"ok": True, **active.snapshot()}
 
     def resume_for_mission(self, mission_id: str) -> dict[str, Any]:
@@ -333,6 +366,7 @@ class MissionExecutionSessions:
             return {"ok": False, "error": f"execution is not paused (status: {active.status})", **active.snapshot()}
         active.executor.resume()
         active.status = "running"
+        active.last_transition_at = active.clock()
         return {"ok": True, **active.snapshot()}
 
     def abort_for_mission(self, mission_id: str) -> dict[str, Any]:
