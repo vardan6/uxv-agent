@@ -24,26 +24,33 @@ run_phase() {
   echo
 }
 
-echo "== [1/5] backend pytest (gcs_server) =="
+echo "== [1/6] backend pytest (gcs_server) =="
 echo "\$ PYTHONPATH=\".:..\" $PY -m pytest -q  (from gcs_server/)"
 if ! (cd gcs_server && PYTHONPATH=".:.." "$PY" -m pytest -q); then
   fail "backend pytest"
 fi
 echo
 
-run_phase "[2/5] legacy-map node tests" node --test gcs_server/tests/ui/*.mjs
+echo "== [2/6] simulator pytest (3d-env) =="
+echo "\$ PYTHONPATH=\"simulator\" $PY -m pytest -q tests  (from 3d-env/)"
+if ! (cd 3d-env && PYTHONPATH="simulator" "$PY" -m pytest -q tests); then
+  fail "simulator pytest"
+fi
+echo
 
-run_phase "[3/5] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
+run_phase "[3/6] legacy-map node tests" node --test gcs_server/tests/ui/*.mjs
+
+run_phase "[4/6] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
 
 PY_PROJECTS=(gcs_server scene rag_service tts_service mav-sim 3d-env tools)
-echo "== [4/5] python compilation =="
+echo "== [5/6] python compilation =="
 echo "\$ $PY -m compileall -q -j 0 ${PY_PROJECTS[*]}"
 if ! "$PY" -m compileall -q -j 0 "${PY_PROJECTS[@]}"; then
   fail "python compilation"
 fi
 echo
 
-echo "== [5/5] shell syntax checks =="
+echo "== [6/6] shell syntax checks =="
 launchers=(
   gcs_server/run-app.sh
   gcs_server/run.sh
