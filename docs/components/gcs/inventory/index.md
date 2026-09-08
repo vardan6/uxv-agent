@@ -3,7 +3,7 @@
 Method and rollup for inventorying every widget of the **old** GCS UI and deciding
 what carries forward into the **new** greenfield operator console.
 
-- **Source (what we inventory):** `backend/static/` — the original multi-page
+- **Source (what we inventory):** `frontend-vanilla/` — the original multi-page
   vanilla-JS app (full source, committed, served at `/`, `/ai`, `/mission-console`,
   `/replay`, `/settings`, `/mqtt-setup`). This is the authoritative baseline.
 - **Target (what we fill in):** `frontend/` — the greenfield React/TS widget
@@ -12,7 +12,7 @@ what carries forward into the **new** greenfield operator console.
   [ADR 0031](../../../cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
 - **Not a source:** `backend/webapp/` (the `/app` "Operator Console" bundle) — a
   newer modernization attempt with no source in-repo (minified only). Ignored for
-  inventory; if it turns out to have polished behavior `static/` lacks, capture that
+  inventory; if it turns out to have polished behavior `frontend-vanilla/` lacks, capture that
   one item ad hoc.
 
 Why this exists: the greenfield was built from zero, so many polished behaviors from
@@ -91,14 +91,14 @@ not in the per-page tables.
 
 ## Workflow
 
-- **Pass A — Extraction (mechanical).** Parse each `static/` page's DOM-building code
+- **Pass A — Extraction (mechanical).** Parse each `frontend-vanilla/` page's DOM-building code
   and `style.css`; emit the node+leaf rows + style appendix. Derived from source, so
   coverage is complete by construction. `planned?` / `implemented?` pre-filled.
 - **Pass B — Mapping & decision (review).** Page by page, fill `target` and
   `decision`; node decisions cascade. Pure judgment, no transcription.
 
 Constraint: all reads from the working tree — **no branch switching** (the greenfield
-`frontend/` is uncommitted; `static/` is identical on `master` and this branch).
+`frontend/` is uncommitted; `frontend-vanilla/` is identical on `master` and this branch).
 
 ## Rollup — per-page status
 
@@ -108,7 +108,7 @@ One file per source page. Status reflects Pass A (extracted) and Pass B (decided
 |------|------|--------|--------|-------|
 | AI chat | `ai.md` | ✓ | ✓ | Flagged most incomplete in new app; ~50 node/leaf rows + style appendix |
 | Mission console | `mission-console.md` | ✓ | ✓ | Composite re-mount: AI chat shell (=`ai.md`) + Map (`map.md`) + unique replay-sessions sidebar; ~24 rows. Key gap: replay selection is inert (no map/playback wiring) |
-| Map (sub-panels) | `map.md` | ✓ | ✓ | ~80 node/leaf rows across MapWidget + 14 UI panels + layers. **Already Embedded** in new app (`MapWidgetPanel.tsx` imports `static/map/index.js`); gap is wiring (sessionId/statusBar/list-side), not re-code |
+| Map (sub-panels) | `map.md` | ✓ | ✓ | ~80 node/leaf rows across MapWidget + 14 UI panels + layers. **Already Embedded** in new app (`MapWidgetPanel.tsx` imports `map/index.js`); gap is wiring (sessionId/statusBar/list-side), not re-code |
 | Replay | `replay.md` | ✓ | ✓ | Standalone replay workstation (own Leaflet map, scene/geo, transport); ~60 rows. Sidebar → Rebuild/`ReplaySessionsWidget.tsx`; Map → Redesign/`MapWidgetPanel.tsx`; Transport → Rebuild/`ReplayControlsWidget.tsx`; Telemetry → Redesign/`TelemetryWidget.tsx`; Records → Defer |
 | Settings | `settings.md` | ✓ | ✓ | 8 tabs; ~110 node/leaf rows. Shell/tabs → Redesign/`SettingsWidget.tsx` (VS-Code-style tree). Conn/Video/Appear/Mission/AI/RAG → Rebuild/`SettingsWidget.tsx`. LLM provider+routing → Redesign/`LLMProviderWidget.tsx` as a routed Settings sub-view. Config I/O → Redesign/`ConfigIOWidget.tsx` as a routed Settings sub-view. mqtt-setup folds into Connectivity |
 | Dashboard / index | `dashboard.md` | ✓ | ✓ | Original single-screen 3-panel operator view (Video+OSD / Controls+Connection d-pad / Telemetry stat sheet); ~40 rows + shared `common.js` header/nav/intro shell (inventoried once here). Panels map to built widgets (`VideoWidget`/`DriveControlsWidget`/`TelemetryWidget`); key gaps = video **OSD overlay** (absent in VideoWidget) + **connection-indicator** broker/rover pills (no panel in new app). No map module on this page |

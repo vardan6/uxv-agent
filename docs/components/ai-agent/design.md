@@ -1074,7 +1074,7 @@ Each node is a `<div>` in a vertical flex stack connected by a CSS `border-left`
 
 ### Implementation boundary
 
-`renderAgentFlow(message)` in `backend/static/ai.js` replaces both `renderAgentTraceChips` and `renderAgentToolRows`. `renderAgentActivityDisclosure` calls `renderAgentFlow` in place of the two separate sections. Data sources — `agentTraceEvents`, `agentToolCalls`, `distinctAgentIterations` — are unchanged.
+`renderAgentFlow(message)` in `frontend-vanilla/ai.js` replaces both `renderAgentTraceChips` and `renderAgentToolRows`. `renderAgentActivityDisclosure` calls `renderAgentFlow` in place of the two separate sections. Data sources — `agentTraceEvents`, `agentToolCalls`, `distinctAgentIterations` — are unchanged.
 
 ## Observability, Replay, and Evaluation
 
@@ -1227,8 +1227,8 @@ backend/ai/graph_state.py             planner_agent_iterations / planner_agent_s
 backend/ai/provider_registry.py       purpose routing evolving toward roles
 backend/ai/context_service.py         compact context and manifest
 backend/ai/mission_execution_service.py   mission_execution subsystem
-backend/static/ai.js                  loop progress + approval surfaces
-backend/static/style.css              UI states
+frontend-vanilla/ai.js                  loop progress + approval surfaces
+frontend-vanilla/style.css              UI states
 backend/app.py                        settings flag plumbing
 ```
 

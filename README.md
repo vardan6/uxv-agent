@@ -42,7 +42,13 @@ Subproject documentation:
 ```text
 remote-rover/
   backend/
+  frontend/
+  frontend-vanilla/
+  map/
   3d-env/
+  mav-sim/
+  scene/
+  rag/
   tts/
   config/
   docs/

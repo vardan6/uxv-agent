@@ -1,7 +1,7 @@
-# AI Chat page inventory — `static/ai.html` + `static/ai.js`
+# AI Chat page inventory — `frontend-vanilla/ai.html` + `frontend-vanilla/ai.js`
 
-Pass A extraction (mechanical). Source: `backend/static/ai.html` (256 lines),
-`backend/static/ai.js` (3,877 lines), styles in `backend/static/style.css`.
+Pass A extraction (mechanical). Source: `frontend-vanilla/ai.html` (256 lines),
+`frontend-vanilla/ai.js` (3,877 lines), styles in `frontend-vanilla/style.css`.
 Target app: `frontend/` — the AI widget today is
 `frontend/src/widgets/AIChatWidget.tsx` (+ `frontend/src/data/aiChat.ts`).
 

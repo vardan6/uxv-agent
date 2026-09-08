@@ -324,7 +324,7 @@ The word "Accept" is not used in UI copy or documentation.
 
 ## MapWidget
 
-The reusable Leaflet-based map component (`static/map/MapWidget.js`) used
+The reusable Leaflet-based map component (`map/MapWidget.js`) used
 on the `/ai` page and the Approval Card. Uses `L.CRS.Simple` with local
 scene metres for all overlay coordinates — not lat/lon. Vehicle-aware: reads
 the active `VehicleProfile` to drive property panels and dispatch validation.
