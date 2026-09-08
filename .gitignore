@@ -56,3 +56,6 @@ ArduPilot-SITL/
 *.egg-info/
 **/*.egg-info/
 build/
+
+# Vitest JSON reporter output
+.vitest/
