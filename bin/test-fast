@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Fast deterministic repository gate. See docs/cross-cutting/operations/testing.md
+# for the accepted policy (30-second budget, offline, hardware-free, no browser).
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+PY="$REPO_ROOT/.venv/bin/python"
+
+status=0
+fail() {
+  echo "FAIL: $1"
+  status=1
+}
+
+run_phase() {
+  local label="$1"
+  shift
+  echo "== $label =="
+  echo "\$ $*"
+  if ! "$@"; then
+    fail "$label"
+  fi
+  echo
+}
+
+echo "== [1/5] backend pytest (gcs_server) =="
+echo "\$ PYTHONPATH=\".:..\" $PY -m pytest -q  (from gcs_server/)"
+if ! (cd gcs_server && PYTHONPATH=".:.." "$PY" -m pytest -q); then
+  fail "backend pytest"
+fi
+echo
+
+run_phase "[2/5] legacy-map node tests" node --test gcs_server/tests/ui/*.mjs
+
+run_phase "[3/5] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
+
+PY_PROJECTS=(gcs_server scene rag_service tts_service mav-sim 3d-env tools)
+echo "== [4/5] python compilation =="
+echo "\$ $PY -m compileall -q -j 0 ${PY_PROJECTS[*]}"
+if ! "$PY" -m compileall -q -j 0 "${PY_PROJECTS[@]}"; then
+  fail "python compilation"
+fi
+echo
+
+echo "== [5/5] shell syntax checks =="
+launchers=(
+  gcs_server/run-app.sh
+  gcs_server/run.sh
+  3d-env/run.sh
+  3d-env/run_gpu.sh
+  mav-sim/run.sh
+  scene/pipeline/sync_terrain_scene.sh
+  tts_service/run.sh
+  tts_service/scripts/run.sh
+  bin/gcs-ai
+  bin/rag
+)
+for script in "${launchers[@]}"; do
+  echo "\$ bash -n $script"
+  if ! bash -n "$script"; then
+    fail "shell syntax: $script"
+  fi
+done
+echo
+
+if [[ $status -eq 0 ]]; then
+  echo "test-fast: all checks passed"
+else
+  echo "test-fast: FAILED"
+fi
+exit $status

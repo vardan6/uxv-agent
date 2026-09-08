@@ -14,6 +14,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+*.egg-info/
+**/*.egg-info/
+build/
+
 imgui.ini
 **/imgui.ini
 
@@ -48,3 +52,7 @@ ArduPilot-SITL/
 
 # Playwright MCP browser-automation scratch (console logs, page snapshots)
 .playwright-mcp/
+
+*.egg-info/
+**/*.egg-info/
+build/

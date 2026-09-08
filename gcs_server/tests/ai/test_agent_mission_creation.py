@@ -8,7 +8,7 @@ from ai.chat_service import AGENT_SYSTEM_PROMPT
 from ai.migrations import apply_ai_store_migrations
 from ai.mission_execution_service import MissionExecutionService
 from ai.mission_store import MissionStore
-from scene_map import get_scene_map_payload
+from scene.scene_map import get_scene_map_payload
 from ai.tool_registry import (
     ToolInvocationContext,
     ToolRegistry,
