@@ -11,8 +11,8 @@ services:
     ports:
       # Host ports sit in the project's 9000 range (GCS app is 9002); the
       # container keeps Qdrant's native 6333/6334 internally.
-      - "${REMOTE_ROVER_QDRANT_REST_PORT:-9004}:6333" # REST API + dashboard
-      - "${REMOTE_ROVER_QDRANT_GRPC_PORT:-9005}:6334" # gRPC API
+      - "${UXV_QDRANT_REST_PORT:-9004}:6333" # REST API + dashboard
+      - "${UXV_QDRANT_GRPC_PORT:-9005}:6334" # gRPC API
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:

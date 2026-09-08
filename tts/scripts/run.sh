@@ -14,4 +14,4 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 cd "$ROOT"
-exec "$PYTHON_BIN" -m uvicorn tts.app:app --host "${REMOTE_ROVER_TTS_HOST:-127.0.0.1}" --port "${REMOTE_ROVER_TTS_PORT:-9101}"
+exec "$PYTHON_BIN" -m uvicorn tts.app:app --host "${UXV_TTS_HOST:-127.0.0.1}" --port "${UXV_TTS_PORT:-9101}"

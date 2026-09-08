@@ -20,7 +20,7 @@ _DEFAULT_QDRANT_PORT = 9004
 
 
 def _qdrant_port() -> int:
-    return int(os.environ.get("REMOTE_ROVER_QDRANT_REST_PORT", _DEFAULT_QDRANT_PORT))
+    return int(os.environ.get("UXV_QDRANT_REST_PORT", _DEFAULT_QDRANT_PORT))
 
 
 def _runtime(request: Request) -> Any:

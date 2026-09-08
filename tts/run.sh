@@ -17,5 +17,5 @@ cd "$DIR"
 exec "$PYTHON_BIN" -m uvicorn \
   --app-dir "$ROOT" \
   tts.app:app \
-  --host "${REMOTE_ROVER_TTS_HOST:-127.0.0.1}" \
-  --port "${REMOTE_ROVER_TTS_PORT:-9101}"
+  --host "${UXV_TTS_HOST:-127.0.0.1}" \
+  --port "${UXV_TTS_PORT:-9101}"

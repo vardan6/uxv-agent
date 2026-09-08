@@ -35,11 +35,11 @@ def _int_env(name: str, default: int) -> int:
 
 def load_config() -> TTSConfig:
     return TTSConfig(
-        host=os.environ.get("REMOTE_ROVER_TTS_HOST", "127.0.0.1"),
-        port=_int_env("REMOTE_ROVER_TTS_PORT", 9101),
-        model_path=Path(os.environ.get("REMOTE_ROVER_TTS_MODEL", DEFAULT_MODEL_PATH)).expanduser(),
-        voices_path=Path(os.environ.get("REMOTE_ROVER_TTS_VOICES", DEFAULT_VOICES_PATH)).expanduser(),
-        default_voice=os.environ.get("REMOTE_ROVER_TTS_VOICE", "af_sky"),
-        default_language=os.environ.get("REMOTE_ROVER_TTS_LANGUAGE", "en-us"),
-        max_text_chars=_int_env("REMOTE_ROVER_TTS_MAX_TEXT_CHARS", 6000),
+        host=os.environ.get("UXV_TTS_HOST", "127.0.0.1"),
+        port=_int_env("UXV_TTS_PORT", 9101),
+        model_path=Path(os.environ.get("UXV_TTS_MODEL", DEFAULT_MODEL_PATH)).expanduser(),
+        voices_path=Path(os.environ.get("UXV_TTS_VOICES", DEFAULT_VOICES_PATH)).expanduser(),
+        default_voice=os.environ.get("UXV_TTS_VOICE", "af_sky"),
+        default_language=os.environ.get("UXV_TTS_LANGUAGE", "en-us"),
+        max_text_chars=_int_env("UXV_TTS_MAX_TEXT_CHARS", 6000),
     )

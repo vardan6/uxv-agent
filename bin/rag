@@ -18,7 +18,7 @@ case "$cmd" in
   up)
     echo "Starting Qdrant sidecar…"
     docker compose -f "$COMPOSE_FILE" up -d "$@"
-    echo "Qdrant is up. Dashboard: http://127.0.0.1:${REMOTE_ROVER_QDRANT_REST_PORT:-9004}/dashboard"
+    echo "Qdrant is up. Dashboard: http://127.0.0.1:${UXV_QDRANT_REST_PORT:-9004}/dashboard"
     ;;
   down)
     echo "Stopping Qdrant sidecar…"

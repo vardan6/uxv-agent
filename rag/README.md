@@ -43,11 +43,11 @@ bin/rag down      # stop (data volume preserved)
 
 | Env var                             | Default | Meaning   |
 | ----------------------------------- | ------- | --------- |
-| `REMOTE_ROVER_QDRANT_REST_PORT`     | `9004`  | REST port (host) |
-| `REMOTE_ROVER_QDRANT_GRPC_PORT`     | `9005`  | gRPC port (host) |
-| `REMOTE_ROVER_EMBEDDINGS_BASE_URL`  | `http://winhost:1234/v1` | OpenAI-compatible embeddings endpoint (LM Studio) |
-| `REMOTE_ROVER_EMBEDDINGS_MODEL`     | `qwen3-embedding-4b` | Embedding model id as the server exposes it |
-| `REMOTE_ROVER_EMBEDDINGS_API_KEY`   | `lm-studio` | Ignored by LM Studio; SDK needs a non-empty value |
+| `UXV_QDRANT_REST_PORT`     | `9004`  | REST port (host) |
+| `UXV_QDRANT_GRPC_PORT`     | `9005`  | gRPC port (host) |
+| `UXV_EMBEDDINGS_BASE_URL`  | `http://winhost:1234/v1` | OpenAI-compatible embeddings endpoint (LM Studio) |
+| `UXV_EMBEDDINGS_MODEL`     | `qwen3-embedding-4b` | Embedding model id as the server exposes it |
+| `UXV_EMBEDDINGS_API_KEY`   | `lm-studio` | Ignored by LM Studio; SDK needs a non-empty value |
 
 Host ports live in the project's 9000 range (GCS app is 9002); the container
 keeps Qdrant's native `6333`/`6334` internally.

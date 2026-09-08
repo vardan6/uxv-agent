@@ -36,7 +36,7 @@ def _resolve_collection(config: Any) -> str:
 def _qdrant_rest_port(qdrant_port: int | None) -> int:
     if qdrant_port:
         return int(qdrant_port)
-    return int(os.environ.get("REMOTE_ROVER_QDRANT_REST_PORT", DEFAULT_QDRANT_REST_PORT))
+    return int(os.environ.get("UXV_QDRANT_REST_PORT", DEFAULT_QDRANT_REST_PORT))
 
 
 def search_project_docs(

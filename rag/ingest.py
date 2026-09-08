@@ -10,15 +10,15 @@ path (Slice 1.6D) calls ``run_ingest(params, ...)`` directly after resolving
 params from ``model_routing.embeddings`` via ``resolve_params_from_config``.
 
 Env (CLI path only):
-    REMOTE_ROVER_EMBEDDINGS_BASE_URL  OpenAI-compatible base URL
+    UXV_EMBEDDINGS_BASE_URL  OpenAI-compatible base URL
                                       (default http://winhost:1234/v1 — LM Studio)
-    REMOTE_ROVER_EMBEDDINGS_MODEL     Embedding model id as the server exposes it
+    UXV_EMBEDDINGS_MODEL     Embedding model id as the server exposes it
                                       (default qwen3-embedding-4b)
-    REMOTE_ROVER_EMBEDDINGS_DIM       Embedding dimension (default 2560)
-    REMOTE_ROVER_EMBEDDINGS_API_KEY   API key; LM Studio ignores it (default lm-studio)
-    REMOTE_ROVER_QDRANT_REST_PORT     Qdrant REST port (default 9004)
-    REMOTE_ROVER_CONTEXTUAL_MODEL     Chat model for contextual enrichment (--contextual)
-    REMOTE_ROVER_CONTEXTUAL_BASE_URL  Base URL for contextual chat (default: embeddings URL)
+    UXV_EMBEDDINGS_DIM       Embedding dimension (default 2560)
+    UXV_EMBEDDINGS_API_KEY   API key; LM Studio ignores it (default lm-studio)
+    UXV_QDRANT_REST_PORT     Qdrant REST port (default 9004)
+    UXV_CONTEXTUAL_MODEL     Chat model for contextual enrichment (--contextual)
+    UXV_CONTEXTUAL_BASE_URL  Base URL for contextual chat (default: embeddings URL)
 """
 
 from __future__ import annotations
@@ -65,10 +65,10 @@ class IngestParams:
 
 def resolve_params_from_env() -> IngestParams:
     """Build IngestParams from env vars (CLI path)."""
-    base_url = os.environ.get("REMOTE_ROVER_EMBEDDINGS_BASE_URL", _DEFAULT_BASE_URL).strip()
-    model_id = os.environ.get("REMOTE_ROVER_EMBEDDINGS_MODEL", _DEFAULT_MODEL).strip()
-    dim = int(os.environ.get("REMOTE_ROVER_EMBEDDINGS_DIM", str(_DEFAULT_DIM)))
-    api_key = (os.environ.get("REMOTE_ROVER_EMBEDDINGS_API_KEY", "lm-studio").strip() or "lm-studio")
+    base_url = os.environ.get("UXV_EMBEDDINGS_BASE_URL", _DEFAULT_BASE_URL).strip()
+    model_id = os.environ.get("UXV_EMBEDDINGS_MODEL", _DEFAULT_MODEL).strip()
+    dim = int(os.environ.get("UXV_EMBEDDINGS_DIM", str(_DEFAULT_DIM)))
+    api_key = (os.environ.get("UXV_EMBEDDINGS_API_KEY", "lm-studio").strip() or "lm-studio")
     collection = collection_name_for(model_id, dim)
     return IngestParams(base_url=base_url, model_id=model_id, api_key=api_key, dim=dim, collection=collection)
 
@@ -514,12 +514,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--contextual-model",
-        help="Chat model for contextual enrichment (default: REMOTE_ROVER_CONTEXTUAL_MODEL env)",
+        help="Chat model for contextual enrichment (default: UXV_CONTEXTUAL_MODEL env)",
     )
     args = parser.parse_args(argv)
 
     params = resolve_params_from_env()
-    port = int(os.environ.get("REMOTE_ROVER_QDRANT_REST_PORT", "9004"))
+    port = int(os.environ.get("UXV_QDRANT_REST_PORT", "9004"))
 
     if args.backfill_sparse:
         dry_tag = " [dry-run]" if args.dry_run else ""
@@ -539,14 +539,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.contextual:
         model = (
             args.contextual_model
-            or os.environ.get("REMOTE_ROVER_CONTEXTUAL_MODEL", "").strip()
+            or os.environ.get("UXV_CONTEXTUAL_MODEL", "").strip()
         )
         if not model:
             sys.exit(
                 "Contextual mode requires a chat model. "
-                "Set --contextual-model or REMOTE_ROVER_CONTEXTUAL_MODEL."
+                "Set --contextual-model or UXV_CONTEXTUAL_MODEL."
             )
-        base_url = os.environ.get("REMOTE_ROVER_CONTEXTUAL_BASE_URL", "").strip() or params.base_url
+        base_url = os.environ.get("UXV_CONTEXTUAL_BASE_URL", "").strip() or params.base_url
         contextual_cfg = ContextualConfig(base_url=base_url, model=model, api_key=params.api_key)
 
     dry_tag = " [dry-run]" if args.dry_run else ""
