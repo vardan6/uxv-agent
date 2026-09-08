@@ -153,6 +153,54 @@ python3 scene/pipeline/validate_terrain_scene.py
 For cross-platform launcher details, shared config behavior, and telemetry policy notes, use:
 - [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
 
+## Migration Notes (2026-09 Naming And Directory Restructure)
+
+Decided in [ADR 0037](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
+Historical docs (`docs/archive/`, `docs/cross-cutting/research/`, `progress.md`,
+handoff docs) intentionally keep the pre-restructure names as an accurate
+record of the state they describe.
+
+### Directories
+
+| Old path | New path |
+|---|---|
+| `gcs_server/` | `backend/` |
+| `rag_service/` | `rag/` |
+| `tts_service/` | `tts/` |
+| `gcs_server/static/map/` | `map/` (shared by both frontends; split into `map/sources/world/` and `map/sources/authored/`) |
+| `gcs_server/static/` (remaining pages) | `frontend-vanilla/` |
+
+The root directory rename (`remote-rover` → `remote-uxv`) is a separate,
+local-machine-only step, not part of this restructure — see
+[ADR 0037's root-rename migration checklist](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md#consequences)
+and `roadmap.md`'s Track 2 for what it still requires (agent memory directory,
+`.venv` recreation, launcher/shell/editor absolute paths).
+
+### Environment variables (Tier A)
+
+| Old name | New name |
+|---|---|
+| `REMOTE_ROVER_QDRANT_REST_PORT` | `UXV_QDRANT_REST_PORT` |
+| `REMOTE_ROVER_QDRANT_GRPC_PORT` | `UXV_QDRANT_GRPC_PORT` |
+| `REMOTE_ROVER_EMBEDDINGS_BASE_URL` | `UXV_EMBEDDINGS_BASE_URL` |
+| `REMOTE_ROVER_EMBEDDINGS_MODEL` | `UXV_EMBEDDINGS_MODEL` |
+| `REMOTE_ROVER_EMBEDDINGS_DIM` | `UXV_EMBEDDINGS_DIM` |
+| `REMOTE_ROVER_EMBEDDINGS_API_KEY` | `UXV_EMBEDDINGS_API_KEY` |
+| `REMOTE_ROVER_CONTEXTUAL_MODEL` | `UXV_CONTEXTUAL_MODEL` |
+| `REMOTE_ROVER_CONTEXTUAL_BASE_URL` | `UXV_CONTEXTUAL_BASE_URL` |
+| `REMOTE_ROVER_TTS_HOST` | `UXV_TTS_HOST` |
+| `REMOTE_ROVER_TTS_PORT` | `UXV_TTS_PORT` |
+| `REMOTE_ROVER_TTS_MODEL` | `UXV_TTS_MODEL` |
+| `REMOTE_ROVER_TTS_VOICES` | `UXV_TTS_VOICES` |
+| `REMOTE_ROVER_TTS_VOICE` | `UXV_TTS_VOICE` |
+| `REMOTE_ROVER_TTS_LANGUAGE` | `UXV_TTS_LANGUAGE` |
+| `REMOTE_ROVER_TTS_MAX_TEXT_CHARS` | `UXV_TTS_MAX_TEXT_CHARS` |
+| `REMOTE_ROVER_UI_SCALE` (`3d-env/`) | `UXV_UI_SCALE` |
+
+No dual-read shim was added — set the new names in your local environment
+(shell profile, `.env`, or launcher overrides) before starting `rag/`, `tts/`,
+or `3d-env`.
+
 ## Current Status In One Paragraph
 
 The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. `3d-env` is the sole supported simulator backend.
