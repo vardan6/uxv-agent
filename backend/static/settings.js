@@ -1649,7 +1649,7 @@ function bindAiSettings() {
   });
   settingsEls.aiTtsEngine.addEventListener('change', () => {
     setAiSettingsStatus(settingsEls.aiTtsEngine.value === 'kokoro_service'
-      ? 'Kokoro local service selected. Make sure tts_service is running on the configured URL.'
+      ? 'Kokoro local service selected. Make sure tts is running on the configured URL.'
       : 'Browser speech selected. Voice quality depends on this browser and operating system.');
   });
 }

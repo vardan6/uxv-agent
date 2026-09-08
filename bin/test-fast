@@ -35,7 +35,7 @@ run_phase "[2/5] legacy-map node tests" node --test backend/tests/ui/*.mjs
 
 run_phase "[3/5] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
 
-PY_PROJECTS=(backend scene rag_service tts_service mav-sim 3d-env tools)
+PY_PROJECTS=(backend scene rag tts mav-sim 3d-env tools)
 echo "== [4/5] python compilation =="
 echo "\$ $PY -m compileall -q -j 0 ${PY_PROJECTS[*]}"
 if ! "$PY" -m compileall -q -j 0 "${PY_PROJECTS[@]}"; then
@@ -51,8 +51,8 @@ launchers=(
   3d-env/run_gpu.sh
   mav-sim/run.sh
   scene/pipeline/sync_terrain_scene.sh
-  tts_service/run.sh
-  tts_service/scripts/run.sh
+  tts/run.sh
+  tts/scripts/run.sh
   bin/gcs-ai
   bin/rag
 )

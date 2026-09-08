@@ -1,21 +1,21 @@
 # Remote Rover TTS Service
 
-`tts_service/` is the local text-to-speech microservice used by GCS AI response playback.
+`tts/` is the local text-to-speech microservice used by GCS AI response playback.
 
 Quick setup:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python -m venv tts_service/.venv
-source tts_service/.venv/bin/activate
-pip install -r tts_service/requirements.txt
-python tts_service/scripts/download_kokoro_models.py
+python -m venv tts/.venv
+source tts/.venv/bin/activate
+pip install -r tts/requirements.txt
+python tts/scripts/download_kokoro_models.py
 ```
 
 Run:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/tts_service
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/tts
 ./run.sh
 ```
 
@@ -24,7 +24,7 @@ Default health URL:
 
 Notes:
 - current engine is `kokoro-onnx`
-- model files stay local under `tts_service/models/`
+- model files stay local under `tts/models/`
 - GCS points at this service through `config/common.local.json` under `ai_settings.tts`
 
 Remote Rover will likely need several local services:

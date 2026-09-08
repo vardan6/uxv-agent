@@ -38,10 +38,10 @@ def test_help_lists_the_complete_canonical_command_surface() -> None:
 @pytest.mark.parametrize(
     ("command", "arguments", "expected"),
     [
-        ("up", ["--remove-orphans"], ["compose", "-f", str(REPO_ROOT / "rag_service" / "docker-compose.yml"), "up", "-d", "--remove-orphans"]),
-        ("down", ["--volumes"], ["compose", "-f", str(REPO_ROOT / "rag_service" / "docker-compose.yml"), "down", "--volumes"]),
-        ("status", [], ["compose", "-f", str(REPO_ROOT / "rag_service" / "docker-compose.yml"), "ps"]),
-        ("logs", ["qdrant"], ["compose", "-f", str(REPO_ROOT / "rag_service" / "docker-compose.yml"), "logs", "--tail=50", "-f", "qdrant"]),
+        ("up", ["--remove-orphans"], ["compose", "-f", str(REPO_ROOT / "rag" / "docker-compose.yml"), "up", "-d", "--remove-orphans"]),
+        ("down", ["--volumes"], ["compose", "-f", str(REPO_ROOT / "rag" / "docker-compose.yml"), "down", "--volumes"]),
+        ("status", [], ["compose", "-f", str(REPO_ROOT / "rag" / "docker-compose.yml"), "ps"]),
+        ("logs", ["qdrant"], ["compose", "-f", str(REPO_ROOT / "rag" / "docker-compose.yml"), "logs", "--tail=50", "-f", "qdrant"]),
     ],
 )
 def test_qdrant_commands_delegate_to_the_service_compose_file(tmp_path: Path, command: str, arguments: list[str], expected: list[str]) -> None:
@@ -58,7 +58,7 @@ def test_qdrant_commands_delegate_to_the_service_compose_file(tmp_path: Path, co
 
 @pytest.mark.parametrize(
     ("command", "module", "arguments"),
-    [("ingest", "rag_service.ingest", ["--dry-run"]), ("eval", "rag_service.eval", ["--limit", "1"])],
+    [("ingest", "rag.ingest", ["--dry-run"]), ("eval", "rag.eval", ["--limit", "1"])],
 )
 def test_python_commands_use_the_repo_root_and_expected_module(tmp_path: Path, command: str, module: str, arguments: list[str]) -> None:
     call_log = tmp_path / "python-args"

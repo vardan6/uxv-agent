@@ -252,7 +252,7 @@ docs, mission history, semantic object definitions, reports, and operator
 notes. Reserved for semantic knowledge, not exact live state or geometry
 (scope: [decisions/0003-rag-scope-vs-live-context.md](./cross-cutting/decisions/0003-rag-scope-vs-live-context.md)).
 First consumer is `project_docs`, built on a Qdrant sidecar with the
-ingestion pipeline in `rag_service/` and the query path in
+ingestion pipeline in `rag/` and the query path in
 `backend/ai/retrieval.py`; see
 [decisions/0028-rag-project-docs-first-consumer-qdrant.md](./cross-cutting/decisions/0028-rag-project-docs-first-consumer-qdrant.md).
 

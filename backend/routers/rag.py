@@ -99,7 +99,7 @@ _job_store = _IngestJobStore()
 
 
 def _run_ingest_job(job: _IngestJob, params: Any, docs_dir: Path, qdrant_port: int) -> None:
-    from rag_service.ingest import run_ingest
+    from rag.ingest import run_ingest
 
     job._set(status="running", started_at=datetime.now(timezone.utc).isoformat())
     try:
@@ -130,7 +130,7 @@ def _run_ingest_job(job: _IngestJob, params: Any, docs_dir: Path, qdrant_port: i
 async def rag_status(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     try:
-        from rag_service.ingest import resolve_params_from_config
+        from rag.ingest import resolve_params_from_config
         secret_resolver = runtime.secret_store.get_secret if hasattr(runtime, "secret_store") else None
         params = resolve_params_from_config(runtime.config, secret_resolver=secret_resolver)
     except Exception as exc:
@@ -160,7 +160,7 @@ async def rag_status(request: Request) -> JSONResponse:
         coll_info = client.get_collection(collection)
         total_points = int(coll_info.points_count or 0)
 
-        from rag_service.manifest import compute_staleness, read_manifest
+        from rag.manifest import compute_staleness, read_manifest
         manifest = read_manifest(client, collection)
         stale_label = compute_staleness(
             manifest,
@@ -204,7 +204,7 @@ async def trigger_rag_ingest(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="mode must be 'incremental' or 'regenerate'")
 
     try:
-        from rag_service.ingest import resolve_params_from_config
+        from rag.ingest import resolve_params_from_config
         secret_resolver = runtime.secret_store.get_secret if hasattr(runtime, "secret_store") else None
         params = resolve_params_from_config(runtime.config, secret_resolver=secret_resolver)
     except Exception as exc:

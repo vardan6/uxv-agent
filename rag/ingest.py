@@ -1,9 +1,9 @@
 """project_docs ingestion pipeline — dense+sparse hybrid (ADR 0028 §8/§9).
 
 Usage (CLI):
-    python -m rag_service.ingest [--docs-dir PATH] [--dry-run]
-    python -m rag_service.ingest --backfill-sparse
-    python -m rag_service.ingest --contextual [--contextual-model MODEL]
+    python -m rag.ingest [--docs-dir PATH] [--dry-run]
+    python -m rag.ingest --backfill-sparse
+    python -m rag.ingest --contextual [--contextual-model MODEL]
 
 The CLI path reads connection params from env vars (below).  The app-triggered
 path (Slice 1.6D) calls ``run_ingest(params, ...)`` directly after resolving
@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rag_service.collection import collection_name_for
+from rag.collection import collection_name_for
 
 EMBED_BATCH_SIZE = 96
 SPARSE_BATCH_SIZE = 128
@@ -219,7 +219,7 @@ def _embed_all(texts: list[str], params: IngestParams) -> tuple[list[list[float]
 def _sparse_encode(texts: list[str]) -> list[dict[str, list]] | None:
     """Encode texts into sparse vectors. Returns None if fastembed is unavailable."""
     try:
-        from rag_service.sparse import get_encoder
+        from rag.sparse import get_encoder
         encoder = get_encoder()
         return encoder.encode(texts)
     except Exception as exc:  # noqa: BLE001
@@ -291,7 +291,7 @@ def _ingest_file(
     stats: dict[str, int],
     contextual_cfg: ContextualConfig | None = None,
 ) -> None:
-    from rag_service.chunker import chunk_markdown_file
+    from rag.chunker import chunk_markdown_file
     from qdrant_client.models import PointIdsList, PointStruct
 
     chunks = chunk_markdown_file(file_path, rel_path)
@@ -409,7 +409,7 @@ def run_ingest(
         )
 
     if not dry_run and client is not None:
-        from rag_service.manifest import write_manifest
+        from rag.manifest import write_manifest
         write_manifest(
             client,
             params.collection,
@@ -439,7 +439,7 @@ def backfill_sparse(
     payload, computes BM42 sparse in-process, and upserts updated points.
     """
     from qdrant_client.models import PointStruct, SparseVector
-    from rag_service.sparse import get_encoder
+    from rag.sparse import get_encoder
 
     encoder = get_encoder()
     client = _qdrant_client(qdrant_port)

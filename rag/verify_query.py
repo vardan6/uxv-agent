@@ -4,7 +4,7 @@ Loads the real GCS config, patches the `embeddings` routing provider's
 `base_url` in-memory to the WSL2 gateway (LM Studio), then calls
 `search_project_docs` and prints chunks + citations. Run-only; not a test.
 
-    PYTHONPATH=<repo-root> .venv/bin/python -m rag_service.verify_query
+    PYTHONPATH=<repo-root> .venv/bin/python -m rag.verify_query
 """
 
 from __future__ import annotations

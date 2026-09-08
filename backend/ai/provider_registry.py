@@ -139,7 +139,7 @@ def embed_query(
     provider_id: str = "",
     secret_resolver: Callable[[str], str] | None = None,
 ) -> list[float]:
-    """Embed a single query string; query-side counterpart to rag_service ingestion."""
+    """Embed a single query string; query-side counterpart to rag ingestion."""
     vectors = embed_texts(config, [str(text or "")], provider_id=provider_id, secret_resolver=secret_resolver)
     if not vectors:
         raise ValueError("Embeddings provider returned no vectors.")

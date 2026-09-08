@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/rag_service/docker-compose.yml"
+COMPOSE_FILE="$REPO_ROOT/rag/docker-compose.yml"
 PYTHON="${RAG_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 
 if [ ! -x "$PYTHON" ]; then
@@ -33,11 +33,11 @@ case "$cmd" in
   eval)
     # Golden-question retrieval eval (spot-check, not a test). Needs Qdrant up,
     # docs ingested, and the embeddings provider reachable.
-    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag_service.eval "$@"
+    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag.eval "$@"
     ;;
   ingest)
     # Incremental, idempotent project_docs ingestion. Docker/Qdrant must be up.
-    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag_service.ingest "$@"
+    PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" "$PYTHON" -m rag.ingest "$@"
     ;;
   *)
     echo "Usage: bin/rag <up|down|status|logs|ingest|eval>"

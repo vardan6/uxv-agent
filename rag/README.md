@@ -1,6 +1,6 @@
 # Remote Rover RAG Service
 
-`rag_service/` is the **write side** of the RAG subsystem (ADR 0028): the Qdrant
+`rag/` is the **write side** of the RAG subsystem (ADR 0028): the Qdrant
 sidecar, ingestion/chunking/embedding, and the update pipeline. The **read side**
 (retrieval queried by the AI chat) lives in `gcs_server/ai/retrieval.py`.
 
@@ -65,7 +65,7 @@ sparse are decoupled — sparse arrives in Slice 1.5 from a separate model
 Load the model in LM Studio, start its server, then:
 
 ```bash
-PYTHONPATH=<repo-root> <repo-root>/.venv/bin/python -m rag_service.ingest
+PYTHONPATH=<repo-root> <repo-root>/.venv/bin/python -m rag.ingest
 ```
 
 The equivalent repository command is `bin/rag ingest`.

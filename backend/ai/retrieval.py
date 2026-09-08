@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from backend.ai.session_store import normalize_source_controls
-from rag_service.collection import collection_name_for
+from rag.collection import collection_name_for
 
 _DEFAULT_EMBEDDINGS_MODEL = "qwen3-embedding-4b"
 _DEFAULT_EMBEDDINGS_DIM = 2560
@@ -96,7 +96,7 @@ def search_project_docs(
     # Attempt sparse encoding for hybrid RRF search; fall back to dense-only gracefully.
     sparse_vector = None
     try:
-        from rag_service.sparse import get_encoder
+        from rag.sparse import get_encoder
         sv = get_encoder().encode([text])[0]
         from qdrant_client.models import SparseVector
         sparse_vector = SparseVector(indices=sv["indices"], values=sv["values"])

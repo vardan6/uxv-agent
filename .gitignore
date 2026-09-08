@@ -44,8 +44,8 @@ frontend/dist/
 *.tsbuildinfo
 node_modules/
 .runtime/
-tts_service/models/*
-!tts_service/models/.gitkeep
+tts/models/*
+!tts/models/.gitkeep
 tts-services-edit/models/*
 !tts-services-edit/models/.gitkeep
 ArduPilot-SITL/

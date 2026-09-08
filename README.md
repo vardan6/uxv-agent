@@ -3,7 +3,7 @@
 Remote Rover is a rover-control platform built around these main local applications:
 - `backend/`: a browser-based Ground Control Station (GCS)
 - `3d-env/`: a Panda3D-based 3D rover simulator
-- `tts_service/`: a local text-to-speech service for AI chat response playback
+- `tts/`: a local text-to-speech service for AI chat response playback
 
 The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
 
@@ -43,7 +43,7 @@ Subproject documentation:
 remote-rover/
   backend/
   3d-env/
-  tts_service/
+  tts/
   config/
   docs/
   tools/
@@ -91,11 +91,11 @@ Set up the local AI voice service from the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python -m venv tts_service/.venv
-source tts_service/.venv/bin/activate
-pip install -r tts_service/requirements.txt
-python tts_service/scripts/download_kokoro_models.py
-python -m uvicorn tts_service.app:app --host 127.0.0.1 --port 9101
+python -m venv tts/.venv
+source tts/.venv/bin/activate
+pip install -r tts/requirements.txt
+python tts/scripts/download_kokoro_models.py
+python -m uvicorn tts.app:app --host 127.0.0.1 --port 9101
 ```
 
 Health check:
@@ -105,7 +105,7 @@ http://127.0.0.1:9101/health
 ```
 
 More details:
-- [TTS Service README](./tts_service/README.md)
+- [TTS Service README](./tts/README.md)
 
 ### 4. Start The Simulator
 

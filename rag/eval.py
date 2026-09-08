@@ -15,7 +15,7 @@ first enabled, secret-free (``auth_mode: none``) embeddings provider in-memory
 — typically the local LM Studio Qwen3 provider the collection was ingested with.
 App config is never modified on disk. Use ``--provider <id>`` to force one.
 
-    PYTHONPATH=<repo-root> .venv/bin/python -m rag_service.eval
+    PYTHONPATH=<repo-root> .venv/bin/python -m rag.eval
     bin/rag eval
 
 Exit code: 0 if every retrieval question passes, 1 otherwise (or on a setup

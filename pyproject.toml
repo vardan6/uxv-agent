@@ -9,4 +9,4 @@ description = "Remote Rover GCS, AI agent, and simulator monorepo"
 requires-python = ">=3.11"
 
 [tool.setuptools]
-packages = ["backend", "rag_service"]
+packages = ["backend", "rag"]
