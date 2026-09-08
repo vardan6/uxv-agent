@@ -75,7 +75,7 @@ initial snapshot also includes `video.latest_frame` for bootstrap display.
 High-volume push streams (video frames) are subscription-gated: the client sends
 `{op:"subscribe"|"unsubscribe", topic}` over the WS connection; the server pushes
 only to subscribers. Cheap topics (telemetry, broker, controller, video metadata)
-stay broadcast. See `gcs_server/ws.py` and operator-console.md §Per-client WS
+stay broadcast. See `backend/ws.py` and operator-console.md §Per-client WS
 subscription protocol.
 
 ### Async Work, Backpressure, And Supervision

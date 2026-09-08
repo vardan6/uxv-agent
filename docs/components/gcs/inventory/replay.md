@@ -1,8 +1,8 @@
 # Replay page inventory — `static/replay.html` + `static/replay.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/replay.html`
-(237 lines), `gcs_server/static/replay.js` (1,572 lines), styles in
-`gcs_server/static/style.css`. Target app: `frontend/` — no replay widget exists
+Pass A extraction (mechanical). Source: `backend/static/replay.html`
+(237 lines), `backend/static/replay.js` (1,572 lines), styles in
+`backend/static/style.css`. Target app: `frontend/` — no replay widget exists
 yet; present widgets are `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`,
 `DriveControlsWidget`, `NotesWidget`, `TelemetryWidget`, `VideoWidget`.
 

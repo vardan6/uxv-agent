@@ -36,7 +36,7 @@ second implementation of replay, Missions, or AI Session behavior.
 
 ## Scope
 
-`gcs_server/` is the browser-facing Ground Control Station for the Remote Rover project.
+`backend/` is the browser-facing Ground Control Station for the Remote Rover project.
 
 It is responsible for:
 
@@ -124,7 +124,7 @@ Keyboard bindings are read from shared config `key_bindings`. The default arrow-
 Control activation invariants (do not regress):
 
 - Control must not auto-release on a timeout; only focus/visibility changes or a real disconnect may deactivate browser control.
-- The focused and visible dashboard browser is the active controller inside `gcs_server`.
+- The focused and visible dashboard browser is the active controller inside `backend`.
 - Losing dashboard focus must publish neutral controls immediately so motion cannot stick.
 
 ## Presence And Telemetry Enablement

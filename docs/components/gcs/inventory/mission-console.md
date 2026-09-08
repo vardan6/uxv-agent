@@ -1,8 +1,8 @@
 # Mission Console page inventory — `static/mission-console.html` + `static/mission-console.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/mission-console.html`
-(241 lines), `gcs_server/static/mission-console.js` (141 lines), styles in
-`gcs_server/static/style.css`. Target app: `frontend/` — no mission-console
+Pass A extraction (mechanical). Source: `backend/static/mission-console.html`
+(241 lines), `backend/static/mission-console.js` (141 lines), styles in
+`backend/static/style.css`. Target app: `frontend/` — no mission-console
 composite or replay-sessions widget exists yet; present widgets are
 `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`, `DriveControlsWidget`,
 `NotesWidget`, `TelemetryWidget`, `VideoWidget`.

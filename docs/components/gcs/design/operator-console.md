@@ -45,7 +45,7 @@ future endpoint that replaces a whole document.
 
 ### Per-client WS subscription protocol (ADR 0031 §5)
 
-`ws_manager` (`gcs_server/ws.py`) holds per-client topic sets.
+`ws_manager` (`backend/ws.py`) holds per-client topic sets.
 Client sends `{op:"subscribe"|"unsubscribe", topic}` (e.g. `video/<cameraId>`);
 server pushes high-volume streams only via `broadcast_to_subscribers`. Cheap topics
 (telemetry, broker, controller) stay broadcast. A reference-counted subscription
@@ -511,6 +511,6 @@ fallback for client routes; `/api` and `/ws` remain the backend contract for all
 clients (web, future CLI, mobile).
 
 The app is mounted under **`/app`** with a `base: "/app/"`
-Vite build that emits to **`gcs_server/webapp/`** (gitignored). `app.py` static-mounts
+Vite build that emits to **`backend/webapp/`** (gitignored). `app.py` static-mounts
 `/app/assets` and falls back any other `/app/*` to `index.html`. Dev runs the Vite
 server proxying `/api` + `/ws` to the Python app.

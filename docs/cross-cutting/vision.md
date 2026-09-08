@@ -188,7 +188,7 @@ The system is built around a working simulator and Ground Control Station:
 
 - **3D Simulator** (`3d-env/`): a Panda3D + Bullet physics rover that publishes
   telemetry and camera frames over MQTT and accepts control input.
-- **Ground Control Station** (`gcs_server/`): a FastAPI + browser application operators
+- **Ground Control Station** (`backend/`): a FastAPI + browser application operators
   use to monitor, drive, and reason about the rover.
 
 MQTT is the integration backbone between simulator and GCS.

@@ -1,8 +1,8 @@
 # Dashboard / index page inventory — `static/index.html` + `static/app.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/index.html` (119 lines),
-`gcs_server/static/app.js` (712 lines), shared shell `gcs_server/static/common.js`
-(174 lines), styles in `gcs_server/static/style.css`. Target app: `frontend/` —
+Pass A extraction (mechanical). Source: `backend/static/index.html` (119 lines),
+`backend/static/app.js` (712 lines), shared shell `backend/static/common.js`
+(174 lines), styles in `backend/static/style.css`. Target app: `frontend/` —
 present widgets are `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`,
 `DriveControlsWidget`, `NotesWidget`, `TelemetryWidget`, `VideoWidget`.
 

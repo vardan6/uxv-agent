@@ -43,7 +43,7 @@ relocatable behavior-tree executor.
 
 This is the engineering reference for implementing the AI agent. Readers:
 
-- engineers writing code in `gcs_server/ai/`
+- engineers writing code in `backend/ai/`
 - reviewers approving phase rollouts
 - on-call engineers debugging traces
 
@@ -184,7 +184,7 @@ The controller update policy is deterministic and decides whether a change can b
 
 ### Current implementation snapshot
 
-- `mission_execution` exists in `gcs_server/ai/mission_execution_service.py`.
+- `mission_execution` exists in `backend/ai/mission_execution_service.py`.
 - Canonical mission revisions, current mission state, and overlay APIs are implemented.
 - Durable controller mission snapshot state and execution-attempt persistence are implemented.
 - Optimistic controller-version compare-and-swap checks are implemented.
@@ -194,12 +194,12 @@ The controller update policy is deterministic and decides whether a change can b
 
 ## AgentLoopRuntime
 
-The shared bounded ReAct runtime. The initial module (`gcs_server/ai/agent_loop.py`) is extracted from Agent chat and is now called by `AIChatService` and the planning shell.
+The shared bounded ReAct runtime. The initial module (`backend/ai/agent_loop.py`) is extracted from Agent chat and is now called by `AIChatService` and the planning shell.
 
 ### Loop pseudocode
 
 ```python
-# Implementation lives in gcs_server/ai/agent_loop.py
+# Implementation lives in backend/ai/agent_loop.py
 async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
     rt = _runtime(config)
     iterations = 0
@@ -556,7 +556,7 @@ Detail: [design.md](./design.md), [design.md](./design.md).
 
 Keep the graph topology vehicle- and task-agnostic. Every new capability ships as a tool with a rich description, and the agent decides when to invoke it. Hard-coded graph nodes are a coupling tax paid only when something cannot be expressed as a tool. This shape — minimal graph, maximal tools, policy-gated execution — is also what enables A/B-ing the underlying agent (current vs. future runtimes) without touching tool code or graph wiring.
 
-### `VehicleProfile` (`gcs_server/ai/vehicle_profile.py`)
+### `VehicleProfile` (`backend/ai/vehicle_profile.py`)
 
 First-class profile concept. Populated for all currently-anticipated kinds (`ground_vehicle`, `multirotor`, `fixed_wing`) even though only `ground_vehicle` is exercised end-to-end. Goal: when multirotor or fixed-wing is wired up later, no refactor of the planner / exporter / tool-registry / shared mission-authoring flow is required — only new planner-tool files and a scene swap.
 
@@ -579,7 +579,7 @@ Active profile is a Settings selection. Single-active assumed (one vehicle comma
 - `MissionExportService` — reads `mav_vehicle_type`, altitude semantics (`default_cruise_alt_m`, `kind=="ground"` ⇒ clamp `alt=0`), and `supports_yaw_at_waypoint` (strip explicit yaws when False).
 - Planning-shell logic — branches on `planner_kind` only inside tools, never at graph topology.
 
-### `RoadGraphService` (`gcs_server/ai/road_graph_service.py`)
+### `RoadGraphService` (`backend/ai/road_graph_service.py`)
 
 - On startup, loads `scene/scenes/terrain_scene.v1.json` (already loaded by `scene/scene_map.py`).
 - Builds an undirected weighted graph: nodes = road endpoints, edges = road segments. Edge weight = euclidean length × cost multiplier from `metadata.route_planning_cost` (`preferred=1.0`, default `1.5`, `avoid` removed from graph).
@@ -747,8 +747,8 @@ The `/ai` map is the authoring surface — there is no separate Missions page. C
 
 ### Critical files (route planning slice)
 
-- **New**: `gcs_server/ai/road_graph_service.py`, `gcs_server/ai/mission_export_service.py`, `gcs_server/ai/vehicle_profile.py`.
-- **Modify**: `gcs_server/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `propose_mission_draft`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `gcs_server/ai/mission_execution_service.py` (own proposal/revision storage and plan-export state); `gcs_server/ai/mission_draft_service.py` (deterministic `validate_draft_payload` helper); `scene/scene_map.py` (expose centerlines).
+- **New**: `backend/ai/road_graph_service.py`, `backend/ai/mission_export_service.py`, `backend/ai/vehicle_profile.py`.
+- **Modify**: `backend/ai/tool_registry.py` (register `plan_route_around_group`, `plan_route_between`, `propose_mission_draft`, `stop_mission`; gate by active `VehicleProfile.planner_kind`); `backend/ai/mission_execution_service.py` (own proposal/revision storage and plan-export state); `backend/ai/mission_draft_service.py` (deterministic `validate_draft_payload` helper); `scene/scene_map.py` (expose centerlines).
 - **Reuse**: `SpatialQueryService.resolve_spatial_target`, `MissionExecutionService` for proposal storage and approval flow, existing `PolicyEngine` for tier gating, and deterministic draft validation.
 - **Possibly bump**: `scene/scenes/terrain_scene.v1.json` + `scene/schema/terrain_scene.schema.json` to add `metadata.group` per road and confirm `coordinate_system.georeference` presence.
 
@@ -1074,7 +1074,7 @@ Each node is a `<div>` in a vertical flex stack connected by a CSS `border-left`
 
 ### Implementation boundary
 
-`renderAgentFlow(message)` in `gcs_server/static/ai.js` replaces both `renderAgentTraceChips` and `renderAgentToolRows`. `renderAgentActivityDisclosure` calls `renderAgentFlow` in place of the two separate sections. Data sources — `agentTraceEvents`, `agentToolCalls`, `distinctAgentIterations` — are unchanged.
+`renderAgentFlow(message)` in `backend/static/ai.js` replaces both `renderAgentTraceChips` and `renderAgentToolRows`. `renderAgentActivityDisclosure` calls `renderAgentFlow` in place of the two separate sections. Data sources — `agentTraceEvents`, `agentToolCalls`, `distinctAgentIterations` — are unchanged.
 
 ## Observability, Replay, and Evaluation
 
@@ -1083,7 +1083,7 @@ Every run has: `run_id`, `trace_id`, session ID, provider / model, role, run mod
 Trace storage:
 
 ```text
-gcs_server/ai/agent_traces.py
+backend/ai/agent_traces.py
 data/agent_traces/YYYY-MM-DD/{trace_id}.jsonl
 ```
 
@@ -1217,30 +1217,30 @@ Before tier-3+ capabilities are enabled, **all** of these invariants must hold:
 ### Platform phases 1–6 (done)
 
 ```text
-gcs_server/ai/agent_loop.py              shared runtime
-gcs_server/ai/policy_engine.py           policy / guardrail seam
-gcs_server/ai/agent_traces.py            JSONL trace writer
-gcs_server/ai/chat_service.py            calls runtime
-gcs_server/ai/tool_registry.py           extended definitions; bounded tools
-gcs_server/ai/planning_shell_graph.py    planner-loop node; deterministic-DAG middle removed
-gcs_server/ai/graph_state.py             planner_agent_iterations / planner_agent_stop_reason
-gcs_server/ai/provider_registry.py       purpose routing evolving toward roles
-gcs_server/ai/context_service.py         compact context and manifest
-gcs_server/ai/mission_execution_service.py   mission_execution subsystem
-gcs_server/static/ai.js                  loop progress + approval surfaces
-gcs_server/static/style.css              UI states
-gcs_server/app.py                        settings flag plumbing
+backend/ai/agent_loop.py              shared runtime
+backend/ai/policy_engine.py           policy / guardrail seam
+backend/ai/agent_traces.py            JSONL trace writer
+backend/ai/chat_service.py            calls runtime
+backend/ai/tool_registry.py           extended definitions; bounded tools
+backend/ai/planning_shell_graph.py    planner-loop node; deterministic-DAG middle removed
+backend/ai/graph_state.py             planner_agent_iterations / planner_agent_stop_reason
+backend/ai/provider_registry.py       purpose routing evolving toward roles
+backend/ai/context_service.py         compact context and manifest
+backend/ai/mission_execution_service.py   mission_execution subsystem
+backend/static/ai.js                  loop progress + approval surfaces
+backend/static/style.css              UI states
+backend/app.py                        settings flag plumbing
 ```
 
 ### Route-planning / export slice (planned)
 
 ```text
-gcs_server/ai/road_graph_service.py      RoadGraphService
-gcs_server/ai/mission_export_service.py  QGC .plan serializer
-gcs_server/ai/vehicle_profile.py         VehicleProfile + active selection
-gcs_server/ai/tool_registry.py           plan_route_*, propose_mission_draft, stop_mission tools
-gcs_server/ai/mission_execution_service.py proposal/revision storage, approval state, export result
-gcs_server/ai/mission_draft_service.py   validate_draft_payload helper
+backend/ai/road_graph_service.py      RoadGraphService
+backend/ai/mission_export_service.py  QGC .plan serializer
+backend/ai/vehicle_profile.py         VehicleProfile + active selection
+backend/ai/tool_registry.py           plan_route_*, propose_mission_draft, stop_mission tools
+backend/ai/mission_execution_service.py proposal/revision storage, approval state, export result
+backend/ai/mission_draft_service.py   validate_draft_payload helper
 scene/scene_map.py                       expose centerlines + metadata.group
 scene/scenes/terrain_scene.v1.json       schema bump: metadata.group per road
 ```
@@ -1248,33 +1248,33 @@ scene/scenes/terrain_scene.v1.json       schema bump: metadata.group per road
 ### Scaffolded; implemented later
 
 ```text
-gcs_server/ai/migrations.py              tables: procedures, world_objects,
+backend/ai/migrations.py              tables: procedures, world_objects,
                                          world_observations, operator_grants,
                                          operator_profile, tasks, mission_runs,
                                          agent_traces
-gcs_server/ai/memory/                    stub services per layer
-gcs_server/ai/specialists/               critic stub, reporter stub
-gcs_server/ai/observations.py            Observation schema, payload_ref handling
-gcs_server/ai/task_store.py              TaskStore CRUD
+backend/ai/memory/                    stub services per layer
+backend/ai/specialists/               critic stub, reporter stub
+backend/ai/observations.py            Observation schema, payload_ref handling
+backend/ai/task_store.py              TaskStore CRUD
 ```
 
 ### Future-phase additions
 
 ```text
-gcs_server/ai/agent_memory.py            Phase 7
-gcs_server/ai/specialists/critic.py      Phase 7a
-gcs_server/ai/specialists/reporter.py    Phase 7b
-gcs_server/ai/specialists/researcher.py  RAG phase
-gcs_server/ai/specialists/monitor.py     Phase 12
-gcs_server/ai/specialists/executor.py    Phase 10–11
-gcs_server/ai/voice/stt.py               Phase 8
-gcs_server/ai/voice/tts.py               Phase 8
-gcs_server/ai/mission_monitor.py         Phase 12
-gcs_server/ai/staging_service.py         Phase 10
-gcs_server/ai/autopilot_handoff.py       Phase 12
-gcs_server/ai/onboard_provider.py        Phase 13
-gcs_server/ai/mission_template_service.py committed follow-up
-gcs_server/ai/operational_constraints.py  committed follow-up (corridors / blockages)
+backend/ai/agent_memory.py            Phase 7
+backend/ai/specialists/critic.py      Phase 7a
+backend/ai/specialists/reporter.py    Phase 7b
+backend/ai/specialists/researcher.py  RAG phase
+backend/ai/specialists/monitor.py     Phase 12
+backend/ai/specialists/executor.py    Phase 10–11
+backend/ai/voice/stt.py               Phase 8
+backend/ai/voice/tts.py               Phase 8
+backend/ai/mission_monitor.py         Phase 12
+backend/ai/staging_service.py         Phase 10
+backend/ai/autopilot_handoff.py       Phase 12
+backend/ai/onboard_provider.py        Phase 13
+backend/ai/mission_template_service.py committed follow-up
+backend/ai/operational_constraints.py  committed follow-up (corridors / blockages)
 ```
 
 These file names are guidance, not mandatory. **Central invariant: after Phase 3, `agent_loop.py`'s public runtime contract should be stable.** New capability should primarily add tools, policies, specialists, and graph shells. Changes to the loop after that point should be treated as platform changes, not incidental feature work.

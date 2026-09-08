@@ -99,7 +99,7 @@ Browser (port 9010)
 
 - **Phase 1 — monitor**: listener decodes and displays; no responses.
 - **Phase 3 — handshake**: `mavlink_listener._handle_protocol` responds to `MISSION_COUNT` + `MISSION_ITEM_INT` with `MISSION_REQUEST_INT` per item then `MISSION_ACK(ACCEPTED)`; tracks upload state; `simulate_execution` emits `MISSION_ITEM_REACHED` + `GLOBAL_POSITION_INT` per waypoint.
-- **Phase 4 — telemetry**: `GLOBAL_POSITION_INT` messages are also received by the GCS-side `MavlinkTelemetryBridge` (`gcs_server/mavlink_telemetry.py`) and broadcast as normalized telemetry; `BasemapPanel` renders a live GPS vehicle marker via its own GCS WebSocket subscription.
+- **Phase 4 — telemetry**: `GLOBAL_POSITION_INT` messages are also received by the GCS-side `MavlinkTelemetryBridge` (`backend/mavlink_telemetry.py`) and broadcast as normalized telemetry; `BasemapPanel` renders a live GPS vehicle marker via its own GCS WebSocket subscription.
 
 ### Phase 5 — multi-protocol (implemented)
 

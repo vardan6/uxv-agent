@@ -27,7 +27,7 @@ The goals are:
 
 ### 1. Keep The Existing System Working
 
-The existing `3d-env` simulator must remain compatible with `gcs_server` for control, telemetry, camera/video, map, and replay visualization.
+The existing `3d-env` simulator must remain compatible with `backend` for control, telemetry, camera/video, map, and replay visualization.
 
 ### 2. Future Simulator Work Requires A New Decision
 

@@ -36,9 +36,9 @@ config/common.local.json
 
 docs/trigger.md
 
-gcs_server/data/
-gcs_server/data_*/
-gcs_server/webapp/
+backend/data/
+backend/data_*/
+backend/webapp/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo

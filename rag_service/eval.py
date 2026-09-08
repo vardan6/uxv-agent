@@ -55,7 +55,7 @@ def _select_embeddings_provider(config: Any, provider_id: str) -> dict[str, Any]
     the first enabled secret-free embeddings provider. Returns the chosen provider
     dict; raises SystemExit with an actionable message if none is usable.
     """
-    from gcs_server.ai.provider_registry import resolve_embeddings_provider
+    from backend.ai.provider_registry import resolve_embeddings_provider
 
     providers = [p for p in config.llm_providers if isinstance(p, dict)]
     if provider_id:
@@ -105,8 +105,8 @@ def run_eval(
     limit_override: int | None = None,
     provider_id: str = "",
 ) -> int:
-    from gcs_server.config import load_config
-    from gcs_server.ai.retrieval import search_project_docs
+    from backend.config import load_config
+    from backend.ai.retrieval import search_project_docs
 
     fixture = _load_fixture(fixture_path)
     defaults = fixture.get("defaults") if isinstance(fixture.get("defaults"), dict) else {}

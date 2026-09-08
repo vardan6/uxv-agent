@@ -76,10 +76,10 @@ def resolve_params_from_env() -> IngestParams:
 def resolve_params_from_config(config: Any, *, secret_resolver: Any = None) -> IngestParams:
     """Build IngestParams from the app's model_routing.embeddings (app-triggered path).
 
-    Requires gcs_server to be importable (called from within the GCS process).
+    Requires backend to be importable (called from within the GCS process).
     The provider must have an ``embedding_dim`` field set in the config.
     """
-    from gcs_server.ai.provider_registry import resolve_embeddings_provider
+    from backend.ai.provider_registry import resolve_embeddings_provider
 
     provider = resolve_embeddings_provider(config, secret_resolver=secret_resolver)
     model_id = str(provider.get("model_id") or "").strip()

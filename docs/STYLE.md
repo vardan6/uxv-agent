@@ -165,7 +165,7 @@ When a topic file would exceed its hard cap, split it by sub-topic into sibling 
 ## Cross-Linking
 
 - **Relative paths inside `docs/`.** `[design](../design.md)`, not absolute.
-- **Repo paths for code.** `gcs_server/ai/context_service.py`, not a URL.
+- **Repo paths for code.** `backend/ai/context_service.py`, not a URL.
 - **Always link with `.md` extension.** Renders on GitHub; agent-friendly.
 - **Glossary on first use.** When introducing a project term in a doc, link it to `glossary.md` on first use.
 - **Two-link rule between tiers.** `requirements.md` links to `design.md`. `design.md` links back to `requirements.md`. No tier reads as an island.
@@ -282,7 +282,7 @@ Everything else is discovery-on-demand. Do not add new "mandatory load" docs. Pr
 
 ## Code And API References
 
-- Reference modules with `path/file.py` (e.g., `gcs_server/ai/context_service.py`).
+- Reference modules with `path/file.py` (e.g., `backend/ai/context_service.py`).
 - Reference functions with `module.function_name()`.
 - Reference API routes with the full path (e.g., `POST /api/ai/sessions/{session_id}/messages/stream`).
 - Use `path/file.py:42` when pointing at a specific line.

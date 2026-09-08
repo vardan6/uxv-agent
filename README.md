@@ -1,7 +1,7 @@
 # Remote Rover
 
 Remote Rover is a rover-control platform built around these main local applications:
-- `gcs_server/`: a browser-based Ground Control Station (GCS)
+- `backend/`: a browser-based Ground Control Station (GCS)
 - `3d-env/`: a Panda3D-based 3D rover simulator
 - `tts_service/`: a local text-to-speech service for AI chat response playback
 
@@ -41,7 +41,7 @@ Subproject documentation:
 
 ```text
 remote-rover/
-  gcs_server/
+  backend/
   3d-env/
   tts_service/
   config/
@@ -69,19 +69,19 @@ From the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python -m venv gcs_server/.venv
-source gcs_server/.venv/bin/activate
-pip install -r gcs_server/requirements-gcs.txt
-python -m gcs_server
+python -m venv backend/.venv
+source backend/.venv/bin/activate
+pip install -r backend/requirements-gcs.txt
+python -m backend
 ```
 
 Open the GCS at the host and port configured under `gcs.host` and `gcs.port` in `config/common.local.json`.
 The tracked template defaults to `http://127.0.0.1:8080`; this repo's local override may differ.
 
-Alternative helper from inside `gcs_server/`:
+Alternative helper from inside `backend/`:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
 ./run.sh
 ```
 

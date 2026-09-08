@@ -1,8 +1,8 @@
 # Settings page inventory — `static/settings.html` + `static/settings.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/settings.html`
-(663 lines), `gcs_server/static/settings.js` (2,009 lines), styles in
-`gcs_server/static/style.css`. Target app: `frontend/` — **no settings widget,
+Pass A extraction (mechanical). Source: `backend/static/settings.html`
+(663 lines), `backend/static/settings.js` (2,009 lines), styles in
+`backend/static/style.css`. Target app: `frontend/` — **no settings widget,
 store, route, or schema layer exists yet**; present widgets are
 `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`, `DriveControlsWidget`,
 `NotesWidget`, `TelemetryWidget`, `VideoWidget`.

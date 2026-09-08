@@ -3,14 +3,14 @@
 Method and rollup for inventorying every widget of the **old** GCS UI and deciding
 what carries forward into the **new** greenfield operator console.
 
-- **Source (what we inventory):** `gcs_server/static/` — the original multi-page
+- **Source (what we inventory):** `backend/static/` — the original multi-page
   vanilla-JS app (full source, committed, served at `/`, `/ai`, `/mission-console`,
   `/replay`, `/settings`, `/mqtt-setup`). This is the authoritative baseline.
 - **Target (what we fill in):** `frontend/` — the greenfield React/TS widget
   workspace. See [../design/operator-console.md](../design/operator-console.md),
   [ADR 0030](../../../cross-cutting/decisions/0030-greenfield-operator-console-frontend.md),
   [ADR 0031](../../../cross-cutting/decisions/0031-headless-full-architecture-and-frontend-data-layer.md).
-- **Not a source:** `gcs_server/webapp/` (the `/app` "Operator Console" bundle) — a
+- **Not a source:** `backend/webapp/` (the `/app` "Operator Console" bundle) — a
   newer modernization attempt with no source in-repo (minified only). Ignored for
   inventory; if it turns out to have polished behavior `static/` lacks, capture that
   one item ad hoc.

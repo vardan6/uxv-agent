@@ -6,7 +6,7 @@ In Agent mode, UI/runtime currently treats a provider as tool-capable when eithe
 - provider capabilities include `tool_calling` or `planner`, or
 - provider type is not `ollama` (fallback heuristic in UI).
 
-Reference: [static/ai.js](/mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server/static/ai.js)
+Reference: [static/ai.js](/mnt/c/Users/vardana/Documents/Proj/remote-rover/backend/static/ai.js)
 
 ## Durable Rule
 

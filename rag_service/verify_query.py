@@ -20,9 +20,9 @@ QUERIES = [
 
 
 def main() -> int:
-    from gcs_server.config import load_config
-    from gcs_server.ai.provider_registry import resolve_embeddings_provider
-    from gcs_server.ai.retrieval import search_project_docs
+    from backend.config import load_config
+    from backend.ai.provider_registry import resolve_embeddings_provider
+    from backend.ai.retrieval import search_project_docs
 
     config = load_config()
     provider = resolve_embeddings_provider(config)

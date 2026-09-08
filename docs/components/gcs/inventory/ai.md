@@ -1,7 +1,7 @@
 # AI Chat page inventory — `static/ai.html` + `static/ai.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/ai.html` (256 lines),
-`gcs_server/static/ai.js` (3,877 lines), styles in `gcs_server/static/style.css`.
+Pass A extraction (mechanical). Source: `backend/static/ai.html` (256 lines),
+`backend/static/ai.js` (3,877 lines), styles in `backend/static/style.css`.
 Target app: `frontend/` — the AI widget today is
 `frontend/src/widgets/AIChatWidget.tsx` (+ `frontend/src/data/aiChat.ts`).
 
