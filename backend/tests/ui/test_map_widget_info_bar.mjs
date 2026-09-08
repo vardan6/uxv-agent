@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MapWidget } from '../../static/map/MapWidget.js';
+import { MapWidget } from '../../../map/MapWidget.js';
 
 test('MapWidget hover info includes terrain ground z', () => {
   const widget = Object.create(MapWidget.prototype);

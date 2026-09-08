@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MapWidget as PublicMapWidget } from '../../static/map/index.js';
-import { MapWidget } from '../../static/map/MapWidget.js';
+import { MapWidget as PublicMapWidget } from '../../../map/index.js';
+import { MapWidget } from '../../../map/MapWidget.js';
 
 function mission(id, status = 'proposed', revisionId = `revision-${id}`) {
   return {

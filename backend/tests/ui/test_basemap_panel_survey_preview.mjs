@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BasemapPanel } from '../../static/map/ui/BasemapPanel.js';
+import { BasemapPanel } from '../../../map/ui/BasemapPanel.js';
 
 // _reconcileSurveyPreview (O12) swaps the locally-drawn survey route line for
 // the backend's actual generated geometry once `onPreviewPattern` resolves.

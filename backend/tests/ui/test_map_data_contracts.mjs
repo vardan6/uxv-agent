@@ -8,17 +8,17 @@ import {
   listMissions,
   previewDrawnPattern,
   setMissionGeofence,
-} from '../../static/map/data/missionApi.js';
+} from '../../../map/sources/authored/missionApi.js';
 import {
   deleteWaypoint,
   getRevision,
   insertWaypoint,
   updateWaypoint,
-} from '../../static/map/data/missionMutationApi.js';
+} from '../../../map/sources/authored/missionMutationApi.js';
 import {
   deleteConstraint,
   updateConstraint,
-} from '../../static/map/data/constraintsApi.js';
+} from '../../../map/sources/authored/constraintsApi.js';
 
 function response(data, { ok = true, status = 200 } = {}) {
   return {

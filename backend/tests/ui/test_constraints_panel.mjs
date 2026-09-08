@@ -117,7 +117,7 @@ globalThis.window = {
   },
 };
 
-const { ConstraintsPanel } = await import('../../static/map/ui/ConstraintsPanel.js');
+const { ConstraintsPanel } = await import('../../../map/ui/ConstraintsPanel.js');
 
 function makeConstraint(overrides = {}) {
   return {

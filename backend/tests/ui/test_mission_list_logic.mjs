@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assignPaletteColor } from '../../static/map/missionListLogic.js';
-import { missionRowMarkup, contextBarVerbs } from '../../static/map/ui/MissionListPanel.js';
-import { sortMissions } from '../../static/map/state/missionSortPreference.js';
+import { assignPaletteColor } from '../../../map/missionListLogic.js';
+import { missionRowMarkup, contextBarVerbs } from '../../../map/ui/MissionListPanel.js';
+import { sortMissions } from '../../../map/state/missionSortPreference.js';
 
 test('assignPaletteColor keeps existing auto colours stable and gives a new mission a new colour', () => {
   const missions = [

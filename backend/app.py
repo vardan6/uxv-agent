@@ -47,8 +47,12 @@ from backend.routers.device_config import _rover_availability_policy
 from backend.mavlink_telemetry import MavlinkTelemetryBridge
 from backend.routers.llm import _repair_stored_secret_refs
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# static/ dissolved into frontend-vanilla/ (pages) + map/ (shared widget, ADR
+# 0037); STATIC_DIR keeps the name because vanilla pages are still served at
+# /static for zero client-side churn.
+STATIC_DIR = REPO_ROOT / "frontend-vanilla"
+MAP_DIR = REPO_ROOT / "map"
 DOCS_DIR = REPO_ROOT / "docs"
 # Greenfield operator console (ADR 0030): Vite builds here; served under /app
 # with an SPA fallback. /api + /ws remain the backend contract for all clients.
@@ -107,6 +111,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Remote Rover GCS", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/map", StaticFiles(directory=MAP_DIR), name="map")
 if (WEBAPP_DIR / "assets").is_dir():
     app.mount("/app/assets", StaticFiles(directory=WEBAPP_DIR / "assets"), name="webapp-assets")
 app.include_router(replay_router_module.router)

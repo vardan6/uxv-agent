@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MapSketchSession } from '../../static/map/MapSketchSession.js';
-import { makeSampler } from '../../static/map/data/terrainApi.js';
+import { MapSketchSession } from '../../../map/MapSketchSession.js';
+import { makeSampler } from '../../../map/sources/world/terrainApi.js';
 
 test('MapSketchSession publishes defensive snapshots and supports unsubscribe', () => {
   const session = new MapSketchSession();

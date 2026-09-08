@@ -1,15 +1,16 @@
-# Map widget inventory — `static/map/` (MapWidget module)
+# Map widget inventory — `map/` (MapWidget module)
 
-Pass A extraction (mechanical). Source: the ES-module map widget under
-`backend/static/map/` (~7,200 lines, 35 files). Entry `map/index.js` →
+Pass A extraction (mechanical). Source: the ES-module map widget promoted to
+top-level `map/` (~7,200 lines, 35 files), per ADR 0037. Entry `map/index.js` →
 `MapWidget.js` (2,496 lines, builds the DOM + orchestrates), UI panels in
-`map/ui/`, on-map render in `map/layers/`, data clients in `map/data/`, shared
-state in `map/state/`. Styles in `backend/static/style.css`. The widget is
-mounted on `ai.html` and `mission-console.html` (see [`ai.md`](ai.md),
+`map/ui/`, on-map render split by source into `map/sources/world/` and
+`map/sources/authored/`, shared state in `map/state/`. Styles in
+`frontend-vanilla/style.css`. The widget is mounted on `ai.html` and
+`mission-console.html` (see [`ai.md`](ai.md),
 [`mission-console.md`](mission-console.md)); it is **not** page-specific.
 
 **This whole module is already Embedded in the new app.** `frontend/src/widgets/
-MapWidgetPanel.tsx` dynamic-imports `../../../backend/static/map/index.js` and
+MapWidgetPanel.tsx` dynamic-imports `../../../map/index.js` and
 does `new MapWidget(host); widget.mount()` inside a dockview panel — the legacy
 vanilla widget runs verbatim. So the *implementation* gap is near-zero; the gap
 is **wiring + parity-of-intent**, not re-coding. Three caveats from the embed:
@@ -112,7 +113,7 @@ instead of DOM id targeting.
 | `map.overflow-menu.import` | leaf | button | "Import missions…" | file picker → `createMission` per item → refresh | unsure | yes (embedded) | `MapWidgetPanel.tsx` | Embed | |
 | `map.row-menu` | node | menu | "Mission actions" | `div.mission-row-menu[role=menu]`: Edit waypoints (status-gated) / Rename / Delete (guard-gated) | yes | yes (embedded) | `MapWidgetPanel.tsx` | Embed | |
 
-### On-map render layers (`map/layers/`)
+### On-map render layers (`map/sources/world/`, `map/sources/authored/`)
 
 | id | kind | type | text | behavior / data | planned? | implemented? | target | decision | notes |
 |----|------|------|------|-----------------|----------|--------------|--------|----------|-------|
