@@ -24,33 +24,40 @@ run_phase() {
   echo
 }
 
-echo "== [1/6] backend pytest =="
+echo "== [1/7] backend pytest =="
 echo "\$ PYTHONPATH=\".:..\" $PY -m pytest -q  (from backend/)"
 if ! (cd backend && PYTHONPATH=".:.." "$PY" -m pytest -q); then
   fail "backend pytest"
 fi
 echo
 
-echo "== [2/6] tts pytest =="
+echo "== [2/7] tts pytest =="
 echo "\$ PYTHONPATH=\".:..\" $PY -m pytest -q  (from tts/)"
 if ! (cd tts && PYTHONPATH=".:.." "$PY" -m pytest -q); then
   fail "tts pytest"
 fi
 echo
 
-run_phase "[3/6] legacy-map node tests" node --test backend/tests/ui/*.mjs
+echo "== [3/7] simulator pytest (3d-env) =="
+echo "\$ PYTHONPATH=\"simulator\" $PY -m pytest -q tests  (from 3d-env/)"
+if ! (cd 3d-env && PYTHONPATH="simulator" "$PY" -m pytest -q tests); then
+  fail "simulator pytest"
+fi
+echo
 
-run_phase "[4/6] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
+run_phase "[4/7] legacy-map node tests" node --test backend/tests/ui/*.mjs
+
+run_phase "[5/7] scene manifest validation" "$PY" scene/pipeline/validate_terrain_scene.py
 
 PY_PROJECTS=(backend scene rag tts mav-sim 3d-env tools)
-echo "== [5/6] python compilation =="
+echo "== [6/7] python compilation =="
 echo "\$ $PY -m compileall -q -j 0 ${PY_PROJECTS[*]}"
 if ! "$PY" -m compileall -q -j 0 "${PY_PROJECTS[@]}"; then
   fail "python compilation"
 fi
 echo
 
-echo "== [6/6] shell syntax checks =="
+echo "== [7/7] shell syntax checks =="
 launchers=(
   backend/run-app.sh
   backend/run.sh
