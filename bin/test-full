@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# Full branch/review/merge gate. See docs/cross-cutting/operations/testing.md
+# for the accepted policy (five-minute automated budget, every environment-gated
+# check reports pass/fail/skipped with a reason — never silent omission).
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+PY="$REPO_ROOT/.venv/bin/python"
+
+status=0
+fail() {
+  echo "FAIL: $1"
+  status=1
+}
+skip() {
+  echo "SKIPPED: $1 -- $2"
+}
+
+run_phase() {
+  local label="$1"
+  shift
+  echo "== $label =="
+  echo "\$ $*"
+  if ! "$@"; then
+    fail "$label"
+  fi
+  echo
+}
+
+echo "== [1/13] fast suite =="
+if ! "$REPO_ROOT/bin/test-fast"; then
+  fail "fast suite"
+fi
+echo
+
+run_phase "[2/13] full frontend vitest suite" bash -c "cd frontend && npm run test"
+
+run_phase "[3/13] frontend production build" bash -c "cd frontend && npm run build"
+
+echo "== [4/13] backend + tts + mav-sim + 3d-env coverage =="
+echo "\$ pytest --cov=. --cov-report=term-missing  (backend/, tts/, mav-sim/, 3d-env/)"
+if ! (cd backend && PYTHONPATH=".:.." "$PY" -m pytest -q --cov=. --cov-report=term-missing); then
+  fail "backend coverage"
+fi
+if ! (cd tts && PYTHONPATH=".:.." "$PY" -m pytest -q --cov=. --cov-report=term-missing); then
+  fail "tts coverage"
+fi
+if ! (cd mav-sim && "$PY" -m pytest -q --cov=. --cov-report=term-missing tests); then
+  fail "mav-sim coverage"
+fi
+if ! (cd 3d-env && PYTHONPATH="simulator" "$PY" -m pytest -q --cov=simulator --cov-report=term-missing tests); then
+  fail "3d-env coverage"
+fi
+echo
+
+run_phase "[5/13] frontend coverage" bash -c "cd frontend && npm run test:coverage"
+
+skip "[6/13] FastAPI application/API integration tests" \
+  "no TestClient-level integration suite exists yet against the assembled app (audit §2.1); tracked as a follow-up product-test gap, not a gate defect"
+
+skip "[7/13] RAG disposable-Qdrant integration" \
+  "no fake-embedding/disposable-Qdrant integration test is implemented yet (audit §8.8); docker is available in this environment but there is nothing to run"
+
+skip "[8/13] TTS synthesis smoke" \
+  "no local TTS model files present under tts/models/ in this environment"
+
+echo "== [9/13] mav-sim startup/shutdown smoke =="
+if command -v curl >/dev/null 2>&1; then
+  (cd mav-sim && "$PY" app.py >/tmp/mav-sim-smoke.log 2>&1 &)
+  mav_pid=""
+  for _ in $(seq 1 20); do
+    mav_pid="$(pgrep -f "$PY app.py" | head -n1 || true)"
+    if [[ -n "$mav_pid" ]] && curl -sf "http://127.0.0.1:9010/" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ -n "$mav_pid" ]] && curl -sf "http://127.0.0.1:9010/" >/dev/null 2>&1; then
+    kill -TERM "$mav_pid" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 "$mav_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.3
+    done
+    if kill -0 "$mav_pid" 2>/dev/null; then
+      fail "mav-sim startup/shutdown smoke: process did not exit after SIGTERM"
+      kill -KILL "$mav_pid" 2>/dev/null || true
+    else
+      echo "mav-sim startup/shutdown smoke: passed"
+    fi
+  else
+    fail "mav-sim startup/shutdown smoke: server never became reachable on :9010"
+    [[ -n "$mav_pid" ]] && kill -KILL "$mav_pid" 2>/dev/null || true
+  fi
+else
+  skip "[9/13] mav-sim startup/shutdown smoke" "curl not available in this environment"
+fi
+echo
+
+skip "[10/13] headless 3d-env startup" \
+  "3d-env has no offscreen/window-type=none launch mode today; running main.py here would attempt to open a real Panda3D window"
+
+skip "[11/13] browser smoke (map/mission workflows, docking, popouts)" \
+  "requires a human at a browser; see roadmap TA9b and R1b's browser acceptance milestone"
+
+skip "[12/13] GCS-to-simulator MQTT telemetry/video/control smoke" \
+  "mosquitto is installed in this environment but no MQTT integration smoke test is implemented yet"
+
+echo "== [13/13] git whitespace + generator-dirty check =="
+if ! git diff --check; then
+  fail "git whitespace check"
+fi
+before_tracked="$(git status --porcelain --untracked-files=no)"
+if ! "$PY" scene/pipeline/validate_terrain_scene.py >/dev/null; then
+  fail "generator-dirty check: scene validation failed"
+else
+  after_tracked="$(git status --porcelain --untracked-files=no)"
+  if [[ "$before_tracked" != "$after_tracked" ]]; then
+    fail "generator-dirty check: generators modified tracked files"
+    diff <(echo "$before_tracked") <(echo "$after_tracked")
+  else
+    echo "generator-dirty check: passed, tracked files unchanged"
+  fi
+fi
+echo
+
+if [[ $status -eq 0 ]]; then
+  echo "test-full: all checks passed (see SKIPPED lines above for environment-gated reasons)"
+else
+  echo "test-full: FAILED"
+fi
+exit $status

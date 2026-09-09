@@ -59,3 +59,7 @@ build/
 
 # Vitest JSON reporter output
 .vitest/
+
+# Coverage tooling output (bin/test-full)
+.coverage
+frontend/coverage/
