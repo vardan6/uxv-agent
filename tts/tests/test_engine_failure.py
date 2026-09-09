@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from fakes import FakeTTSEngine
-from tts_service.engines.kokoro import KokoroEngineError
+from tts.engines.kokoro import KokoroEngineError
 
 
 def test_engine_error_maps_to_503_with_message(client: TestClient, fake_engine: FakeTTSEngine) -> None:

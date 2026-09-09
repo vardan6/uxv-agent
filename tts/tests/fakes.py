@@ -1,6 +1,6 @@
 """Injectable fake TTS engine for HTTP-boundary tests.
 
-`tts_service/app.py` talks to whatever object is assigned to its module-level
+`tts/app.py` talks to whatever object is assigned to its module-level
 `engine` name through three methods: `status()`, `voices()`, and
 `synthesize_wav()`. `FakeTTSEngine` implements that surface without loading a
 real Kokoro model, so tests can assert on the HTTP contract (status codes,

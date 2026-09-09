@@ -23,7 +23,7 @@ def test_root_route_mirrors_health_route(client: TestClient) -> None:
 
 
 def test_voices_route_lists_engine_voices_and_default(client: TestClient, fake_engine: FakeTTSEngine) -> None:
-    from tts_service import app as app_module
+    from tts import app as app_module
 
     response = client.get("/voices")
 

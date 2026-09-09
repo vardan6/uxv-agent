@@ -55,7 +55,7 @@ def test_voice_speed_and_language_are_forwarded_to_the_engine(
 
 
 def test_blank_voice_falls_back_to_configured_default(client: TestClient, fake_engine: FakeTTSEngine) -> None:
-    from tts_service import app as app_module
+    from tts import app as app_module
 
     response = client.post("/v1/audio/speech", json={"input": "hello rover", "voice": "   "})
 

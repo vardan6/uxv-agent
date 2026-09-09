@@ -46,7 +46,7 @@ def test_non_json_body_returns_422(client: TestClient) -> None:
 
 
 def test_input_over_max_text_chars_returns_413(client: TestClient) -> None:
-    from tts_service import app as app_module
+    from tts import app as app_module
 
     too_long = "a" * (app_module.config.max_text_chars + 1)
 

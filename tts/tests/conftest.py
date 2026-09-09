@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from tts_service import app as app_module
+from tts import app as app_module
 
 from fakes import FakeTTSEngine
 
