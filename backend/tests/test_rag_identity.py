@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-import rag_service.ingest as ingest
-from rag_service.chunker import chunk_markdown_file
-from rag_service.collection import collection_name_for
-from rag_service.manifest import compute_staleness, manifest_point_id
+import rag.ingest as ingest
+from rag.chunker import chunk_markdown_file
+from rag.collection import collection_name_for
+from rag.manifest import compute_staleness, manifest_point_id
 
 
 # ---------------------------------------------------------------------------
