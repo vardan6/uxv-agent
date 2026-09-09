@@ -1,0 +1,299 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+OPENAI_COMPATIBLE_PROVIDER_TYPES = {
+    "openrouter",
+    "nvidia_nim",
+    "openai",
+    "google_gemini",
+    "lm_studio",
+    "mistral",
+    "together",
+    "groq",
+    "huggingface",
+    "openai_compatible",
+}
+
+
+_MODEL_CACHE: dict[str, Any] = {}
+_EMBEDDINGS_CLIENT_CACHE: dict[str, Any] = {}
+
+
+def _provider_cache_key(provider: dict[str, Any], secret_resolver: Callable[[str], str] | None) -> str:
+    """Stable key that changes whenever the provider connection config changes."""
+    relevant = {
+        "id": provider.get("id"),
+        "provider_type": provider.get("provider_type"),
+        "model_id": provider.get("model_id"),
+        "base_url": provider.get("base_url"),
+        "auth_mode": provider.get("auth_mode"),
+        "secret_ref": provider.get("secret_ref"),
+    }
+    # Include resolved secret value so cache is invalidated when credentials rotate.
+    auth_mode = str(provider.get("auth_mode", "env_var"))
+    if auth_mode != "none":
+        secret_ref = str(provider.get("secret_ref", "")).strip()
+        if secret_ref and auth_mode == "env_var":
+            relevant["_secret_val"] = os.getenv(secret_ref, "")
+    payload = json.dumps(relevant, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def evict_model_cache() -> None:
+    """Clear the process-level model cache (call after provider config changes)."""
+    _MODEL_CACHE.clear()
+    _EMBEDDINGS_CLIENT_CACHE.clear()
+
+
+@dataclass(slots=True)
+class ResolvedProvider:
+    provider: dict[str, Any]
+    model: Any
+
+
+def resolve_provider(
+    config: Any,
+    *,
+    purpose: str = "general_chat",
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> ResolvedProvider:
+    providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+    provider = _find_provider(providers, provider_id) if provider_id else _provider_from_routing(config.model_routing, providers, purpose)
+    if provider is None:
+        raise ValueError("No LLM provider is configured for General Chat.")
+    if not provider.get("enabled", True):
+        raise ValueError(f"LLM provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
+    return ResolvedProvider(provider=provider, model=_cached_chat_model(provider, secret_resolver=secret_resolver))
+
+
+def resolve_intent_provider(
+    config: Any,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> ResolvedProvider:
+    providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+    for purpose in ("command_parser", "planner", "general_chat"):
+        provider = _find_provider(providers, provider_id) if provider_id else _provider_from_routing(
+            config.model_routing,
+            providers,
+            purpose,
+            allow_default=purpose == "general_chat",
+        )
+        if provider is None:
+            continue
+        if not provider.get("enabled", True):
+            raise ValueError(f"LLM provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
+        return ResolvedProvider(provider=provider, model=_cached_chat_model(provider, secret_resolver=secret_resolver))
+    raise ValueError("No LLM provider is configured for intent parsing.")
+
+
+def resolve_embeddings_provider(
+    config: Any,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Resolve the provider for the `embeddings` routing purpose (query side)."""
+    providers = [provider for provider in config.llm_providers if isinstance(provider, dict)]
+    provider = (
+        _find_provider(providers, provider_id)
+        if provider_id
+        else _provider_from_routing(config.model_routing, providers, "embeddings", allow_default=False)
+    )
+    if provider is None:
+        raise ValueError("No embeddings provider is configured (model routing purpose 'embeddings').")
+    if not provider.get("enabled", True):
+        raise ValueError(f"Embeddings provider '{provider.get('display_name') or provider.get('id')}' is disabled.")
+    return provider
+
+
+def embed_texts(
+    config: Any,
+    texts: list[str],
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> list[list[float]]:
+    """Embed texts through the routed embeddings provider (OpenAI-compatible /embeddings)."""
+    provider = resolve_embeddings_provider(config, provider_id=provider_id, secret_resolver=secret_resolver)
+    model = str(provider.get("model_id") or "").strip()
+    if not model:
+        raise ValueError("Selected embeddings provider has no model_id.")
+    client = _cached_embeddings_client(provider, secret_resolver=secret_resolver)
+    response = client.embeddings.create(model=model, input=list(texts))
+    return [item.embedding for item in response.data]
+
+
+def embed_query(
+    config: Any,
+    text: str,
+    *,
+    provider_id: str = "",
+    secret_resolver: Callable[[str], str] | None = None,
+) -> list[float]:
+    """Embed a single query string; query-side counterpart to rag ingestion."""
+    vectors = embed_texts(config, [str(text or "")], provider_id=provider_id, secret_resolver=secret_resolver)
+    if not vectors:
+        raise ValueError("Embeddings provider returned no vectors.")
+    return vectors[0]
+
+
+def _cached_embeddings_client(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    key = _provider_cache_key(provider, secret_resolver)
+    if key not in _EMBEDDINGS_CLIENT_CACHE:
+        _EMBEDDINGS_CLIENT_CACHE[key] = _build_embeddings_client(provider, secret_resolver=secret_resolver)
+    return _EMBEDDINGS_CLIENT_CACHE[key]
+
+
+def _build_embeddings_client(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    provider_type = str(provider.get("provider_type", "openai_compatible"))
+    if provider_type not in OPENAI_COMPATIBLE_PROVIDER_TYPES:
+        raise ValueError(f"Unsupported embeddings provider type: {provider_type}")
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("The openai package is not installed. Install backend/requirements-gcs.txt.") from exc
+
+    api_key = _api_key_for_provider(provider, secret_resolver=secret_resolver)
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(provider.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = _normalized_base_url(provider_type, base_url)
+    return OpenAI(**kwargs)
+
+
+def _cached_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    key = _provider_cache_key(provider, secret_resolver)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = build_chat_model(provider, secret_resolver=secret_resolver)
+    return _MODEL_CACHE[key]
+
+
+def build_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    provider_type = str(provider.get("provider_type", "openai_compatible"))
+    if provider_type == "ollama":
+        return _build_ollama_chat_model(provider)
+    if provider_type == "anthropic":
+        return _build_anthropic_chat_model(provider, secret_resolver=secret_resolver)
+    if provider_type == "cohere":
+        raise ValueError("Cohere chat support requires langchain-cohere. Add it to requirements and implement _build_cohere_chat_model.")
+    if provider_type not in OPENAI_COMPATIBLE_PROVIDER_TYPES:
+        raise ValueError(f"Unsupported LLM provider type: {provider_type}")
+
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError as exc:
+        raise RuntimeError("LangChain OpenAI integration is not installed. Install backend/requirements-gcs.txt.") from exc
+
+    api_key = _api_key_for_provider(provider, secret_resolver=secret_resolver)
+    kwargs: dict[str, Any] = {
+        "model": str(provider.get("model_id") or "").strip(),
+        "api_key": api_key,
+        "temperature": 0.2,
+        "stream_usage": True,
+    }
+    base_url = str(provider.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = _normalized_base_url(provider_type, base_url)
+    if not kwargs["model"]:
+        raise ValueError("Selected LLM provider has no model_id.")
+    return ChatOpenAI(**kwargs)
+
+
+def _build_anthropic_chat_model(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> Any:
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError as exc:
+        raise RuntimeError("LangChain Anthropic integration is not installed. Run: pip install langchain-anthropic") from exc
+
+    model_id = str(provider.get("model_id") or "").strip()
+    if not model_id:
+        raise ValueError("Selected Anthropic provider has no model_id.")
+
+    api_key = _api_key_for_provider(provider, secret_resolver=secret_resolver)
+    return ChatAnthropic(model=model_id, api_key=api_key, temperature=0.2)
+
+
+def _build_ollama_chat_model(provider: dict[str, Any]) -> Any:
+    try:
+        from langchain_ollama import ChatOllama
+    except ImportError as exc:
+        raise RuntimeError("LangChain Ollama integration is not installed. Install backend/requirements-gcs.txt.") from exc
+
+    model_id = str(provider.get("model_id") or "").strip()
+    if not model_id:
+        raise ValueError("Selected Ollama provider has no model_id.")
+
+    kwargs: dict[str, Any] = {
+        "model": model_id,
+        "temperature": 0.2,
+        # Keep the model loaded in Ollama until explicitly unloaded.
+        # Without this Ollama unloads the model after 5 minutes of idle,
+        # causing a 20-40s reload on the next message.
+        "keep_alive": -1,
+    }
+    base_url = str(provider.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = base_url.rstrip("/")
+    return ChatOllama(**kwargs)
+
+
+def _provider_from_routing(
+    routing: dict[str, Any],
+    providers: list[dict[str, Any]],
+    purpose: str,
+    *,
+    allow_default: bool = True,
+) -> dict[str, Any] | None:
+    rule = routing.get(purpose, {}) if isinstance(routing, dict) else {}
+    candidate_ids = []
+    if isinstance(rule, dict):
+        primary_id = str(rule.get("primary_provider_id", "")).strip()
+        fallback_ids = [str(item).strip() for item in rule.get("fallback_provider_ids", []) if str(item).strip()]
+        candidate_ids = [primary_id, *fallback_ids]
+    for candidate_id in candidate_ids:
+        provider = _find_provider(providers, candidate_id)
+        if provider and provider.get("enabled", True):
+            return provider
+    if not allow_default:
+        return None
+    return next((provider for provider in providers if provider.get("enabled", True)), None)
+
+
+def _find_provider(providers: list[dict[str, Any]], provider_id: str) -> dict[str, Any] | None:
+    return next((provider for provider in providers if str(provider.get("id")) == provider_id), None)
+
+
+def _api_key_for_provider(provider: dict[str, Any], *, secret_resolver: Callable[[str], str] | None = None) -> str:
+    auth_mode = str(provider.get("auth_mode", "env_var"))
+    if auth_mode == "none":
+        return "not-needed"
+    if auth_mode == "stored_secret":
+        secret_ref = str(provider.get("secret_ref", "")).strip()
+        if not secret_ref:
+            raise ValueError("Selected LLM provider has no secret_ref.")
+        if secret_resolver is None:
+            raise ValueError("Stored secret auth is not available in this runtime.")
+        api_key = str(secret_resolver(secret_ref)).strip()
+        if not api_key:
+            raise ValueError("Stored secret value is empty.")
+        return api_key
+    secret_ref = str(provider.get("secret_ref", "")).strip()
+    if not secret_ref:
+        raise ValueError("Selected LLM provider has no secret_ref.")
+    api_key = os.getenv(secret_ref, "").strip()
+    if not api_key:
+        raise ValueError(f"Environment variable {secret_ref} is not set.")
+    return api_key
+
+
+def _normalized_base_url(provider_type: str, base_url: str) -> str:
+    return base_url.rstrip("/")

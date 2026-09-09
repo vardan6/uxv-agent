@@ -45,8 +45,8 @@ compact context block uses a 24,000-char default budget, so it is materially
 larger than the inputs to early estimates — never optimize it (or anything) on
 assumed sizes.
 
-**Harness:** `gcs_server/tools/measure_agent_surfaces.py`  
-Run from repo root: `PYTHONPATH=gcs_server:. .venv/bin/python -m tools.measure_agent_surfaces`
+**Harness:** `backend/tools/measure_agent_surfaces.py`  
+Run from repo root: `PYTHONPATH=backend:. .venv/bin/python -m tools.measure_agent_surfaces`
 
 ### Measured baseline (2026-06-18, post-ADR-0029-Tier-1)
 

@@ -21,7 +21,7 @@ Repository structure:
 ```text
 remote-rover/
   3d-env/
-  gcs_server/
+  backend/
   config/
   tools/
   docs/
@@ -46,7 +46,7 @@ Primary responsibilities:
 ### 2. GCS Server
 
 Location:
-- `gcs_server/`
+- `backend/`
 
 Primary responsibilities:
 - serve the browser UI
@@ -338,24 +338,24 @@ Current important modules:
 ### In The GCS
 
 Current important modules:
-- `gcs_server/app.py`: FastAPI routes, WebSocket endpoint, runtime wiring
-- `gcs_server/mqtt_service.py`: broker connection, subscriptions, control publish, presence publish
-- `gcs_server/control.py`: control loop and held-button publishing
-- `gcs_server/state.py`: in-memory runtime state and freshness tracking
-- `gcs_server/ws.py`: browser connection manager
-- `gcs_server/runtime.py`: service assembly and reconfiguration
+- `backend/app.py`: FastAPI routes, WebSocket endpoint, runtime wiring
+- `backend/mqtt_service.py`: broker connection, subscriptions, control publish, presence publish
+- `backend/control.py`: control loop and held-button publishing
+- `backend/state.py`: in-memory runtime state and freshness tracking
+- `backend/ws.py`: browser connection manager
+- `backend/runtime.py`: service assembly and reconfiguration
 - `scene/scene_map.py`: scene-map payload from `scene/scenes/terrain_scene.v1.json`
-- `gcs_server/ai/context_service.py`: live current-context providers for AI Chat
-- `gcs_server/ai/spatial_query_service.py`: deterministic spatial/geometry query service
-- `gcs_server/ai/tool_registry.py`: permissioned per-request tool registry for Agent and mission-authoring flows
-- `gcs_server/ai/intent_service.py`: structured rover intent parsing with repair
-- `gcs_server/ai/mission_draft_service.py`: mission-draft CRUD, validate, approve/reject
-- `gcs_server/ai/planning_shell_graph.py`: LangGraph planning graph
-- `gcs_server/ai/graph_state.py`: `PlanningShellGraphState` TypedDict
-- `gcs_server/ai/provider_registry.py`: configured provider to LangChain model adapter
-- `gcs_server/ai/chat_service.py`: read-only Chat/Agent orchestration
-- `gcs_server/ai/session_store.py`: SQLite AI session/message storage
-- `gcs_server/ai/migrations.py`: AI store schema migrations
+- `backend/ai/context_service.py`: live current-context providers for AI Chat
+- `backend/ai/spatial_query_service.py`: deterministic spatial/geometry query service
+- `backend/ai/tool_registry.py`: permissioned per-request tool registry for Agent and mission-authoring flows
+- `backend/ai/intent_service.py`: structured rover intent parsing with repair
+- `backend/ai/mission_draft_service.py`: mission-draft CRUD, validate, approve/reject
+- `backend/ai/planning_shell_graph.py`: LangGraph planning graph
+- `backend/ai/graph_state.py`: `PlanningShellGraphState` TypedDict
+- `backend/ai/provider_registry.py`: configured provider to LangChain model adapter
+- `backend/ai/chat_service.py`: read-only Chat/Agent orchestration
+- `backend/ai/session_store.py`: SQLite AI session/message storage
+- `backend/ai/migrations.py`: AI store schema migrations
 
 ## Current Architectural Strengths
 

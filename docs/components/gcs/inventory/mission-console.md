@@ -1,8 +1,8 @@
-# Mission Console page inventory — `static/mission-console.html` + `static/mission-console.js`
+# Mission Console page inventory — `frontend-vanilla/mission-console.html` + `frontend-vanilla/mission-console.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/mission-console.html`
-(241 lines), `gcs_server/static/mission-console.js` (141 lines), styles in
-`gcs_server/static/style.css`. Target app: `frontend/` — no mission-console
+Pass A extraction (mechanical). Source: `frontend-vanilla/mission-console.html`
+(241 lines), `frontend-vanilla/mission-console.js` (141 lines), styles in
+`frontend-vanilla/style.css`. Target app: `frontend/` — no mission-console
 composite or replay-sessions widget exists yet; present widgets are
 `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`, `DriveControlsWidget`,
 `NotesWidget`, `TelemetryWidget`, `VideoWidget`.
@@ -126,7 +126,7 @@ only mission-console + replay-sidebar classes are below.
 - `mc.replay.list.item.stat.*` — `.session-stat` inline-flex; `gap:5px`; `padding:2px 6px`; `border-radius:999px`; `background:color-mix(--panel-strong 70%)`; `border:1px color-mix(--line 68%)`; svg 12px `opacity:.9`. `.session-item.active .session-stat`→accent border+bg `@ style.css:2136`. `@ style.css:2118`
 - `mc.replay.list.item.id` — `.session-id` ellipsis; `white-space:nowrap`; `overflow:hidden`. Shared muted text `.session-select span` `color:var(--muted)`; `font-size:.72rem` `@ style.css:2141`. `@ style.css:2148`
 
-### Dead CSS in `static/` not used by this page
+### Dead CSS in `frontend-vanilla/` not used by this page
 
 `.session-delete` (@2086), `.session-sort-control` (@1640), `.record-tabs` (@2155)
 are styled but **not rendered** by `mission-console.js` (no delete/sort/tabs here).

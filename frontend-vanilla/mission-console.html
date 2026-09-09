@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Mission Console | Remote Rover GCS</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/style.css">
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/atom-one-dark.min.css">
+  </head>
+  <body data-page="mission-console">
+    <main class="app-shell mission-console-shell" data-app-shell>
+      <section data-page-intro></section>
+
+      <section class="mission-console-grid" aria-label="Mission console workspace">
+        <aside class="panel replay-sidebar mission-console-replay-sidebar">
+          <div class="panel-head">
+            <div class="session-head-top">
+              <p class="section-kicker">Replay</p>
+              <h2>Sessions</h2>
+            </div>
+            <div class="session-head-meta">
+              <span id="mission-console-replay-count" class="pill">0 sessions</span>
+              <span id="mission-console-replay-current" class="pill">No active session</span>
+            </div>
+          </div>
+          <div class="session-toolbar" role="toolbar" aria-label="Replay session actions">
+            <button
+              id="mission-console-refresh-replay"
+              class="ghost replay-session-icon-btn"
+              type="button"
+              data-tooltip="Refresh sessions"
+              aria-label="Refresh replay sessions"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4a8 8 0 0 1 7.45 5H17v2h5V6h-2v2.1A10 10 0 1 0 22 12h-2a8 8 0 1 1-8-8Z"/></svg>
+            </button>
+            <button
+              id="mission-console-rollover-replay"
+              class="ghost replay-session-icon-btn"
+              type="button"
+              data-tooltip="Start new session"
+              aria-label="Start new replay session"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
+            </button>
+          </div>
+          <div id="mission-console-replay-list" class="session-list"></div>
+        </aside>
+
+        <section id="ai-map-area" class="panel ai-map-area mission-console-map-area">
+          <div id="ai-map-widget-container" class="ai-map-widget-container"></div>
+        </section>
+      </section>
+
+      <button
+        id="ai-map-height-resizer"
+        class="ai-map-height-resizer"
+        type="button"
+        role="separator"
+        aria-label="Resize mission console map area"
+        aria-orientation="horizontal"
+        aria-valuemin="320"
+        aria-valuemax="1100"
+        aria-valuenow="680"
+        title="Drag to resize map panel"
+      ></button>
+
+      <section class="ai-chat-shell mission-console-chat-shell">
+        <aside class="panel ai-sidebar">
+          <div class="ai-sidebar-head">
+            <div>
+              <p class="section-kicker">AI Sessions</p>
+              <h2>Chats</h2>
+            </div>
+            <div class="ai-sidebar-head-actions">
+              <button id="ai-show-active" class="ghost" type="button" title="Show active chats" aria-pressed="true">Active</button>
+              <button id="ai-show-archived" class="ghost" type="button" title="Show archived chats" aria-pressed="false">Archived</button>
+              <button id="ai-new-session" type="button" title="New chat" aria-label="New chat">+</button>
+            </div>
+          </div>
+          <input id="ai-session-search" type="search" placeholder="Search sessions" autocomplete="off">
+          <div id="ai-session-list" class="ai-session-list"></div>
+        </aside>
+
+        <button
+          id="ai-layout-resizer"
+          class="ai-layout-resizer"
+          type="button"
+          role="separator"
+          aria-label="Resize AI sessions panel"
+          aria-orientation="vertical"
+          aria-valuemin="240"
+          aria-valuemax="560"
+          aria-valuenow="340"
+          title="Drag to resize AI sessions panel"
+        ></button>
+
+        <section class="panel ai-chat-panel">
+          <div class="ai-chat-head">
+            <div>
+              <p class="section-kicker">Agent Chat</p>
+              <h2 id="ai-session-title">New chat</h2>
+            </div>
+            <div class="ai-chat-actions">
+              <select id="ai-provider-select" title="Chat provider"></select>
+              <button id="ai-rename-session" class="ghost ai-chat-icon-btn" type="button" data-tooltip="Rename chat" title="Rename chat" aria-label="Rename chat">
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+              <button id="ai-archive-session" class="ghost ai-chat-icon-btn" type="button" data-tooltip="Archive chat" title="Archive chat" aria-label="Archive chat">
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              </button>
+              <button id="ai-copy-chat" class="ghost ai-chat-icon-btn" type="button" data-tooltip="Copy chat as markdown (Shift-click for diagnostics)" title="Copy chat as markdown (Shift-click for diagnostics)" aria-label="Copy chat as markdown">
+                <svg class="ai-message-speak-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="10" height="14" rx="2"/><path d="M5 6H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ai-provider-strip">
+            <span id="ai-provider-pill" class="pill">Provider: routing default</span>
+            <span id="ai-status-pill" class="pill warn">Idle</span>
+          </div>
+
+          <div id="ai-message-list" class="ai-message-list" aria-live="polite"></div>
+
+          <form id="ai-message-form" class="ai-composer">
+            <div class="ai-composer-input-wrap">
+              <textarea id="ai-message-input" rows="3" placeholder="Ask the agent about missions, replay, map, settings, or rover state"></textarea>
+              <div id="ai-slash-menu" class="ai-slash-menu" role="listbox" aria-label="AI slash commands" hidden></div>
+            </div>
+            <div class="ai-composer-actions">
+              <div class="ai-run-mode-toggle" role="group" aria-label="Message mode">
+                <button class="ghost" type="button" data-run-mode="chat" aria-pressed="false">Chat</button>
+                <button class="ghost active" type="button" data-run-mode="agent" aria-pressed="true">Agent</button>
+              </div>
+              <div class="ai-sources-control" data-ai-sources-control>
+                <button id="ai-sources-toggle" class="ghost ai-sources-toggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="ai-sources-popover" title="Per-session retrieval source controls">
+                  <span class="ai-sources-toggle-label">Sources</span>
+                  <span class="ai-sources-toggle-count" id="ai-sources-toggle-count">0/0</span>
+                  <span class="ai-sources-toggle-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="ai-sources-popover" class="ai-sources-popover" role="dialog" aria-label="Source controls" hidden>
+                  <div class="ai-sources-popover-head">
+                    <h3>Source Controls</h3>
+                    <span class="pill" id="ai-sources-popover-count">0/0 enabled</span>
+                  </div>
+                  <p class="ai-sources-popover-note">Toggle which retrieval sources this session can use. Saved per session.</p>
+                  <div class="ai-sources-popover-list" id="ai-source-controls"></div>
+                </div>
+              </div>
+              <p id="ai-status" class="status-banner">Create or open a session to begin.</p>
+              <div class="inline-actions">
+                <button id="ai-retry-response" class="ghost" type="button" title="Retry the last model response">Retry response</button>
+                <button id="ai-stop-message" class="ghost" type="button" title="Stop receiving this response">Stop</button>
+                <button id="ai-send-message" type="submit">Send</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <button
+          id="ai-height-resizer"
+          class="ai-height-resizer"
+          type="button"
+          role="separator"
+          aria-label="Resize AI chat area height"
+          aria-orientation="horizontal"
+          aria-valuemin="420"
+          aria-valuenow="680"
+          title="Drag to resize chat panels height"
+        ></button>
+      </section>
+
+      <div id="gcs-status-bar-container" class="gcs-status-bar-panel"></div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@14.1.1/lib/marked.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.3/dist/purify.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js" defer></script>
+    <script src="/static/common.js" defer></script>
+    <script src="/static/mission-console.js" defer></script>
+    <script src="/static/ai.js" defer></script>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+      defer
+    ></script>
+    <script type="module">
+      import { MapWidget } from '/map/index.js';
+      import { StatusBar } from '/map/ui/StatusBar.js';
+
+      const _statusBar = new StatusBar();
+      const statusBarEl = document.getElementById('gcs-status-bar-container');
+      if (statusBarEl) _statusBar.mount(statusBarEl);
+      window.__gcsStatusBar = _statusBar;
+
+      let _widget = null;
+
+      function mountWidget(sessionId) {
+        const container = document.getElementById('ai-map-widget-container');
+        if (!container) return;
+        if (_widget) {
+          if (!_widget.isMounted) {
+            _widget.mount();
+          }
+          _widget.setSessionId(sessionId);
+          return;
+        }
+        _widget = new MapWidget(container, {
+          sessionId,
+          statusBar: _statusBar,
+          missionListPosition: 'right',
+        });
+        _widget.mount();
+      }
+
+      document.addEventListener('ai:session-open', (e) => {
+        mountWidget(e.detail.sessionId);
+      });
+
+      document.addEventListener('ai:session-refreshed', (e) => {
+        const activeSessionId = window.__aiGetActiveSessionId?.() || '';
+        if (e.detail.sessionId === activeSessionId && _widget) {
+          _widget.refresh();
+        }
+      });
+
+      window.addEventListener('load', () => {
+        const currentSessionId = window.__aiGetActiveSessionId?.() || '';
+        mountWidget(currentSessionId);
+      });
+    </script>
+  </body>
+</html>

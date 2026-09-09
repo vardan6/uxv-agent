@@ -1,7 +1,7 @@
-# MQTT Setup page inventory — `static/mqtt-setup.html` + `static/mqtt-setup.js`
+# MQTT Setup page inventory — `frontend-vanilla/mqtt-setup.html` + `frontend-vanilla/mqtt-setup.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/mqtt-setup.html` (82 lines),
-`gcs_server/static/mqtt-setup.js` (143 lines), styles in `gcs_server/static/style.css`.
+Pass A extraction (mechanical). Source: `frontend-vanilla/mqtt-setup.html` (82 lines),
+`frontend-vanilla/mqtt-setup.js` (143 lines), styles in `frontend-vanilla/style.css`.
 Target app: `frontend/` — served at `/setup/mqtt` (`data-page="settings"`).
 
 **This is the MQTT broker/topic configuration form.** One panel: a `form-grid` of

@@ -12,11 +12,11 @@ python3 -m py_compile \
   3d-env/simulator/terrain.py \
   3d-env/simulator/main.py \
   scene/scene_map.py \
-  gcs_server/ai/road_graph_service.py
+  backend/ai/road_graph_service.py
 
 python3 - <<'PY'
 from scene.scene_map import get_scene_map_payload
-from gcs_server.ai.road_graph_service import RoadGraphService
+from backend.ai.road_graph_service import RoadGraphService
 
 scene = get_scene_map_payload(grid_size=64)
 graph = RoadGraphService()

@@ -36,7 +36,7 @@ second implementation of replay, Missions, or AI Session behavior.
 
 ## Scope
 
-`gcs_server/` is the browser-facing Ground Control Station for the Remote Rover project.
+`backend/` is the browser-facing Ground Control Station for the Remote Rover project.
 
 It is responsible for:
 
@@ -124,7 +124,7 @@ Keyboard bindings are read from shared config `key_bindings`. The default arrow-
 Control activation invariants (do not regress):
 
 - Control must not auto-release on a timeout; only focus/visibility changes or a real disconnect may deactivate browser control.
-- The focused and visible dashboard browser is the active controller inside `gcs_server`.
+- The focused and visible dashboard browser is the active controller inside `backend`.
 - Losing dashboard focus must publish neutral controls immediately so motion cannot stick.
 
 ## Presence And Telemetry Enablement
@@ -165,8 +165,8 @@ For the AI agent architecture and tool contract, see the [AI Agent component](..
 
 ### AI chat frontend layout
 
-The `/ai` chat layout is owned by `static/ai.html`, `static/ai.js`, and
-`static/style.css`. Its sessions/sidebar resizer should follow the lighter
+The `/ai` chat layout is owned by `frontend-vanilla/ai.html`, `frontend-vanilla/ai.js`, and
+`frontend-vanilla/style.css`. Its sessions/sidebar resizer should follow the lighter
 `MapWidget` list-resizer pattern: keep the usable hit target, make the visible
 divider narrow and low contrast, and let the adjacent panel own any subtle
 border. Do not fork resize semantics away from the current AI chat behavior:
@@ -180,17 +180,17 @@ mission/map behavior.
 
 ## Map Widget
 
-The `/ai` page hosts a `MapWidget` (`static/map/MapWidget.js`) below the chat panel. It is the primary mission authoring surface and the live vehicle view during mission execution.
+The `/ai` page hosts a `MapWidget` (`map/MapWidget.js`) below the chat panel. It is the primary mission authoring surface and the live vehicle view during mission execution.
 
-Key frontend modules under `static/map/`:
+Key frontend modules under `map/`:
 
 | Module | Role |
 |---|---|
 | `MapWidget.js` | Root widget; Leaflet init, layer orchestration, keyboard shortcuts |
-| `layers/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
-| `layers/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
+| `sources/authored/LiveVehicleLayer.js` | Renders live vehicle position from `/ws` telemetry; polling fallback at 2 s |
+| `sources/authored/MissionOverlayLayer.js` | Renders mission route overlays with per-waypoint provenance styling |
 | `ui/MissionListPanel.js` | Flat-Mission list (ADR 0021 §2: one row = one Mission) with Visible/Selected/Active state, five fixed per-row action slots (play/pause, stop, edit, delete, visibility), batch show/hide. Row markup escapes AI-/operator-derived names. See [requirements.md §Mission Row Button Layout](../gcs/requirements.md#mission-row-button-layout) for slot spec. |
-| `layers/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
+| `sources/world/SceneObjectsLayer.js` | Renders the static 3d-env scene (roads, objects, spawn) from `/api/replay/scene-map`, matching replay |
 | `ui/BasemapPanel.js` | Real 2D WGS84 basemap view (OSM tiles, EPSG:3857) plotting the focused mission by lat/lon; owns only basemap rendering plus WGS84 sketch capture for the shared toolbar |
 | `ui/MapAuthoringToolbar.js` | Shared bottom authoring toolbar owned by `MapWidget`; routes add-waypoint, corridor/survey generation, geofence save/clear, and sketch state/status through existing mission handlers |
 | `ui/SelectionPanel.js` | Waypoint-level details and provenance display for selected waypoint |
@@ -198,7 +198,7 @@ Key frontend modules under `static/map/`:
 | `ui/HintToasts.js` | Gesture hint toasts |
 | `ui/KeyboardHelpOverlay.js` | Keyboard shortcut reference overlay |
 | `ui/ElevationProfilePanel.js` | Mission elevation profile panel for the selected overlay |
-| `data/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
+| `sources/authored/missionMutationApi.js` | Client-side mutation API calls with `client_version` CAS |
 | `state/` | Frontend mission state management |
 
 The widget's primary scene view uses `L.CRS.Simple` with local scene metres for overlay coordinates. Under ADR 0022 (GPS-master) WGS84 is the stored truth: overlay payloads now carry `lat/lon/alt` on every feature point plus the Mission `origin` datum, and `BasemapPanel` plots the focused mission (and geofence) by lat/lon on a real EPSG:3857 basemap. The default `CRS.Simple` scene view still derives local metres from the WGS84 truth via the origin datum. Basemap is a map VIEW, not a separate authoring mode; mission authoring controls belong to the shared bottom authoring toolbar.
@@ -212,7 +212,7 @@ For AI context and intent parsing, see [design.md](./design.md).
 Map integration boundaries:
 
 - the mission elevation profile panel is implemented on `/ai`
-- the replay page still renders through `static/replay.js`, not through `MapWidget`
+- the replay page still renders through `frontend-vanilla/replay.js`, not through `MapWidget`
 - geofence authoring + validation now have a real backend source: a mission's
   inclusion fence is stored on mission content (`geofence`), authored via the
   `set_mission_geofence` AI tool or the map authoring toolbar's fence mode
@@ -248,7 +248,9 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 - `state.py`: local runtime state and freshness tracking
 - `ws.py`: WebSocket connection manager
 - `ai/`: current-context service, provider registry, chat service, session storage, and secret storage
-- `static/`: dashboard and setup frontend assets
+- `frontend-vanilla/`: dashboard and setup frontend assets
+- `map/`: the shared map widget (both frontends), split into
+  `sources/world/` and `sources/authored/` per ADR 0037
 - `tools/` / `bin/` (planned): terminal AI CLI thin client over `/api/ai/...`
 
 ## Current Limitations
@@ -257,7 +259,7 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 - no authentication or authorization
 - current video delivery is still the bootstrap WebSocket path fed from MQTT frames
 - multi-instance GCS behavior is not yet fully hardened
-- replay map rendering still lives in `static/replay.js`; replay has not been migrated onto `MapWidget`
+- replay map rendering still lives in `frontend-vanilla/replay.js`; replay has not been migrated onto `MapWidget`
 - geofence is authored + enforced (ADR 0023 Phase 5) and a stored inclusion fence now renders on the basemap on load (overlay payload carries `geofence` + per-Mission `origin`; `BasemapPanel` draws the saved polygon/rally points distinct from the in-progress sketch)
 - LLM provider checks are simple endpoint probes, not full chat completions
 - bounded lazy data branches/source controls are implemented for replay, AI memory, settings, and sensor metadata; RAG/document retrieval and web research/search are still not implemented

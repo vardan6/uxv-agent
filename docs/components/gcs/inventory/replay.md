@@ -1,8 +1,8 @@
-# Replay page inventory — `static/replay.html` + `static/replay.js`
+# Replay page inventory — `frontend-vanilla/replay.html` + `frontend-vanilla/replay.js`
 
-Pass A extraction (mechanical). Source: `gcs_server/static/replay.html`
-(237 lines), `gcs_server/static/replay.js` (1,572 lines), styles in
-`gcs_server/static/style.css`. Target app: `frontend/` — no replay widget exists
+Pass A extraction (mechanical). Source: `frontend-vanilla/replay.html`
+(237 lines), `frontend-vanilla/replay.js` (1,572 lines), styles in
+`frontend-vanilla/style.css`. Target app: `frontend/` — no replay widget exists
 yet; present widgets are `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`,
 `DriveControlsWidget`, `NotesWidget`, `TelemetryWidget`, `VideoWidget`.
 
@@ -15,7 +15,7 @@ points), and a transport (play/pause/seek/speed/scrubber). It shares only the
 **richer** (sort popover, delete button) **and live**: selecting a session loads
 it and drives the map (the inert-selection gap flagged in `mission-console.md`
 does **not** apply here). The map here is a *replay-specific reimplementation*,
-**not** the embeddable `static/map/` `MapWidget` inventoried in `map.md`.
+**not** the embeddable `map/` `MapWidget` inventoried in `map.md`.
 
 `planned?` / `implemented?` pre-filled. Pass B decisions filled below.
 
@@ -86,7 +86,7 @@ Node decision: **Redesign / `MapWidgetPanel.tsx`**. The replay-specific Leaflet 
 
 | id | kind | type | text | behavior / data | planned? | implemented? | target | decision | notes |
 |----|------|------|------|-----------------|----------|--------------|--------|----------|-------|
-| `rp.map` | node | panel | "Replay" / "Map Playback" | `article.panel.replay-map-panel`; head + layer toolbar + `#replay-map` + info bar. **Replay-specific Leaflet map**, *not* the `static/map/` `MapWidget` — `ensureMap()` builds it inline in `scene` (CRS.Simple terrain) or `geo` (OSM tiles) mode | unsure (folds into Map widget? operator-console.md:84) | no | MapWidgetPanel.tsx | Redesign | replay path/track capabilities fold into MapWidget layer toggles; bespoke inline Leaflet not rebuilt |
+| `rp.map` | node | panel | "Replay" / "Map Playback" | `article.panel.replay-map-panel`; head + layer toolbar + `#replay-map` + info bar. **Replay-specific Leaflet map**, *not* the `map/` `MapWidget` — `ensureMap()` builds it inline in `scene` (CRS.Simple terrain) or `geo` (OSM tiles) mode | unsure (folds into Map widget? operator-console.md:84) | no | MapWidgetPanel.tsx | Redesign | replay path/track capabilities fold into MapWidget layer toggles; bespoke inline Leaflet not rebuilt |
 | `rp.map.head.loaded` | leaf | pill | "No session loaded" / session id | `#loaded-session-pill.pill.warn`; set by `loadSession`/`clearReplaySelection` | yes (parity) | no | MapWidgetPanel.tsx | Redesign | surfaces as MapWidget status bar or ReplayControlsWidget header |
 | `rp.map.layer-toolbar` | node | panel | "Map layers" | `.map-layer-toolbar`; six checkbox toggles | unsure (Map layer toggles, operator-console.md:84) | no | MapWidgetPanel.tsx | Redesign | folds into MapWidget's existing layer toggle system |
 | `rp.map.layer.terrain` | leaf | toggle | "Terrain" | `#layer-terrain`; `layerVisibility.terrain` → re-render scene overlay | unsure | no | MapWidgetPanel.tsx | Redesign | |

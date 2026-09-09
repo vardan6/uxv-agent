@@ -300,18 +300,18 @@ removes.
 
 Expected frontend touch points:
 
-- `gcs_server/static/map/ui/MissionListPanel.js`
+- `map/ui/MissionListPanel.js`
   - split current batch-bar markup into a real context bar
   - add contextual single-target action rendering
   - optionally remove repeated row buttons
-- `gcs_server/static/map/MapWidget.js`
+- `map/MapWidget.js`
   - keep ownership of action handlers
   - resolve context-bar target **focus-first**: `Active` first, then the single
     `Selected` Mission when exactly one is selected (see "Resolved placement")
   - distinguish executor session state via `sessionStatus` (`running`/`paused`),
     labelled **Running**/**Paused** — never "Active"
   - preserve ADR 0021 state model: `Visible`, `Selected`, `Active`
-- `gcs_server/static/style.css`
+- `frontend-vanilla/style.css`
   - replace the pseudo-row batch bar styles
   - introduce shared sidebar column variables
   - align checkbox and visibility columns between context bar and rows

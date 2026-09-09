@@ -36,16 +36,16 @@ config/common.local.json
 
 docs/trigger.md
 
-gcs_server/data/
-gcs_server/data_*/
-gcs_server/webapp/
+backend/data/
+backend/data_*/
+backend/webapp/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
 node_modules/
 .runtime/
-tts_service/models/*
-!tts_service/models/.gitkeep
+tts/models/*
+!tts/models/.gitkeep
 tts-services-edit/models/*
 !tts-services-edit/models/.gitkeep
 ArduPilot-SITL/

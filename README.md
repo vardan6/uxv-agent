@@ -1,9 +1,9 @@
 # Remote Rover
 
 Remote Rover is a rover-control platform built around these main local applications:
-- `gcs_server/`: a browser-based Ground Control Station (GCS)
+- `backend/`: a browser-based Ground Control Station (GCS)
 - `3d-env/`: a Panda3D-based 3D rover simulator
-- `tts_service/`: a local text-to-speech service for AI chat response playback
+- `tts/`: a local text-to-speech service for AI chat response playback
 
 The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
 
@@ -41,9 +41,15 @@ Subproject documentation:
 
 ```text
 remote-rover/
-  gcs_server/
+  backend/
+  frontend/
+  frontend-vanilla/
+  map/
   3d-env/
-  tts_service/
+  mav-sim/
+  scene/
+  rag/
+  tts/
   config/
   docs/
   tools/
@@ -69,19 +75,19 @@ From the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python -m venv gcs_server/.venv
-source gcs_server/.venv/bin/activate
-pip install -r gcs_server/requirements-gcs.txt
-python -m gcs_server
+python -m venv backend/.venv
+source backend/.venv/bin/activate
+pip install -r backend/requirements-gcs.txt
+python -m backend
 ```
 
 Open the GCS at the host and port configured under `gcs.host` and `gcs.port` in `config/common.local.json`.
 The tracked template defaults to `http://127.0.0.1:8080`; this repo's local override may differ.
 
-Alternative helper from inside `gcs_server/`:
+Alternative helper from inside `backend/`:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
 ./run.sh
 ```
 
@@ -91,11 +97,11 @@ Set up the local AI voice service from the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-python -m venv tts_service/.venv
-source tts_service/.venv/bin/activate
-pip install -r tts_service/requirements.txt
-python tts_service/scripts/download_kokoro_models.py
-python -m uvicorn tts_service.app:app --host 127.0.0.1 --port 9101
+python -m venv tts/.venv
+source tts/.venv/bin/activate
+pip install -r tts/requirements.txt
+python tts/scripts/download_kokoro_models.py
+python -m uvicorn tts.app:app --host 127.0.0.1 --port 9101
 ```
 
 Health check:
@@ -105,7 +111,7 @@ http://127.0.0.1:9101/health
 ```
 
 More details:
-- [TTS Service README](./tts_service/README.md)
+- [TTS Service README](./tts/README.md)
 
 ### 4. Start The Simulator
 
@@ -146,6 +152,54 @@ python3 scene/pipeline/validate_terrain_scene.py
 
 For cross-platform launcher details, shared config behavior, and telemetry policy notes, use:
 - [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
+
+## Migration Notes (2026-09 Naming And Directory Restructure)
+
+Decided in [ADR 0037](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
+Historical docs (`docs/archive/`, `docs/cross-cutting/research/`, `progress.md`,
+handoff docs) intentionally keep the pre-restructure names as an accurate
+record of the state they describe.
+
+### Directories
+
+| Old path | New path |
+|---|---|
+| `gcs_server/` | `backend/` |
+| `rag_service/` | `rag/` |
+| `tts_service/` | `tts/` |
+| `gcs_server/static/map/` | `map/` (shared by both frontends; split into `map/sources/world/` and `map/sources/authored/`) |
+| `gcs_server/static/` (remaining pages) | `frontend-vanilla/` |
+
+The root directory rename (`remote-rover` → `remote-uxv`) is a separate,
+local-machine-only step, not part of this restructure — see
+[ADR 0037's root-rename migration checklist](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md#consequences)
+and `roadmap.md`'s Track 2 for what it still requires (agent memory directory,
+`.venv` recreation, launcher/shell/editor absolute paths).
+
+### Environment variables (Tier A)
+
+| Old name | New name |
+|---|---|
+| `REMOTE_ROVER_QDRANT_REST_PORT` | `UXV_QDRANT_REST_PORT` |
+| `REMOTE_ROVER_QDRANT_GRPC_PORT` | `UXV_QDRANT_GRPC_PORT` |
+| `REMOTE_ROVER_EMBEDDINGS_BASE_URL` | `UXV_EMBEDDINGS_BASE_URL` |
+| `REMOTE_ROVER_EMBEDDINGS_MODEL` | `UXV_EMBEDDINGS_MODEL` |
+| `REMOTE_ROVER_EMBEDDINGS_DIM` | `UXV_EMBEDDINGS_DIM` |
+| `REMOTE_ROVER_EMBEDDINGS_API_KEY` | `UXV_EMBEDDINGS_API_KEY` |
+| `REMOTE_ROVER_CONTEXTUAL_MODEL` | `UXV_CONTEXTUAL_MODEL` |
+| `REMOTE_ROVER_CONTEXTUAL_BASE_URL` | `UXV_CONTEXTUAL_BASE_URL` |
+| `REMOTE_ROVER_TTS_HOST` | `UXV_TTS_HOST` |
+| `REMOTE_ROVER_TTS_PORT` | `UXV_TTS_PORT` |
+| `REMOTE_ROVER_TTS_MODEL` | `UXV_TTS_MODEL` |
+| `REMOTE_ROVER_TTS_VOICES` | `UXV_TTS_VOICES` |
+| `REMOTE_ROVER_TTS_VOICE` | `UXV_TTS_VOICE` |
+| `REMOTE_ROVER_TTS_LANGUAGE` | `UXV_TTS_LANGUAGE` |
+| `REMOTE_ROVER_TTS_MAX_TEXT_CHARS` | `UXV_TTS_MAX_TEXT_CHARS` |
+| `REMOTE_ROVER_UI_SCALE` (`3d-env/`) | `UXV_UI_SCALE` |
+
+No dual-read shim was added — set the new names in your local environment
+(shell profile, `.env`, or launcher overrides) before starting `rag/`, `tts/`,
+or `3d-env`.
 
 ## Current Status In One Paragraph
 

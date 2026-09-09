@@ -7,7 +7,7 @@ Repository root:
 
 Main subprojects:
 - `3d-env/`
-- `gcs_server/`
+- `backend/`
 - `scene/`
 - `config/`
 - `docs/`
@@ -141,8 +141,8 @@ From the repository root:
 
 ```bash
 cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
-pip install -r gcs_server/requirements-gcs.txt
-python -m gcs_server
+pip install -r backend/requirements-gcs.txt
+python -m backend
 ```
 
 Open:
@@ -151,7 +151,7 @@ Open:
 Alternative helper:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/gcs_server
+cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
 ./run.sh
 ```
 

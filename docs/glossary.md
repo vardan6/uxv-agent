@@ -141,7 +141,7 @@ telemetry. Renamed from "Dashboard". Pairs with the [Mission Console](#mission-c
 ## GCS
 
 Ground Control Station — the FastAPI + browser application in
-`gcs_server/` that operators use to monitor and control the rover.
+`backend/` that operators use to monitor and control the rover.
 
 ## GCS Process Failure
 
@@ -252,8 +252,8 @@ docs, mission history, semantic object definitions, reports, and operator
 notes. Reserved for semantic knowledge, not exact live state or geometry
 (scope: [decisions/0003-rag-scope-vs-live-context.md](./cross-cutting/decisions/0003-rag-scope-vs-live-context.md)).
 First consumer is `project_docs`, built on a Qdrant sidecar with the
-ingestion pipeline in `rag_service/` and the query path in
-`gcs_server/ai/retrieval.py`; see
+ingestion pipeline in `rag/` and the query path in
+`backend/ai/retrieval.py`; see
 [decisions/0028-rag-project-docs-first-consumer-qdrant.md](./cross-cutting/decisions/0028-rag-project-docs-first-consumer-qdrant.md).
 
 ## Read-Only Agent
@@ -324,7 +324,7 @@ The word "Accept" is not used in UI copy or documentation.
 
 ## MapWidget
 
-The reusable Leaflet-based map component (`static/map/MapWidget.js`) used
+The reusable Leaflet-based map component (`map/MapWidget.js`) used
 on the `/ai` page and the Approval Card. Uses `L.CRS.Simple` with local
 scene metres for all overlay coordinates — not lat/lon. Vehicle-aware: reads
 the active `VehicleProfile` to drive property panels and dispatch validation.
