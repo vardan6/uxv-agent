@@ -20,6 +20,9 @@ QUERIES = [
 
 
 def main() -> int:
+    # Backend imports are confined to this CLI entrypoint (never a library
+    # function importable from elsewhere), so no import-cycle risk exists at
+    # module-load time — no injection needed here (see R2).
     from backend.config import load_config
     from backend.ai.provider_registry import resolve_embeddings_provider
     from backend.ai.retrieval import search_project_docs

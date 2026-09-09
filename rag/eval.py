@@ -48,15 +48,19 @@ def _is_embeddings_provider(provider: dict[str, Any]) -> bool:
     return isinstance(caps, list) and "embeddings" in caps
 
 
-def _select_embeddings_provider(config: Any, provider_id: str) -> dict[str, Any]:
+def _select_embeddings_provider(
+    config: Any, provider_id: str, *, resolve_provider: Any
+) -> dict[str, Any]:
     """Pick the embeddings provider for the eval, preferring a secret-free local one.
 
     Order: explicit ``provider_id`` > the routed provider if it needs no secret >
     the first enabled secret-free embeddings provider. Returns the chosen provider
     dict; raises SystemExit with an actionable message if none is usable.
-    """
-    from backend.ai.provider_registry import resolve_embeddings_provider
 
+    ``resolve_provider`` is injected by the caller (``main``) as
+    ``resolve_embeddings_provider`` from ``backend.ai.provider_registry`` — this
+    module never imports backend outside ``main()``.
+    """
     providers = [p for p in config.llm_providers if isinstance(p, dict)]
     if provider_id:
         match = next((p for p in providers if str(p.get("id")) == provider_id), None)
@@ -64,7 +68,7 @@ def _select_embeddings_provider(config: Any, provider_id: str) -> dict[str, Any]
             raise SystemExit(f"--provider '{provider_id}' not found in config.llm_providers")
         return match
 
-    routed = resolve_embeddings_provider(config)
+    routed = resolve_provider(config)
     if str(routed.get("auth_mode", "env_var")) == "none":
         return routed
 
@@ -104,10 +108,17 @@ def run_eval(
     *,
     limit_override: int | None = None,
     provider_id: str = "",
+    load_config: Any,
+    search_project_docs: Any,
+    resolve_provider: Any,
 ) -> int:
-    from backend.config import load_config
-    from backend.ai.retrieval import search_project_docs
+    """Run the golden-question eval.
 
+    ``load_config``, ``search_project_docs``, and ``resolve_provider`` are
+    injected by the caller (``main``) from ``backend.config`` /
+    ``backend.ai.retrieval`` / ``backend.ai.provider_registry`` — this module
+    never imports backend outside ``main()``.
+    """
     fixture = _load_fixture(fixture_path)
     defaults = fixture.get("defaults") if isinstance(fixture.get("defaults"), dict) else {}
     default_limit = limit_override or int(defaults.get("limit") or 5)
@@ -117,7 +128,7 @@ def run_eval(
         raise SystemExit("eval fixture has no `retrieval` questions")
 
     config = load_config()
-    provider = _select_embeddings_provider(config, provider_id)
+    provider = _select_embeddings_provider(config, provider_id, resolve_provider=resolve_provider)
     # Route both query embedding and collection-name resolution at the chosen
     # provider for this run only (in-memory; on-disk config is untouched).
     config.model_routing["embeddings"] = {
@@ -188,7 +199,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Force an embeddings provider id (default: prefer a secret-free one)",
     )
     args = parser.parse_args(argv)
-    return run_eval(Path(args.fixture), limit_override=args.limit, provider_id=args.provider)
+
+    from backend.config import load_config
+    from backend.ai.provider_registry import resolve_embeddings_provider
+    from backend.ai.retrieval import search_project_docs
+
+    return run_eval(
+        Path(args.fixture),
+        limit_override=args.limit,
+        provider_id=args.provider,
+        load_config=load_config,
+        search_project_docs=search_project_docs,
+        resolve_provider=resolve_embeddings_provider,
+    )
 
 
 if __name__ == "__main__":

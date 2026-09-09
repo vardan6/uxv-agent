@@ -7,7 +7,7 @@ Usage (CLI):
 
 The CLI path reads connection params from env vars (below).  The app-triggered
 path (Slice 1.6D) calls ``run_ingest(params, ...)`` directly after resolving
-params from ``model_routing.embeddings`` via ``resolve_params_from_config``.
+params from ``model_routing.embeddings`` via ``resolve_params_from_provider``.
 
 Env (CLI path only):
     UXV_EMBEDDINGS_BASE_URL  OpenAI-compatible base URL
@@ -73,15 +73,14 @@ def resolve_params_from_env() -> IngestParams:
     return IngestParams(base_url=base_url, model_id=model_id, api_key=api_key, dim=dim, collection=collection)
 
 
-def resolve_params_from_config(config: Any, *, secret_resolver: Any = None) -> IngestParams:
-    """Build IngestParams from the app's model_routing.embeddings (app-triggered path).
+def resolve_params_from_provider(provider: dict[str, Any], *, secret_resolver: Any = None) -> IngestParams:
+    """Build IngestParams from an already-resolved embeddings provider dict.
 
-    Requires backend to be importable (called from within the GCS process).
-    The provider must have an ``embedding_dim`` field set in the config.
+    The caller (backend) resolves the provider via ``resolve_embeddings_provider``
+    from ``model_routing.embeddings`` and passes the plain dict here — this module
+    never imports backend. The provider must have an ``embedding_dim`` field set
+    in the config.
     """
-    from backend.ai.provider_registry import resolve_embeddings_provider
-
-    provider = resolve_embeddings_provider(config, secret_resolver=secret_resolver)
     model_id = str(provider.get("model_id") or "").strip()
     if not model_id:
         raise ValueError("Routed embeddings provider has no model_id.")

@@ -235,3 +235,60 @@ def test_removed_chunks_delete_their_points_and_leave_the_rest(
     assert client.points.keys() < ids_before
     assert stats["deleted"] == 1
     assert stats["upserted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# R2 — resolve_params_from_provider takes a plain provider dict, no backend
+# import required. This is the proof the rag -> backend import cycle is broken:
+# these tests exercise the resolution logic with zero backend imports.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_params_from_provider_builds_ingest_params_from_plain_dict() -> None:
+    provider = {
+        "id": "local-lmstudio",
+        "model_id": "qwen3-embedding-4b",
+        "embedding_dim": 2560,
+        "base_url": "http://winhost:1234/v1",
+        "secret_ref": "",
+    }
+
+    params = ingest.resolve_params_from_provider(provider)
+
+    assert params.model_id == "qwen3-embedding-4b"
+    assert params.dim == 2560
+    assert params.base_url == "http://winhost:1234/v1"
+    assert params.api_key == "lm-studio"
+    assert params.collection == collection_name_for("qwen3-embedding-4b", 2560)
+
+
+def test_resolve_params_from_provider_resolves_api_key_via_secret_resolver() -> None:
+    provider = {
+        "id": "openai",
+        "model_id": "text-embedding-3-small",
+        "embedding_dim": 1536,
+        "base_url": "https://api.openai.com/v1",
+        "secret_ref": "openai_api_key",
+    }
+
+    def secret_resolver(ref: str) -> str:
+        assert ref == "openai_api_key"
+        return "sk-secret"
+
+    params = ingest.resolve_params_from_provider(provider, secret_resolver=secret_resolver)
+
+    assert params.api_key == "sk-secret"
+
+
+def test_resolve_params_from_provider_requires_embedding_dim() -> None:
+    provider = {"id": "bad", "model_id": "m", "base_url": "http://x"}
+
+    with pytest.raises(ValueError, match="embedding_dim"):
+        ingest.resolve_params_from_provider(provider)
+
+
+def test_resolve_params_from_provider_requires_base_url() -> None:
+    provider = {"id": "bad", "model_id": "m", "embedding_dim": 8}
+
+    with pytest.raises(ValueError, match="base_url"):
+        ingest.resolve_params_from_provider(provider)

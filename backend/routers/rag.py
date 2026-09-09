@@ -130,9 +130,11 @@ def _run_ingest_job(job: _IngestJob, params: Any, docs_dir: Path, qdrant_port: i
 async def rag_status(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     try:
-        from rag.ingest import resolve_params_from_config
+        from backend.ai.provider_registry import resolve_embeddings_provider
+        from rag.ingest import resolve_params_from_provider
         secret_resolver = runtime.secret_store.get_secret if hasattr(runtime, "secret_store") else None
-        params = resolve_params_from_config(runtime.config, secret_resolver=secret_resolver)
+        provider = resolve_embeddings_provider(runtime.config, secret_resolver=secret_resolver)
+        params = resolve_params_from_provider(provider, secret_resolver=secret_resolver)
     except Exception as exc:
         return JSONResponse({"ok": False, "error": f"Could not resolve embeddings config: {exc}"}, status_code=500)
 
@@ -204,9 +206,11 @@ async def trigger_rag_ingest(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="mode must be 'incremental' or 'regenerate'")
 
     try:
-        from rag.ingest import resolve_params_from_config
+        from backend.ai.provider_registry import resolve_embeddings_provider
+        from rag.ingest import resolve_params_from_provider
         secret_resolver = runtime.secret_store.get_secret if hasattr(runtime, "secret_store") else None
-        params = resolve_params_from_config(runtime.config, secret_resolver=secret_resolver)
+        provider = resolve_embeddings_provider(runtime.config, secret_resolver=secret_resolver)
+        params = resolve_params_from_provider(provider, secret_resolver=secret_resolver)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not resolve embeddings config: {exc}") from exc
 
