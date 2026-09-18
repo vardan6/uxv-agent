@@ -19,7 +19,7 @@ The current simulator rover is the prototype target, but the intended architectu
 Repository structure:
 
 ```text
-remote-rover/
+remote-uxv/
   3d-env/
   backend/
   config/

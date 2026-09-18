@@ -86,6 +86,22 @@ will look like an omission to a later pass; it is not. Per
 it is the persisted default and renaming it would break stored missions for no
 gain.
 
+### `3d-env` keeps `Rover` — amended 2026-09-18
+
+Slice 1 assumed the simulator's `Rover` class, `rover.py`, `rover_body`, and the
+camera's `rover_np` / `rover_heading` were generic stand-ins for *vehicle*. They
+are not. `3d-env/simulator/rover.py` models exactly one vehicle kind: a chassis,
+four wheels, skid-steer, and wheel-slip friction constants tuned for loose soil.
+`Rover` there names the kind, for the same reason `rover_default` keeps its ID
+above.
+
+Renaming it to `Vehicle` would claim a generality the simulator does not have,
+and would have to be undone the day a second vehicle kind is modelled. Nothing
+in `3d-env` is contract-bearing, so this has no external effect either way.
+
+The MQTT `topic_prefix` value `rover` is likewise unchanged, per ADR 0037
+leaving MQTT contract values alone.
+
 ### Shape — four slices, one PR
 
 ADR 0037's table says Tier D is one PR; that stands. But it ships as four
@@ -93,7 +109,7 @@ slices, each separately verifiable, in this order:
 
 | Slice | Surface | Risk |
 |---|---|---|
-| 1 | Internal identifiers — `3d-env`, frontend internals | none, mechanical |
+| 1 | Internal identifiers — frontend internals (`3d-env` carved out, see above) | none, mechanical |
 | 2 | LLM/Tool Registry names + prompt and eval text | prompt churn |
 | 3 | Operator config keys, with the tolerant read above | operator-visible |
 | 4 | The wire key + the two stored replay values | the break |

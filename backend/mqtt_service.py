@@ -22,7 +22,7 @@ def _topic_join(prefix: str, leaf: str) -> str:
 
 logger = logging.getLogger(__name__)
 PRESENCE_PUBLISH_INTERVAL_S = 30.0
-DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS = 60.0
+DEFAULT_VEHICLE_UNAVAILABLE_THRESHOLD_SECONDS = 60.0
 
 
 class MQTTRuntime:
@@ -280,11 +280,11 @@ class MQTTRuntime:
 
     def _unavailable_threshold_seconds(self) -> float:
         policy = self._vehicle_availability_policy()
-        value = policy.get("unavailable_threshold_seconds", DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS)
+        value = policy.get("unavailable_threshold_seconds", DEFAULT_VEHICLE_UNAVAILABLE_THRESHOLD_SECONDS)
         try:
             return max(1.0, float(value))
         except (TypeError, ValueError):
-            return DEFAULT_ROVER_UNAVAILABLE_THRESHOLD_SECONDS
+            return DEFAULT_VEHICLE_UNAVAILABLE_THRESHOLD_SECONDS
 
     def _should_rollover_on_reconnect(self, telemetry_gap_s: float) -> bool:
         policy = self._vehicle_availability_policy()

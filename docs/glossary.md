@@ -99,7 +99,7 @@ focus releases the lock.
 
 ## Current Context Layer
 
-The compact set of live structured facts (rover state, runtime, settings,
+The compact set of live structured facts (vehicle state, runtime, settings,
 scene summary, replay summary) injected into AI prompts before larger
 retrieval is used. See
 [components/ai-agent/design.md](./components/ai-agent/design.md).
@@ -141,7 +141,7 @@ telemetry. Renamed from "Dashboard". Pairs with the [Mission Console](#mission-c
 ## GCS
 
 Ground Control Station — the FastAPI + browser application in
-`backend/` that operators use to monitor and control the rover.
+`backend/` that operators use to monitor and control the vehicle.
 
 ## GCS Process Failure
 
@@ -164,7 +164,7 @@ web / CLI / mobile are clients of the same HTTP/WS contract. See
 ## Intent
 
 A structured interpretation of a natural-language operator request, with
-fields like `intent_type`, `target`, `area`, `requires_rover_motion`,
+fields like `intent_type`, `target`, `area`, `requires_vehicle_motion`,
 `missing_information`. Produced by `IntentService` from the operator's
 prompt.
 
@@ -188,7 +188,7 @@ The configurable policy governing how a mission moves from creation to
 execution. One of **Strict** (AI may only propose; operator clicks play),
 **Confirm** (AI arms execution; operator confirms via banner within a
 timeout), or **Autonomous** (AI may execute directly). Build-time defaults:
-sim build → Autonomous, real-rover build → Strict. Runtime configurable via
+sim build → Autonomous, real-vehicle build → Strict. Runtime configurable via
 `Settings → Mission Lifecycle`. Defined in
 [decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md),
 which supersedes the historical two-approval model.
@@ -201,7 +201,7 @@ single page while preserving each surface's existing behavior and ownership.
 
 ## Model Routing
 
-The mapping from AI purpose (General Chat, Mission Planner, Rover Intent
+The mapping from AI purpose (General Chat, Mission Planner, Vehicle Intent
 Parser, Reporter, Embeddings, Vision) to a primary and fallback LLM
 provider. Persisted in shared GCS config.
 
@@ -242,7 +242,7 @@ ignoring normal routing for that session.
 ## Purpose
 
 A semantic role assigned to an LLM provider via model routing. Current
-purposes: General Chat, Rover Intent Parser, Mission Planner, Reporter,
+purposes: General Chat, Vehicle Intent Parser, Mission Planner, Reporter,
 Embeddings, Vision / Object Description.
 
 ## RAG
@@ -267,12 +267,6 @@ A recorded period of GCS runtime persisted in SQLite. Contains telemetry,
 control frames, runtime events, and camera timing metadata. Inspectable
 via the `/replay` page.
 
-## Rover Intent Parser
-
-The LLM purpose / service responsible for converting a natural-language
-operator prompt into a structured intent. Implemented as `IntentService`
-with structured-output parsing and a single repair attempt.
-
 ## Scene Map / Terrain Scene Manifest
 
 The single source of truth for static world geometry: terrain
@@ -283,8 +277,8 @@ simulator and GCS.
 ## SpatialQueryService
 
 The deterministic geometry service that answers questions like "objects in
-front of the rover," "objects within radius," and "nearest object by
-kind." Backed by the scene manifest and rover pose.
+front of the vehicle," "objects within radius," and "nearest object by
+kind." Backed by the scene manifest and vehicle pose.
 
 ## Telemetry Policy
 
@@ -308,11 +302,11 @@ registration time.
 
 Historical term. Originally the boundary that separated draft approval
 ("this planning artifact is acceptable") from execution approval
-("publish these commands to the rover"). Superseded by the
+("publish these commands to the vehicle"). Superseded by the
 configurable **Mission Lifecycle Modes** (Strict / Confirm / Autonomous);
 see [decisions/0021-mission-lifecycle.md](./cross-cutting/decisions/0021-mission-lifecycle.md).
 Strict mode preserves separate operator authorization for execution and is the
-shipped default for real-rover builds. See
+shipped default for real-vehicle builds. See
 [ADR 0021](./cross-cutting/decisions/0021-mission-lifecycle.md).
 
 The three canonical operator verbs are:
@@ -321,6 +315,16 @@ The three canonical operator verbs are:
 - **Export plan** — exports an approved revision as a `.plan` file without executing.
 
 The word "Accept" is not used in UI copy or documentation.
+
+## Vehicle Intent Parser
+
+The LLM purpose / service responsible for converting a natural-language
+operator prompt into a structured intent. Implemented as `IntentService`
+with structured-output parsing and a single repair attempt. Named
+`vehicle_intent_parser` as a model-routing purpose; renamed from
+`rover_intent_parser` by
+[ADR 0038](./cross-cutting/decisions/0038-rover-to-vehicle-rename.md), which
+also defines the tolerant config read that still accepts the old spelling.
 
 ## MapWidget
 
@@ -407,8 +411,8 @@ the code has been vehicle-agnostic since `VehicleProfile` started modelling
 | `uxv-sim` | Earlier proposed umbrella name for simulation infrastructure | abandoned; `mav-sim/` and `3d-env/` remain independent |
 
 The naming decision is [ADR 0037](./cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
-The current worktree remains `remote-rover` until its scheduled R1 move; that
-temporary path is not the chosen repository name. The older
+The current worktree and chosen repository name are `remote-uxv` after the
+scheduled R1 move. The older
 [split handoff](./cross-cutting/handoff-repo-split-and-rename-2026-09-02.md)
 and [strategy record](./cross-cutting/research/2026-08-10-project-naming-and-repo-split-strategy.md)
 retain historical reasoning only.

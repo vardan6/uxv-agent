@@ -40,7 +40,7 @@ Subproject documentation:
 ## Repository Layout
 
 ```text
-remote-rover/
+remote-uxv/
   backend/
   frontend/
   frontend-vanilla/
@@ -74,7 +74,7 @@ If you use a local Mosquitto broker, start it before the GCS and simulator.
 From the repository root:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python -m venv backend/.venv
 source backend/.venv/bin/activate
 pip install -r backend/requirements-gcs.txt
@@ -87,7 +87,7 @@ The tracked template defaults to `http://127.0.0.1:8080`; this repo's local over
 Alternative helper from inside `backend/`:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/backend
 ./run.sh
 ```
 
@@ -96,7 +96,7 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
 Set up the local AI voice service from the repository root:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python -m venv tts/.venv
 source tts/.venv/bin/activate
 pip install -r tts/requirements.txt
@@ -118,7 +118,7 @@ More details:
 From `3d-env/`:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -128,7 +128,7 @@ python simulator/main.py
 Alternative helper:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
 ./run.sh
 ```
 
@@ -145,7 +145,7 @@ cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
 Regenerate the explicit terrain scene manifest when terrain/object definitions change:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python3 scene/pipeline/generate_terrain_scene.py
 python3 scene/pipeline/validate_terrain_scene.py
 ```

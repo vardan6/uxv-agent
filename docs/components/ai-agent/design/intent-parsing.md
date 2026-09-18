@@ -1,17 +1,17 @@
-# Rover Intent Parsing
+# Vehicle Intent Parsing
 
 ## Purpose
 
-This document describes the shared rover-intent parser used by the GCS AI stack
+This document describes the shared vehicle-intent parser used by the GCS AI stack
 to convert an operator request into structured fields that downstream planning
 and safety logic can reason about.
 
 Intent parsing is an internal capability. There is no dedicated `/intent`
 operator-facing mode.
 
-## What A Rover Intent Is
+## What A Vehicle Intent Is
 
-A rover intent is a structured interpretation of a natural-language operator
+A vehicle intent is a structured interpretation of a natural-language operator
 request. Instead of keeping the request only as free text, the GCS asks an LLM
 to convert it into a predictable JSON object.
 
@@ -23,12 +23,12 @@ Current intent fields include:
 - `area`
 - `requested_actions`
 - `constraints`
-- `requires_rover_motion`
+- `requires_vehicle_motion`
 - `requires_operator_approval`
 - `missing_information`
 - `confidence`
 
-The parser is designed for rover-task understanding, not open-ended chat.
+The parser is designed for vehicle-task understanding, not open-ended chat.
 
 ## Why The System Needs Structured Intent
 
@@ -40,7 +40,7 @@ machine-readable intermediate form so downstream components can reason about:
 - what object or area the operator is referring to
 - what information is still missing
 - whether a later plan should be blocked pending clarification
-- whether operator approval is mandatory before any rover motion
+- whether operator approval is mandatory before any vehicle motion
 
 This intermediate representation is the contract between free-form language and
 later structured workflows.
@@ -76,7 +76,7 @@ fails schema validation.
 
 Intent parsing is still used by shared planning and mission-authoring internals:
 
-- `parse_rover_intent` in `ToolRegistry`
+- `parse_vehicle_intent` in `ToolRegistry`
 - direct Agent mission-authoring
 - target and context resolution that depends on parsed operator intent
 
@@ -93,7 +93,7 @@ In short:
 
 - `Chat` explains
 - `Agent` investigates with tools
-- shared intent parsing structures rover-task requests for planning flows
+- shared intent parsing structures vehicle-task requests for planning flows
 
 ## Relationship To Future Workflow
 

@@ -20,7 +20,7 @@ The AI system should use three separate knowledge layers:
 
 ```text
 Current state layer
-  -> latest rover pose, heading, speed, freshness, controller, active mission
+  -> latest vehicle pose, heading, speed, freshness, controller, active mission
   -> exact structured data from GCS runtime and telemetry
 
 Spatial world model
@@ -37,8 +37,8 @@ The LLM or agent should interpret the operator request and choose tools. The bac
 ## Always-On Context Versus On-Demand Tools
 
 Always-on AI context should stay small and high-signal:
-- rover telemetry freshness
-- current rover pose and heading
+- vehicle telemetry freshness
+- current vehicle pose and heading
 - runtime/broker summary
 - active controller summary
 - active mission summary or no-active-mission state
@@ -46,7 +46,7 @@ Always-on AI context should stay small and high-signal:
 - safe LLM/provider/routing summary
 
 On-demand tools should provide larger detail:
-- objects in front of the rover
+- objects in front of the vehicle
 - objects to the left or right
 - nearest objects by kind
 - objects within radius
@@ -62,7 +62,7 @@ On-demand tools should provide larger detail:
 Spatial query behavior should live in a dedicated deterministic service with
 these responsibilities:
 - load object geometry from `scene_map.py`
-- read rover pose from the current rover state passed by the caller
+- read vehicle pose from the current vehicle state passed by the caller
 - calculate distance, bearing, and relative bearing
 - filter objects by distance, field of view, side, kind, and sector
 - return compact structured hits suitable for LLM/tool output
@@ -78,7 +78,7 @@ find_objects_to_left(max_distance_m, angle_width_deg, kinds=None)
 find_objects_to_right(max_distance_m, angle_width_deg, kinds=None)
 find_nearest_objects(limit, max_distance_m=None, kinds=None)
 find_objects_in_sector(center_bearing_deg, fov_deg, max_distance_m, kinds=None)
-resolve_target_description(scene, rover_state, target)
+resolve_target_description(scene, vehicle_state, target)
 ```
 
 The `target` argument is the structured target dict produced by the intent
@@ -98,14 +98,14 @@ candidate filtering. For example:
 
 The same registry serves:
 - Agent mode (Chat page)
-- shared rover-intent parsing
+- shared vehicle-intent parsing
 - shared mission-authoring workflows
 - future MCP server adapters
 
 Initial read-only tools:
 
 ```text
-get_current_rover_state()
+get_current_vehicle_state()
 get_scene_summary()
 query_map_objects(mode, kinds=None, kind=None, position=None, heading_deg=None,
                   max_distance_m=None, fov_deg=20, angle_width_deg=90, radius_m=50, limit=5)
@@ -120,7 +120,7 @@ get_replay_summary(session_id=None)
 Planning-only tools:
 
 ```text
-parse_rover_intent(prompt)
+parse_vehicle_intent(prompt)
 resolve_spatial_target(intent)
 draft_mission(goal, target_candidates, constraints)
 validate_mission_draft(plan)
@@ -151,11 +151,11 @@ The initial safe surface includes only `read_only`, `analysis`, and `planning`.
 
 ### Async/Sync Boundary For Spatial Tools
 
-`SpatialQueryService` should stay synchronous and deterministic. It should accept already-resolved inputs such as rover pose, heading, scene payload, and query parameters, then return geometry results without touching async runtime state.
+`SpatialQueryService` should stay synchronous and deterministic. It should accept already-resolved inputs such as vehicle pose, heading, scene payload, and query parameters, then return geometry results without touching async runtime state.
 
 Callers are responsible for resolving async state before invoking spatial tools:
-- API/context callers should `await get_current_rover_state()` or use an already-built context snapshot.
-- LangChain tools must remain synchronous. They should close over the request's preloaded rover/context snapshot rather than calling `asyncio.run()` inside the tool loop.
+- API/context callers should `await get_current_vehicle_state()` or use an already-built context snapshot.
+- LangChain tools must remain synchronous. They should close over the request's preloaded vehicle/context snapshot rather than calling `asyncio.run()` inside the tool loop.
 
 This keeps spatial queries testable without an event loop and avoids nested-event-loop failures inside FastAPI/uvicorn.
 
@@ -176,7 +176,7 @@ The perception subsystem should produce structured detected objects or tracks:
     "y": -4.5,
     "z": 0.3
   },
-  "relative_to_rover": {
+  "relative_to_vehicle": {
     "distance_m": 14.8,
     "bearing_deg": 12.5,
     "zone": "front"
@@ -215,7 +215,7 @@ First build normal Python services and a tool registry. Later, expose stable rea
 ```text
 query_map_objects
 resolve_spatial_target
-get_current_rover_state
+get_current_vehicle_state
 get_scene_summary
 get_recent_telemetry
 retrieve_project_docs

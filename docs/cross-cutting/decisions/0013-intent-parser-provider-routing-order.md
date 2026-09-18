@@ -3,9 +3,17 @@
 Date: 2026-05-26
 Status: Accepted
 
+> Amended 2026-09-18 by
+> [ADR 0038](./0038-rover-to-vehicle-rename.md): identifiers renamed off
+> `rover`. The routing order decided here is unchanged — only the spelling of
+> the names it refers to. The routing purposes named in the title
+> (`command_parser` → `planner` → `general_chat`) are unaffected; the parser
+> purpose is now `vehicle_intent_parser`, with a warned fallback to
+> `rover_intent_parser` for operator config files.
+
 ## Context
 
-Intent parsing converts a free-text operator request into a structured JSON object with fields like `intent_type`, `target`, `requires_rover_motion`, and `missing_information`. The parser prompt is strict: enum-bounded, JSON-only output, with one repair attempt.
+Intent parsing converts a free-text operator request into a structured JSON object with fields like `intent_type`, `target`, `requires_vehicle_motion`, and `missing_information`. The parser prompt is strict: enum-bounded, JSON-only output, with one repair attempt.
 
 Good conversational models and good structured-parser models are not always the same choice. A model that excels at chat may produce diffuse prose under the parser prompt; a model trained or selected for structured output may be a poor fit for general dialogue. Forcing the intent parser to share the operator's currently-selected chat provider blends these two qualities into one configuration knob.
 

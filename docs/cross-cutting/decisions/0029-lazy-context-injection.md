@@ -4,11 +4,17 @@
 **Date:** 2026-06-18
 **Review:** `docs/cross-cutting/research/2026-06-18-tool-loading-plan-review.md`
 
+> Amended 2026-09-18 by
+> [ADR 0038](./0038-rover-to-vehicle-rename.md): identifiers renamed off
+> `rover`. The injection decision here is unchanged — only the spelling. The
+> compact-context key is now `vehicle` (was `rover`) and the tool is
+> `get_current_vehicle_state` (was `get_current_rover_state`).
+
 > Revision note: the first draft of this ADR said "remove `_tool_calls()`
-> pre-injection" and add a system-prompt sentence stating "live rover state,
+> pre-injection" and add a system-prompt sentence stating "live vehicle state,
 > scene, and spatial data are not pre-loaded." A code review found that wording
 > would have produced a **self-contradicting prompt**: the implementation still
-> injects rover/runtime/mission/scene through `context_snapshot.prompt`
+> injects vehicle/runtime/mission/scene through `context_snapshot.prompt`
 > (`AIContextService.build_compact_context` → `_format_context_block`), so the
 > model would have been *told* state was absent while still *receiving* it. This
 > revision scopes the decision to what the code actually does and what is safe to
@@ -20,17 +26,17 @@ On every Agent-mode request, `chat_service.py` builds two overlapping copies of
 live state:
 
 1. **Synthetic tool-call preamble** — `_tool_calls(context_snapshot)` fabricates
-   tool-call records for `get_current_rover_state` and `get_scene_summary` (the
+   tool-call records for `get_current_vehicle_state` and `get_scene_summary` (the
    only two providers in its map that resolve in Agent mode) and injects them as
    if the model had already called those tools in turn 0. These render as the
    "Context used" section in the chat UI.
 2. **Compact context block** — `AIContextService.build_compact_context` always
-   assembles `rover`, `runtime`, `mission`, and `scene` and serializes them
+   assembles `vehicle`, `runtime`, `mission`, and `scene` and serializes them
    through `_format_context_block` as a "Live GCS current context" system
    message (`context_snapshot.prompt`), appended to every agent prompt by
    `_prompt_for_mode` → `_context_prompt`.
 
-**Rover and scene are therefore injected twice per agent turn** — once as
+**Vehicle and scene are therefore injected twice per agent turn** — once as
 synthetic tool calls, once inside the compact JSON block. The duplicate carries
 no information the block does not already carry.
 
@@ -48,7 +54,7 @@ Lazy loading is **not** universally good. The honest rule:
 > later. For data needed by most turns, lazy loading is a net token *and* latency
 > loss.
 
-For an operator-facing rover agent, **rover pose, mission state, and scene
+For an operator-facing vehicle agent, **vehicle pose, mission state, and scene
 summary are usually needed**; runtime/broker config, replay history, telemetry
 samples, settings, LLM config, and chat history are usually not. The codebase
 already lazy-loads the query-triggered details correctly (`eager_detail_mode =
@@ -61,12 +67,12 @@ always-on sections.
 Scope the change to the no-regression, mostly quality-positive set ("Tier 1"):
 
 1. **Remove the duplicate.** Drop `_tool_calls()` synthetic pre-injection in
-   Agent mode. Rover and scene remain available once, in the compact context
+   Agent mode. Vehicle and scene remain available once, in the compact context
    block — nothing the model needs is lost.
 2. **Lazy-load `runtime`.** Stop assembling `runtime` into the always-on compact
    block; expose it through the existing `get_runtime_context` tool so the agent
    fetches broker/sim/map config only on the rare turn that needs it.
-3. **Keep compact rover, mission, and scene summary always-on.** These are
+3. **Keep compact vehicle, mission, and scene summary always-on.** These are
    needed by most operator turns; lazy-loading them would add a round-trip to the
    majority of queries (see trade-off rule). Detail (map objects, replay paths,
    etc.) stays tool-loaded as it already is.
@@ -77,11 +83,11 @@ Scope the change to the no-regression, mostly quality-positive set ("Tier 1"):
 ### Prompt changes (must ship in the same commit)
 
 - **`AGENT_SYSTEM_PROMPT`** — add an accurate sentence:
-  *"You are given a compact summary of current rover pose, mission state, and
+  *"You are given a compact summary of current vehicle pose, mission state, and
   scene as authoritative facts. Detailed map objects, replay history, telemetry
   samples, settings, and runtime/broker config are not pre-loaded — call the
   matching read-only tool when the operator's question needs them."*
-  (Do **not** claim rover/scene are absent — they are present.)
+  (Do **not** claim vehicle/scene are absent — they are present.)
 - **`_prompt_for_mode`** — make the agent opening conditional so an empty
   tool-call list no longer reads "use the results below as current facts." When
   there is no synthetic preamble, the compact context block speaks for itself.
@@ -90,7 +96,7 @@ Scope the change to the no-regression, mostly quality-positive set ("Tier 1"):
 
 **Positive:**
 
-- Removes a per-turn duplicate of rover+scene at zero quality cost.
+- Removes a per-turn duplicate of vehicle+scene at zero quality cost.
 - Drops always-on `runtime` config (rarely needed) from every turn.
 - Compact rendering shrinks the same facts further.
 - Agent trace is honest: state the agent actively fetches appears as real tool
@@ -98,11 +104,11 @@ Scope the change to the no-regression, mostly quality-positive set ("Tier 1"):
 - Aligns with requirements §Primary Product Requirement (gradual, lazy
   discovery) for the surfaces where lazy loading is actually a win.
 
-**Quality risk:** **None expected for Tier 1.** Rover/mission/scene — the
+**Quality risk:** **None expected for Tier 1.** Vehicle/mission/scene — the
 surfaces most queries depend on — remain in context. The only newly-lazy surface
 is `runtime` config, which is almost never the answer; on the rare turn that
 needs it, the agent pays one tool round-trip. More aggressive lazy loading
-(removing rover/scene/mission entirely) is **explicitly rejected here** and
+(removing vehicle/scene/mission entirely) is **explicitly rejected here** and
 deferred to eval-gated Tier 3 work (see roadmap "Agent Tool-Schema
 Optimization"), because it would regress implicit-state queries such as "plan a
 mission for me."
@@ -130,8 +136,8 @@ Before marking the slice complete, manually confirm these five prompts produce
 equivalent-or-better answers than the pre-change baseline (covering the risk
 surfaces named in the trade-off rule):
 
-1. **Rover-state:** "Where is the rover and what's the battery level?" — must use
-   the compact rover summary (no regression; no extra tool call expected).
+1. **Vehicle-state:** "Where is the vehicle and what's the battery level?" — must use
+   the compact vehicle summary (no regression; no extra tool call expected).
 2. **Spatial:** "What's the nearest boulder?" — must call a spatial tool (detail
    was already tool-loaded; confirm no regression).
 3. **Runtime/config (newly lazy):** "What MQTT broker and port is configured?" —
@@ -143,7 +149,7 @@ surfaces named in the trade-off rule):
 
 ## Rejected alternatives
 
-**Remove all preloaded live state (full lazy).** Rejected for now: rover, scene,
+**Remove all preloaded live state (full lazy).** Rejected for now: vehicle, scene,
 and mission are needed by most operator turns, so removing them adds a round-trip
 to the majority of queries and risks implicit-state failures. Revisit only as
 eval-gated Tier 3 work, after the measurement harness and golden-question eval

@@ -8,7 +8,7 @@ present widgets are `AIChatWidget.tsx`, `MapWidgetPanel.tsx`, `ClockWidget`,
 
 **This is the original single-screen operator dashboard:** a 3-panel grid —
 **Video Feed** (with a telemetry OSD overlay), **Controls & Connection** (broker/
-rover/control pills + a touch d-pad + keyboard driving), and **Telemetry &
+vehicle/control pills + a touch d-pad + keyboard driving), and **Telemetry &
 Runtime** (a 12-field stat sheet). Served at `/` and `/dashboard` (body
 `data-page="dashboard"`). Almost everything is static HTML whose **text content**
 is updated in place by `app.js`; the only DOM *created* at runtime is the shared
@@ -17,7 +17,7 @@ header/intro injected by `common.js` `initShell()`.
 The dashboard's three panels map cleanly to **already-built** greenfield widgets
 (`VideoWidget`, `DriveControlsWidget`, `TelemetryWidget`), so most rows read
 `partial`/`yes` on `implemented?` — the real gaps are the **video OSD overlay**
-(absent in `VideoWidget`) and the **connection-indicator strip** (broker/rover
+(absent in `VideoWidget`) and the **connection-indicator strip** (broker/vehicle
 pills have no dashboard panel in the new app). The shared page **header/nav/intro**
 shell is superseded by the dockview workspace shell and is not a per-page widget.
 
@@ -30,7 +30,7 @@ Feed** ("OSD overlay is a bound sub-part; WS-subscription-gated", line 79), **Dr
 Controls** ("singleton; owns key capture when focused", line 80), **Telemetry /
 Runtime** ("pure read view", line 81), and **Status Bar** (line 86); line 141 calls
 out Video, Drive Controls (touch d-pad), Telemetry, and AI Chat as the responsive
-set. So those rows read **yes**. The **broker/rover/control-state pills** have no
+set. So those rows read **yes**. The **broker/vehicle/control-state pills** have no
 dedicated widget — design folds broker/controller into the shared runtime store and
 a singleton Status Bar — so the connection strip reads **unsure**. The page
 **header/nav** is replaced by the workspace shell, so it reads **no**.
@@ -63,7 +63,7 @@ inventoried here once. Identical rows recur on `ai`/`replay`/`settings`/
 | `db.video` | node | panel | "Video Feed" | `article.panel.video-panel` (grid-area `video`); head (title + mode pill) + frame wrap | yes (Video Feed widget, operator-console.md:79) | yes (`VideoWidget.tsx`) | `VideoWidget.tsx` | Keep | Widget exists; wiring complete |
 | `db.video.mode-pill` | leaf | pill | "MQTT -> WebSocket" / "`<ingest>` -> `<delivery>`" / "Disabled" | `#video-mode-pill`; `updateVideoMode()` from snapshot/WS `video.{ingest_mode,delivery_mode,enabled}` | yes | partial: `VideoWidget` shows `delivery_mode`/"disabled" only, not `ingest -> delivery` | `VideoWidget.tsx` | Rebuild | Show full `ingest → delivery` format; may reflect recent bug fix — verify |
 | `db.video.frame-wrap` | node | panel | — | `div.video-frame-wrap`; positioned container for img + OSD + empty-state | yes | yes | `VideoWidget.tsx` | Keep | |
-| `db.video.frame` | leaf | img | (rover feed) | `#video-frame`; `updateVideoFrame()` sets `src=data:<mime>;base64,<data>` from `video_frame` WS msg / `video.latest_frame`; hidden until first frame | yes | yes (`VideoWidget` img ref, same data-URI path) | `VideoWidget.tsx` | Keep | |
+| `db.video.frame` | leaf | img | (vehicle feed) | `#video-frame`; `updateVideoFrame()` sets `src=data:<mime>;base64,<data>` from `video_frame` WS msg / `video.latest_frame`; hidden until first frame | yes | yes (`VideoWidget` img ref, same data-URI path) | `VideoWidget.tsx` | Keep | |
 | `db.video.osd` | node | panel | "Telemetry overlay" | `div.video-osd[aria-label]`; absolute top-right overlay, 5 monospace lines; `pointer-events:none` | yes (OSD is a bound sub-part, operator-console.md:79) | no (`VideoWidget` has no overlay) | `VideoWidget.tsx` | Rebuild | Key gap — OSD overlay absent in VideoWidget; 5 telemetry lines at top-right |
 | `db.video.osd.position` | leaf | label | "position x:+00.00 y:+00.00 z:+0.00" | `#osd-line-position`; `telemetryOsdPosition()` signed-padded x/y/z | yes | no | `VideoWidget.tsx` | Rebuild | Cascades from osd |
 | `db.video.osd.speed` | leaf | label | "speed 0.0 km/h (0.00 m/s) heading 0.0 deg" | `#osd-line-speed`; `telemetryOsdSpeed()` speed + heading | yes | no | `VideoWidget.tsx` | Rebuild | |
@@ -79,9 +79,9 @@ inventoried here once. Identical rows recur on `ai`/`replay`/`settings`/
 | `db.controls` | node | panel | "Controls & Connection" | `article.panel.controls-panel` (grid-area `controls`); flex column: control-state row, connection indicators, hint, d-pad, status banner | yes (Drive Controls widget, operator-console.md:80) | partial (`DriveControlsWidget` covers d-pad/keys/ownership; no connection strip) | `DriveControlsWidget.tsx` | Keep | Widget covers d-pad + key capture + ownership; connection strip handled separately |
 | `db.controls.state-row` | node | panel | "Browser Control" | `div.indicator-row.control-state-row` inside `.inline-actions` | unsure | partial (ownership shown inside `DriveControlsWidget`, not a pill row) | `DriveControlsWidget.tsx` | Redesign | Ownership state is already surfaced inside the widget; shape differs — keep the widget's own treatment |
 | `db.controls.state-pill` | leaf | pill | "Inactive" / "Activating" / "Deactivating" / "Active" / "Other Browser Active" | `#control-state-pill`; `renderControlToggle()` from owner vs `clientId` + pending; tone warn/ok | yes (control ownership UX) | partial (`DriveControlsWidget` renders an owner/acquire state, different shape) | `DriveControlsWidget.tsx` | Redesign | Reconcile pill states (Inactive/Activating/Active/Other) with widget's current ownership display |
-| `db.controls.connection` | node | panel | "Connection indicators" | `div.connection-indicators`; two rows (broker, rover) | unsure (design folds broker/controller into runtime store + Status Bar) | no (no connection panel in new app) | `workspace` | Redesign | Broker + rover availability → workspace status bar / status surface, not a dedicated panel |
+| `db.controls.connection` | node | panel | "Connection indicators" | `div.connection-indicators`; two rows (broker, vehicle) | unsure (design folds broker/controller into runtime store + Status Bar) | no (no connection panel in new app) | `workspace` | Redesign | Broker + vehicle availability → workspace status bar / status surface, not a dedicated panel |
 | `db.controls.broker-pill` | leaf | pill | "Connecting" / "Connected" / "Disconnected" | `#broker-pill`; `renderBrokerIndicator()` from snapshot/WS `broker.{connected,status}` | unsure | partial (broker status surfaced as a line in Video/Telemetry widgets, no pill) | `workspace` | Redesign | Fold into workspace status bar pill; runtime store already tracks broker state |
-| `db.controls.rover-pill` | leaf | pill | "No data" / "Connected" / "`N`s delayed" / "Unavailable" | `#rover-pill`; `renderRoverIndicator()` from telemetry age vs `rover_availability` thresholds | unsure | no | `workspace` | Redesign | Fold into workspace status bar; rover availability thresholds are in config |
+| `db.controls.vehicle-pill` | leaf | pill | "No data" / "Connected" / "`N`s delayed" / "Unavailable" | `#vehicle-pill`; `renderVehicleIndicator()` from telemetry age vs `vehicle_availability` thresholds | unsure | no | `workspace` | Redesign | Fold into workspace status bar; vehicle availability thresholds are in config |
 | `db.controls.hint` | leaf | label | "Use arrow keys or W/A/S/D. Control is active only while this dashboard tab is visible and focused." | static `p.hint` | yes (driving help) | no | `DriveControlsWidget.tsx` | Rebuild | Add driving hint text to DriveControlsWidget; may have landed with bug fixes — verify |
 | `db.controls.dpad` | node | panel | — | `div.dpad`; Forward on top, then row Left/Backward/Right; `bindControlButtons()` mouse/touch press→`state.buttons[ctrl]`→`sendControlState()` (WS `{type:control}`); `.active` class on press | yes (touch d-pad, operator-console.md:141) | yes (`DriveControlsWidget` d-pad) | `DriveControlsWidget.tsx` | Keep | |
 | `db.controls.dpad.forward` | leaf | button | "Forward" | `button.control-btn[data-control=forward]` | yes | yes | `DriveControlsWidget.tsx` | Keep | |
@@ -112,7 +112,7 @@ inventoried here once. Identical rows recur on `ai`/`replay`/`settings`/
 
 | id | kind | type | text | behavior / data | planned? | implemented? | target | decision | notes |
 |----|------|------|------|-----------------|----------|--------------|--------|----------|-------|
-| `db.behavior.snapshot` | node | (behavior) | — | `loadSnapshot()` → `GET /api/snapshot` seeds broker/controller/telemetry/video/simulation/`rover_availability` before WS | yes (data layer, operator-console.md §data) | yes (runtime store `/ws` snapshot) | `data/runtimeStore.ts` | Keep | |
+| `db.behavior.snapshot` | node | (behavior) | — | `loadSnapshot()` → `GET /api/snapshot` seeds broker/controller/telemetry/video/simulation/`vehicle_availability` before WS | yes (data layer, operator-console.md §data) | yes (runtime store `/ws` snapshot) | `data/runtimeStore.ts` | Keep | |
 | `db.behavior.ws` | node | (behavior) | — | `connectSocket()` → `/ws?client_id=…`; dispatches `snapshot`/`telemetry`/`simulation_config`/`broker`/`controller`/`video_frame`/`video`/`error` | yes | yes (`wsClient` runtime store) | `data/runtimeStore.ts` | Keep | |
 | `db.behavior.control-take` | leaf | (behavior) | — | `setControlEnabled()` → `POST /api/controller/{take,release}` on focus/blur/visibility; auto-acquires while tab focused | yes | yes (`DriveControlsWidget` ownership) | `DriveControlsWidget.tsx` | Keep | |
 | `db.behavior.keyboard` | leaf | (behavior) | — | `bindKeyboard()`: keydown/keyup arrows+WASD → control while `canControlLocally()`; preventDefault; focus/blur/visibility re-sync | yes (key capture, operator-console.md:80) | yes (`DriveControlsWidget`) | `DriveControlsWidget.tsx` | Keep | |
@@ -145,7 +145,7 @@ listed once here (they recur on every page).
 ### Appearance (leaves)
 
 - `db.header.nav.link` — `.app-nav-link` shares button base `padding:11px 16px`; `border-radius:14px`; `1px var(--line)`; `var(--button-secondary-gradient)` `@369`; `.active` accent gradient `var(--tab-active-*)` + raised shadow `@393`; hover `translateY(-1px)` + accent border `@606`; focus 3px accent ring `@616`. `@ style.css:387`
-- `db.*.pill` (`mode-pill`, `state-pill`, `broker-pill`, `rover-pill`) — `.pill` `padding:6px 10px`; `border-radius:999px`; `background:var(--button-secondary-bg)`; `color:var(--muted)`; `font-size:.85rem`; `white-space:nowrap` `@553`. Tones: `.ok`→`--accent-strong`/`--ok-bg` `@562`; `.warn`→`--warn`/`--warn-bg` `@567`; `.danger`→`--danger`/`--danger-bg` `@572`.
+- `db.*.pill` (`mode-pill`, `state-pill`, `broker-pill`, `vehicle-pill`) — `.pill` `padding:6px 10px`; `border-radius:999px`; `background:var(--button-secondary-bg)`; `color:var(--muted)`; `font-size:.85rem`; `white-space:nowrap` `@553`. Tones: `.ok`→`--accent-strong`/`--ok-bg` `@562`; `.warn`→`--warn`/`--warn-bg` `@567`; `.danger`→`--danger`/`--danger-bg` `@572`.
 - `db.video.frame` — `#video-frame` `width:100%`; `height:100%`; `object-fit:cover`; `display:none` until first frame. `@ style.css:642`
 - `db.video.osd.*` — `.video-osd-line` `color:#ffffff`; `font-family:"IBM Plex Mono",…monospace`; `font-size:clamp(.74rem,1.2vw,.92rem)`; `line-height:1.25`; layered text-shadow for legibility; `word-break:break-word`. `@ style.css:661`
 - `db.video.empty` — `.video-empty` `position:absolute`; `inset:0`; grid place-items center; `color:var(--muted)`. `@ style.css:673`

@@ -56,7 +56,7 @@ flowchart TB
         STG[CommandStaging]
         SIM[Simulator]
         APH[Autopilot]
-        HW[Rover Hardware]
+        HW[Vehicle Hardware]
     end
 
     TXT --> CHAT
@@ -261,7 +261,7 @@ Future long-horizon task handling should follow this lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> requested
-    requested --> understood: parse_rover_intent ok
+    requested --> understood: parse_vehicle_intent ok
     understood --> clarified: clarification answered<br/>(or not needed)
     clarified --> planned: draft validated
     planned --> draft_approved: draft approval ⏸
@@ -332,7 +332,7 @@ flowchart TB
     SR[run in simulator]
     DF{operator accepts diff?}
     APH[autopilot handoff]
-    HW[rover hardware]
+    HW[vehicle hardware]
 
     MON[monitor specialist]
     TEL[(telemetry)]

@@ -194,7 +194,7 @@ The expanded `scene/scenes/terrain_scene.v1.json` is the runtime source of truth
 
 To regenerate:
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python3 scene/pipeline/generate_terrain_scene.py
 python3 scene/pipeline/validate_terrain_scene.py
 ```

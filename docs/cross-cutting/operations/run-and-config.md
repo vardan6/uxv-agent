@@ -3,7 +3,7 @@
 ## Repository Layout
 
 Repository root:
-- `/mnt/c/Users/vardana/Documents/Proj/remote-rover`
+- `/mnt/c/Users/vardana/Documents/Proj/remote-uxv`
 
 Main subprojects:
 - `3d-env/`
@@ -44,7 +44,7 @@ The manifest contains explicit final objects and terrain data. Runtime scripts s
 Regenerate and validate it from the repository root when terrain definitions change:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python3 scene/pipeline/generate_terrain_scene.py
 python3 scene/pipeline/validate_terrain_scene.py
 ```
@@ -101,7 +101,7 @@ Do not store raw API key values in tracked config or exported JSON intended for 
 From `3d-env/` using Linux or WSL Python:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -111,14 +111,14 @@ python simulator/main.py
 Helper launcher:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
 ./run.sh
 ```
 
 Windows GPU launcher:
 
 ```powershell
-cd C:\Users\vardana\Documents\Proj\remote-rover\3d-env
+cd C:\Users\vardana\Documents\Proj\remote-uxv\3d-env
 python -m venv .venv-gpu
 .\.venv-gpu\Scripts\python -m pip install -r requirements.txt
 .\run.bat
@@ -127,7 +127,7 @@ python -m venv .venv-gpu
 WSL bridge to the Windows GPU environment:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/3d-env
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
 ./run_gpu.sh
 ```
 
@@ -135,12 +135,30 @@ WSL note:
 - `run_gpu.sh` requires WSL interop to be enabled so the shell can invoke Windows executables
 - if WSL interop is disabled, launch the simulator from Windows directly with `run.bat`
 
+### Simulator Launcher Environment Variables
+
+Read only by the `3d-env` launchers and `simulator/gpu_probe.py`. They select a
+launch route; none of them names a vehicle, which is why they carry the `UXV_`
+product prefix rather than the simulator's `Rover` kind name.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `UXV_GPU_PREFERENCE` | `nvidia` | GPU routing preference; any other value disables NVIDIA-first routing and falls back to native |
+| `UXV_LAUNCH_PATH` | `direct` | Set by the launcher, read back by `gpu_probe`; one of `linux-native`, `windows-venv`, `wsl-windows-venv`, `wsl-linux-fallback` |
+| `UXV_OPTIMUS_HINT` | unset | Path to `optimus_hint.dll`, passed by `run.bat` to `main.py` when the DLL is present |
+| `UXV_PYTHON` | `python` | Interpreter used to build the Windows GPU venv |
+
+Renamed from `ROVER_*` on 2026-09-18 under
+[ADR 0037](../decisions/0037-project-naming-and-directory-restructure.md)'s
+`UXV_*` env-var convention — these are Tier A product-prefix variables, not part
+of the Tier D `rover` → `vehicle` rename.
+
 ## Running The GCS
 
 From the repository root:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 pip install -r backend/requirements-gcs.txt
 python -m backend
 ```
@@ -151,7 +169,7 @@ Open:
 Alternative helper:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/backend
 ./run.sh
 ```
 

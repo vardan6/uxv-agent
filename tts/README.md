@@ -5,7 +5,7 @@
 Quick setup:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 python -m venv tts/.venv
 source tts/.venv/bin/activate
 pip install -r tts/requirements.txt
@@ -15,7 +15,7 @@ python tts/scripts/download_kokoro_models.py
 Run:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/tts
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/tts
 ./run.sh
 ```
 
@@ -39,7 +39,7 @@ Remote Rover will likely need several local services:
 A future root-level launcher can keep this manageable:
 
 ```text
-remote-rover/
+remote-uxv/
   services.yml
   tools/
     run_services.py

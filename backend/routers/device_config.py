@@ -10,7 +10,7 @@ from backend.runtime import AppRuntime
 
 router = APIRouter()
 
-DEFAULT_ROVER_AVAILABILITY_POLICY = {
+DEFAULT_VEHICLE_AVAILABILITY_POLICY = {
     "connected_threshold_seconds": 2,
     "unavailable_threshold_seconds": 60,
     "rollover_on_reconnect": True,
@@ -31,17 +31,17 @@ def _parse_int_field(value: Any, name: str) -> int:
 def _vehicle_availability_policy_from_mqtt(mqtt: dict[str, Any] | None) -> dict[str, Any]:
     raw_policy = mqtt.get("vehicle_availability", {}) if isinstance(mqtt, dict) else {}
     policy = raw_policy if isinstance(raw_policy, dict) else {}
-    connected = policy.get("connected_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["connected_threshold_seconds"])
-    unavailable = policy.get("unavailable_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["unavailable_threshold_seconds"])
-    rollover = policy.get("rollover_on_reconnect", DEFAULT_ROVER_AVAILABILITY_POLICY["rollover_on_reconnect"])
+    connected = policy.get("connected_threshold_seconds", DEFAULT_VEHICLE_AVAILABILITY_POLICY["connected_threshold_seconds"])
+    unavailable = policy.get("unavailable_threshold_seconds", DEFAULT_VEHICLE_AVAILABILITY_POLICY["unavailable_threshold_seconds"])
+    rollover = policy.get("rollover_on_reconnect", DEFAULT_VEHICLE_AVAILABILITY_POLICY["rollover_on_reconnect"])
     try:
         connected_value = max(0, int(connected))
     except (TypeError, ValueError):
-        connected_value = DEFAULT_ROVER_AVAILABILITY_POLICY["connected_threshold_seconds"]
+        connected_value = DEFAULT_VEHICLE_AVAILABILITY_POLICY["connected_threshold_seconds"]
     try:
         unavailable_value = max(1, int(unavailable))
     except (TypeError, ValueError):
-        unavailable_value = DEFAULT_ROVER_AVAILABILITY_POLICY["unavailable_threshold_seconds"]
+        unavailable_value = DEFAULT_VEHICLE_AVAILABILITY_POLICY["unavailable_threshold_seconds"]
     if unavailable_value < connected_value:
         unavailable_value = connected_value
     return {

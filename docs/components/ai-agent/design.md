@@ -160,7 +160,7 @@ Every operator mission request opens a first-class operation. The state machine 
 
 - Controller upload success cannot rely on ACK alone. Post-upload read-back verification is required.
 - If cutover verification fails, the system automatically attempts to restore the last verified controller mission snapshot. The rollback source is the exact previously verified controller-ready snapshot, not a regenerated mission from an old draft.
-- The rollback snapshot belongs to rover/controller execution state, not to a single AI chat session.
+- The rollback snapshot belongs to vehicle/controller execution state, not to a single AI chat session.
 - Default behavior on cutover failure preserves the currently executing verified mission unless the state has become unsafe or ambiguous enough to require escalation.
 
 ### Controller update policy
@@ -282,7 +282,7 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
 
 ### Important properties
 
-- **Single role provider per loop.** Specialist tools may internally call their own providers (e.g., `parse_rover_intent` keeps its own structured-output provider).
+- **Single role provider per loop.** Specialist tools may internally call their own providers (e.g., `parse_vehicle_intent` keeps its own structured-output provider).
 - **Tool calls are sequential in v1.** Determinism over throughput for mission-authoring and safety-gated flows. `allow_parallel_tool_calls` is a future config knob.
 - **Terminal actions are tools, not free-form output.** `propose_mission_draft` is the planning exit signal; its args schema is the mission draft schema. Strictly stronger than parsing free-form JSON.
 - **No execution tools bound to the model.** `_bind_role_tools` reads from `ToolRegistry` with `permissions ⊆ DEFAULT_PERMISSIONS`.
@@ -290,11 +290,11 @@ async def run_loop(state, config: AgentLoopConfig) -> AgentLoopResult:
   overhead from system safety instructions, tool catalog/binding, and compact
   context injection is intentional. ADR 0029 governs token reduction: lazy
   loading is appropriate for rarely needed data and counterproductive for
-  usually needed data. Removing usually needed rover, scene, or mission state,
+  usually needed data. Removing usually needed vehicle, scene, or mission state,
   or pruning schemas per intent, requires the golden-question evaluation gate.
   Every optimization must preserve safety guardrails, tool reliability, and
   operator-facing answer quality.
-- **Narrow greeting fast-path is allowed.** A trivial small-talk bypass may skip tool-loop/context injection for short greeting-only prompts in Agent mode, but it must remain strict and must not trigger for rover-state, map-object, mission, telemetry, or replay intent.
+- **Narrow greeting fast-path is allowed.** A trivial small-talk bypass may skip tool-loop/context injection for short greeting-only prompts in Agent mode, but it must remain strict and must not trigger for vehicle-state, map-object, mission, telemetry, or replay intent.
 
 ### Runtime interfaces
 
@@ -398,7 +398,7 @@ Tier 0–2 active today; tier ≥ 3 defined but with zero registered tools.
 | 2 | `planning` | Mission draft proposal, intent parsing, target resolution, clarification, route planning, mission export | Draft approval per draft |
 | 3 | `command_staging` | Propose specific commands for execution review | Separate staging approval |
 | 4 | `execution_simulated` | Execute commands in simulator only | Draft + staging approval; never hardware |
-| 5 | `execution_live` | Execute commands on the real rover | Draft + staging + per-mission live grant; e-stop primacy |
+| 5 | `execution_live` | Execute commands on the real vehicle | Draft + staging + per-mission live grant; e-stop primacy |
 | 6 | `autonomous_scoped_execution` | Operate without per-command approval inside a grant | Pre-grant with TTL; auto-revocation on policy violation |
 
 Tier numbers are monotone: a tool at tier *n* requires every guard from tier *n − 1* to also hold.
@@ -452,7 +452,7 @@ Phase-3 footprint: thin wrapper around the current permission filter. Same behav
 
 ```text
 Always in context (compact summaries, not full payloads):
-  current rover summary        usually needed -> stays always-on
+  current vehicle summary        usually needed -> stays always-on
   current scene summary        usually needed -> stays always-on
   current mission summary      usually needed -> stays always-on
   current run mode and permissions
@@ -474,7 +474,7 @@ Loaded through tools (rarely needed per turn -> lazy):
 The always-on set is deliberately the surfaces **most operator turns depend on**.
 `runtime` config moved to tool-loaded under ADR 0029 because it is rarely the
 answer; lazy-loading a usually-needed surface would add a round-trip to the
-majority of turns (lazy loading wins only for rarely-needed data). Rover and
+majority of turns (lazy loading wins only for rarely-needed data). Vehicle and
 scene are injected **once** (the compact block), not duplicated as synthetic
 turn-0 tool calls — see ADR 0029.
 
@@ -518,7 +518,7 @@ Disappearing nodes (collapsed into tools during the planner migration):
 | `retrieve_application_memory` | `lazy_load_ai_memory` tool |
 | `retrieve_settings_context` | `lazy_load_settings` tool |
 | `retrieve_sensor_context` | `lazy_load_sensor` tool |
-| `parse_intent` | `parse_rover_intent` tool |
+| `parse_intent` | `parse_vehicle_intent` tool |
 | `resolve_target` | `resolve_spatial_target` tool |
 | `generate_mission_draft` | `propose_mission_draft` terminal tool |
 Agent mission-authoring loop config:
@@ -605,7 +605,7 @@ Vehicle binding is stamped at authoring time: `create_proposal` and `create_clie
 Registered when `planner_kind == "road_graph"`:
 
 - `plan_route_around_group(group_id)` — wraps `route_to_then_around_then_back`.
-- `plan_route_between(start_target, goal_target)` (also `plan_route_to(goal_target, start_target=None)`) — resolves targets via `SpatialQueryService.resolve_spatial_target`, snaps to graph, runs Dijkstra. `start_target=None` uses current rover pose from live telemetry; stale or absent pose (older than `pose_max_age_s`, default 5.0) returns a structured `pose_unavailable` error.
+- `plan_route_between(start_target, goal_target)` (also `plan_route_to(goal_target, start_target=None)`) — resolves targets via `SpatialQueryService.resolve_spatial_target`, snaps to graph, runs Dijkstra. `start_target=None` uses current vehicle pose from live telemetry; stale or absent pose (older than `pose_max_age_s`, default 5.0) returns a structured `pose_unavailable` error.
 - `stop_mission(reason)` — registered now as a stub so the tool is always discoverable. `PolicyEngine` does **not** gate it on draft state; aborting a non-existent mission is a no-op.
 
 Tool descriptions are production code. The first line states the trigger condition; the description also names sibling tools, payload shape, return shape, and failure modes.
@@ -699,7 +699,7 @@ Tool descriptions must teach the agent this distinction so dispatch-mode inferen
 
 ### Stop / abort path
 
-Two independent channels. Safety requires stopping the rover never depends on the agent being responsive:
+Two independent channels. Safety requires stopping the vehicle never depends on the agent being responsive:
 
 1. **UI Stop button** — hardwired, always present, bypasses the agent entirely. Calls a server-side `abort_mission()` handler directly which issues the appropriate FC command (rover: `MAV_CMD_DO_SET_MODE → HOLD`, or `DISARM` if HOLD unsafe; per-vehicle profile may override). Primary safety control.
 2. **Agent-callable `stop_mission` tool** — convenience for prompt-driven stop ("stop now", "abort"). Wraps the same server-side handler. Policy engine treats it as always-available regardless of draft state.
@@ -708,10 +708,10 @@ Both channels write a `cancelled` (operator stop) or `failed` (FC error during s
 
 ### Mission authoring and start target (committed follow-up)
 
-The `start_target` is not always "current rover pose." Two distinct dispatch modes:
+The `start_target` is not always "current vehicle pose." Two distinct dispatch modes:
 
 - **Mode A — Live dispatch.** `start_target = None` ⇒ tool reads current pose at dispatch time. Pose must be fresh. Normal draft → approve → execute.
-- **Mode B — Pre-authored revisions.** `start_target` is explicit at authoring time (coordinate, named scene object, or sentinel `"rover_pose_at_execution"` for deferred resolution). The operator authors the route directly on the `/ai` map — either by creating a new mission from scratch (`➕ New mission`) or by editing an AI-proposed revision. Manual edits and AI proposals are different provenance sources on the same revision data model.
+- **Mode B — Pre-authored revisions.** `start_target` is explicit at authoring time (coordinate, named scene object, or sentinel `"vehicle_pose_at_execution"` for deferred resolution). The operator authors the route directly on the `/ai` map — either by creating a new mission from scratch (`➕ New mission`) or by editing an AI-proposed revision. Manual edits and AI proposals are different provenance sources on the same revision data model.
 
 Revisions are vehicle-bound. Every revision stores a required `vehicle_profile_id`. Dispatch refuses if the active vehicle profile does not match. Rationale: the `.plan` format is vehicle-bound; `NAV_WAYPOINT` parameter interpretation differs by stack, fixed-wing/PX4-multirotor require explicit `NAV_TAKEOFF` while rovers do not, and some commands exist only on specific firmware variants. A vehicle-abstract intent grammar would re-materialise through divergent rules at dispatch time — exactly where a bug becomes "wrong mission uploaded."
 
@@ -734,10 +734,10 @@ Storage: `config/operational_constraints.v1.json` (or alongside the scene). Sche
 
 ### Off-route handling (committed follow-up)
 
-During execution, the rover may deviate (GPS drift, obstacle avoidance, terrain). Configurable tolerance (`cross_track_tolerance_m`, `off_route_max_age_s`):
+During execution, the vehicle may deviate (GPS drift, obstacle avoidance, terrain). Configurable tolerance (`cross_track_tolerance_m`, `off_route_max_age_s`):
 
 - Within tolerance → continue silently.
-- Beyond tolerance → execution interrupts itself; agent receives a structured `off_route` event with deviation + likely cause. Agent either resolves it autonomously (replan from current pose) or escalates ("rover is 8 m off route near `road_plant_b_loop_2`; replan / abort / continue?").
+- Beyond tolerance → execution interrupts itself; agent receives a structured `off_route` event with deviation + likely cause. Agent either resolves it autonomously (replan from current pose) or escalates ("vehicle is 8 m off route near `road_plant_b_loop_2`; replan / abort / continue?").
 
 The same interrupt mechanism used for approval — generalised into a runtime exception channel rather than a one-shot gate. Other preventing events (low battery, sensor fault, blocked sensor) reuse the channel.
 
@@ -847,7 +847,7 @@ Lifecycle:
 
 ```text
 requested
-  -> understood            (parse_rover_intent succeeded)
+  -> understood            (parse_vehicle_intent succeeded)
   -> clarified             (any required clarification answered)
   -> planned               (mission draft generated + validated)
   -> draft_approved        (draft approval; tier ≤ 2)
@@ -884,7 +884,7 @@ Applies declarative policies. Examples:
   severity: warning
 
 - name: geofence_breach_halt
-  trigger: rover.position not in active_task.scope.geofence
+  trigger: vehicle.position not in active_task.scope.geofence
   action: signal_emergency_stop
   severity: critical
 
@@ -950,7 +950,7 @@ Evolution: replace per-purpose providers with roles.
 |---|---|---|
 | `assistant` | General chat, optional tools | Today's `general_chat` |
 | `planner` | Strong tool calling, ≥ 32k context, reliable structured output | Today's `mission_planner` |
-| `parser` | Strict structured output | Today's `rover_intent` |
+| `parser` | Strict structured output | Today's `vehicle_intent` |
 | `critic` | Structured output reliability | Same as planner in v1 |
 | `researcher` | Long context and citation quality | Future |
 | `vision` | Multimodal frame input | Future; can be `None` |
@@ -1076,7 +1076,7 @@ Each node is a `<div>` in a vertical flex stack connected by a CSS `border-left`
 - Per-tool `<details>` expand/collapse is preserved for args JSON and result JSON.
 - Streaming is preserved: nodes are appended to the DOM as events arrive; no batch-render on completion.
 - Tool cards are nested inside their iteration node using `call.iteration` as the join key.
-- The "Context used" section (synthetic `prompt_context_tool_calls`) disappears once ADR 0029 lands, because that preamble is a removed duplicate of the compact context block — not because all preloaded context is gone. The compact rover/mission/scene block still reaches the model; if a disclosure is wanted, render the compact block as a single preamble node before Iteration 1 rather than as fabricated tool cards. Until ADR 0029 lands, the synthetic preamble is rendered as that preamble node.
+- The "Context used" section (synthetic `prompt_context_tool_calls`) disappears once ADR 0029 lands, because that preamble is a removed duplicate of the compact context block — not because all preloaded context is gone. The compact vehicle/mission/scene block still reaches the model; if a disclosure is wanted, render the compact block as a single preamble node before Iteration 1 rather than as fabricated tool cards. Until ADR 0029 lands, the synthetic preamble is rendered as that preamble node.
 
 ### Implementation boundary
 
@@ -1301,14 +1301,14 @@ Paired so reviewers can decide together. Product-level questions live in [requir
 |---|---|---|
 | 1 | Default loop iteration cap: 6 or 8? | Chat at 6; planner-style Agent turns at 8. |
 | 2 | `propose_mission_draft` mid-loop or only final? | Final only. Simpler invariant: once proposed, loop exits. |
-| 3 | Allow planner to retry `parse_rover_intent` after new observations? | One retry, gated by `_intent_retries` counter. |
+| 3 | Allow planner to retry `parse_vehicle_intent` after new observations? | One retry, gated by `_intent_retries` counter. |
 | 4 | Keep planning as a separate runtime? | No; current product path uses shared `AgentLoopRuntime`. |
 | 5 | Streaming: include free-text content in `agent_plan_update`? | Strip free-text; only summary + tool-call summaries. |
-| 6 | Sub-tool provider routing (`parse_rover_intent`)? | Keep its own structured-output provider; independent of planner. |
+| 6 | Sub-tool provider routing (`parse_vehicle_intent`)? | Keep its own structured-output provider; independent of planner. |
 | 7 | Critic provider — same as planner or different family? | Same in single-provider deployments; different family once available. |
 | 8 | Procedural memory writes — draft approval or inline? | Inline tier-2 operator confirmation. |
 | 9 | Voice approval phrasing — free-form or fixed grammar? | Fixed grammar for approvals + e-stop; free-form elsewhere. |
-| 10 | Target hardware for onboard fallback? | GCS host first; rover compute is a later phase. |
+| 10 | Target hardware for onboard fallback? | GCS host first; vehicle compute is a later phase. |
 | 11 | Policy engine substrate — custom DSL or OPA / Cedar? | Minimal custom DSL in v1; re-evaluate when policy count > ~30. |
 | 12 | Episodic memory — summaries replace raw or coexist? | Augment, do not replace. |
 | 13 | Replay determinism — seed providers or compare structurally? | Seed where supported; compare structurally otherwise. |

@@ -11,7 +11,7 @@ Use these docs first:
 Quick start:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 pip install -r backend/requirements-gcs.txt
 python -m backend
 ```
@@ -19,7 +19,7 @@ python -m backend
 Alternative local run:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover/backend
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/backend
 ./run.sh
 ```
 
@@ -29,7 +29,7 @@ Default URL:
 AI CLI:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 ./bin/gcs-ai "Summarize the active mission state."
 ./bin/gcs-ai --stream --prompt "What can you see in current rover context?"
 ./bin/gcs-ai --session-id <session-id> "Continue from the previous answer."

@@ -20,7 +20,7 @@ gracefully** without it — chat still works and `project_docs` reports
 ## Quick start
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-rover
+cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
 bin/rag up        # start Qdrant (pulls the image on first run)
 bin/rag status    # report readiness
 bin/rag down      # stop (data volume preserved)
