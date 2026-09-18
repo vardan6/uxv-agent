@@ -26,7 +26,7 @@ const state = {
 
 const els = {
   brokerPill: document.getElementById('broker-pill'),
-  roverPill: document.getElementById('rover-pill'),
+  vehiclePill: document.getElementById('vehicle-pill'),
   controlStatePill: document.getElementById('control-state-pill'),
   controllerOwner: document.getElementById('controller-owner'),
   telemetryFreshness: document.getElementById('telemetry-freshness'),
@@ -209,24 +209,24 @@ function renderBrokerIndicator(broker = {}) {
   setPillState(els.brokerPill, 'Disconnected', 'danger');
 }
 
-function renderRoverIndicator() {
-  if (!els.roverPill) return;
+function renderVehicleIndicator() {
+  if (!els.vehiclePill) return;
   if (!state.lastTelemetryTs) {
-    setPillState(els.roverPill, 'No data', 'danger');
+    setPillState(els.vehiclePill, 'No data', 'danger');
     return;
   }
   const ageSeconds = Math.max(0, Math.floor((Date.now() - (state.lastTelemetryTs * 1000)) / 1000));
   const connectedThreshold = state.roverAvailability.connectedThresholdSeconds;
   const unavailableThreshold = state.roverAvailability.unavailableThresholdSeconds;
   if (ageSeconds < connectedThreshold) {
-    setPillState(els.roverPill, 'Connected', 'ok');
+    setPillState(els.vehiclePill, 'Connected', 'ok');
     return;
   }
   if (ageSeconds < unavailableThreshold) {
-    setPillState(els.roverPill, `${ageSeconds}s delayed`, 'warn');
+    setPillState(els.vehiclePill, `${ageSeconds}s delayed`, 'warn');
     return;
   }
-  setPillState(els.roverPill, 'Unavailable', 'danger');
+  setPillState(els.vehiclePill, 'Unavailable', 'danger');
 }
 
 function updateRoverAvailabilityPolicy(policy = {}) {
@@ -259,7 +259,7 @@ function renderTelemetryLastReceived() {
   if (!els.telemetryLastReceived) return;
   if (!state.lastTelemetryTs) {
     els.telemetryLastReceived.textContent = 'No data';
-    renderRoverIndicator();
+    renderVehicleIndicator();
     renderTelemetryOsd();
     return;
   }
@@ -274,7 +274,7 @@ function renderTelemetryLastReceived() {
   });
 
   els.telemetryLastReceived.textContent = `${formatAge(ageSeconds)} ago (${exactTime})`;
-  renderRoverIndicator();
+  renderVehicleIndicator();
   renderTelemetryOsd();
 }
 

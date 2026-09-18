@@ -136,14 +136,14 @@
                         <option value="satellite-debug">GPS/Satellite Debug</option>
                       </select>
                     </label>
-                    <label title="Choose whether the map stays free or follows the rover during replay.">
+                    <label title="Choose whether the map stays free or follows the vehicle during replay.">
                       <span class="map-tool-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3 5 21l7-3 7 3-7-18Zm0 5.6 3.4 8.8-3.4-1.5-3.4 1.5L12 8.6Z"/></svg>
                       </span>
                       <span class="map-tool-label">Nav</span>
                       <select id="map-nav-mode" title="Map navigation behavior">
                         <option value="free">Free Pan</option>
-                        <option value="follow">Follow Rover</option>
+                        <option value="follow">Follow Vehicle</option>
                       </select>
                     </label>
                   </div>
@@ -154,7 +154,7 @@
                     <button id="fit-path" class="map-tool-button" type="button" title="Fit Path: Fit the loaded replay route in the map view" aria-label="Fit path">
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.5 6A2.5 2.5 0 1 0 6.5 11 2.5 2.5 0 0 0 6.5 6Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM17.5 13A2.5 2.5 0 1 0 17.5 18 2.5 2.5 0 0 0 17.5 13Zm0 1.8a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4ZM9.1 9.4l1.2-1.5 5.6 4.7-1.2 1.5-5.6-4.7Z"/></svg>
                     </button>
-                    <button id="jump-rover" class="map-tool-button" type="button" title="Jump Rover: Center the map on the rover at the current replay frame" aria-label="Jump to rover">
+                    <button id="jump-vehicle" class="map-tool-button" type="button" title="Jump to Vehicle: Center the map on the vehicle at the current replay frame" aria-label="Jump to vehicle">
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.8 4.5 21 12 17.8 19.5 21 12 2.8Zm0 5.2 3.8 9.2-3.8-1.6-3.8 1.6L12 8Z"/></svg>
                     </button>
                   </div>

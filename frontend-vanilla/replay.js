@@ -38,7 +38,7 @@ const replayState = {
   sceneCompassControl: null,
   fullTrackLine: null,
   trackLine: null,
-  roverMarker: null,
+  vehicleMarker: null,
   baseTileLayer: null,
 };
 
@@ -75,7 +75,7 @@ const replayEls = {
   mapObjectDetail: document.getElementById('map-object-detail'),
   fitTerrain: document.getElementById('fit-terrain'),
   fitPath: document.getElementById('fit-path'),
-  jumpRover: document.getElementById('jump-rover'),
+  jumpVehicle: document.getElementById('jump-vehicle'),
   layerToggles: {
     terrain: document.getElementById('layer-terrain'),
     roads: document.getElementById('layer-roads'),
@@ -372,11 +372,11 @@ function speedColor(speedMps) {
   return '#c72e0f';
 }
 
-function makeRoverIcon(headingDeg = 0) {
+function makeVehicleIcon(headingDeg = 0) {
   const heading = Number.isFinite(headingDeg) ? headingDeg : 0;
   return L.divIcon({
-    className: 'rover-marker-icon',
-    html: `<div class="rover-heading-arrow" style="transform: rotate(${heading}deg)"><span></span></div>`,
+    className: 'vehicle-marker-icon',
+    html: `<div class="vehicle-heading-arrow" style="transform: rotate(${heading}deg)"><span></span></div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });
@@ -392,7 +392,7 @@ function makeCurrentFrameIcon() {
 }
 
 function bringReplayMarkersToFront() {
-  replayState.roverMarker?.setZIndexOffset?.(1200);
+  replayState.vehicleMarker?.setZIndexOffset?.(1200);
   replayState.currentFrameMarker?.setZIndexOffset?.(1100);
 }
 
@@ -414,7 +414,7 @@ function destroyMap() {
   replayState.sceneCompassControl = null;
   replayState.fullTrackLine = null;
   replayState.trackLine = null;
-  replayState.roverMarker = null;
+  replayState.vehicleMarker = null;
   replayState.baseTileLayer = null;
 }
 
@@ -661,8 +661,8 @@ function ensureMap(mode = 'geo') {
       opacity: 0.98,
       pane: 'replayPathPane',
     }).addTo(replayState.map);
-    replayState.roverMarker = L.marker([0, 0], {
-      icon: makeRoverIcon(0),
+    replayState.vehicleMarker = L.marker([0, 0], {
+      icon: makeVehicleIcon(0),
       pane: 'replayPathPane',
     }).addTo(replayState.map);
     replayState.currentFrameMarker = L.marker([0, 0], {
@@ -699,8 +699,8 @@ function ensureMap(mode = 'geo') {
   }).addTo(replayState.map);
   replayState.trackLine = L.polyline([], { color: '#005fb8', weight: 4 }).addTo(replayState.map);
   replayState.telemetryPointsLayer = L.layerGroup().addTo(replayState.map);
-  replayState.roverMarker = L.marker(origin, {
-    icon: makeRoverIcon(0),
+  replayState.vehicleMarker = L.marker(origin, {
+    icon: makeVehicleIcon(0),
   }).addTo(replayState.map);
   replayState.currentFrameMarker = L.marker(origin, {
     icon: makeCurrentFrameIcon(),
@@ -1005,7 +1005,7 @@ function syncPathLayerVisibility() {
   const visible = replayState.layerVisibility.path;
   replayState.fullTrackLine?.setStyle({ opacity: visible ? 0.95 : 0 });
   replayState.trackLine?.setStyle({ opacity: visible ? 0.98 : 0 });
-  [replayState.roverMarker, replayState.currentFrameMarker].forEach((marker) => {
+  [replayState.vehicleMarker, replayState.currentFrameMarker].forEach((marker) => {
     const el = marker?.getElement?.();
     if (el) el.style.display = visible ? '' : 'none';
   });
@@ -1223,7 +1223,7 @@ function resetMapForSession(sessionDetail) {
   syncPathLayerVisibility();
 
   if (fullTrack.length) {
-    replayState.roverMarker?.setLatLng(fullTrack[0]);
+    replayState.vehicleMarker?.setLatLng(fullTrack[0]);
     replayState.currentFrameMarker?.setLatLng(fullTrack[0]);
   }
   replayState.fullTrackLine?.bringToFront();
@@ -1261,8 +1261,8 @@ function updateMapForIndex(index) {
   const payload = telemetry[index]?.payload || {};
   const heading = payload.orientation?.heading_deg;
   replayState.trackLine.setLatLngs(sourceTrack);
-  replayState.roverMarker.setLatLng(sourceTrack[sourceTrack.length - 1]);
-  replayState.roverMarker.setIcon(makeRoverIcon(heading));
+  replayState.vehicleMarker.setLatLng(sourceTrack[sourceTrack.length - 1]);
+  replayState.vehicleMarker.setIcon(makeVehicleIcon(heading));
   replayState.currentFrameMarker?.setLatLng(sourceTrack[sourceTrack.length - 1]);
   replayState.trackLine.bringToFront();
   bringReplayMarkersToFront();
@@ -1428,7 +1428,7 @@ function fitCurrentPath() {
   fitTrackBounds(track);
 }
 
-function jumpToRover() {
+function jumpToVehicle() {
   if (!replayState.map || !replayState.loadedSession) return;
   const telemetry = replayState.loadedSession.timeline.telemetry || [];
   const entry = telemetry[replayState.playbackIndex];
@@ -1490,7 +1490,7 @@ function bindReplayActions() {
   });
   replayEls.fitTerrain?.addEventListener('click', fitSceneMapBounds);
   replayEls.fitPath?.addEventListener('click', fitCurrentPath);
-  replayEls.jumpRover?.addEventListener('click', jumpToRover);
+  replayEls.jumpVehicle?.addEventListener('click', jumpToVehicle);
   Object.entries(replayEls.layerToggles).forEach(([name, input]) => {
     input?.addEventListener('change', (event) => {
       replayState.layerVisibility[name] = Boolean(event.target.checked);
@@ -1544,7 +1544,7 @@ async function initReplay() {
     window.GCSCommon.initShell({
       page: 'replay',
       title: 'Recorded Sessions',
-      subtitle: 'Review rover motion, telemetry, and runtime events from the GCS session log.',
+      subtitle: 'Review vehicle motion, telemetry, and runtime events from the GCS session log.',
     });
   }
   bindReplaySplitResize();

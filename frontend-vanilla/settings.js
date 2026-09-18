@@ -22,9 +22,9 @@ const settingsEls = {
   stateTopic: document.getElementById('state-topic'),
   cameraTopic: document.getElementById('camera-topic'),
   controlHz: document.getElementById('control-hz'),
-  roverConnectedThreshold: document.getElementById('rover-connected-threshold'),
-  roverUnavailableThreshold: document.getElementById('rover-unavailable-threshold'),
-  roverRolloverOnReconnect: document.getElementById('rover-rollover-on-reconnect'),
+  vehicleConnectedThreshold: document.getElementById('vehicle-connected-threshold'),
+  vehicleUnavailableThreshold: document.getElementById('vehicle-unavailable-threshold'),
+  vehicleRolloverOnReconnect: document.getElementById('vehicle-rollover-on-reconnect'),
   simulationBackend: document.getElementById('simulation-backend-select'),
   reload: document.getElementById('reload-config'),
   ingestMode: document.getElementById('ingest-mode'),
@@ -351,15 +351,15 @@ function fillForm(mqtt = {}, simulation = {}) {
   settingsEls.stateTopic.value = mqtt.state_topic || 'telemetry/state';
   settingsEls.cameraTopic.value = mqtt.camera_topic || 'camera-feed';
   settingsEls.controlHz.value = mqtt.control_hz ?? 20;
-  settingsEls.roverConnectedThreshold.value = connectedThreshold;
-  settingsEls.roverUnavailableThreshold.value = unavailableThreshold;
-  settingsEls.roverRolloverOnReconnect.checked = roverAvailability.rollover_on_reconnect !== false;
+  settingsEls.vehicleConnectedThreshold.value = connectedThreshold;
+  settingsEls.vehicleUnavailableThreshold.value = unavailableThreshold;
+  settingsEls.vehicleRolloverOnReconnect.checked = roverAvailability.rollover_on_reconnect !== false;
   settingsEls.simulationBackend.value = simulation.backend || '3d-env';
 }
 
 function readConnectivityFromForm() {
-  const connectedThresholdRaw = Number.parseInt(settingsEls.roverConnectedThreshold.value, 10);
-  const unavailableThresholdRaw = Number.parseInt(settingsEls.roverUnavailableThreshold.value, 10);
+  const connectedThresholdRaw = Number.parseInt(settingsEls.vehicleConnectedThreshold.value, 10);
+  const unavailableThresholdRaw = Number.parseInt(settingsEls.vehicleUnavailableThreshold.value, 10);
   const connectedThreshold = Number.isFinite(connectedThresholdRaw) ? Math.max(0, connectedThresholdRaw) : 2;
   let unavailableThreshold = Number.isFinite(unavailableThresholdRaw) ? Math.max(1, unavailableThresholdRaw) : 60;
   if (unavailableThreshold < connectedThreshold) unavailableThreshold = connectedThreshold;
@@ -376,7 +376,7 @@ function readConnectivityFromForm() {
       rover_availability: {
         connected_threshold_seconds: connectedThreshold,
         unavailable_threshold_seconds: unavailableThreshold,
-        rollover_on_reconnect: settingsEls.roverRolloverOnReconnect.checked,
+        rollover_on_reconnect: settingsEls.vehicleRolloverOnReconnect.checked,
       },
     },
     simulation: {

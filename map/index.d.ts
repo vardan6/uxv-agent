@@ -36,7 +36,7 @@ export type LegacyMapWidget = {
   setReplayFrame(index: number, points: readonly ReplayPathPoint[]): void;
   clearReplayFrame(): void;
   setReplayTrackVisible(visible: boolean): void;
-  setLiveRoverVisible(visible: boolean): void;
+  setLiveVehicleVisible(visible: boolean): void;
   getLeafletMap(): LeafletMapHandle | null;
 };
 

@@ -201,7 +201,7 @@ export class MapWidget {
     this._statusBar = opts.statusBar || null;
     this._replayPathLayer = null;
     this._replayTrackVisible = true;
-    this._liveRoverVisible = true;
+    this._liveVehicleVisible = true;
   }
 
   mount() {
@@ -584,8 +584,8 @@ export class MapWidget {
     }
   }
 
-  setLiveRoverVisible(visible) {
-    this._liveRoverVisible = visible;
+  setLiveVehicleVisible(visible) {
+    this._liveVehicleVisible = visible;
     this._vehicleLayer?.setVisible(visible);
   }
 

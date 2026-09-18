@@ -1429,12 +1429,12 @@ select:focus-visible {
   border-left: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
 }
 
-.rover-marker-icon {
+.vehicle-marker-icon {
   background: transparent;
   border: 0;
 }
 
-.rover-heading-arrow {
+.vehicle-heading-arrow {
   position: relative;
   width: 34px;
   height: 34px;
@@ -1443,7 +1443,7 @@ select:focus-visible {
   transform-origin: 50% 50%;
 }
 
-.rover-heading-arrow::before {
+.vehicle-heading-arrow::before {
   content: "";
   position: absolute;
   inset: 3px;
@@ -1453,7 +1453,7 @@ select:focus-visible {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
 }
 
-.rover-heading-arrow span {
+.vehicle-heading-arrow span {
   position: relative;
   width: 0;
   height: 0;
