@@ -12,6 +12,7 @@ from backend.ai.mission_store import MissionStore
 from backend.ai.operational_constraints_store import OperationalConstraintsStore
 from backend.ai.secret_store import SecretStore
 from backend.ai.session_store import AISessionStore
+from backend.ai.vehicle_profile import VehicleProfile, resolve_active_profile
 from backend.config import AppConfig, ROOT_DIR
 from backend.control import ControlService
 from backend.mqtt_service import MQTTRuntime
@@ -94,10 +95,17 @@ async def build_runtime(config: AppConfig) -> AppRuntime:
             return None
         return mission_store.get_origin_datum(str(mission.get("id") or ""))
 
+    def _resolve_profile() -> VehicleProfile:
+        """The operator's persisted vehicle-profile selection, read per call so a
+        change through /api/vehicle-profile/active takes effect without a
+        restart."""
+        return resolve_active_profile(config)
+
     mission_execution_service = MissionExecutionService(
         db_path=ai_sessions_db_path,
         controller_adapter=controller_mission_adapter,
         origin_resolver=_resolve_mission_origin,
+        profile_resolver=_resolve_profile,
     )
     replay_analytics = ReplayAnalyticsService(replay_store)
     secret_store = SecretStore(

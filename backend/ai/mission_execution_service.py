@@ -24,7 +24,7 @@ from . import mission_patterns, mission_tree, polygon_geometry
 from .mission_export_service import MissionExportService
 from .mission_revision_repository import MissionRevisionRepository
 from .mission_safety import parse_geofence
-from .vehicle_profile import get_active_profile
+from .vehicle_profile import VehicleProfile, get_active_profile
 
 
 def _constraint_ring(constraint: dict[str, Any]) -> list[polygon_geometry.Point]:
@@ -613,6 +613,7 @@ class MissionExecutionService:
         *,
         controller_adapter: ControllerMissionAdapter | None = None,
         origin_resolver: Callable[[str | None], Origin | None] | None = None,
+        profile_resolver: Callable[[], VehicleProfile] | None = None,
     ):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -620,7 +621,11 @@ class MissionExecutionService:
         self._controller_adapter = controller_adapter or JsonFileControllerMissionAdapter(
             self._db_path.parent / "controller_mission_adapter.json"
         )
-        self._exporter = MissionExportService(missions_dir=self._db_path.parent)
+        self._profile_resolver = profile_resolver or get_active_profile
+        self._exporter = MissionExportService(
+            missions_dir=self._db_path.parent,
+            profile_resolver=self._profile_resolver,
+        )
         # ADR 0022: per-Mission coordinate datum. The resolver maps an internal
         # operation id to its Mission's Origin (runtime composes
         # MissionStore.get_by_operation_id → get_origin_datum); a None id or None
@@ -681,6 +686,9 @@ class MissionExecutionService:
             str(parent_operation_id or "").strip() or None
         )
         mission = _canonicalize_mission_payload(draft_payload, origin)
+        # Revisions are vehicle-bound: stamp the profile the mission is authored
+        # against so execute_revision can refuse a later profile switch.
+        mission.setdefault("vehicle_profile_id", self._profile_resolver().id)
         operation_status = _operation_status_from_revision(draft_status)
         policy = {
             "execution_allowed": False,
@@ -1205,6 +1213,28 @@ class MissionExecutionService:
                 "status": "revision_not_ready",
                 "error": f"mission revision '{revision['id']}' is not ready for execution (status='{status}')",
                 "revision": revision,
+            }
+
+        # Revisions are vehicle-bound (requirements.md §Vehicle-bound revisions):
+        # a saved mission keeps the profile it was authored against and is never
+        # re-interpreted under whatever is selected now. The .plan format is
+        # vehicle-bound, so a mismatch here is a wrong-mission-uploaded bug.
+        # Revisions authored before the profile was stamped carry no id; those
+        # stay dispatchable under the active profile.
+        bound_profile_id = str(dict(revision.get("mission") or {}).get("vehicle_profile_id") or "").strip()
+        active_profile = self._profile_resolver()
+        if bound_profile_id and bound_profile_id != active_profile.id:
+            return {
+                "ok": False,
+                "status": "vehicle_profile_mismatch",
+                "error": (
+                    f"mission revision '{revision['id']}' was authored for vehicle profile "
+                    f"'{bound_profile_id}' but '{active_profile.id}' is active; select the "
+                    f"matching vehicle profile before executing"
+                ),
+                "revision": revision,
+                "vehicle_profile_id": bound_profile_id,
+                "active_profile_id": active_profile.id,
             }
 
         export_ready = self._ensure_revision_exported_for_execution(revision)
@@ -1912,6 +1942,7 @@ class MissionExecutionService:
             ) for wp in coerced],
             "execution_allowed": False,
             "required_operator_approval": True,
+            "vehicle_profile_id": self._profile_resolver().id,
         }
 
         with self._connect() as conn:
@@ -2315,7 +2346,7 @@ class MissionExecutionService:
         if not needs_export:
             return {"ok": True, "revision": revision}
 
-        export_result = self._exporter.export(revision, profile=get_active_profile())
+        export_result = self._exporter.export(revision, profile=self._profile_resolver())
         if not export_result.get("ok"):
             return {
                 "ok": False,

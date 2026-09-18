@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from backend.ai.coordinate_frame import load_scene_origin, local_to_wgs84
 from backend.ai.vehicle_profile import VehicleProfile, get_active_profile
@@ -40,7 +40,11 @@ class MissionExportService:
 
     Usage:
         svc = MissionExportService()
-        result = svc.export(draft, profile)   # profile defaults to get_active_profile()
+        result = svc.export(draft, profile)   # profile defaults to the resolver
+
+    ``profile_resolver`` is how the operator's persisted selection reaches the
+    exporter: the app wires one that reads settings, and callers that omit it
+    fall back to the default profile rather than importing config here.
     """
 
     def __init__(
@@ -48,10 +52,12 @@ class MissionExportService:
         missions_dir: str | Path | None = None,
         accept_radius_m: float = _DEFAULT_ACCEPT_RADIUS_M,
         hold_s: float = _DEFAULT_HOLD_S,
+        profile_resolver: Callable[[], VehicleProfile] | None = None,
     ):
         self._missions_dir = Path(missions_dir) if missions_dir else _MISSIONS_DIR
         self._accept_radius_m = accept_radius_m
         self._hold_s = hold_s
+        self._profile_resolver = profile_resolver or get_active_profile
         self._origin = load_scene_origin()
 
     def export(
@@ -65,7 +71,7 @@ class MissionExportService:
         Returns a result dict with ok, file_path, waypoint_count, and plan.
         """
         if profile is None:
-            profile = get_active_profile()
+            profile = self._profile_resolver()
 
         draft_id = str(draft.get("id") or draft.get("draft_id") or "unknown")
 
@@ -107,7 +113,7 @@ class MissionExportService:
         embeds, so adapter ``install_mission`` normalization is identical.
         """
         if profile is None:
-            profile = get_active_profile()
+            profile = self._profile_resolver()
         return self._build_plan(
             [dict(wp) for wp in waypoints if isinstance(wp, dict)],
             profile,

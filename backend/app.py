@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.ai.agent_traces import AgentTraceStore
 from backend.ai.chat_service import AIChatService
 from backend.ai.tool_registry import ToolRegistry
+from backend.ai.vehicle_profile import resolve_active_profile
 from backend.config import load_config, save_config
 from backend.runtime import AppRuntime, GCS_DIR, build_runtime
 from backend.routers import replay as replay_router_module
@@ -73,7 +74,7 @@ async def lifespan(app: FastAPI):
         save_config(config)
     runtime = await build_runtime(config)
     app.state.runtime = runtime
-    _tool_registry = ToolRegistry()
+    _tool_registry = ToolRegistry(profile_resolver=lambda: resolve_active_profile(config))
     app.state.tool_registry = _tool_registry
     agent_trace_store = AgentTraceStore(
         _resolve_gcs_data_path(config.logging.get("agent_trace_dir", "data/agent_traces"))

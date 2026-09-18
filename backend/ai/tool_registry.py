@@ -22,7 +22,7 @@ from backend.ai.retrieval import search_project_docs as _search_project_docs
 from backend.ai.road_graph_service import RoadGraphService
 from backend.ai.session_store import normalize_source_controls
 from backend.ai.spatial_query_service import SpatialQueryService
-from backend.ai.vehicle_profile import get_active_profile
+from backend.ai.vehicle_profile import VehicleProfile, get_active_profile
 
 
 READ_ONLY = "read_only"
@@ -256,10 +256,15 @@ def build_data_access_manifest(tool_definitions: list[Any], *, allowed_tool_name
 
 
 class ToolRegistry:
-    def __init__(self, spatial: SpatialQueryService | None = None):
+    def __init__(
+        self,
+        spatial: SpatialQueryService | None = None,
+        profile_resolver: Callable[[], VehicleProfile] | None = None,
+    ):
         self._spatial = spatial or SpatialQueryService()
         self._road_graph = RoadGraphService()
-        self._exporter = MissionExportService()
+        self._profile_resolver = profile_resolver or get_active_profile
+        self._exporter = MissionExportService(profile_resolver=self._profile_resolver)
         self._definitions = self._build_definitions()
 
     def definitions(self) -> list[ToolDefinition]:
@@ -1437,7 +1442,7 @@ class ToolRegistry:
                 }
             export_result = self._exporter.export(
                 {"id": draft_id, "draft": draft},
-                profile=get_active_profile(),
+                profile=self._profile_resolver(),
                 home_position=home,
             )
             if export_result.get("ok"):
