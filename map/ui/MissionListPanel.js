@@ -1,3 +1,5 @@
+import { UNKNOWN_VEHICLE_ICON, vehicleIcon as vehicleIconForKind } from '../vehicleProfiles.js';
+
 const SVG = {
   edit:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M9.5 2 12 4.5 5.5 11H3V8.5L9.5 2z"/><line x1="7.8" y1="3.7" x2="10.3" y2="6.2"/></svg>`,
   run:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" focusable="false" aria-hidden="true"><polygon points="4,2 12,7 4,12"/></svg>`,
@@ -16,7 +18,6 @@ const SVG = {
 // execute is available for any idle row with an active revision. executing →
 // locked (no edit/execute). approve/reject are removed — play gates execution.
 const MISSION_ROW_EDITABLE = new Set(['proposed', 'planning', 'exported', 'cutover_pending']);
-const VEHICLE_ICON = { ground: '🚗', multirotor: '🚁', fixed_wing: '✈️' };
 
 // Maps activeRevisionStatus → CSS class applied to the row div for status stripe colouring.
 const STATUS_CLASS = {
@@ -204,12 +205,15 @@ export function missionRowMarkup(missionRow, ctx = {}) {
   const indexLabel = missionRow.missionIndex != null ? `#${missionRow.missionIndex}` : '';
   const label = statusLabel(status);
   const dateStr = formatDate(missionRow.createdAt);
-  const vehicleKind = String(
-    profilesById[missionRow.vehicleProfileId]?.kind
-    || profilesById[activeProfileId]?.kind
-    || 'ground'
+  // A saved mission keeps its own profile, so the row shows the profile the
+  // mission is bound to; the active selection is only the fallback for rows
+  // that predate the stamp. An unrecognised kind renders neutral, never as a
+  // rover.
+  const vehicleIcon = vehicleIconForKind(
+    missionRow.vehicleProfileId,
+    profilesById,
+    activeProfileId,
   );
-  const vehicleIcon = VEHICLE_ICON[vehicleKind] || '';
   const waypointLabel = formatWaypointCount(missionRow.waypointCount);
   const metaParts = [escapeHtml(indexLabel), escapeHtml(waypointLabel), escapeHtml(label), escapeHtml(dateStr)].filter(Boolean);
   const safeId = escapeHtml(id);
@@ -234,7 +238,7 @@ export function missionRowMarkup(missionRow, ctx = {}) {
         title="Focus mission"
       >
         <span class="mission-row-leading">
-          ${vehicleIcon ? `<span class="mission-row-vehicle" title="Vehicle type">${escapeHtml(vehicleIcon)}</span>` : ''}
+          <span class="mission-row-vehicle" title="${vehicleIcon === UNKNOWN_VEHICLE_ICON ? 'Vehicle type unknown' : 'Vehicle type'}">${escapeHtml(vehicleIcon)}</span>
           <span class="mission-row-origin" title="Mission origin">${escapeHtml(missionRow.originBadge)}</span>
         </span>
         <span class="mission-row-main">

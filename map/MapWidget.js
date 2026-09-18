@@ -143,7 +143,9 @@ export class MapWidget {
     // The Mission whose active revision is currently being edited (edit
     // internals below stay revision-keyed via editState).
     this._editingMissionId = '';
-    this._activeProfileId = 'rover_default';
+    // Empty until /api/vehicle-profile/active answers — the widget does not
+    // assume a rover before the backend says which profile is selected.
+    this._activeProfileId = '';
     this._profilesById = {};
     this._controllerVersion = null;
     this._executionState = null;
@@ -629,7 +631,7 @@ export class MapWidget {
           .map((profile) => [String(profile.id), profile]),
       );
     } else if (!listResult.ok) {
-      console.warn('MapWidget: vehicle profiles unavailable, defaulting to rover_default');
+      console.warn('MapWidget: vehicle profiles unavailable; rows show an unknown-vehicle glyph');
     }
   }
 
