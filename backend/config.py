@@ -45,6 +45,11 @@ DEFAULT_GCS_SETTINGS: dict[str, Any] = {
         },
         "ai_context_budget_chars": 24000,
     },
+    "vehicle_profile": {
+        # The operator's persisted selection. Unknown or absent IDs resolve to
+        # rover_default at read time (ai/vehicle_profile.py).
+        "active_profile_id": "rover_default",
+    },
     "mission_lifecycle": {
         # execution_mode is intentionally absent so a fresh config inherits the
         # build-time default (sim -> autonomous, real-rover -> strict) resolved
@@ -199,6 +204,11 @@ class AppConfig:
     def ai_settings(self) -> dict[str, Any]:
         settings = self.raw.get("ai_settings", {})
         return settings if isinstance(settings, dict) else {}
+
+    @property
+    def vehicle_profile(self) -> dict[str, Any]:
+        section = self.raw.get("vehicle_profile", {})
+        return section if isinstance(section, dict) else {}
 
     @property
     def mission_lifecycle(self) -> dict[str, Any]:

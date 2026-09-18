@@ -28,7 +28,13 @@ from backend.ai.tool_registry import (
     allowed_tool_names_for_source_controls,
     build_data_access_manifest,
 )
-from backend.ai.vehicle_profile import KNOWN_PROFILES, get_active_profile
+from backend.ai.vehicle_profile import (
+    KNOWN_PROFILES,
+    SETTINGS_KEY,
+    SETTINGS_SECTION,
+    resolve_active_profile,
+)
+from backend.config import save_config
 from backend.routers.llm import _redact_secret_text
 from backend.runtime import AppRuntime
 
@@ -1657,8 +1663,33 @@ async def delete_mission_waypoint(
 
 @router.get("/api/vehicle-profile/active")
 async def get_active_vehicle_profile(request: Request) -> JSONResponse:
-    _runtime(request)
-    return JSONResponse({"ok": True, "profile": asdict(get_active_profile())})
+    runtime = _runtime(request)
+    profile = resolve_active_profile(runtime.config)
+    return JSONResponse({"ok": True, "profile": asdict(profile)})
+
+
+@router.post("/api/vehicle-profile/active")
+async def set_active_vehicle_profile(request: Request) -> JSONResponse:
+    runtime = _runtime(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    profile_id = payload.get("profile_id")
+    if not isinstance(profile_id, str) or not profile_id.strip():
+        raise HTTPException(status_code=400, detail="profile_id is required")
+    profile = KNOWN_PROFILES.get(profile_id.strip())
+    if profile is None:
+        raise HTTPException(status_code=400, detail=f"unknown vehicle profile {profile_id!r}")
+    section = runtime.config.raw.get(SETTINGS_SECTION)
+    if not isinstance(section, dict):
+        section = {}
+        runtime.config.raw[SETTINGS_SECTION] = section
+    section[SETTINGS_KEY] = profile.id
+    save_config(runtime.config)
+    return JSONResponse({"ok": True, "profile": asdict(profile)})
 
 
 @router.get("/api/vehicle-profiles")

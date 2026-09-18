@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,43 @@ KNOWN_PROFILES: dict[str, VehicleProfile] = {
 }
 
 
-def get_active_profile() -> VehicleProfile:
-    # Phase 1: rover_default is always active.
-    # When settings-page profile selection lands, read from settings store here.
-    return ROVER_DEFAULT
+DEFAULT_PROFILE_ID = ROVER_DEFAULT.id
+
+# Settings key holding the operator's persisted selection.
+SETTINGS_SECTION = "vehicle_profile"
+SETTINGS_KEY = "active_profile_id"
+
+
+def resolve_active_profile(config: Any) -> VehicleProfile:
+    """Read the persisted selection, falling back to the default profile.
+
+    The read path is deliberately tolerant: a settings file naming a profile
+    this build does not ship must not break planning or export. The write path
+    (`POST /api/vehicle-profile/active`) rejects unknown IDs instead.
+    """
+    section = getattr(config, SETTINGS_SECTION, None)
+    if not isinstance(section, dict):
+        section = {}
+    profile_id = section.get(SETTINGS_KEY)
+    if profile_id is None:
+        return ROVER_DEFAULT
+    profile = KNOWN_PROFILES.get(str(profile_id))
+    if profile is None:
+        logger.warning(
+            "unknown %s.%s %r in settings; falling back to %s",
+            SETTINGS_SECTION,
+            SETTINGS_KEY,
+            profile_id,
+            DEFAULT_PROFILE_ID,
+        )
+        return ROVER_DEFAULT
+    return profile
+
+
+def get_active_profile(config: Any | None = None) -> VehicleProfile:
+    # Callers that hold a config resolve the operator's selection; the
+    # remaining zero-argument call sites still get rover_default until R3
+    # slice 2 threads the config through them.
+    if config is None:
+        return ROVER_DEFAULT
+    return resolve_active_profile(config)
