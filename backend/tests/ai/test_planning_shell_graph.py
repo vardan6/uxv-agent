@@ -33,7 +33,7 @@ def test_normalize_retrieval_request_defaults_for_non_dict_input() -> None:
 
     assert result["session_id"] == "ai-session-456"
     assert result["lazy_branches"] == []
-    assert result["request_scope"] == "rover_task"
+    assert result["request_scope"] == "vehicle_task"
 
 
 def test_build_retrieved_sources_reflects_enabled_controls() -> None:

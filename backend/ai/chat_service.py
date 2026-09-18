@@ -15,15 +15,15 @@ from .tool_registry import allowed_tool_names_for_source_controls
 
 SYSTEM_PROMPT = """You are the AI chat assistant inside Remote Rover GCS.
 Answer operator questions clearly and concisely.
-Do not claim to control the rover, publish commands, or start missions.
+Do not claim to control the vehicle, publish commands, or start missions.
 If the operator asks to create a route, mission, or waypoint plan (including requests like "go around X" or "fly to Y"), tell them to switch to Agent mode using the mode toggle above the input — Agent mode has map and mission-authoring tools that can resolve object names and create missions directly. Do not ask for coordinates or details you cannot use; redirect to Agent mode instead.
-If the operator asks for direct rover motion (move now, fly now, execute) without mission planning, explain that chat is read-only for live commands."""
+If the operator asks for direct vehicle motion (move now, fly now, execute) without mission planning, explain that chat is read-only for live commands."""
 
 AGENT_SYSTEM_PROMPT = """You are the operator-facing AI agent in Remote Rover GCS.
-Use tools and provided context as authoritative; do not invent rover state, telemetry, or map data.
-You are given a compact summary of current rover pose, mission state, and scene as authoritative facts. Detailed map objects, replay history, telemetry samples, settings, and runtime/broker config are not pre-loaded — call the matching read-only tool when the operator's question needs them.
+Use tools and provided context as authoritative; do not invent vehicle state, telemetry, or map data.
+You are given a compact summary of current vehicle pose, mission state, and scene as authoritative facts. Detailed map objects, replay history, telemetry samples, settings, and runtime/broker config are not pre-loaded — call the matching read-only tool when the operator's question needs them.
 Travel distance = path_length_m. Furthest from home/start = max_distance_from_start_m.
-Prefer live rover telemetry when fresh; otherwise use last_known_replay_state and say live is unavailable.
+Prefer live vehicle telemetry when fresh; otherwise use last_known_replay_state and say live is unavailable.
 For underspecified replay/telemetry requests, auto-resolve via tools (e.g. resolve_replay_sessions -> metrics/path/compare/aggregate) before asking for IDs.
 For follow-up references like "that session" or "the first one", reuse session_ids already present in recent history before resolving a new selector.
 resolve_spatial_target: pass plain-language text or a minimal target object; never an empty payload.
@@ -33,8 +33,8 @@ If a failed tool result includes a `hint` or `fallback_tool` field, follow it (t
 Mission-authoring requests must use a terminal mission-creation tool; prose alone does not create a Mission.
 When the operator supplies explicit route coordinates, extract them into structured {x, y, z} waypoints and call create_mission_from_waypoints instead of refusing or treating route_hash as a draft_id.
 A successful mission-creation tool call creates a durable Mission visible on the map and in the mission sidebar, while your normal text response remains visible in chat.
-Creating or editing a Mission is a planning action, not rover motion. Never claim a Mission was created unless the tool result includes a mission_id.
-Do not publish raw commands or bypass approval/policy. Start or stop rover motion only through execution tools that are explicitly available in the current execution mode."""
+Creating or editing a Mission is a planning action, not vehicle motion. Never claim a Mission was created unless the tool result includes a mission_id.
+Do not publish raw commands or bypass approval/policy. Start or stop vehicle motion only through execution tools that are explicitly available in the current execution mode."""
 
 AI_CONTEXT_MESSAGE_LIMIT = 40
 AI_CONTEXT_HISTORY_CHAR_BUDGET = 16000
@@ -526,7 +526,7 @@ def _resolve_provider_for_session(
 ) -> Any:
     provider_id = str(session.get("provider_id") or "")
     mode = str(session.get("mode") or "general_chat").strip()
-    if mode in ("rover_intent_test", "rover_mission_planning"):
+    if mode in ("vehicle_intent_test", "vehicle_mission_planning"):
         return resolve_intent_provider(config, provider_id=provider_id, secret_resolver=secret_resolver)
     return resolve_provider(config, purpose="general_chat", provider_id=provider_id, secret_resolver=secret_resolver)
 
@@ -557,7 +557,7 @@ def _to_langchain_messages(
 
 def _normalize_run_mode(run_mode: str) -> str:
     clean = str(run_mode or "chat").strip().lower()
-    if clean in {"general_chat", "chat", "intent", "rover_intent_test"}:
+    if clean in {"general_chat", "chat", "intent", "vehicle_intent_test"}:
         return "chat"
     if clean in {"agent", "planning_shell"}:
         return "agent"
@@ -641,7 +641,7 @@ def _prompt_for_mode(
         return base_prompt
     if run_mode != "agent":
         return (
-            "This chat message may use read-only rover and replay tools when needed. Use tool/context results as current facts. "
+            "This chat message may use read-only vehicle and replay tools when needed. Use tool/context results as current facts. "
             "If live telemetry is stale, prefer the last known replay-backed state when available.\n"
             f"{tool_guidance}"
             f"{manifest_guidance}"
@@ -658,8 +658,8 @@ def _prompt_for_mode(
         "For follow-up references like 'the first one in each set', prefer session_ids already named in recent conversation history. "
         "For underspecified replay requests, auto-resolve a selector (for example 'latest session with telemetry') and continue with tool calls before asking the operator for IDs. "
         "Never call resolve_spatial_target with an empty payload; pass either plain text or a minimal target object. "
-        "If the operator explicitly supplies coordinates or heading for a hypothetical rover pose, pass them to object-query tools instead of treating them as unavailable telemetry. "
-        "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, rover pose, "
+        "If the operator explicitly supplies coordinates or heading for a hypothetical vehicle pose, pass them to object-query tools instead of treating them as unavailable telemetry. "
+        "If a requested tool result is unavailable or empty, say so directly. Do not invent map objects, vehicle pose, "
         "or telemetry values beyond what the operator explicitly supplied.\n"
         f"{tool_guidance}"
         f"{manifest_guidance}"
@@ -680,10 +680,10 @@ def _tool_calls(context_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]
     details = snapshot.get("details") if isinstance(snapshot.get("details"), dict) else {}
     calls: list[dict[str, Any]] = []
     provider_to_result = {
-        "get_current_rover_state": snapshot.get("rover"),
+        "get_current_vehicle_state": snapshot.get("vehicle"),
         "get_scene_summary": snapshot.get("scene"),
         "query_objects_in_front": details.get("objects_in_front"),
-        "query_objects_near": details.get("objects_near_rover"),
+        "query_objects_near": details.get("objects_near_vehicle"),
         "query_objects_by_kind": details.get("objects_by_kind"),
         "get_current_replay_summary": details.get("current_replay") if allow_replay else None,
         "get_recent_telemetry": details.get("recent_telemetry") if allow_replay else None,
@@ -755,8 +755,8 @@ def _should_use_read_only_tools(messages: list[dict[str, Any]], context_snapshot
             "distance from start",
             "furthest",
             "longest",
-            "current state of rover",
-            "current rover state",
+            "current state of vehicle",
+            "current vehicle state",
             "last known",
         )
     )

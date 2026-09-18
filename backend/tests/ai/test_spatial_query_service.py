@@ -69,7 +69,7 @@ def test_nearest_object_ranking() -> None:
     assert _ids(result) == ["near_rock", "north_tree", "east_rock"]
 
 
-def test_unavailable_rover_pose() -> None:
+def test_unavailable_vehicle_pose() -> None:
     service = SpatialQueryService()
 
     result = service.find_objects_in_front(_scene(), {"position": {"x": 0, "y": 0}}, fov_deg=30)

@@ -193,7 +193,7 @@ def normalize_retrieval_request(
         "enabled_sources": enabled,
         "disabled_sources": disabled,
         "lazy_branches": lazy_branches,
-        "request_scope": str(source.get("request_scope") or "rover_task"),
+        "request_scope": str(source.get("request_scope") or "vehicle_task"),
     }
 
 

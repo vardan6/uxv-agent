@@ -38,8 +38,8 @@ DEFAULT_PERMISSIONS = frozenset({READ_ONLY, ANALYSIS, PLANNING})
 DISABLED_PERMISSIONS = frozenset({COMMAND_STAGING})
 
 _PLANNER_DRAFT_SYSTEM_PROMPT = (
-    "You are a mission planning assistant for a remote rover GCS.\n"
-    "Generate a structured mission draft from the provided rover intent and resolved target.\n\n"
+    "You are a mission planning assistant for a remote vehicle GCS.\n"
+    "Generate a structured mission draft from the provided vehicle intent and resolved target.\n\n"
     "Hard rules:\n"
     "- required_operator_approval MUST be true\n"
     "- execution_allowed MUST be false\n"
@@ -208,7 +208,7 @@ def tool_cache_ttl_s(name: str, default: int = 300) -> int:
 _DATA_SURFACES: tuple[tuple[str, str, str, str], ...] = (
     # (surface_name, description, access, initial_context)
     ("system_capabilities", "Discovery of available bounded data surfaces and source-control gating for this session.", "tool", "manifest_only"),
-    ("current_rover_state", "Latest telemetry snapshot and freshness metadata.", "tool", "summary"),
+    ("current_vehicle_state", "Latest telemetry snapshot and freshness metadata.", "tool", "summary"),
     ("terrain_scene", "Terrain/map objects and deterministic spatial geometry.", "tool", "scene_summary_only"),
     ("mission_state", "Current mission placeholder and mission-related state available to read-only AI flows.", "tool", "summary"),
     ("replay_sessions", "Recorded sessions, telemetry, events, paths, and metrics.", "tool", "manifest_only"),
@@ -360,15 +360,15 @@ class ToolRegistry:
     def _scene_payload(self, context: ToolInvocationContext) -> dict[str, Any] | None:
         return AIContextService(context.runtime).load_scene_payload()
 
-    def _rover_snapshot(self, context: ToolInvocationContext) -> dict[str, Any]:
-        rover = context.context_snapshot.get("rover")
-        if not isinstance(rover, dict):
+    def _vehicle_snapshot(self, context: ToolInvocationContext) -> dict[str, Any]:
+        vehicle = context.context_snapshot.get("vehicle")
+        if not isinstance(vehicle, dict):
             return {}
-        if _has_pose_and_heading(rover):
-            return rover
-        fallback = rover.get("last_known_replay_state")
+        if _has_pose_and_heading(vehicle):
+            return vehicle
+        fallback = vehicle.get("last_known_replay_state")
         if isinstance(fallback, dict) and _has_position(fallback):
-            merged = dict(rover)
+            merged = dict(vehicle)
             merged["position"] = fallback.get("position") or {}
             if fallback.get("heading_deg") is not None:
                 merged["heading_deg"] = fallback.get("heading_deg")
@@ -378,10 +378,10 @@ class ToolRegistry:
             merged["telemetry_source"] = "last_known_replay_state"
             merged["telemetry_source_session_id"] = fallback.get("session_id")
             return merged
-        return rover
+        return vehicle
 
-    def _get_current_rover_state(self, context: ToolInvocationContext) -> dict[str, Any]:
-        return dict(self._rover_snapshot(context))
+    def _get_current_vehicle_state(self, context: ToolInvocationContext) -> dict[str, Any]:
+        return dict(self._vehicle_snapshot(context))
 
     def _list_data_surfaces(self, context: ToolInvocationContext) -> dict[str, Any]:
         allowed_tool_names = allowed_tool_names_for_source_controls(context.source_controls)
@@ -439,8 +439,8 @@ class ToolRegistry:
         coordinates: dict[str, Any] | list[Any] | str | None = None,
         heading_deg: float | None = None,
     ) -> dict[str, Any]:
-        rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
-        return self._spatial.find_objects_in_front(self._scene_payload(context), rover_state, max_distance_m, fov_deg, kinds)
+        vehicle_state = self._vehicle_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
+        return self._spatial.find_objects_in_front(self._scene_payload(context), vehicle_state, max_distance_m, fov_deg, kinds)
 
     def _query_objects_near(
         self,
@@ -450,8 +450,8 @@ class ToolRegistry:
         position: dict[str, Any] | list[Any] | str | None = None,
         coordinates: dict[str, Any] | list[Any] | str | None = None,
     ) -> dict[str, Any]:
-        rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates)
-        return self._spatial.find_objects_near(self._scene_payload(context), rover_state, radius_m, kinds)
+        vehicle_state = self._vehicle_snapshot_with_override(context, position=position if position is not None else coordinates)
+        return self._spatial.find_objects_near(self._scene_payload(context), vehicle_state, radius_m, kinds)
 
     def _query_objects_by_kind(self, context: ToolInvocationContext, kind: str) -> dict[str, Any]:
         return self._spatial.find_objects_by_kind(self._scene_payload(context), kind)
@@ -466,8 +466,8 @@ class ToolRegistry:
         coordinates: dict[str, Any] | list[Any] | str | None = None,
         heading_deg: float | None = None,
     ) -> dict[str, Any]:
-        rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
-        return self._spatial.find_objects_to_left(self._scene_payload(context), rover_state, max_distance_m, angle_width_deg, kinds)
+        vehicle_state = self._vehicle_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
+        return self._spatial.find_objects_to_left(self._scene_payload(context), vehicle_state, max_distance_m, angle_width_deg, kinds)
 
     def _query_objects_to_right(
         self,
@@ -479,8 +479,8 @@ class ToolRegistry:
         coordinates: dict[str, Any] | list[Any] | str | None = None,
         heading_deg: float | None = None,
     ) -> dict[str, Any]:
-        rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
-        return self._spatial.find_objects_to_right(self._scene_payload(context), rover_state, max_distance_m, angle_width_deg, kinds)
+        vehicle_state = self._vehicle_snapshot_with_override(context, position=position if position is not None else coordinates, heading_deg=heading_deg)
+        return self._spatial.find_objects_to_right(self._scene_payload(context), vehicle_state, max_distance_m, angle_width_deg, kinds)
 
     def _query_nearest_objects(
         self,
@@ -491,8 +491,8 @@ class ToolRegistry:
         position: dict[str, Any] | list[Any] | str | None = None,
         coordinates: dict[str, Any] | list[Any] | str | None = None,
     ) -> dict[str, Any]:
-        rover_state = self._rover_snapshot_with_override(context, position=position if position is not None else coordinates)
-        return self._spatial.find_nearest_objects(self._scene_payload(context), rover_state, limit, max_distance_m, kinds)
+        vehicle_state = self._vehicle_snapshot_with_override(context, position=position if position is not None else coordinates)
+        return self._spatial.find_nearest_objects(self._scene_payload(context), vehicle_state, limit, max_distance_m, kinds)
 
     def _query_map_objects(
         self,
@@ -528,35 +528,35 @@ class ToolRegistry:
 
     def _resolve_spatial_target(self, context: ToolInvocationContext, target: dict[str, Any] | str) -> dict[str, Any]:
         resolved_target = _normalize_spatial_target(target)
-        rover_state = self._rover_snapshot_with_override(
+        vehicle_state = self._vehicle_snapshot_with_override(
             context,
             position=resolved_target.get("position") if isinstance(resolved_target, dict) and resolved_target.get("position") is not None else resolved_target.get("coordinates") if isinstance(resolved_target, dict) else None,
             heading_deg=resolved_target.get("heading_deg") if isinstance(resolved_target, dict) else None,
         )
-        return self._spatial.resolve_target_description(self._scene_payload(context), rover_state, resolved_target)
+        return self._spatial.resolve_target_description(self._scene_payload(context), vehicle_state, resolved_target)
 
-    def _rover_snapshot_with_override(
+    def _vehicle_snapshot_with_override(
         self,
         context: ToolInvocationContext,
         *,
         position: dict[str, Any] | list[Any] | str | None = None,
         heading_deg: float | None = None,
     ) -> dict[str, Any]:
-        rover = dict(self._rover_snapshot(context))
+        vehicle = dict(self._vehicle_snapshot(context))
         explicit_position = _normalize_position_override(position)
         if explicit_position is not None:
-            rover["position"] = explicit_position
-            rover["position_frame"] = "explicit_query_position"
-            rover["telemetry_fresh"] = False
-            rover["telemetry_source"] = "explicit_query_position"
+            vehicle["position"] = explicit_position
+            vehicle["position_frame"] = "explicit_query_position"
+            vehicle["telemetry_fresh"] = False
+            vehicle["telemetry_source"] = "explicit_query_position"
         if heading_deg is not None:
             try:
-                rover["heading_deg"] = float(heading_deg) % 360.0
-                rover["telemetry_fresh"] = False
-                rover["telemetry_source"] = "explicit_query_pose"
+                vehicle["heading_deg"] = float(heading_deg) % 360.0
+                vehicle["telemetry_fresh"] = False
+                vehicle["telemetry_source"] = "explicit_query_pose"
             except (TypeError, ValueError):
                 pass
-        return rover
+        return vehicle
 
     def _get_current_mission_state(self, context: ToolInvocationContext) -> dict[str, Any]:
         mission = context.context_snapshot.get("mission")
@@ -890,17 +890,17 @@ class ToolRegistry:
         return {"error": f"unknown operation: {op!r}. Use one of: summary, section, provider"}
 
     def _get_sensor_status(self, context: ToolInvocationContext) -> dict[str, Any]:
-        rover = self._rover_snapshot(context)
+        vehicle = self._vehicle_snapshot(context)
         runtime_summary = context.context_snapshot.get("runtime")
         runtime_details = dict(runtime_summary) if isinstance(runtime_summary, dict) else {}
         video = runtime_details.get("video")
         return {
             "available": True,
-            "telemetry_fresh": bool(rover.get("telemetry_fresh")),
-            "camera_fresh": bool(rover.get("camera_fresh")),
-            "last_telemetry_ts": rover.get("last_telemetry_ts"),
-            "last_camera_ts": rover.get("last_camera_ts"),
-            "camera": dict(rover.get("camera") or {}),
+            "telemetry_fresh": bool(vehicle.get("telemetry_fresh")),
+            "camera_fresh": bool(vehicle.get("camera_fresh")),
+            "last_telemetry_ts": vehicle.get("last_telemetry_ts"),
+            "last_camera_ts": vehicle.get("last_camera_ts"),
+            "camera": dict(vehicle.get("camera") or {}),
             "video": dict(video) if isinstance(video, dict) else {},
             "perception_available": False,
             "perception_note": "This phase exposes only metadata and freshness; raw frames, detections, and perception events are not implemented.",
@@ -925,8 +925,8 @@ class ToolRegistry:
         context: ToolInvocationContext,
         group_id: str,
     ) -> dict[str, Any]:
-        rover = self._rover_snapshot(context)
-        pos = rover.get("position") or {}
+        vehicle = self._vehicle_snapshot(context)
+        pos = vehicle.get("position") or {}
         try:
             x = float(pos.get("x") or 0.0)
             y = float(pos.get("y") or 0.0)
@@ -973,21 +973,21 @@ class ToolRegistry:
             scene = self._scene_payload(context)
         except Exception:
             scene = None
-        rover = self._rover_snapshot(context)
+        vehicle = self._vehicle_snapshot(context)
 
-        if start_target is None or str(start_target or "").strip() in ("", "rover_pose"):
-            start_pos = rover.get("position") or {}
+        if start_target is None or str(start_target or "").strip() in ("", "vehicle_pose"):
+            start_pos = vehicle.get("position") or {}
             try:
                 sx = float(start_pos.get("x") or 0.0)
                 sy = float(start_pos.get("y") or 0.0)
             except (TypeError, ValueError):
-                return {"ok": False, "error": "rover position unavailable for start_target=None; provide explicit start_target"}
+                return {"ok": False, "error": "vehicle position unavailable for start_target=None; provide explicit start_target"}
         else:
             start_point = _normalize_scene_point(start_target, scene=scene)
             if start_point is not None:
                 sx, sy = start_point["x"], start_point["y"]
             else:
-                resolved = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(start_target))
+                resolved = self._spatial.resolve_target_description(scene, vehicle, _normalize_spatial_target(start_target))
                 selected = resolved.get("selected")
                 if not selected:
                     return {"ok": False, "error": "start_target could not be resolved on the scene map"}
@@ -1000,7 +1000,7 @@ class ToolRegistry:
         if goal_point is not None:
             gx, gy = goal_point["x"], goal_point["y"]
         else:
-            resolved_goal = self._spatial.resolve_target_description(scene, rover, _normalize_spatial_target(goal_target))
+            resolved_goal = self._spatial.resolve_target_description(scene, vehicle, _normalize_spatial_target(goal_target))
             selected_goal = resolved_goal.get("selected")
             if not selected_goal:
                 return {"ok": False, "error": "goal_target could not be resolved on the scene map"}
@@ -1120,7 +1120,7 @@ class ToolRegistry:
 
     # ── Planner loop handlers (Phase 5) ───────────────────────────────────────
 
-    def _parse_rover_intent(
+    def _parse_vehicle_intent(
         self,
         context: ToolInvocationContext,
         prompt: str,
@@ -1172,12 +1172,12 @@ class ToolRegistry:
     def _lazy_load_sensor(self, context: ToolInvocationContext) -> dict[str, Any]:
         if not context.source_controls.get("sensor_context", False):
             return {"ok": False, "error": "source_disabled", "source": "sensor_context"}
-        rover = context.context_snapshot.get("rover") or {}
+        vehicle = context.context_snapshot.get("vehicle") or {}
         return {
             "ok": True,
-            "telemetry_fresh": rover.get("telemetry_fresh"),
-            "camera_fresh": rover.get("camera_fresh"),
-            "available": bool(rover),
+            "telemetry_fresh": vehicle.get("telemetry_fresh"),
+            "camera_fresh": vehicle.get("camera_fresh"),
+            "available": bool(vehicle),
         }
 
     def _create_mission_from_waypoints(
@@ -1231,7 +1231,7 @@ class ToolRegistry:
             context,
             intent={
                 "intent_type": "navigate",
-                "requires_rover_motion": True,
+                "requires_vehicle_motion": True,
                 "requested_actions": ["follow supplied waypoint route"],
             },
             draft={
@@ -1250,7 +1250,7 @@ class ToolRegistry:
         context: ToolInvocationContext,
         intent: dict,
         target_resolution: dict | None = None,
-        rover_position: dict | None = None,
+        vehicle_position: dict | None = None,
         draft: dict | None = None,
         route_artifacts: list | None = None,
         parent_operation_id: str = "",
@@ -1284,7 +1284,7 @@ class ToolRegistry:
                 result=result,
                 intent=intent,
                 target_resolution=target_resolution or {},
-                rover_position=rover_position or {},
+                vehicle_position=vehicle_position or {},
             )
 
         # LLM generation mode: second model generates draft from intent summary.
@@ -1305,7 +1305,7 @@ class ToolRegistry:
         prompt = _planner_draft_prompt(
             intent or {},
             target_resolution or {},
-            rover_position or {},
+            vehicle_position or {},
         )
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -1334,7 +1334,7 @@ class ToolRegistry:
             result=result,
             intent=intent,
             target_resolution=target_resolution or {},
-            rover_position=rover_position or {},
+            vehicle_position=vehicle_position or {},
         )
 
     def _persist_agent_mission_proposal(
@@ -1344,7 +1344,7 @@ class ToolRegistry:
         result: dict[str, Any],
         intent: dict[str, Any],
         target_resolution: dict[str, Any],
-        rover_position: dict[str, Any],
+        vehicle_position: dict[str, Any],
     ) -> dict[str, Any]:
         """Persist terminal Agent-chat proposals as real Mission objects."""
         if context.run_mode != "agent":
@@ -1364,7 +1364,7 @@ class ToolRegistry:
             intent,
             target_resolution,
             draft,
-            rover_position or None,
+            vehicle_position or None,
         )
         if validation.get("status") in {"blocked", "unsafe", "needs_clarification"}:
             return {
@@ -1431,8 +1431,8 @@ class ToolRegistry:
         revision_id = str(revision.get("id") or "")
         export_error: str = ""
         try:
-            rover = self._rover_snapshot(context)
-            gps = rover.get("gps") or {}
+            vehicle = self._vehicle_snapshot(context)
+            gps = vehicle.get("gps") or {}
             home: dict[str, float] | None = None
             if gps.get("lat") and gps.get("lon"):
                 home = {
@@ -1685,7 +1685,7 @@ def _snapshot_context(context_snapshot: dict[str, Any] | None) -> dict[str, Any]
     return snapshot if isinstance(snapshot, dict) else {}
 
 
-def _planner_draft_prompt(intent: dict, target_resolution: dict, rover_position: dict) -> str:
+def _planner_draft_prompt(intent: dict, target_resolution: dict, vehicle_position: dict) -> str:
     parts: list[str] = [
         f"Intent type: {intent.get('intent_type', 'unknown')}",
         f"Summary: {intent.get('summary', '')}",
@@ -1706,8 +1706,8 @@ def _planner_draft_prompt(intent: dict, target_resolution: dict, rover_position:
     missing = intent.get("missing_information") or []
     if missing:
         parts.append(f"Missing information (flag as assumption): {', '.join(str(m) for m in missing)}")
-    if rover_position:
-        parts.append(f"Current rover position: {json.dumps(rover_position)}")
+    if vehicle_position:
+        parts.append(f"Current vehicle position: {json.dumps(vehicle_position)}")
     return "\n".join(parts)
 
 
@@ -1757,20 +1757,20 @@ def _snapshot_user_id(context_snapshot: dict[str, Any] | None) -> str:
     return str(meta.get("user_id") or "").strip()
 
 
-def _has_pose_and_heading(rover: dict[str, Any]) -> bool:
-    if not _has_position(rover):
+def _has_pose_and_heading(vehicle: dict[str, Any]) -> bool:
+    if not _has_position(vehicle):
         return False
     try:
-        float(rover.get("heading_deg"))
+        float(vehicle.get("heading_deg"))
         return True
     except (TypeError, ValueError):
         return False
 
 
-def _has_position(rover: dict[str, Any]) -> bool:
-    if not isinstance(rover, dict):
+def _has_position(vehicle: dict[str, Any]) -> bool:
+    if not isinstance(vehicle, dict):
         return False
-    position = rover.get("position")
+    position = vehicle.get("position")
     if not isinstance(position, dict):
         return False
     try:
@@ -2036,11 +2036,11 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         next_tools=("query_settings", "query_ai_memory", "query_replay_sessions", "get_sensor_status"),
     ),
     _meta(
-        "get_current_rover_state",
-        "Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.",
+        "get_current_vehicle_state",
+        "Get the current vehicle telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded vehicle values and source session.",
         READ_ONLY,
-        ToolRegistry._get_current_rover_state,
-        surface="current_rover_state",
+        ToolRegistry._get_current_vehicle_state,
+        surface="current_vehicle_state",
         always_allowed=True,
         returns={
             "position": "object{x,y,z} | {}",
@@ -2097,20 +2097,20 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
             "limit": "integer",
         },
         required_inputs=("mode",),
-        upstream_from_tools=("get_current_rover_state (pose/heading/replay fallback)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"),
+        upstream_from_tools=("get_current_vehicle_state (pose/heading/replay fallback)", "operator-provided coordinates/heading", "get_scene_summary (kind discovery)"),
         returns={"available": "boolean", "objects": "object[]", "reason": "string?"},
         next_tools=("resolve_spatial_target",),
     ),
     _meta(
         "resolve_spatial_target",
-        "Resolve a spatial target against the current map and rover pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.",
+        "Resolve a spatial target against the current map and vehicle pose. Accepts either a target object (kind/side/max_distance_m/min_distance_m/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as 'nearest tree on the left'. If live telemetry is stale, it can use last_known_replay_state when available.",
         PLANNING,
         ToolRegistry._resolve_spatial_target,
         surface="terrain_scene",
         always_allowed=True,
         inputs={"target": "string | object{description,kind,side,min_distance_m,max_distance_m,relative_bearing_deg,position,coordinates,heading_deg}"},
         required_inputs=("target",),
-        upstream_from_tools=("get_current_rover_state", "operator-provided coordinates/heading", "get_scene_summary", "query_map_objects results"),
+        upstream_from_tools=("get_current_vehicle_state", "operator-provided coordinates/heading", "get_scene_summary", "query_map_objects results"),
         returns={"available": "boolean", "candidates": "object[]", "selected": "object|null", "needs_clarification": "boolean"},
     ),
     _meta(
@@ -2236,7 +2236,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         ToolRegistry._get_sensor_status,
         surface="video_perception",
         source_control="sensor_context",
-        upstream_from_tools=("get_current_rover_state",),
+        upstream_from_tools=("get_current_vehicle_state",),
         returns={"telemetry_fresh": "boolean", "camera_fresh": "boolean", "video": "object", "perception_available": "boolean"},
     ),
     _meta(
@@ -2251,14 +2251,14 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
     ),
     _meta(
         "plan_route_around_group",
-        "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the rover's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id. Next step is propose_mission_draft with these waypoints — it persists and exports the Mission. Does not upload to the flight controller.",
+        "Use when the operator asks the vehicle to traverse a named area — drive around a plantation, patrol a zone, or cover all roads in a group. Computes a route from the vehicle's current position to the group, traverses every road edge in the group at least once (Chinese-Postman), and returns to the start. Returns a compact route summary (waypoint_count, total_distance_m, legs) and the full waypoints list for the draft. NOTE: the returned route_hash is only a waypoint fingerprint, NOT a draft_id. Next step is propose_mission_draft with these waypoints — it persists and exports the Mission. Does not upload to the flight controller.",
         PLANNING,
         ToolRegistry._plan_route_around_group,
         surface="route_planning",
         always_allowed=True,
         inputs={"group_id": "string — one of known_groups; e.g. 'plant_a', 'plant_b', 'connector', 'building', 'start_hub'"},
         required_inputs=("group_id",),
-        upstream_from_tools=("get_current_rover_state (rover position for transit legs)", "get_scene_summary (to discover group names)"),
+        upstream_from_tools=("get_current_vehicle_state (vehicle position for transit legs)", "get_scene_summary (to discover group names)"),
         returns={"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "legs": "leg[]", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)", "known_groups": "string[]"},
         next_tools=("propose_mission_draft (with waypoints)",),
     ),
@@ -2269,9 +2269,9 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         ToolRegistry._plan_route_between,
         surface="route_planning",
         always_allowed=True,
-        inputs={"start_target": "string | object | null (null = rover current pose)", "goal_target": "string | object"},
+        inputs={"start_target": "string | object | null (null = vehicle current pose)", "goal_target": "string | object"},
         required_inputs=("goal_target",),
-        upstream_from_tools=("get_current_rover_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"),
+        upstream_from_tools=("get_current_vehicle_state (when start_target is null)", "resolve_spatial_target (to resolve start/goal targets)"),
         returns={"ok": "boolean", "waypoint_count": "integer", "total_distance_m": "number", "waypoints": "waypoint[]", "route_hash": "string (waypoint fingerprint, NOT a draft_id)"},
         next_tools=("propose_mission_draft (with waypoints)",),
     ),
@@ -2309,10 +2309,10 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
     ),
     # ── Planner loop tools (Phase 5) ──────────────────────────────────
     _meta(
-        "parse_rover_intent",
-        "Parse the operator's mission request into a structured RoverIntent. Call this first in the planner loop to extract intent_type, target, requested_actions, constraints, and missing_information. Pass the original user prompt and the compact context_summary from retrieve_initial_context.",
+        "parse_vehicle_intent",
+        "Parse the operator's mission request into a structured VehicleIntent. Call this first in the planner loop to extract intent_type, target, requested_actions, constraints, and missing_information. Pass the original user prompt and the compact context_summary from retrieve_initial_context.",
         READ_ONLY,
-        ToolRegistry._parse_rover_intent,
+        ToolRegistry._parse_vehicle_intent,
         always_allowed=True,
         inputs={
             "prompt": "string — original operator mission request",
@@ -2335,7 +2335,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         "Load the active replay session summary for the current request. Returns replay_summary with the most recent session metadata. Call this when the operator's request references prior missions, replay sessions, or recorded data. Available only when replay_reports source control is enabled.",
         READ_ONLY,
         ToolRegistry._lazy_load_replay,
-        upstream_from_tools=("source_controls.replay_reports", "parse_rover_intent (when the request references prior missions or recorded data)"),
+        upstream_from_tools=("source_controls.replay_reports", "parse_vehicle_intent (when the request references prior missions or recorded data)"),
         returns={"ok": "boolean", "replay_summary": "object", "available": "boolean"},
         next_tools=("propose_mission_draft",),
     ),
@@ -2344,7 +2344,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         "Load the AI chat history summary for the current session. Returns chat_history_summary with a bounded view of recent AI conversation context. Call this when the operator references earlier discussions or prior planning sessions.",
         READ_ONLY,
         ToolRegistry._lazy_load_ai_memory,
-        upstream_from_tools=("source_controls.ai_chat_history", "parse_rover_intent (when the request references earlier discussions)"),
+        upstream_from_tools=("source_controls.ai_chat_history", "parse_vehicle_intent (when the request references earlier discussions)"),
         returns={"ok": "boolean", "chat_history_summary": "object", "available": "boolean"},
         next_tools=("propose_mission_draft",),
     ),
@@ -2353,7 +2353,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         "Load the GCS settings summary for the current request. Returns settings_summary with safe configuration metadata. Call this when the operator references configuration, provider routing, or enabled capabilities.",
         READ_ONLY,
         ToolRegistry._lazy_load_settings,
-        upstream_from_tools=("source_controls.settings_config", "parse_rover_intent (when the request depends on configuration or provider routing)"),
+        upstream_from_tools=("source_controls.settings_config", "parse_vehicle_intent (when the request depends on configuration or provider routing)"),
         returns={"ok": "boolean", "settings_summary": "object", "available": "boolean"},
         next_tools=("propose_mission_draft",),
     ),
@@ -2362,7 +2362,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
         "Load sensor and telemetry freshness status. Returns telemetry_fresh and camera_fresh flags. Call this when the operator's request depends on live sensor availability or to flag staleness constraints in the mission draft.",
         READ_ONLY,
         ToolRegistry._lazy_load_sensor,
-        upstream_from_tools=("source_controls.sensor_context", "parse_rover_intent (when the request depends on live telemetry or camera freshness)"),
+        upstream_from_tools=("source_controls.sensor_context", "parse_vehicle_intent (when the request depends on live telemetry or camera freshness)"),
         returns={"ok": "boolean", "telemetry_fresh": "boolean | null", "camera_fresh": "boolean | null", "available": "boolean"},
         next_tools=("propose_mission_draft",),
     ),
@@ -2389,15 +2389,15 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
     ),
     _meta(
         "propose_mission_draft",
-        "Submit the final mission draft and create the operator-visible Mission. Terminal planning action — call after parse_rover_intent and optional route-planning tools. In Agent chat, success persists a durable Mission revision and flat Mission row, returning mission_id; the Mission then appears on the map and in the mission sidebar. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
+        "Submit the final mission draft and create the operator-visible Mission. Terminal planning action — call after parse_vehicle_intent and optional route-planning tools. In Agent chat, success persists a durable Mission revision and flat Mission row, returning mission_id; the Mission then appears on the map and in the mission sidebar. Provide a complete 'draft' object (goal, steps, constraints, assumptions, risks) to submit it directly — preferred when route-planning was done so waypoints are preserved. Omit 'draft' to have one generated from 'intent' and 'target_resolution'. Pass route tool outputs as 'route_artifacts' to attach them to the draft. For a structured mission — branching, retries, loops, or operator prompts — set the draft's 'tree' to a behavior tree: nested nodes of type 'sequence'/'fallback'/'loop'/'recovery' (each with 'children'), 'nav_leaf' (a 'waypoints' run that drives the vehicle), 'condition', and 'ask_operator'. Omit 'tree' for a plain linear mission (the flat 'waypoints' list still works). The draft always has execution_allowed=false and required_operator_approval=true. Set 'mission_edit_mode' to choose how the result lands in the operator's Mission list: 'create' (default) for a brand-new mission; 'clone_and_edit' when changing an existing mission — pass its id as 'source_mission_id' — which creates a NEW mission row so the original is preserved for side-by-side comparison (use this for almost all edits); 'edit_in_place' ONLY when the operator explicitly said to edit the existing mission in place — also pass 'source_mission_id', and it mutates that mission instead of cloning.",
         PLANNING,
         ToolRegistry._propose_mission_draft,
         is_terminal=True,
         always_allowed=True,
         inputs={
-            "intent": "object — from parse_rover_intent.intent",
+            "intent": "object — from parse_vehicle_intent.intent",
             "target_resolution": "object — from resolve_spatial_target (optional)",
-            "rover_position": "object — rover position override (optional)",
+            "vehicle_position": "object — vehicle position override (optional)",
             "draft": "object — complete draft to submit directly; preferred when route-planning was done (optional)",
             "route_artifacts": "object[] — route artifacts from plan_route_* tools (optional)",
             "parent_operation_id": "string — internal parent operation for an explicit in-place edit (optional)",
@@ -2405,7 +2405,7 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
             "source_mission_id": "string — existing flat Mission id for clone/edit operations (optional)",
         },
         required_inputs=("intent",),
-        upstream_from_tools=("parse_rover_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"),
+        upstream_from_tools=("parse_vehicle_intent", "resolve_spatial_target (optional)", "plan_route_around_group or plan_route_between (optional)"),
         returns={
             "ok": "boolean",
             "draft": "mission_draft",
@@ -2432,10 +2432,10 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
     # Autonomous binds execute_mission; cancel_execution/abort always bind.
     _meta(
         "arm_execution",
-        "Confirm-mode only: arm a Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the rover — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the rover is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
+        "Confirm-mode only: arm a Mission's behavior tree and request operator confirmation. Pass the flat Mission id as 'mission_id'. This does NOT start the vehicle — it opens a bounded confirm window; the run starts only when the operator confirms via the on-screen banner ([Play]) before it expires. Arming authorizes exactly one run. Use this when the operator has asked to run/play a mission and the system is in Confirm mode. Tell the operator the vehicle is awaiting their confirmation, not that it is running. 'cancel_execution' drops an armed/awaiting run; 'abort'/'cancel_execution' stop a run once started.",
         EXECUTION,
         ToolRegistry._arm_execution,
-        side_effects=frozenset({"drives_rover"}),
+        side_effects=frozenset({"drives_vehicle"}),
         inputs={"mission_id": "string — durable flat Mission id"},
         required_inputs=("mission_id",),
         upstream_from_tools=("propose_mission_draft or create_mission_from_waypoints (mission_id)",),
@@ -2444,10 +2444,10 @@ _TOOL_META: dict[str, ToolMeta] = {meta.name: meta for meta in [
     ),
     _meta(
         "execute_mission",
-        "Autonomous-mode only: run a Mission's behavior tree on the rover immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
+        "Autonomous-mode only: run a Mission's behavior tree on the vehicle immediately. Pass the flat Mission id as 'mission_id'. The behavior tree is flattened to navigable segments and driven through the controller adapter on the server. Returns once started; the run continues asynchronously and can be stopped with 'abort'/'cancel_execution'.",
         EXECUTION,
         ToolRegistry._execute_mission,
-        side_effects=frozenset({"drives_rover"}),
+        side_effects=frozenset({"drives_vehicle"}),
         inputs={"mission_id": "string — durable flat Mission id"},
         required_inputs=("mission_id",),
         upstream_from_tools=("propose_mission_draft or create_mission_from_waypoints (mission_id)",),

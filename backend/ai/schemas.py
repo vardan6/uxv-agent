@@ -35,7 +35,7 @@ def make_empty_intent() -> dict[str, Any]:
         },
         "requested_actions": [],
         "constraints": [],
-        "requires_rover_motion": False,
+        "requires_vehicle_motion": False,
         "requires_operator_approval": True,
         "missing_information": [],
         "confidence": 0.0,

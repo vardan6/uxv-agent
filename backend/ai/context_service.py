@@ -34,11 +34,11 @@ class AIContextService:
     ) -> AIContextSnapshot:
         clean_source_controls = normalize_source_controls(source_controls)
         providers = [
-            "get_current_rover_state",
+            "get_current_vehicle_state",
             "get_current_mission_state",
             "get_scene_summary",
         ]
-        rover = await self.get_current_rover_state()
+        vehicle = await self.get_current_vehicle_state()
         runtime = await self.get_runtime_context()
         settings: dict[str, Any] = {}
         llm: dict[str, Any] = {"session": {"id": session_id}}
@@ -62,13 +62,13 @@ class AIContextService:
                     scene_payload,
                     max_distance_m=max_distance,
                     fov_deg=fov,
-                    rover_state=rover,
+                    vehicle_state=vehicle,
                 )
                 providers.append("query_objects_in_front")
-            if "near" in lower and ("object" in lower or "rover" in lower):
+            if "near" in lower and ("object" in lower or "vehicle" in lower):
                 radius = _parse_radius_query(lower, default=50.0)
-                details["objects_near_rover"] = self._find_objects_near_rover_from_payload(
-                    scene_payload, radius_m=radius, rover_state=rover
+                details["objects_near_vehicle"] = self._find_objects_near_vehicle_from_payload(
+                    scene_payload, radius_m=radius, vehicle_state=vehicle
                 )
                 providers.append("query_objects_near")
             known_kinds = frozenset((scene.get("object_kinds") or {}).keys()) if scene.get("available") else None
@@ -93,7 +93,7 @@ class AIContextService:
 
         context = {
             "generated_at": time.time(),
-            "rover": rover,
+            "vehicle": vehicle,
             "runtime": runtime,
             "settings": settings,
             "llm": llm,
@@ -128,7 +128,7 @@ class AIContextService:
             },
         )
 
-    async def get_current_rover_state(self) -> dict[str, Any]:
+    async def get_current_vehicle_state(self) -> dict[str, Any]:
         snapshot = await self._runtime.state_store.snapshot()
         telemetry = snapshot.get("telemetry") or {}
         broker = snapshot.get("broker") or {}
@@ -147,7 +147,7 @@ class AIContextService:
             "last_camera_ts": broker.get("last_camera_ts") or 0.0,
             "camera_age_s": _age_seconds(broker.get("last_camera_ts")),
         }
-        last_known = self.get_last_known_rover_state()
+        last_known = self.get_last_known_vehicle_state()
         if last_known:
             current["last_known_replay_state"] = last_known
         return current
@@ -288,11 +288,11 @@ class AIContextService:
         scene: dict[str, Any] | None,
         max_distance_m: float = 100.0,
         fov_deg: float = 20.0,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._spatial.find_objects_in_front(
             scene,
-            rover_state or {},
+            vehicle_state or {},
             max_distance_m=max_distance_m,
             fov_deg=fov_deg,
         )
@@ -301,30 +301,30 @@ class AIContextService:
         self,
         max_distance_m: float = 100.0,
         fov_deg: float = 20.0,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._find_objects_in_front_from_payload(
             self.load_scene_payload(),
             max_distance_m=max_distance_m,
             fov_deg=fov_deg,
-            rover_state=rover_state,
+            vehicle_state=vehicle_state,
         )
 
-    def _find_objects_near_rover_from_payload(
+    def _find_objects_near_vehicle_from_payload(
         self,
         scene: dict[str, Any] | None,
         radius_m: float = 50.0,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._spatial.find_objects_near(scene, rover_state or {}, radius_m=radius_m)
+        return self._spatial.find_objects_near(scene, vehicle_state or {}, radius_m=radius_m)
 
-    def find_objects_near_rover(
+    def find_objects_near_vehicle(
         self,
         radius_m: float = 50.0,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._find_objects_near_rover_from_payload(
-            self.load_scene_payload(), radius_m=radius_m, rover_state=rover_state
+        return self._find_objects_near_vehicle_from_payload(
+            self.load_scene_payload(), radius_m=radius_m, vehicle_state=vehicle_state
         )
 
     def _find_objects_by_kind_from_payload(self, scene: dict[str, Any] | None, kind: str) -> dict[str, Any]:
@@ -338,11 +338,11 @@ class AIContextService:
         max_distance_m: float = 100.0,
         angle_width_deg: float = 90.0,
         kinds: list[str] | None = None,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._spatial.find_objects_to_left(
             self.load_scene_payload(),
-            rover_state or {},
+            vehicle_state or {},
             max_distance_m=max_distance_m,
             angle_width_deg=angle_width_deg,
             kinds=kinds,
@@ -353,11 +353,11 @@ class AIContextService:
         max_distance_m: float = 100.0,
         angle_width_deg: float = 90.0,
         kinds: list[str] | None = None,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._spatial.find_objects_to_right(
             self.load_scene_payload(),
-            rover_state or {},
+            vehicle_state or {},
             max_distance_m=max_distance_m,
             angle_width_deg=angle_width_deg,
             kinds=kinds,
@@ -368,18 +368,18 @@ class AIContextService:
         limit: int = 5,
         max_distance_m: float | None = None,
         kinds: list[str] | None = None,
-        rover_state: dict[str, Any] | None = None,
+        vehicle_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._spatial.find_nearest_objects(
             self.load_scene_payload(),
-            rover_state or {},
+            vehicle_state or {},
             limit=limit,
             max_distance_m=max_distance_m,
             kinds=kinds,
         )
 
-    def resolve_target_description(self, target: dict[str, Any], rover_state: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._spatial.resolve_target_description(self.load_scene_payload(), rover_state or {}, target)
+    def resolve_target_description(self, target: dict[str, Any], vehicle_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._spatial.resolve_target_description(self.load_scene_payload(), vehicle_state or {}, target)
 
     def get_current_replay_summary(self) -> dict[str, Any]:
         current_id = self._runtime.replay_store.current_session_id
@@ -391,7 +391,7 @@ class AIContextService:
     def get_recent_telemetry(self, seconds: int = 120, limit: int = 20) -> list[dict[str, Any]]:
         return self._runtime.replay_store.get_recent_telemetry(seconds=seconds, limit=limit)
 
-    def get_last_known_rover_state(self) -> dict[str, Any] | None:
+    def get_last_known_vehicle_state(self) -> dict[str, Any] | None:
         analytics = getattr(self._runtime, "replay_analytics", None)
         if analytics is None:
             return None
@@ -678,7 +678,7 @@ def _apply_context_budget(
       Phase 1 — drop non-relevant always-on background sections first.
       Phase 2 — trim large triggered detail sections (preserve, reduce size).
       Phase 3 — last resort: drop triggered detail sections.
-    rover and mission are never touched.
+    vehicle and mission are never touched.
     """
     if _estimate_chars(context) <= max_chars:
         return context, []
@@ -687,7 +687,7 @@ def _apply_context_budget(
     dropped: list[str] = []
 
     # Phase 1: drop background sections the message doesn't reference.
-    # Settings/LLM are less useful than scene facts for rover-operation prompts,
+    # Settings/LLM are less useful than scene facts for vehicle-operation prompts,
     # so shed them first when the prompt does not explicitly ask for them.
     for key, keywords in (
         ("settings", _SETTINGS_KEYWORDS),
@@ -721,7 +721,7 @@ def _apply_context_budget(
                     return ctx, dropped
 
         # object query results → top 10 by distance (already sorted)
-        for obj_key in ("objects_in_front", "objects_near_rover", "objects_by_kind"):
+        for obj_key in ("objects_in_front", "objects_near_vehicle", "objects_by_kind"):
             if obj_key in details:
                 details[obj_key] = _trim_objects_list(details[obj_key], max_objects=10)
         if _estimate_chars(ctx) <= max_chars:
@@ -757,7 +757,7 @@ def _apply_context_budget(
             "current_replay",
             "ai_chat_history",
             "objects_by_kind",
-            "objects_near_rover",
+            "objects_near_vehicle",
             "objects_in_front",
         ):
             if _estimate_chars(ctx) <= max_chars:

@@ -8,7 +8,7 @@ def test_planner_loop_tools_have_applied_contracts() -> None:
     definitions = {definition.name: definition for definition in registry.definitions()}
 
     expected_tools = {
-        "parse_rover_intent",
+        "parse_vehicle_intent",
         "lazy_load_replay",
         "lazy_load_ai_memory",
         "lazy_load_settings",

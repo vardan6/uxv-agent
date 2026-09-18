@@ -68,14 +68,14 @@ const AI_SOURCE_CONTROL_META = {
 };
 
 const AI_CONTEXT_PROVIDER_META = {
-  get_current_rover_state: 'Current rover state snapshot',
+  get_current_vehicle_state: 'Current vehicle state snapshot',
   get_runtime_context: 'Runtime status and environment context',
   get_settings_context: 'Settings/config summary',
   get_llm_context: 'LLM provider and routing context',
   get_current_mission_state: 'Current mission state',
   get_scene_summary: 'Scene/map summary',
-  query_objects_in_front: 'Objects in front of the rover',
-  query_objects_near: 'Objects near the rover',
+  query_objects_in_front: 'Objects in front of the vehicle',
+  query_objects_near: 'Objects near the vehicle',
   query_objects_by_kind: 'Objects filtered by kind',
   get_current_replay_summary: 'Current replay summary',
   get_recent_telemetry: 'Recent telemetry window',
@@ -85,7 +85,7 @@ const AI_CONTEXT_PROVIDER_META = {
 
 const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'list_data_surfaces',
-  'get_current_rover_state',
+  'get_current_vehicle_state',
   'get_scene_summary',
   'query_map_objects',
   'resolve_spatial_target',
@@ -94,7 +94,7 @@ const AI_ALWAYS_ALLOWED_TOOL_NAMES = new Set([
   'plan_route_between',
   'generate_pattern_subtree',
   'set_mission_geofence',
-  'parse_rover_intent',
+  'parse_vehicle_intent',
   'create_mission_from_waypoints',
   'propose_mission_draft',
   'resolve_mission_reference',
@@ -157,9 +157,9 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'List every bounded data surface available to this session, show which source controls currently enable them, and identify the exact tools that can load each surface. Call this first when you need to discover where replay history, AI chat history, settings/config, or sensor metadata can be retrieved from.',
   },
   {
-    name: 'get_current_rover_state',
+    name: 'get_current_vehicle_state',
     permission: 'read_only',
-    description: 'Get the current rover telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded rover values and source session.',
+    description: 'Get the current vehicle telemetry snapshot captured for this request, including pose, heading, freshness, battery, speed, and camera state. If live telemetry is stale or unavailable, inspect last_known_replay_state for the latest recorded vehicle values and source session.',
   },
   {
     name: 'get_scene_summary',
@@ -174,7 +174,7 @@ const AI_AGENT_TOOL_DEFINITIONS = [
   {
     name: 'resolve_spatial_target',
     permission: 'planning',
-    description: 'Resolve a spatial target against the current map and rover pose. Accepts a target object (kind/side/distance/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as "nearest tree on the left". Can use last_known_replay_state when live telemetry is stale.',
+    description: 'Resolve a spatial target against the current map and vehicle pose. Accepts a target object (kind/side/distance/relative_bearing_deg and optional position/coordinates/heading_deg) or a plain-language string such as "nearest tree on the left". Can use last_known_replay_state when live telemetry is stale.',
   },
   {
     name: 'get_current_mission_state',
@@ -184,7 +184,7 @@ const AI_AGENT_TOOL_DEFINITIONS = [
   {
     name: 'plan_route_around_group',
     permission: 'planning',
-    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the rover and back. Returns a route summary and waypoints. Next step is propose_mission_draft, which persists and exports the Mission. Does not upload.',
+    description: 'Compute a route that traverses every road in a named group (Chinese-Postman) from the vehicle and back. Returns a route summary and waypoints. Next step is propose_mission_draft, which persists and exports the Mission. Does not upload.',
   },
   {
     name: 'plan_route_between',
@@ -202,7 +202,7 @@ const AI_AGENT_TOOL_DEFINITIONS = [
     description: 'Set or clear an inclusion geofence on an existing Mission by mission_id. Pass a polygon of WGS84 vertices, optional rally_points and alt bounds, or clear=true to remove. Appends an approval-required revision; the fence uploads to the FC when the mission is armed/executed.',
   },
   {
-    name: 'parse_rover_intent',
+    name: 'parse_vehicle_intent',
     permission: 'read_only',
     description: 'Parse an operator mission request into structured intent before route planning and Mission creation.',
   },
@@ -1213,7 +1213,7 @@ function renderIntentPanel(message) {
   const intentType = escapeHtml(intent.intent_type || 'unknown');
   const summary = escapeHtml(intent.summary || '');
   const confidence = Number.isFinite(intent.confidence) ? `${Math.round(intent.confidence * 100)}%` : '—';
-  const requiresMotion = intent.requires_rover_motion ? 'Yes — execution approval still required' : 'No';
+  const requiresMotion = intent.requires_vehicle_motion ? 'Yes — execution approval still required' : 'No';
 
   const target = intent.target || {};
   const targetParts = [
@@ -1243,14 +1243,14 @@ function renderIntentPanel(message) {
     }).join('');
     candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Candidates</span><ul class="ai-intent-candidates">${items}</ul></div>`;
   } else if (resolution.available === false) {
-    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Rover pose or scene unavailable</span></div>`;
+    candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Vehicle pose or scene unavailable</span></div>`;
   } else if (resolution.needs_clarification) {
     candidateRows = `<div class="ai-intent-row"><span class="ai-intent-label">Target</span><span class="ai-intent-value ai-intent-warn">Needs clarification</span></div>`;
   }
 
   return `
-    <div class="ai-intent-panel" aria-label="Parsed rover intent">
-      <div class="ai-intent-title">Rover intent</div>
+    <div class="ai-intent-panel" aria-label="Parsed vehicle intent">
+      <div class="ai-intent-title">Vehicle intent</div>
       <div class="ai-intent-row"><span class="ai-intent-label">Type</span><span class="ai-intent-value">${intentType}</span></div>
       ${summary ? `<div class="ai-intent-row"><span class="ai-intent-label">Summary</span><span class="ai-intent-value">${summary}</span></div>` : ''}
       <div class="ai-intent-row"><span class="ai-intent-label">Confidence</span><span class="ai-intent-value">${confidence}</span></div>
@@ -1871,7 +1871,7 @@ function renderRunModeToggle() {
     button.disabled = isSending() || Boolean(aiState.activeSession?.archived_at);
     if (buttonRunMode === 'agent') {
       const title = agentSupported
-        ? 'Use rover inspection and mission-planning tools when the provider supports tool calling'
+        ? 'Use vehicle inspection and mission-planning tools when the provider supports tool calling'
         : 'This provider may fall back to plain agent chat without tool calls';
       button.title = title;
       button.setAttribute('aria-label', title);
@@ -2358,7 +2358,7 @@ function renderMessages(options = {}) {
   aiEls.messageInput.placeholder = viewingArchived
     ? 'Restore this archived chat to continue messaging'
     : currentRunMode() === 'agent'
-      ? 'Ask the read-only rover agent'
+      ? 'Ask the read-only vehicle agent'
       : 'Ask the configured General Chat provider';
   aiEls.showArchived.setAttribute('aria-pressed', aiState.showArchived ? 'true' : 'false');
   aiEls.showActive.setAttribute('aria-pressed', aiState.showArchived ? 'false' : 'true');
@@ -3234,7 +3234,7 @@ async function sendMessage(event) {
   renderMessages();
   setAiStatus(
     isSessionCommand ? `Running ${slash.command}...`
-    : runMode === 'agent' ? 'Agent is checking rover context.'
+    : runMode === 'agent' ? 'Agent is checking vehicle context.'
     : 'Waiting for model response.'
   );
 

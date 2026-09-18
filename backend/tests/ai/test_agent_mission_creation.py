@@ -49,7 +49,7 @@ def _draft() -> dict:
 def test_agent_mode_exposes_mission_creation_tools() -> None:
     allowed = allowed_tool_names_for_source_controls({})
 
-    assert "parse_rover_intent" in allowed
+    assert "parse_vehicle_intent" in allowed
     assert "create_mission_from_waypoints" in allowed
     assert "propose_mission_draft" in allowed
     assert "resolve_mission_reference" in allowed
@@ -71,7 +71,7 @@ def test_agent_proposal_creates_durable_mission_and_revision(tmp_path) -> None:
 
     result = ToolRegistry()._propose_mission_draft(
         _context(runtime, run_mode="agent"),
-        intent={"intent_type": "navigate", "requires_rover_motion": False},
+        intent={"intent_type": "navigate", "requires_vehicle_motion": False},
         draft=_draft(),
     )
 

@@ -25,7 +25,7 @@ class IntentService:
         context_summary: str = "",
         timezone_name: str = "",
     ) -> dict[str, Any]:
-        """Parse a rover prompt into a structured intent dict.
+        """Parse a vehicle prompt into a structured intent dict.
 
         Returns a dict with: intent, parse_errors, provider_name, latency_ms.
         """
@@ -153,7 +153,7 @@ def _parse_intent_json(text: str) -> tuple[dict[str, Any], list[str]]:
 
 
 def _coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
-    """Coerce a parsed dict into a complete RoverIntent-shaped dict."""
+    """Coerce a parsed dict into a complete VehicleIntent-shaped dict."""
     base = make_empty_intent()
     for key in list(base.keys()):
         if key == "target":

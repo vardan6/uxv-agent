@@ -18,7 +18,7 @@ def _base_intent(requires_motion: bool = False, with_target: bool = False) -> di
         "area": {"description": None, "radius_m": None},
         "requested_actions": ["navigate"] if requires_motion else ["report"],
         "constraints": [],
-        "requires_rover_motion": requires_motion,
+        "requires_vehicle_motion": requires_motion,
         "requires_operator_approval": True,
         "missing_information": [],
         "confidence": 0.9,
@@ -90,15 +90,15 @@ class TestValidateDraftPayload:
 
     def test_stale_telemetry_produces_warning_for_motion(self):
         intent = _base_intent(requires_motion=True, with_target=True)
-        rover_state = {"freshness_seconds": 120.0}
-        result = validate_draft_payload(intent, _resolved_target(), _base_draft(), rover_state)
+        vehicle_state = {"freshness_seconds": 120.0}
+        result = validate_draft_payload(intent, _resolved_target(), _base_draft(), vehicle_state)
         assert result["status"] == "warning"
         assert any("stale" in w for w in result["warnings"])
 
     def test_fresh_telemetry_no_warning(self):
         intent = _base_intent(requires_motion=True, with_target=True)
-        rover_state = {"freshness_seconds": 1.5}
-        result = validate_draft_payload(intent, _resolved_target(), _base_draft(), rover_state)
+        vehicle_state = {"freshness_seconds": 1.5}
+        result = validate_draft_payload(intent, _resolved_target(), _base_draft(), vehicle_state)
         assert result["status"] in ("valid",)
         assert result["warnings"] == []
 

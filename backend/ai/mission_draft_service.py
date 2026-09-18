@@ -12,7 +12,7 @@ def validate_draft_payload(
     intent: dict[str, Any],
     target_resolution: dict[str, Any],
     draft_payload: dict[str, Any],
-    rover_state: dict[str, Any] | None = None,
+    vehicle_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic validation of a mission draft.
 
@@ -40,36 +40,36 @@ def validate_draft_payload(
             if field in step:
                 blockers.append(f"draft step contains disallowed execution field: '{field}'")
 
-    # require operator approval for rover motion
-    if intent.get("requires_rover_motion") and not draft_payload.get("required_operator_approval", True):
-        blockers.append("required_operator_approval must be true when rover motion is involved")
+    # require operator approval for vehicle motion
+    if intent.get("requires_vehicle_motion") and not draft_payload.get("required_operator_approval", True):
+        blockers.append("required_operator_approval must be true when vehicle motion is involved")
 
     # spatial navigation requires resolved target
-    requires_motion = bool(intent.get("requires_rover_motion"))
+    requires_motion = bool(intent.get("requires_vehicle_motion"))
     has_spatial_target = _has_spatial_target(intent)
     if requires_motion and has_spatial_target:
         resolved = _target_resolved(target_resolution)
         if resolved == "blocked":
-            blockers.append("spatial navigation requires a resolved target; scene or rover pose unavailable")
+            blockers.append("spatial navigation requires a resolved target; scene or vehicle pose unavailable")
         elif resolved == "ambiguous":
             notes.append("spatial target is ambiguous; clarification may be needed")
             if not blockers:
                 return _validation_result("needs_clarification", blockers, warnings, notes)
 
     # stale telemetry check
-    if rover_state is not None:
-        freshness = rover_state.get("freshness_seconds")
+    if vehicle_state is not None:
+        freshness = vehicle_state.get("freshness_seconds")
         if freshness is None:
             if requires_motion:
-                warnings.append("rover telemetry freshness is unknown; draft risk elevated for motion tasks")
+                warnings.append("vehicle telemetry freshness is unknown; draft risk elevated for motion tasks")
         elif float(freshness) > _TELEMETRY_STALE_SECONDS:
             if requires_motion:
                 warnings.append(
-                    f"rover telemetry is stale ({freshness:.0f}s old); "
-                    "draft requires fresh rover pose before execution can be considered"
+                    f"vehicle telemetry is stale ({freshness:.0f}s old); "
+                    "draft requires fresh vehicle pose before execution can be considered"
                 )
             else:
-                notes.append(f"rover telemetry is stale ({freshness:.0f}s old)")
+                notes.append(f"vehicle telemetry is stale ({freshness:.0f}s old)")
 
     # unavailable scene data is a blocker for spatial missions
     if requires_motion and has_spatial_target:

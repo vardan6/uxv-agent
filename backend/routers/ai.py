@@ -66,14 +66,14 @@ _AI_SOURCE_CONTROL_LABELS = {
 }
 
 _AI_CONTEXT_PROVIDER_LABELS = {
-    "get_current_rover_state": "Current rover state snapshot",
+    "get_current_vehicle_state": "Current vehicle state snapshot",
     "get_runtime_context": "Runtime status and environment context",
     "get_settings_context": "Settings/config summary",
     "get_llm_context": "LLM provider and routing context",
     "get_current_mission_state": "Current mission state",
     "get_scene_summary": "Scene/map summary",
-    "query_objects_in_front": "Objects in front of the rover",
-    "query_objects_near": "Objects near the rover",
+    "query_objects_in_front": "Objects in front of the vehicle",
+    "query_objects_near": "Objects near the vehicle",
     "query_objects_by_kind": "Objects filtered by kind",
     "get_current_replay_summary": "Current replay summary",
     "get_recent_telemetry": "Recent telemetry window",
@@ -542,7 +542,7 @@ async def _ai_context_snapshot(
     replay_summary = details.get("current_replay") if isinstance(details, dict) else {}
     chat_history_summary = details.get("ai_chat_history") if isinstance(details, dict) else {}
     settings_summary = (full_ctx or {}).get("settings") if isinstance(full_ctx, dict) else {}
-    rover_state = (full_ctx or {}).get("rover") if isinstance(full_ctx, dict) else {}
+    vehicle_state = (full_ctx or {}).get("vehicle") if isinstance(full_ctx, dict) else {}
     runtime_summary = (full_ctx or {}).get("runtime") if isinstance(full_ctx, dict) else {}
     retrieval_request = normalize_retrieval_request(
         {"source_controls": source_controls},
@@ -550,8 +550,8 @@ async def _ai_context_snapshot(
         session_id=session_id,
     )
     sensor_summary = {
-        "telemetry_fresh": (rover_state or {}).get("telemetry_fresh"),
-        "camera_fresh": (rover_state or {}).get("camera_fresh"),
+        "telemetry_fresh": (vehicle_state or {}).get("telemetry_fresh"),
+        "camera_fresh": (vehicle_state or {}).get("camera_fresh"),
         "video_delivery": (runtime_summary or {}).get("video"),
     }
     retrieved_sources = build_retrieved_sources(
@@ -609,7 +609,7 @@ def _payload_or_latest_user_run_mode(payload: dict[str, Any], messages: list[dic
 
 def _ai_run_mode(payload: dict[str, Any]) -> str:
     clean = str(payload.get("run_mode", "chat")).strip().lower()
-    if clean in {"", "chat", "general_chat", "intent", "rover_intent_test"}:
+    if clean in {"", "chat", "general_chat", "intent", "vehicle_intent_test"}:
         return "chat"
     if clean in {"agent", "planning_shell"}:
         return "agent"

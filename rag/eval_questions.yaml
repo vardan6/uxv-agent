@@ -53,7 +53,7 @@ retrieval:
       - docs/components/ai-agent/design/token-efficiency.md
 
   - id: intent-parsing
-    question: How does the agent parse a rover intent from an operator request?
+    question: How does the agent parse a vehicle intent from an operator request?
     expected_sources:
       - docs/components/ai-agent/design/intent-parsing.md
 
@@ -68,7 +68,7 @@ retrieval:
       - docs/components/gcs/design/map-widget.md
 
   - id: rag-deferred-live-state
-    question: Why was RAG deferred for live rover state?
+    question: Why was RAG deferred for live vehicle state?
     expected_sources:
       - docs/cross-cutting/decisions/0007-rag-later-not-now-for-live-state.md
       - docs/cross-cutting/decisions/0003-rag-scope-vs-live-context.md
@@ -87,10 +87,10 @@ retrieval:
 # tool sequence still fires.
 # ---------------------------------------------------------------------------
 tool_trajectories:
-  - id: rover-where
-    prompt: where is the rover?
+  - id: vehicle-where
+    prompt: where is the vehicle?
     expected_tools:
-      - get_current_rover_state
+      - get_current_vehicle_state
 
   - id: mission-status
     prompt: what missions are running?

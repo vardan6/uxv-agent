@@ -33,14 +33,14 @@ class SpatialQueryService:
     def find_objects_in_front(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         max_distance_m: float = 100.0,
         fov_deg: float = 20.0,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
         return self.find_objects_in_sector(
             scene,
-            rover_state,
+            vehicle_state,
             center_relative_bearing_deg=0.0,
             fov_deg=fov_deg,
             max_distance_m=max_distance_m,
@@ -50,13 +50,13 @@ class SpatialQueryService:
     def find_objects_near(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         radius_m: float = 50.0,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        pose = _rover_position(rover_state)
+        pose = _vehicle_position(vehicle_state)
         if pose is None:
-            return {"available": False, "reason": "rover position is unavailable"}
+            return {"available": False, "reason": "vehicle position is unavailable"}
         radius = max(0.0, _float(radius_m, 50.0))
         matches = [
             _object_hit(obj, pose)
@@ -67,7 +67,7 @@ class SpatialQueryService:
         return {
             "available": True,
             "query": {"radius_m": radius, "kinds": _clean_kinds(kinds)},
-            "rover_pose": pose,
+            "vehicle_pose": pose,
             "objects": matches,
         }
 
@@ -79,34 +79,34 @@ class SpatialQueryService:
     def find_objects_to_left(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         max_distance_m: float = 100.0,
         angle_width_deg: float = 90.0,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        return self.find_objects_in_sector(scene, rover_state, -90.0, angle_width_deg, max_distance_m, kinds)
+        return self.find_objects_in_sector(scene, vehicle_state, -90.0, angle_width_deg, max_distance_m, kinds)
 
     def find_objects_to_right(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         max_distance_m: float = 100.0,
         angle_width_deg: float = 90.0,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        return self.find_objects_in_sector(scene, rover_state, 90.0, angle_width_deg, max_distance_m, kinds)
+        return self.find_objects_in_sector(scene, vehicle_state, 90.0, angle_width_deg, max_distance_m, kinds)
 
     def find_nearest_objects(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         limit: int = 5,
         max_distance_m: float | None = None,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        pose = _rover_position(rover_state)
+        pose = _vehicle_position(vehicle_state)
         if pose is None:
-            return {"available": False, "reason": "rover position is unavailable"}
+            return {"available": False, "reason": "vehicle position is unavailable"}
         max_distance = None if max_distance_m is None else max(0.0, _float(max_distance_m, 0.0))
         matches = []
         for obj in _objects(scene):
@@ -120,22 +120,22 @@ class SpatialQueryService:
         return {
             "available": True,
             "query": {"limit": count, "max_distance_m": max_distance, "kinds": _clean_kinds(kinds)},
-            "rover_pose": pose,
+            "vehicle_pose": pose,
             "objects": matches[:count],
         }
 
     def find_objects_in_sector(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         center_relative_bearing_deg: float,
         fov_deg: float,
         max_distance_m: float,
         kinds: list[str] | None = None,
     ) -> dict[str, Any]:
-        pose = _rover_pose(rover_state)
+        pose = _vehicle_pose(vehicle_state)
         if pose is None:
-            return {"available": False, "reason": "rover pose or heading is unavailable"}
+            return {"available": False, "reason": "vehicle pose or heading is unavailable"}
         center = _float(center_relative_bearing_deg, 0.0)
         half_fov = max(0.0, _float(fov_deg, 20.0)) / 2.0
         max_distance = max(0.0, _float(max_distance_m, 100.0))
@@ -157,14 +157,14 @@ class SpatialQueryService:
                 "max_distance_m": max_distance,
                 "kinds": _clean_kinds(kinds),
             },
-            "rover_pose": pose,
+            "vehicle_pose": pose,
             "objects": matches,
         }
 
     def resolve_target_description(
         self,
         scene: dict[str, Any] | None,
-        rover_state: dict[str, Any],
+        vehicle_state: dict[str, Any],
         target: dict[str, Any],
     ) -> dict[str, Any]:
         clean_target = dict(target or {})
@@ -173,22 +173,22 @@ class SpatialQueryService:
         max_distance_m = _float(max_distance, 100.0) if max_distance is not None else 100.0
         side = str(clean_target.get("side") or "").strip().lower()
         if side == "front":
-            result = self.find_objects_in_front(scene, rover_state, max_distance_m=max_distance_m, kinds=kinds)
+            result = self.find_objects_in_front(scene, vehicle_state, max_distance_m=max_distance_m, kinds=kinds)
         elif side == "left":
-            result = self.find_objects_to_left(scene, rover_state, max_distance_m=max_distance_m, kinds=kinds)
+            result = self.find_objects_to_left(scene, vehicle_state, max_distance_m=max_distance_m, kinds=kinds)
         elif side == "right":
-            result = self.find_objects_to_right(scene, rover_state, max_distance_m=max_distance_m, kinds=kinds)
+            result = self.find_objects_to_right(scene, vehicle_state, max_distance_m=max_distance_m, kinds=kinds)
         elif clean_target.get("relative_bearing_deg") is not None:
             result = self.find_objects_in_sector(
                 scene,
-                rover_state,
+                vehicle_state,
                 center_relative_bearing_deg=_float(clean_target.get("relative_bearing_deg"), 0.0),
                 fov_deg=30.0,
                 max_distance_m=max_distance_m,
                 kinds=kinds,
             )
         else:
-            result = self.find_nearest_objects(scene, rover_state, limit=5, max_distance_m=max_distance_m, kinds=kinds)
+            result = self.find_nearest_objects(scene, vehicle_state, limit=5, max_distance_m=max_distance_m, kinds=kinds)
 
         min_distance = clean_target.get("min_distance_m")
         if min_distance is not None and isinstance(result.get("objects"), list):
@@ -213,11 +213,11 @@ def _objects(scene: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [obj for obj in list(scene.get("objects") or []) if isinstance(obj, dict)]
 
 
-def _rover_pose(rover: dict[str, Any] | None) -> dict[str, float] | None:
-    pose = _rover_position(rover)
+def _vehicle_pose(vehicle: dict[str, Any] | None) -> dict[str, float] | None:
+    pose = _vehicle_position(vehicle)
     if pose is None:
         return None
-    heading_raw = rover.get("heading_deg")
+    heading_raw = vehicle.get("heading_deg")
     if heading_raw is None:
         return None
     try:
@@ -227,10 +227,10 @@ def _rover_pose(rover: dict[str, Any] | None) -> dict[str, float] | None:
     return {**pose, "heading_deg": heading}
 
 
-def _rover_position(rover: dict[str, Any] | None) -> dict[str, float] | None:
-    if not isinstance(rover, dict):
+def _vehicle_position(vehicle: dict[str, Any] | None) -> dict[str, float] | None:
+    if not isinstance(vehicle, dict):
         return None
-    pos = rover.get("position") or {}
+    pos = vehicle.get("position") or {}
     try:
         x = float(pos["x"])
         y = float(pos["y"])
