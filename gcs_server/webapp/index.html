@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Remote Rover — Operator Console</title>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("gcs-theme-mode");
+          var l = localStorage.getItem("gcs-theme-light");
+          var d = localStorage.getItem("gcs-theme-dark");
+          var modes = ["system", "light", "dark"];
+          var lights = ["vscode-light", "quiet-light", "cool-light", "sandstone-light"];
+          var darks = ["vscode-dark", "graphite-dark", "midnight-dark", "deep-forest-dark"];
+          var mode = modes.indexOf(m) !== -1 ? m : "system";
+          var light = lights.indexOf(l) !== -1 ? l : "vscode-light";
+          var dark = darks.indexOf(d) !== -1 ? d : "vscode-dark";
+          var resolved =
+            mode === "system"
+              ? window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : mode;
+          var theme = resolved === "dark" ? dark : light;
+          var h = document.documentElement;
+          h.dataset.themeMode = mode;
+          h.dataset.colorMode = resolved;
+          h.dataset.theme = theme;
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/app/assets/index-CXZR-4gx.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index-NkEncv3Q.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
