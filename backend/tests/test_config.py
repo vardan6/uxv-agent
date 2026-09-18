@@ -55,6 +55,15 @@ def test_legacy_routing_purpose_loses_to_the_new_name_when_both_are_set() -> Non
     assert raw["model_routing"] == {"vehicle_intent_parser": new}
 
 
+def test_legacy_availability_policy_is_read_under_its_new_name() -> None:
+    policy = {"connected_threshold_seconds": 5, "unavailable_threshold_seconds": 30}
+    raw = {"mqtt": {"host": "localhost", "rover_availability": policy}}
+
+    _migrate_legacy_config_keys(raw)
+
+    assert raw["mqtt"] == {"host": "localhost", "vehicle_availability": policy}
+
+
 def test_config_without_the_legacy_routing_purpose_is_untouched() -> None:
     raw = {"model_routing": {"general_chat": {}}}
 

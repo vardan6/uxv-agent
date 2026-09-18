@@ -44,7 +44,7 @@ from backend.routers import mission_lifecycle as mission_lifecycle_router_module
 from backend.routers import operational_constraints as operational_constraints_router_module
 from backend.routers import rag as rag_router_module
 from backend.routers.ai import AIInflightStreamManager
-from backend.routers.device_config import _rover_availability_policy
+from backend.routers.device_config import _vehicle_availability_policy
 from backend.mavlink_telemetry import MavlinkTelemetryBridge
 from backend.routers.llm import _repair_stored_secret_refs
 
@@ -252,7 +252,7 @@ async def snapshot(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     data = await runtime.state_store.snapshot()
     data["simulation"] = runtime.config.simulation
-    data["rover_availability"] = _rover_availability_policy(runtime.config)
+    data["vehicle_availability"] = _vehicle_availability_policy(runtime.config)
     return data
 
 
@@ -272,7 +272,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await runtime.mqtt_runtime.publish_presence_snapshot()
     snapshot = await runtime.state_store.snapshot()
     snapshot["simulation"] = runtime.config.simulation
-    snapshot["rover_availability"] = _rover_availability_policy(runtime.config)
+    snapshot["vehicle_availability"] = _vehicle_availability_policy(runtime.config)
     await runtime.ws_manager.send(client_id, {
         "type": "snapshot",
         "client_id": client_id,

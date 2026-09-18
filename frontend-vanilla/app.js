@@ -7,7 +7,7 @@ const state = {
   lastTelemetryTs: 0,
   latestTelemetry: {},
   simulation: {},
-  roverAvailability: {
+  vehicleAvailability: {
     connectedThresholdSeconds: 2,
     unavailableThresholdSeconds: 60,
   },
@@ -216,8 +216,8 @@ function renderVehicleIndicator() {
     return;
   }
   const ageSeconds = Math.max(0, Math.floor((Date.now() - (state.lastTelemetryTs * 1000)) / 1000));
-  const connectedThreshold = state.roverAvailability.connectedThresholdSeconds;
-  const unavailableThreshold = state.roverAvailability.unavailableThresholdSeconds;
+  const connectedThreshold = state.vehicleAvailability.connectedThresholdSeconds;
+  const unavailableThreshold = state.vehicleAvailability.unavailableThresholdSeconds;
   if (ageSeconds < connectedThreshold) {
     setPillState(els.vehiclePill, 'Connected', 'ok');
     return;
@@ -229,7 +229,7 @@ function renderVehicleIndicator() {
   setPillState(els.vehiclePill, 'Unavailable', 'danger');
 }
 
-function updateRoverAvailabilityPolicy(policy = {}) {
+function updateVehicleAvailabilityPolicy(policy = {}) {
   const connectedRaw = Number.parseInt(policy.connected_threshold_seconds, 10);
   const unavailableRaw = Number.parseInt(policy.unavailable_threshold_seconds, 10);
   const connectedThreshold = Number.isFinite(connectedRaw) ? Math.max(0, connectedRaw) : 2;
@@ -237,7 +237,7 @@ function updateRoverAvailabilityPolicy(policy = {}) {
   if (unavailableThreshold < connectedThreshold) {
     unavailableThreshold = connectedThreshold;
   }
-  state.roverAvailability = {
+  state.vehicleAvailability = {
     connectedThresholdSeconds: connectedThreshold,
     unavailableThresholdSeconds: unavailableThreshold,
   };
@@ -656,7 +656,7 @@ function initDashboard() {
 async function loadSnapshot() {
   const response = await fetch('/api/snapshot');
   const snapshot = await response.json();
-  updateRoverAvailabilityPolicy(snapshot.rover_availability || {});
+  updateVehicleAvailabilityPolicy(snapshot.vehicle_availability || {});
   updateBrokerPill(snapshot.broker);
   updateController(snapshot.controller);
   updateTelemetry(snapshot.telemetry);
@@ -679,7 +679,7 @@ function connectSocket() {
   state.socket.addEventListener('message', (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'snapshot') {
-      updateRoverAvailabilityPolicy(msg.data.rover_availability || {});
+      updateVehicleAvailabilityPolicy(msg.data.vehicle_availability || {});
       updateBrokerPill(msg.data.broker);
       updateController(msg.data.controller);
       updateTelemetry(msg.data.telemetry);

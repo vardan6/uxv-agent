@@ -28,8 +28,8 @@ def _parse_int_field(value: Any, name: str) -> int:
         raise HTTPException(status_code=400, detail=f"{name} must be an integer") from exc
 
 
-def _rover_availability_policy_from_mqtt(mqtt: dict[str, Any] | None) -> dict[str, Any]:
-    raw_policy = mqtt.get("rover_availability", {}) if isinstance(mqtt, dict) else {}
+def _vehicle_availability_policy_from_mqtt(mqtt: dict[str, Any] | None) -> dict[str, Any]:
+    raw_policy = mqtt.get("vehicle_availability", {}) if isinstance(mqtt, dict) else {}
     policy = raw_policy if isinstance(raw_policy, dict) else {}
     connected = policy.get("connected_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["connected_threshold_seconds"])
     unavailable = policy.get("unavailable_threshold_seconds", DEFAULT_ROVER_AVAILABILITY_POLICY["unavailable_threshold_seconds"])
@@ -51,9 +51,9 @@ def _rover_availability_policy_from_mqtt(mqtt: dict[str, Any] | None) -> dict[st
     }
 
 
-def _rover_availability_policy(config: Any) -> dict[str, Any]:
+def _vehicle_availability_policy(config: Any) -> dict[str, Any]:
     mqtt = config.mqtt if hasattr(config, "mqtt") else {}
-    return _rover_availability_policy_from_mqtt(mqtt if isinstance(mqtt, dict) else {})
+    return _vehicle_availability_policy_from_mqtt(mqtt if isinstance(mqtt, dict) else {})
 
 
 @router.get("/api/simulation-config")
@@ -129,12 +129,12 @@ async def set_mqtt_config(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="broker_port must be positive")
     if updated["control_hz"] <= 0:
         raise HTTPException(status_code=400, detail="control_hz must be positive")
-    rover_availability_payload = mqtt_payload.get("rover_availability")
-    if rover_availability_payload is not None and not isinstance(rover_availability_payload, dict):
-        raise HTTPException(status_code=400, detail="mqtt.rover_availability must be an object")
-    updated["rover_availability"] = _rover_availability_policy_from_mqtt({
+    vehicle_availability_payload = mqtt_payload.get("vehicle_availability")
+    if vehicle_availability_payload is not None and not isinstance(vehicle_availability_payload, dict):
+        raise HTTPException(status_code=400, detail="mqtt.vehicle_availability must be an object")
+    updated["vehicle_availability"] = _vehicle_availability_policy_from_mqtt({
         **updated,
-        **({"rover_availability": rover_availability_payload} if rover_availability_payload is not None else {}),
+        **({"vehicle_availability": vehicle_availability_payload} if vehicle_availability_payload is not None else {}),
     })
 
     runtime.config.raw.setdefault("mqtt", {}).update(updated)

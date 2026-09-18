@@ -236,6 +236,7 @@ class AppConfig:
 # tracked config/*.json files no longer carry the old keys.
 LEGACY_CONFIG_KEYS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("model_routing",), "rover_intent_parser", "vehicle_intent_parser"),
+    (("mqtt",), "rover_availability", "vehicle_availability"),
 )
 
 

@@ -10,7 +10,7 @@
     "control_hz": 20,
     "telemetry_hz": 2,
     "telemetry_policy": "auto",
-    "rover_availability": {
+    "vehicle_availability": {
       "connected_threshold_seconds": 2,
       "unavailable_threshold_seconds": 60,
       "rollover_on_reconnect": true

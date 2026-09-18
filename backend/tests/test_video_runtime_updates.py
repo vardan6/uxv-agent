@@ -289,7 +289,7 @@ def test_settings_apply_osd_presets_section_broadcasts_shared_catalog_update(mon
     ]
 
 
-def test_mqtt_config_route_updates_rover_availability_policy(monkeypatch) -> None:
+def test_mqtt_config_route_updates_vehicle_availability_policy(monkeypatch) -> None:
     runtime = _runtime()
     runtime.config.raw["mqtt"] = {
         "broker_host": "demo-broker",
@@ -300,7 +300,7 @@ def test_mqtt_config_route_updates_rover_availability_policy(monkeypatch) -> Non
         "state_topic": "telemetry/state",
         "camera_topic": "camera-feed",
         "control_hz": 20,
-        "rover_availability": {
+        "vehicle_availability": {
             "connected_threshold_seconds": 2,
             "unavailable_threshold_seconds": 60,
             "rollover_on_reconnect": True,
@@ -322,7 +322,7 @@ def test_mqtt_config_route_updates_rover_availability_policy(monkeypatch) -> Non
                         "state_topic": "telemetry/state",
                         "camera_topic": "camera-feed",
                         "control_hz": 10,
-                        "rover_availability": {
+                        "vehicle_availability": {
                             "connected_threshold_seconds": 5,
                             "unavailable_threshold_seconds": 3,
                             "rollover_on_reconnect": False,
@@ -336,7 +336,7 @@ def test_mqtt_config_route_updates_rover_availability_policy(monkeypatch) -> Non
 
     assert runtime.config.raw["mqtt"]["broker_port"] == 1884
     assert runtime.config.raw["mqtt"]["control_hz"] == 10
-    assert runtime.config.raw["mqtt"]["rover_availability"] == {
+    assert runtime.config.raw["mqtt"]["vehicle_availability"] == {
         "connected_threshold_seconds": 5,
         "unavailable_threshold_seconds": 5,
         "rollover_on_reconnect": False,

@@ -335,11 +335,11 @@ function updateVideoPill(video = {}) {
 }
 
 function fillForm(mqtt = {}, simulation = {}) {
-  const roverAvailability = (mqtt.rover_availability && typeof mqtt.rover_availability === 'object')
-    ? mqtt.rover_availability
+  const vehicleAvailability = (mqtt.vehicle_availability && typeof mqtt.vehicle_availability === 'object')
+    ? mqtt.vehicle_availability
     : {};
-  const connectedThresholdRaw = Number.parseInt(roverAvailability.connected_threshold_seconds, 10);
-  const unavailableThresholdRaw = Number.parseInt(roverAvailability.unavailable_threshold_seconds, 10);
+  const connectedThresholdRaw = Number.parseInt(vehicleAvailability.connected_threshold_seconds, 10);
+  const unavailableThresholdRaw = Number.parseInt(vehicleAvailability.unavailable_threshold_seconds, 10);
   const connectedThreshold = Number.isFinite(connectedThresholdRaw) ? Math.max(0, connectedThresholdRaw) : 2;
   let unavailableThreshold = Number.isFinite(unavailableThresholdRaw) ? Math.max(1, unavailableThresholdRaw) : 60;
   if (unavailableThreshold < connectedThreshold) unavailableThreshold = connectedThreshold;
@@ -353,7 +353,7 @@ function fillForm(mqtt = {}, simulation = {}) {
   settingsEls.controlHz.value = mqtt.control_hz ?? 20;
   settingsEls.vehicleConnectedThreshold.value = connectedThreshold;
   settingsEls.vehicleUnavailableThreshold.value = unavailableThreshold;
-  settingsEls.vehicleRolloverOnReconnect.checked = roverAvailability.rollover_on_reconnect !== false;
+  settingsEls.vehicleRolloverOnReconnect.checked = vehicleAvailability.rollover_on_reconnect !== false;
   settingsEls.simulationBackend.value = simulation.backend || '3d-env';
 }
 
@@ -373,7 +373,7 @@ function readConnectivityFromForm() {
       state_topic: settingsEls.stateTopic.value.trim(),
       camera_topic: settingsEls.cameraTopic.value.trim(),
       control_hz: Number.parseInt(settingsEls.controlHz.value, 10),
-      rover_availability: {
+      vehicle_availability: {
         connected_threshold_seconds: connectedThreshold,
         unavailable_threshold_seconds: unavailableThreshold,
         rollover_on_reconnect: settingsEls.vehicleRolloverOnReconnect.checked,
