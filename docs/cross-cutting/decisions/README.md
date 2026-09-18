@@ -36,3 +36,4 @@ older decisions. Template and conventions live in [../../STYLE.md](../../STYLE.m
 | [0034](./0034-cross-container-drop-targets.md) | Cross-Container Drop Targets Need Our Own Overlay Layer |
 | [0036](./0036-retire-rover-sim-next.md) | Retire `rover-sim-next` |
 | [0037](./0037-project-naming-and-directory-restructure.md) | Project Naming, Directory Convention, And Repository Restructure |
+| [0038](./0038-rover-to-vehicle-rename.md) | `rover` → `vehicle`: Clean Break On One Wire Key, Four Slices |

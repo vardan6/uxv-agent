@@ -6,6 +6,13 @@ Python exception. `uxv` becomes an organisation, not a name prefix.
 
 Date: 2026-09-06
 Status: Accepted
+Amended: 2026-09-18 — §Naming scope settles what "no old names in public
+history" means (roadmap R4). The original text left it implicit and the
+[2026-09-07 plan review §7](../../reviews/plan-review-2026-09-07-project-cleanup-and-restructure.md#7-separate-tip-cleanup-from-history-rewriting)
+asked for it to be stated.
+Amended: 2026-09-18 — the Tier D consequence no longer states a blast radius.
+[ADR 0038](./0038-rover-to-vehicle-rename.md) owns it and supersedes the
+pre-measurement "~500 identifiers across the HTTP/WS contract" estimate.
 
 ## Context
 
@@ -107,15 +114,35 @@ Stage 8 is the extraction itself rather than preparation for it, is estimated in
 weeks, and is gated on splitting the 2,507-line `tool_registry.py`. It is
 therefore not part of PR 1 and `agent_core/` does not exist when PR 1 lands.
 
+### Naming scope — the tip, not retained history
+
+**Only the published tip must use the new names. Retained history keeps its
+original content, unrewritten.** Commits published in `uxv-agent` will contain
+`REMOTE_ROVER_*`, `gcs_server/`, and `rover`-keyed identifiers, and that is
+accepted. `uxv-agent` is a portfolio artifact
+([split handoff Q1](../handoff-repo-split-and-rename-2026-09-02.md)); a visible
+refactor history demonstrates how the work was done, so rewriting it would
+destroy value rather than create it. No historical content rewrite is planned.
+
+This does **not** weaken the sequencing rule above, because that rule rests on
+divergence — a change made after the fork must be made twice — not on the
+appearance of history. Every item stays pre-split for the reason already given.
+
+The rule is scoped to *content*. Path selection is a separate matter, and
+pulls the opposite way: see the extraction-manifest consequence below.
+
 ## Consequences
 
 - `pyproject.toml` moves onto the critical path **ahead of the split**. It must
   land before `gcs_server/` → `backend/` rewrites 116 import sites. This delays
   `uxv-agent` extraction by roughly 3–5 days.
-- Tier D enters pre-split scope by the sequencing rule. It is ~500 identifiers
-  across the HTTP/WS contract — larger than the restructure itself — and breaks
-  any client or stored payload keyed on the old names. It ships as its own PR
-  with its own ADR rather than inside PR 1.
+- Tier D enters pre-split scope by the sequencing rule and ships as its own PR
+  with its own ADR rather than inside PR 1. That ADR is
+  [ADR 0038](./0038-rover-to-vehicle-rename.md), which owns the blast radius:
+  the estimate once given here — "~500 identifiers across the HTTP/WS contract,
+  larger than the restructure itself" — was made before measurement and is
+  superseded. Tier D is a large internal rename with four narrow external edges;
+  no route path, table, column, or MQTT topic changes.
 - `uxv-agent` was settled 2026-09-02 as the *public repository* name. It stays
   there; it is not reassigned to the root.
 - The local absolute path changes from `~/Proj/remote-rover` to
@@ -130,6 +157,15 @@ therefore not part of PR 1 and `agent_core/` does not exist when PR 1 lands.
   directory.
 - `map/sources/world/` retains the word *world*, where it contrasts against
   *authored*. That is a real distinction, not a synonym for `scene/`.
+- **The extraction manifest must select historical ∪ current paths.** Keeping
+  full history (§Naming scope) constrains the `filter-repo` recipe: `--path`
+  selection does not follow renames across the commit that performed them, so a
+  manifest naming only `backend/`, `rag/`, `tts/`, `frontend-vanilla/`, `map/`
+  truncates each file's history at the restructure and makes the public repo
+  look as though it began at R1b. The old spellings — `gcs_server/`,
+  `rag_service/`, `tts_service/`, `static/` — must be selected alongside the new
+  ones. This is the one place the decision to keep history adds work rather than
+  removing it.
 - Standardizing scene access across the three consumers is **not** done here —
   the directory move is cheap, the contract rework is not. Deferred in
   [future-plans.md](../../future-plans.md).
@@ -148,7 +184,11 @@ therefore not part of PR 1 and `agent_core/` does not exist when PR 1 lands.
   derived names undersell the public repository, which is the one with an
   audience.
 - **Split first, restructure after.** Rejected by the sequencing rule: the
-  public history would carry the old names and layout permanently.
+  public *tip*, and every commit after the fork, would carry the old names and
+  layout permanently, and each rename would then have to be made twice. Read
+  forward, not retroactively — per §Naming scope this was never a claim that
+  pre-split renames scrub old names from commits that already exist. They do
+  not; an ordinary rename commit retains its parents.
 - **Hybrid — stages 0–3 before the split, 4–8 after.** Rejected for the same
   reason, though it remains the cheaper option if sequencing is ever revisited.
   `git filter-repo --path-rename` stays available as the fallback.
