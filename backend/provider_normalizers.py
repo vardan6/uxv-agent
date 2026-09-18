@@ -25,7 +25,7 @@ SECRET_REF_PREFIX = "secret://"
 
 ROUTING_PURPOSES = {
     "general_chat": "General Chat",
-    "rover_intent_parser": "Rover Intent Parser",
+    "vehicle_intent_parser": "Vehicle Intent Parser",
     "mission_planner": "Mission Planner",
     "reporter": "Reporter",
     "embeddings": "Embeddings",

@@ -238,7 +238,7 @@ const EXAMPLE_PROVIDER_ORDER = Object.keys(LLM_TEMPLATES);
 
 const ROUTING_LABELS = {
   general_chat: 'General Chat',
-  rover_intent_parser: 'Rover Intent Parser',
+  vehicle_intent_parser: 'Vehicle Intent Parser',
   mission_planner: 'Mission Planner',
   reporter: 'Reporter',
   embeddings: 'Embeddings',

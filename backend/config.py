@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 VIDEO_OSD_LINE_IDS = ("position", "speed_heading", "gps", "power", "camera")
 VIDEO_OSD_CORNERS = ("top-right", "top-left", "bottom-right", "bottom-left")
@@ -226,6 +229,44 @@ class AppConfig:
         return routing if isinstance(routing, dict) else {}
 
 
+# ADR 0038 renamed these config keys off `rover`. Operator settings files live
+# outside the repository, so unlike every other surface in that rename they are
+# read tolerantly: the old spelling still loads, warns, and is migrated in
+# memory. This is deliberate, time-limited debt — drop the table once the
+# tracked config/*.json files no longer carry the old keys.
+LEGACY_CONFIG_KEYS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("model_routing",), "rover_intent_parser", "vehicle_intent_parser"),
+)
+
+
+def _migrate_legacy_config_keys(raw: dict[str, Any]) -> dict[str, Any]:
+    for section_path, old_key, new_key in LEGACY_CONFIG_KEYS:
+        section: Any = raw
+        for name in section_path:
+            section = section.get(name) if isinstance(section, dict) else None
+            if not isinstance(section, dict):
+                break
+        if not isinstance(section, dict) or old_key not in section:
+            continue
+        if new_key in section:
+            logger.warning(
+                "config: %s.%s is obsolete and ignored because %s is also set; remove the old key",
+                ".".join(section_path),
+                old_key,
+                new_key,
+            )
+        else:
+            logger.warning(
+                "config: %s.%s is deprecated; reading it as %s. Rename it in your settings file",
+                ".".join(section_path),
+                old_key,
+                new_key,
+            )
+            section[new_key] = section[old_key]
+        section.pop(old_key, None)
+    return raw
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     settings_path = Path(path) if path else DEFAULT_SETTINGS_PATH
     data: dict[str, Any] = {}
@@ -240,6 +281,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if not isinstance(providers, list) or not providers:
         merged["llm_providers"] = copy.deepcopy(DEFAULT_LLM_PROVIDERS)
     merged["simulation"] = normalize_simulation_config(merged.get("simulation"))
+    merged = _migrate_legacy_config_keys(merged)
     return AppConfig(raw=merged, settings_path=settings_path)
 
 
