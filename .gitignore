@@ -38,6 +38,7 @@ docs/trigger.md
 
 backend/data/
 backend/data_*/
+backend/data-*/
 backend/webapp/
 frontend/node_modules/
 frontend/dist/
@@ -52,6 +53,13 @@ ArduPilot-SITL/
 
 # Playwright MCP browser-automation scratch (console logs, page snapshots)
 .playwright-mcp/
+
+# Runtime SQLite state — never committed (incl. gcs_llm_secrets.sqlite3).
+# Defence in depth: the path rules above are the primary guard, but a stray
+# `git add` from an unexpected location must not be able to stage a secrets DB.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 
 *.egg-info/
 **/*.egg-info/
