@@ -198,7 +198,7 @@ did not intend to protect is the wiring existing **twice**: the outer dock
 and they have already drifted — the outer one guards
 `onUnhandledDragOverEvent` with `hasNestedDockAt` and binds no `onWillDrop`,
 the inner one binds `onWillDrop` and omits the guard. They last had to change
-together in `ddca3c6`.
+together in `607270d`.
 
 **Decision:** the seam stays open with **two adapters and one implementation**.
 A new module `widgets/crossBoundaryDockWiring.ts` exports

@@ -212,12 +212,12 @@ Beyond per-row editing, the list offers Mission-management UX:
   bulk Delete** (delete loops the per-Mission delete, honouring the
   armed/awaiting-confirm/running/executing guard, then refreshes once).
 
-Design decisions (the management suite is ported forward from `e4a7c61`
+Design decisions (the management suite is ported forward from `4d32e92`
 additively — it predates the current flat-Mission/`escapeHtml` rewrite):
 
 - the top control cluster (view-mode, layer toggles, fit buttons, info bar) lives
   **top-right**, clear of the Leaflet zoom ± — the branch's own richer view-mode
-  cluster is *relocated* there rather than importing `e4a7c61`'s narrower
+  cluster is *relocated* there rather than importing `4d32e92`'s narrower
   `MapViewToolbar`
 - bulk delete *extends* the existing batch bar rather than importing a second
   bulk-action bar
