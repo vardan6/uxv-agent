@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Remote Rover GCS, AI agent, and simulator monorepo"
 requires-python = ">=3.11"
 
-[tool.setuptools]
-packages = ["backend", "rag"]
+[tool.setuptools.packages.find]
+include = ["backend", "backend.*", "rag", "rag.*"]
 
 [tool.coverage.report]
 show_missing = true
