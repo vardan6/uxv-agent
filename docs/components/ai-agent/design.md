@@ -694,7 +694,7 @@ Hand-off boundary: the `.plan` file. No upload code in this slice; that lands wh
 New sub-project Settings surface, two tabs:
 
 - **Constants** — `default_accept_radius_m` (default 2.0), `default_hold_s` (default 0.0), `road_graph_epsilon_m` (default 0.5), exporter output directory, `pose_max_age_s` (default 5.0), `cross_track_tolerance_m` (declared, not used in this slice).
-- **Vehicle profile** — active profile selector plus per-profile physical / behavioural fields. Ships with `ground_vehicle`, `multirotor`, `fixed_wing` presets; only `ground_vehicle` is exercised.
+- **Vehicle profile** — active profile selector (not built yet; see §Selection contract) plus per-profile physical / behavioural fields. Ships with `ground_vehicle`, `multirotor`, `fixed_wing` presets; only `ground_vehicle` is exercised.
 
 ### Dispatch mode
 
