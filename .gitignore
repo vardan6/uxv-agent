@@ -32,7 +32,7 @@ imgui.ini
 AGENTS.md
 CLAUDE.md
 
-config/common.local.json
+config/common.local*
 
 docs/trigger.md
 
