@@ -581,6 +581,15 @@ Active profile is a Settings selection. Single-active assumed (one vehicle comma
 
 **Selection contract.** The selection persists as `vehicle_profile.active_profile_id` in the GCS settings file, read and written through `GET`/`POST /api/vehicle-profile/active` (`backend/routers/ai.py`). The two directions are deliberately asymmetric: the read path is tolerant — an absent or unrecognised id logs and resolves to `rover_default`, so a settings file naming a profile this build no longer ships cannot break planning or export — while the write path rejects an unknown id with `400` rather than persisting one. `ROVER_DEFAULT` is the fallback, not a hardcoded active profile.
 
+**No operator control exists for this yet.** The contract above is server-side
+only: the sole in-repository client is the `GET` in
+`map/sources/authored/vehicleProfileApi.js`, and nothing calls `POST`, so the
+selector described under §Settings layout is intent, not shipped behavior —
+changing the active profile today means editing the settings file or calling the
+API directly. Deliberately deferred, not overlooked; the gap is tracked as
+finding 5 of
+[the 2026-09-24 review](../../reviews/code-review-2026-09-24-projects-cleanup-vs-master.md).
+
 Consumers never read settings themselves. `ToolRegistry`, `MissionExportService`, and `MissionExecutionService` each take an injected `profile_resolver` callable (`backend/runtime.py`, `backend/app.py` wire the settings-backed one); it is called per operation, so a selection change takes effect without a restart, and tests inject a fake instead of a config. This is the same injection seam the RAG modules use to keep their dependency direction one-way.
 
 Vehicle binding is stamped at authoring time: `create_proposal` and `create_client_revision` write the resolved profile id into the revision's `mission.vehicle_profile_id`, and `execute_revision` refuses a mismatch with status `vehicle_profile_mismatch` before any export or controller install (see §Mission authoring and start target). A revision that predates the stamp carries no id and stays dispatchable under the active profile.
