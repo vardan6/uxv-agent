@@ -273,16 +273,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     data: dict[str, Any] = {}
     if FALLBACK_SETTINGS_PATH.exists():
         with open(FALLBACK_SETTINGS_PATH, encoding="utf-8") as fh:
-            data = json.load(fh)
+            data = _migrate_legacy_config_keys(json.load(fh))
+    # Migrate each source before merging: the example already carries the new
+    # keys, so migrating after the merge would discard an operator's old value.
     if settings_path.exists():
         with open(settings_path, encoding="utf-8") as fh:
-            data = _deep_merge(data, json.load(fh))
+            data = _deep_merge(data, _migrate_legacy_config_keys(json.load(fh)))
     merged = _deep_merge(DEFAULT_GCS_SETTINGS, data)
     providers = merged.get("llm_providers")
     if not isinstance(providers, list) or not providers:
         merged["llm_providers"] = copy.deepcopy(DEFAULT_LLM_PROVIDERS)
     merged["simulation"] = normalize_simulation_config(merged.get("simulation"))
-    merged = _migrate_legacy_config_keys(merged)
     return AppConfig(raw=merged, settings_path=settings_path)
 
 

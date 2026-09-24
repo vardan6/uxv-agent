@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from config import AppConfig, _migrate_legacy_config_keys, normalize_simulation_config
+from config import AppConfig, _migrate_legacy_config_keys, load_config, normalize_simulation_config
 
 
 def test_optional_config_getters_do_not_mutate_raw_when_keys_are_missing() -> None:
@@ -62,6 +63,19 @@ def test_legacy_availability_policy_is_read_under_its_new_name() -> None:
     _migrate_legacy_config_keys(raw)
 
     assert raw["mqtt"] == {"host": "localhost", "vehicle_availability": policy}
+
+
+def test_operator_legacy_availability_policy_survives_the_example_defaults(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"mqtt": {"rover_availability": {"connected_threshold_seconds": 99}}}),
+        encoding="utf-8",
+    )
+
+    config = load_config(settings)
+
+    assert config.raw["mqtt"]["vehicle_availability"]["connected_threshold_seconds"] == 99
+    assert "rover_availability" not in config.raw["mqtt"]
 
 
 def test_config_without_the_legacy_routing_purpose_is_untouched() -> None:
