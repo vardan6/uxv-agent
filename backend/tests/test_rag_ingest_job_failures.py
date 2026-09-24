@@ -1,7 +1,7 @@
 """TA7 — RAG job failures boundary (audit item 5).
 
 `POST /api/rag/ingest` fans out to a background thread via
-`gcs_server/routers/rag.py`'s in-memory `_IngestJobStore` / `_run_ingest_job`.
+`backend/routers/rag.py`'s in-memory `_IngestJobStore` / `_run_ingest_job`.
 These tests exercise that job lifecycle directly: duplicate/concurrent jobs
 for the same collection are rejected, a worker exception lands as an
 observable terminal "error" status rather than crashing or hanging the

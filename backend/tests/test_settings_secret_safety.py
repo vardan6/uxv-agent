@@ -1,7 +1,7 @@
 """TA7 — settings/secret safety boundary (audit item 2).
 
 Covers the operator-facing settings surface directly against
-`gcs_server/routers/settings.py`'s module functions: secret redaction on
+`backend/routers/settings.py`'s module functions: secret redaction on
 export, allow-listed section selection, path-escape rejection for the
 load/save-to-path flow, and all-or-nothing application of a settings patch
 when one section is malformed.
