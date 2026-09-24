@@ -2,7 +2,7 @@
 
 This index shows the stakeholder-facing components that use the two-tier
 documentation model. Each component has fixed `requirements.md` and `design.md`
-entrypoints; smaller support modules such as `tts_service` and `config` stay
+entrypoints; smaller support modules such as `tts` and `config` stay
 documented in their local READMEs instead of getting full component folders. A
 retired third `internals/` tier was folded into `design.md`.
 

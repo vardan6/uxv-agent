@@ -4,7 +4,7 @@
 # pass/fail on whether the expected source document(s) appear in the top-k
 # retrieval results. No ML scoring.
 #
-# Run:  bin/rag eval            (or: python -m rag_service.eval)
+# Run:  bin/rag eval            (or: python -m rag.eval)
 #
 # Fields per retrieval question:
 #   id                short stable identifier

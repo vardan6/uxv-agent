@@ -2,7 +2,7 @@
 
 `rag/` is the **write side** of the RAG subsystem (ADR 0028): the Qdrant
 sidecar, ingestion/chunking/embedding, and the update pipeline. The **read side**
-(retrieval queried by the AI chat) lives in `gcs_server/ai/retrieval.py`.
+(retrieval queried by the AI chat) lives in `backend/ai/retrieval.py`.
 
 Qdrant is the repo's first mandatory runtime container. The app **degrades
 gracefully** without it — chat still works and `project_docs` reports
@@ -56,7 +56,7 @@ keeps Qdrant's native `6333`/`6334` internally.
 
 The dense embedding model is **Qwen3-Embedding-4B** (2560-dim, Q8_0) served by
 **LM Studio** over its OpenAI-compatible `/v1/embeddings` endpoint (ADR 0028
-§4 / §4a). Ingest (write) and the query side (`gcs_server`'s `embeddings`
+§4 / §4a). Ingest (write) and the query side (`backend`'s `embeddings`
 routing provider) **must point at the same endpoint + model** or dense vectors
 land in different spaces. Collection: `project_docs_v1_qwen3e4b_2560`. Dense and
 sparse are decoupled — sparse arrives in Slice 1.5 from a separate model

@@ -2,4 +2,4 @@ fastapi
 uvicorn
 kokoro-onnx
 numpy
-httpx  # test-only: fastapi.testclient.TestClient in tts_service/tests
+httpx  # test-only: fastapi.testclient.TestClient in tts/tests
