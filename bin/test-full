@@ -62,8 +62,24 @@ skip "[6/13] FastAPI application/API integration tests" \
 skip "[7/13] RAG disposable-Qdrant integration" \
   "no fake-embedding/disposable-Qdrant integration test is implemented yet (audit §8.8); docker is available in this environment but there is nothing to run"
 
-skip "[8/13] TTS synthesis smoke" \
-  "no local TTS model files present under tts/models/ in this environment"
+echo "== [8/13] TTS synthesis smoke =="
+if [[ ! -f tts/models/kokoro-v1.0.onnx || ! -f tts/models/voices-v1.0.bin ]]; then
+  skip "[8/13] TTS synthesis smoke" "no local TTS model files present under tts/models/ in this environment"
+elif ! "$PY" -c "import kokoro_onnx" 2>/dev/null; then
+  skip "[8/13] TTS synthesis smoke" "kokoro-onnx is not installed in .venv"
+elif "$PY" -c '
+from tts.config import load_config
+from tts.engines.kokoro import KokoroEngine
+c = load_config()
+wav = KokoroEngine(c.model_path, c.voices_path).synthesize_wav(
+    "Smoke test.", voice=c.default_voice, speed=1.0, language=c.default_language)
+assert wav[:4] == b"RIFF" and len(wav) > 1000, len(wav)
+'; then
+  echo "TTS synthesis smoke: passed"
+else
+  fail "TTS synthesis smoke"
+fi
+echo
 
 echo "== [9/13] mav-sim startup/shutdown smoke =="
 if command -v curl >/dev/null 2>&1 && curl -s -o /dev/null "http://127.0.0.1:9010/" 2>/dev/null; then
