@@ -10,6 +10,10 @@ Amended: 2026-09-18 — §Naming scope settles what "no old names in public
 history" means (roadmap R4). The original text left it implicit and the
 [2026-09-07 plan review §7](../../reviews/plan-review-2026-09-07-project-cleanup-and-restructure.md#7-separate-tip-cleanup-from-history-rewriting)
 asked for it to be stated.
+Amended: 2026-09-24 — §Sequencing: the restructure, Tier C, and Tier D reach
+`master` as one PR (a single fast-forward of `projects-cleanup`), not three.
+Operator decision on
+[review finding 8](../../reviews/code-review-2026-09-24-projects-cleanup-vs-master.md).
 Amended: 2026-09-18 — the Tier D consequence no longer states a blast radius.
 [ADR 0038](./0038-rover-to-vehicle-rename.md) owns it and supersedes the
 pre-measurement "~500 identifiers across the HTTP/WS contract" estimate.
@@ -105,15 +109,16 @@ made after the fork must be made twice and diverges.
 
 | Order | Work |
 |---|---|
-| PR 1 | Restructure stages 0–7 + Tier A `UXV_*` env rename |
-| PR 2 | Tier C vehicle-profile defaulting |
-| PR 3 | Tier D `rover` → `vehicle` + its own ADR |
+| 1 | Restructure stages 0–7 + Tier A `UXV_*` env rename |
+| 2 | Tier C vehicle-profile defaulting |
+| 3 | Tier D `rover` → `vehicle` + its own ADR |
+| PR | Items 1–3 reach `master` together as **one PR**: a single fast-forward of the linear `projects-cleanup` stack |
 | then | Split to `uxv-agent` |
 | after | Stage 8 — `ai/` → portable `agent_core/` |
 
 Stage 8 is the extraction itself rather than preparation for it, is estimated in
 weeks, and is gated on splitting the 2,507-line `tool_registry.py`. It is
-therefore not part of PR 1 and `agent_core/` does not exist when PR 1 lands.
+therefore not part of that PR, and `agent_core/` does not exist when it lands.
 
 ### Naming scope — the tip, not retained history
 
@@ -137,8 +142,8 @@ pulls the opposite way: see the extraction-manifest consequence below.
 - `pyproject.toml` moves onto the critical path **ahead of the split**. It must
   land before `gcs_server/` → `backend/` rewrites 116 import sites. This delays
   `uxv-agent` extraction by roughly 3–5 days.
-- Tier D enters pre-split scope by the sequencing rule and ships as its own PR
-  with its own ADR rather than inside PR 1. That ADR is
+- Tier D enters pre-split scope by the sequencing rule and has its own ADR; it
+  ships in the same single PR as the restructure. That ADR is
   [ADR 0038](./0038-rover-to-vehicle-rename.md), which owns the blast radius:
   the estimate once given here — "~500 identifiers across the HTTP/WS contract,
   larger than the restructure itself" — was made before measurement and is
