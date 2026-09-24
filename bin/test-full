@@ -66,17 +66,22 @@ skip "[8/13] TTS synthesis smoke" \
   "no local TTS model files present under tts/models/ in this environment"
 
 echo "== [9/13] mav-sim startup/shutdown smoke =="
-if command -v curl >/dev/null 2>&1; then
-  (cd mav-sim && "$PY" app.py >/tmp/mav-sim-smoke.log 2>&1 &)
-  mav_pid=""
+if command -v curl >/dev/null 2>&1 && curl -s -o /dev/null "http://127.0.0.1:9010/" 2>/dev/null; then
+  # Something already answers on :9010; never signal a process we did not start.
+  skip "[9/13] mav-sim startup/shutdown smoke" "port 9010 is already in use by another process"
+elif command -v curl >/dev/null 2>&1; then
+  (cd mav-sim && exec "$PY" app.py >/tmp/mav-sim-smoke.log 2>&1) &
+  mav_pid=$!
+  ready=0
   for _ in $(seq 1 20); do
-    mav_pid="$(pgrep -f "$PY app.py" | head -n1 || true)"
-    if [[ -n "$mav_pid" ]] && curl -sf "http://127.0.0.1:9010/" >/dev/null 2>&1; then
+    kill -0 "$mav_pid" 2>/dev/null || break
+    if curl -sf "http://127.0.0.1:9010/" >/dev/null 2>&1; then
+      ready=1
       break
     fi
     sleep 0.5
   done
-  if [[ -n "$mav_pid" ]] && curl -sf "http://127.0.0.1:9010/" >/dev/null 2>&1; then
+  if (( ready )); then
     kill -TERM "$mav_pid" 2>/dev/null || true
     for _ in $(seq 1 10); do
       if ! kill -0 "$mav_pid" 2>/dev/null; then
@@ -91,9 +96,10 @@ if command -v curl >/dev/null 2>&1; then
       echo "mav-sim startup/shutdown smoke: passed"
     fi
   else
-    fail "mav-sim startup/shutdown smoke: server never became reachable on :9010"
-    [[ -n "$mav_pid" ]] && kill -KILL "$mav_pid" 2>/dev/null || true
+    fail "mav-sim startup/shutdown smoke: launched process never became reachable on :9010"
+    kill -KILL "$mav_pid" 2>/dev/null || true
   fi
+  wait "$mav_pid" 2>/dev/null || true
 else
   skip "[9/13] mav-sim startup/shutdown smoke" "curl not available in this environment"
 fi
