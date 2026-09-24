@@ -27,7 +27,8 @@ staged migration plan, but left them explicitly unratified — a draft ADR was
 written and deliberately not adopted. A grilling session on 2026-09-06 closed
 the remaining questions. Full working record, including measurements and
 rejected candidates, is in
-[handoff-naming-and-restructure-2026-09-06.md](../handoff-naming-and-restructure-2026-09-06.md).
+[2026-09-06-naming-and-restructure-handoff.md](../../archive/cross-cutting/2026-09-06-naming-and-restructure-handoff.md)
+(archived 2026-09-24 — traceability only; this ADR is the decision truth).
 
 Measurements that drove these decisions, verified and not to be re-derived:
 

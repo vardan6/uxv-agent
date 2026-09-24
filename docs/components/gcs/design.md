@@ -250,7 +250,11 @@ See [requirements.md §Mission Lifecycle Tab](../gcs/requirements.md#mission-lif
 - `ai/`: current-context service, provider registry, chat service, session storage, and secret storage
 - `frontend-vanilla/`: dashboard and setup frontend assets
 - `map/`: the shared map widget (both frontends), split into
-  `sources/world/` and `sources/authored/` per ADR 0037
+  `sources/world/` and `sources/authored/` per ADR 0037. The split is an
+  isolation rule, not a filing convention: `sources/world/` must never import
+  from `sources/authored/`, because world content is generated and read-only
+  while authored content is operator-created and mutable. Neither direction
+  imports the other today; only `MapWidget.js` composes both.
 - `tools/` / `bin/` (planned): terminal AI CLI thin client over `/api/ai/...`
 
 ## Current Limitations
