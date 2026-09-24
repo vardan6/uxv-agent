@@ -10,6 +10,9 @@ export const VEHICLE_KIND_ICON = {
 export const UNKNOWN_VEHICLE_ICON = '❔';
 
 export function vehicleIcon(profileId = '', profiles = {}, activeProfileId = '') {
-  const profile = profiles[profileId] || (activeProfileId ? profiles[activeProfileId] : null) || {};
+  // The active profile stands in only for a row with no profile id at all; an
+  // id that resolves to nothing is unknown, not the active vehicle.
+  const id = profileId || activeProfileId;
+  const profile = (id && profiles[id]) || {};
   return VEHICLE_KIND_ICON[profile.kind] || UNKNOWN_VEHICLE_ICON;
 }

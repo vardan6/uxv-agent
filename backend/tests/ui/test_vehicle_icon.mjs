@@ -30,6 +30,11 @@ test('vehicleIcon does not assume an active profile when none is selected', () =
   assert.equal(vehicleIcon('', PROFILES, 'quad_x500'), '🚁');
 });
 
+test('vehicleIcon never lends the active profile to an unresolved profile id', () => {
+  assert.equal(vehicleIcon('no_such_profile', PROFILES, 'quad_x500'), UNKNOWN_VEHICLE_ICON);
+  assert.equal(vehicleIcon('no_such_profile', PROFILES, 'rover_default'), UNKNOWN_VEHICLE_ICON);
+});
+
 test('a mission row shows the profile the mission is bound to, not the active one', () => {
   const html = missionRowMarkup(
     {
@@ -62,7 +67,7 @@ test('a mission row with an unrecognised profile is labelled unknown', () => {
       sessionStatus: '',
       vehicleProfileId: 'retired_profile',
     },
-    { profilesById: PROFILES, activeProfileId: '' },
+    { profilesById: PROFILES, activeProfileId: 'rover_default' },
   );
 
   assert.match(html, /title="Vehicle type unknown"/);
