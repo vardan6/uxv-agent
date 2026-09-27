@@ -253,7 +253,7 @@ any drag whose `viewId` belongs to another dock and never fires the unhandled
 event, so container edges and — decisively — **empty** docks cannot receive a
 cross-boundary drop, while pane targets can. That is why a custom overlay layer
 exists for those two zones; full analysis and rejected alternatives in
-[ADR 0034](../../cross-cutting/decisions/0034-cross-container-drop-targets.md).
+[ADR 0034](../../../cross-cutting/decisions/0034-cross-container-drop-targets.md).
 
 - **Zone precedence.** Innermost dock under the cursor wins; within a dock the
   outer **24px rim** wins over the pane beneath it, matching the `dndEdges`
