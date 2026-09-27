@@ -1,206 +1,91 @@
-# Remote Rover
+# uxv-agent
 
-Remote Rover is a rover-control platform built around these main local applications:
-- `backend/`: a browser-based Ground Control Station (GCS)
-- `3d-env/`: a Panda3D-based 3D rover simulator
-- `tts/`: a local text-to-speech service for AI chat response playback
+uxv-agent is a ground control station (GCS) with an AI agent layer for
+uncrewed vehicles (UxV). An operator controls a vehicle directly from the
+browser, or asks the agent by text or voice to plan a mission, watch its
+execution, and hand control back to a human when something unexpected happens.
 
-The high-level goal is broader than the current rover simulator: build a remote operations stack for rovers and later other robots. The current rover-in-simulator workflow is the prototype path toward real remotely controlled robots, where users can operate directly or ask AI agents by text or voice to generate missions, monitor execution, and escalate to a human when the robot encounters unexpected conditions.
+It is a working prototype developed against a simulated ground vehicle; the
+simulator itself is not part of this repository.
 
-The system already supports the full working control loop:
-- browser control through the GCS
-- MQTT control delivery to the simulator
-- simulator telemetry publication
-- simulator camera-frame publication
-- browser telemetry and camera display through the GCS
-- simulator-side outbound publish suppression when no active GCS is present
+## What is in this repository
+
+| Path | What it is |
+|---|---|
+| `backend/` | FastAPI GCS server: MQTT bridge, telemetry, replay, video, and the AI agent (`backend/ai/`) |
+| `frontend-vanilla/` | Browser operator UI served by the backend |
+| `map/` | Map widget shared by the operator UI |
+| `mav-sim/` | MAVLink flight-controller simulator used for mission upload and execution tests |
+| `rag/` | Retrieval service: ingestion and Qdrant-backed search for the agent |
+| `tts/` | Local text-to-speech service (Kokoro) for spoken agent replies |
+| `scene/` | Terrain scene manifest and its generate/validate pipeline |
+| `config/` | Shared configuration template (`common.example.json`) |
+| `tools/`, `bin/` | CLI helpers and the test gates |
+| `docs/` | Requirements, design, and architecture decision records |
 
 ## Documentation
 
-Main documentation entry point:
-- [Documentation Portal](./docs/README.md)
+Start at the [documentation portal](./docs/README.md). Recommended reading order:
 
-Recommended reading order:
-- [Vision](./docs/cross-cutting/vision.md)
-- [Architecture](./docs/cross-cutting/architecture.md)
-- [GCS Requirements](./docs/components/gcs/requirements.md)
-- [AI Agent Requirements](./docs/components/ai-agent/requirements.md)
-- [AI Agent Design](./docs/components/ai-agent/design.md)
-- [AI Agent Graph Spec](./docs/components/ai-agent/design/graph-spec.md)
-- [AI Current Context Layer](./docs/components/ai-agent/design/context-layer.md)
-- [AI Spatial Tools](./docs/components/ai-agent/design/spatial-tools.md)
-- [Simulator Design](./docs/components/simulator/design.md)
-- [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
+1. [Vision](./docs/cross-cutting/vision.md)
+2. [Architecture](./docs/cross-cutting/architecture.md)
+3. [GCS requirements](./docs/components/gcs/requirements.md)
+4. [AI agent requirements](./docs/components/ai-agent/requirements.md) and
+   [design](./docs/components/ai-agent/design.md)
+5. [Architecture decision records](./docs/cross-cutting/decisions/README.md)
+6. [Run and config guide](./docs/cross-cutting/operations/run-and-config.md)
 
-Subproject documentation:
-- [Simulator Docs](./docs/components/simulator/README.md)
-- [GCS Docs](./docs/components/gcs/README.md)
-- [Terrain Scene Manifest](./docs/components/simulator/design/terrain-scene.md)
+Some docs describe components that live only in the private upstream
+repository — the Panda3D simulator (`3d-env/`) and the React operator console
+(`frontend/`). They are kept because the decisions they record still shape the
+code here.
 
-## Repository Layout
+## Quick start
 
-```text
-remote-uxv/
-  backend/
-  frontend/
-  frontend-vanilla/
-  map/
-  3d-env/
-  mav-sim/
-  scene/
-  rag/
-  tts/
-  config/
-  docs/
-  tools/
-```
-
-## Quick Start
-
-Remote Rover is currently run as separate local processes. Use separate terminals so each service stays visible and can be stopped independently.
-
-### 1. Start MQTT
-
-Make sure an MQTT broker is reachable using the host and port configured in:
-
-```text
-config/common.local.json
-```
-
-If you use a local Mosquitto broker, start it before the GCS and simulator.
-
-### 2. Start The GCS
-
-From the repository root:
+Requires Python 3.11+, Node.js (for the map tests), and an MQTT broker such as
+Mosquitto.
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
-python -m venv backend/.venv
-source backend/.venv/bin/activate
-pip install -r backend/requirements-gcs.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements-gcs.txt -r tts/requirements.txt \
+            -r mav-sim/requirements.txt -r rag/requirements.txt pytest pytest-cov
+cp config/common.example.json config/common.local.json   # then edit hosts/ports
 python -m backend
 ```
 
-Open the GCS at the host and port configured under `gcs.host` and `gcs.port` in `config/common.local.json`.
-The tracked template defaults to `http://127.0.0.1:8080`; this repo's local override may differ.
+Open the GCS at the `gcs.host` / `gcs.port` configured in
+`config/common.local.json` (template default `http://127.0.0.1:8080`).
+`backend/run.sh` starts the backend from the root `.venv`.
 
-Alternative helper from inside `backend/`:
-
-```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/backend
-./run.sh
-```
-
-### 3. Start The TTS Service
-
-Set up the local AI voice service from the repository root:
+Optional services, each in its own terminal:
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
-python -m venv tts/.venv
-source tts/.venv/bin/activate
-pip install -r tts/requirements.txt
+# Text-to-speech (downloads the Kokoro model once)
 python tts/scripts/download_kokoro_models.py
 python -m uvicorn tts.app:app --host 127.0.0.1 --port 9101
+
+# MAVLink flight-controller simulator (web UI on port 9010)
+mav-sim/run.sh
 ```
 
-Health check:
+Launcher details, shared config behaviour, and telemetry policy are in the
+[run and config guide](./docs/cross-cutting/operations/run-and-config.md).
 
-```text
-http://127.0.0.1:9101/health
-```
-
-More details:
-- [TTS Service README](./tts/README.md)
-
-### 4. Start The Simulator
-
-From `3d-env/`:
+## Tests
 
 ```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python simulator/main.py
+bin/test-fast   # offline, deterministic gate
+bin/test-full   # fast gate + coverage + environment-gated smoke checks
 ```
 
-Alternative helper:
+Both use the root `.venv`. The policy is in
+[testing](./docs/cross-cutting/operations/testing.md).
 
-```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv/3d-env
-./run.sh
-```
+## History
 
-### 5. Recommended Run Order
-
-1. Start MQTT.
-2. Start the GCS.
-3. Start the TTS service when AI response voice playback is needed.
-4. Open the GCS in the browser.
-5. Start the simulator.
-6. Confirm telemetry and camera data appear in the GCS.
-7. Use AI Chat and test voice playback.
-
-Regenerate the explicit terrain scene manifest when terrain/object definitions change:
-
-```bash
-cd /mnt/c/Users/vardana/Documents/Proj/remote-uxv
-python3 scene/pipeline/generate_terrain_scene.py
-python3 scene/pipeline/validate_terrain_scene.py
-```
-
-For cross-platform launcher details, shared config behavior, and telemetry policy notes, use:
-- [Run And Config Guide](./docs/cross-cutting/operations/run-and-config.md)
-
-## Migration Notes (2026-09 Naming And Directory Restructure)
-
-Decided in [ADR 0037](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
-Historical docs (`docs/archive/`, `docs/cross-cutting/research/`, `progress.md`,
-handoff docs) intentionally keep the pre-restructure names as an accurate
-record of the state they describe.
-
-### Directories
-
-| Old path | New path |
-|---|---|
-| `gcs_server/` | `backend/` |
-| `rag_service/` | `rag/` |
-| `tts_service/` | `tts/` |
-| `gcs_server/static/map/` | `map/` (shared by both frontends; split into `map/sources/world/` and `map/sources/authored/`) |
-| `gcs_server/static/` (remaining pages) | `frontend-vanilla/` |
-
-The root directory rename (`remote-rover` → `remote-uxv`) is a separate,
-local-machine-only step, not part of this restructure — see
-[ADR 0037's root-rename migration checklist](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md#consequences)
-and `roadmap.md`'s Track 2 for what it still requires (agent memory directory,
-`.venv` recreation, launcher/shell/editor absolute paths).
-
-### Environment variables (Tier A)
-
-| Old name | New name |
-|---|---|
-| `REMOTE_ROVER_QDRANT_REST_PORT` | `UXV_QDRANT_REST_PORT` |
-| `REMOTE_ROVER_QDRANT_GRPC_PORT` | `UXV_QDRANT_GRPC_PORT` |
-| `REMOTE_ROVER_EMBEDDINGS_BASE_URL` | `UXV_EMBEDDINGS_BASE_URL` |
-| `REMOTE_ROVER_EMBEDDINGS_MODEL` | `UXV_EMBEDDINGS_MODEL` |
-| `REMOTE_ROVER_EMBEDDINGS_DIM` | `UXV_EMBEDDINGS_DIM` |
-| `REMOTE_ROVER_EMBEDDINGS_API_KEY` | `UXV_EMBEDDINGS_API_KEY` |
-| `REMOTE_ROVER_CONTEXTUAL_MODEL` | `UXV_CONTEXTUAL_MODEL` |
-| `REMOTE_ROVER_CONTEXTUAL_BASE_URL` | `UXV_CONTEXTUAL_BASE_URL` |
-| `REMOTE_ROVER_TTS_HOST` | `UXV_TTS_HOST` |
-| `REMOTE_ROVER_TTS_PORT` | `UXV_TTS_PORT` |
-| `REMOTE_ROVER_TTS_MODEL` | `UXV_TTS_MODEL` |
-| `REMOTE_ROVER_TTS_VOICES` | `UXV_TTS_VOICES` |
-| `REMOTE_ROVER_TTS_VOICE` | `UXV_TTS_VOICE` |
-| `REMOTE_ROVER_TTS_LANGUAGE` | `UXV_TTS_LANGUAGE` |
-| `REMOTE_ROVER_TTS_MAX_TEXT_CHARS` | `UXV_TTS_MAX_TEXT_CHARS` |
-| `REMOTE_ROVER_UI_SCALE` (`3d-env/`) | `UXV_UI_SCALE` |
-
-No dual-read shim was added — set the new names in your local environment
-(shell profile, `.env`, or launcher overrides) before starting `rag/`, `tts/`,
-or `3d-env`.
-
-## Current Status In One Paragraph
-
-The project is currently a working integrated prototype with a Panda3D simulator, a browser-based GCS, MQTT-based control and telemetry, GCS-side replay, and an MQTT-to-WebSocket bootstrap video path. The AI foundation already includes provider-backed chat, compact live context, a read-only Agent path, supervised intent parsing, planner-loop mission planning, and a backend-owned `mission_execution` boundary for revisions, overlays, and execution attempts. `3d-env` is the sole supported simulator backend.
+This repository was extracted from a private monorepo with its history kept.
+Commits before the 2026-09 restructure use the old names (`gcs_server/`,
+`rag_service/`, `tts_service/`, `REMOTE_ROVER_*` environment variables); see
+[ADR 0037](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md)
+for the mapping. The UI and some identifiers still say "Remote Rover".

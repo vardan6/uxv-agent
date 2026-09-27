@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "remote-uxv"
+name = "uxv-agent"
 version = "0.1.0"
-description = "Remote Rover GCS, AI agent, and simulator monorepo"
+description = "Ground control station and AI agent layer for uncrewed vehicles"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]

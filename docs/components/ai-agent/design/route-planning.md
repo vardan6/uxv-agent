@@ -50,7 +50,7 @@ Log node count, edge count, connected-component count. Single component expected
 
 ## Mission export reference
 
-Output format: QGC `.plan` JSON. Reference: [../../../cross-cutting/research/flight-controllers/mission-formats.md](../../../cross-cutting/research/flight-controllers/mission-formats.md).
+Output format: QGC `.plan` JSON.
 
 - `fileType="Plan"`, `version=1`
 - `mission.firmwareType=3` (ArduPilot)

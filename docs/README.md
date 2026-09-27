@@ -1,6 +1,6 @@
 # Remote Rover Documentation
 
-This directory is the source of truth for project docs. The live surface is intentionally small: fixed three-tier component docs under `components/`, cross-cutting architecture and ADRs under `cross-cutting/`, and historical material under `archive/`.
+This directory is the source of truth for project docs. The live surface is intentionally small: fixed three-tier component docs under `components/`, and cross-cutting architecture and ADRs under `cross-cutting/`.
 
 ## Start Here
 
@@ -26,7 +26,6 @@ This directory is the source of truth for project docs. The live surface is inte
 | [cross-cutting/README.md](./cross-cutting/README.md) | Index of system-wide docs |
 | [cross-cutting/decisions/README.md](./cross-cutting/decisions/README.md) | ADR index |
 | [cross-cutting/operations/README.md](./cross-cutting/operations/README.md) | Runtime and operational docs |
-| [cross-cutting/research/README.md](./cross-cutting/research/README.md) | Third-party background and research material |
 
 ## Reference
 
@@ -34,21 +33,6 @@ This directory is the source of truth for project docs. The live surface is inte
 |---|---|
 | [glossary.md](./glossary.md) | Shared project vocabulary |
 | [STYLE.md](./STYLE.md) | Documentation conventions and archive rules |
-| [snapshots/README.md](./snapshots/README.md) | Dated point-in-time reports of what a subsystem currently implements — not specs, no authority |
-| [reviews/README.md](./reviews/README.md) | Dated review output (architecture, code, audits) — findings not decisions, consumed then archived |
-
-## Archive
-
-Older plans, superseded designs, review output, and handoff notes live under [archive/](./archive/). Archive content is for traceability, not for the current source of truth.
-
-The former `docs/current-state.md` and `docs/roadmap.md` status hubs were retired
-2026-05-26 and removed outright 2026-08-22; their content lives in
-[archive/cross-cutting/2026-05-26-current-state-retired.md](./archive/cross-cutting/2026-05-26-current-state-retired.md)
-and
-[archive/cross-cutting/2026-05-26-product-roadmap-retired.md](./archive/cross-cutting/2026-05-26-product-roadmap-retired.md).
-Use root [`roadmap.md`](../roadmap.md), `activeContext.md`, and `progress.md` for
-current status. Component requirements and design documents are durable specs,
-not status surfaces.
 
 ## Reading Order
 

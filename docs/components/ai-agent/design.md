@@ -588,7 +588,7 @@ selector described under §Settings layout is intent, not shipped behavior —
 changing the active profile today means editing the settings file or calling the
 API directly. Deliberately deferred, not overlooked; the gap is tracked as
 finding 5 of
-[the 2026-09-24 review](../../reviews/code-review-2026-09-24-projects-cleanup-vs-master.md).
+the 2026-09-24 review.
 
 Consumers never read settings themselves. `ToolRegistry`, `MissionExportService`, and `MissionExecutionService` each take an injected `profile_resolver` callable (`backend/runtime.py`, `backend/app.py` wire the settings-backed one); it is called per operation, so a selection change takes effect without a restart, and tests inject a fake instead of a config. This is the same injection seam the RAG modules use to keep their dependency direction one-way.
 

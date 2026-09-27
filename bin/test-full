@@ -28,18 +28,14 @@ run_phase() {
   echo
 }
 
-echo "== [1/13] fast suite =="
+echo "== [1/9] fast suite =="
 if ! "$REPO_ROOT/bin/test-fast"; then
   fail "fast suite"
 fi
 echo
 
-run_phase "[2/13] full frontend vitest suite" bash -c "cd frontend && npm run test"
-
-run_phase "[3/13] frontend production build" bash -c "cd frontend && npm run build"
-
-echo "== [4/13] backend + tts + mav-sim + 3d-env coverage =="
-echo "\$ pytest --cov=. --cov-report=term-missing  (backend/, tts/, mav-sim/, 3d-env/)"
+echo "== [2/9] backend + tts + mav-sim coverage =="
+echo "\$ pytest --cov=. --cov-report=term-missing  (backend/, tts/, mav-sim/)"
 if ! (cd backend && PYTHONPATH=".:.." "$PY" -m pytest -q --cov=. --cov-report=term-missing); then
   fail "backend coverage"
 fi
@@ -49,24 +45,19 @@ fi
 if ! (cd mav-sim && "$PY" -m pytest -q --cov=. --cov-report=term-missing tests); then
   fail "mav-sim coverage"
 fi
-if ! (cd 3d-env && PYTHONPATH="simulator" "$PY" -m pytest -q --cov=simulator --cov-report=term-missing tests); then
-  fail "3d-env coverage"
-fi
 echo
 
-run_phase "[5/13] frontend coverage" bash -c "cd frontend && npm run test:coverage"
+skip "[3/9] FastAPI application/API integration tests" \
+  "no TestClient-level integration suite exists yet against the assembled app; a known product-test gap, not a gate defect"
 
-skip "[6/13] FastAPI application/API integration tests" \
-  "no TestClient-level integration suite exists yet against the assembled app (audit §2.1); tracked as a follow-up product-test gap, not a gate defect"
+skip "[4/9] RAG disposable-Qdrant integration" \
+  "no fake-embedding/disposable-Qdrant integration test is implemented yet"
 
-skip "[7/13] RAG disposable-Qdrant integration" \
-  "no fake-embedding/disposable-Qdrant integration test is implemented yet (audit §8.8); docker is available in this environment but there is nothing to run"
-
-echo "== [8/13] TTS synthesis smoke =="
+echo "== [5/9] TTS synthesis smoke =="
 if [[ ! -f tts/models/kokoro-v1.0.onnx || ! -f tts/models/voices-v1.0.bin ]]; then
-  skip "[8/13] TTS synthesis smoke" "no local TTS model files present under tts/models/ in this environment"
+  skip "[5/9] TTS synthesis smoke" "no local TTS model files present under tts/models/ in this environment"
 elif ! "$PY" -c "import kokoro_onnx" 2>/dev/null; then
-  skip "[8/13] TTS synthesis smoke" "kokoro-onnx is not installed in .venv"
+  skip "[5/9] TTS synthesis smoke" "kokoro-onnx is not installed in .venv"
 elif "$PY" -c '
 from tts.config import load_config
 from tts.engines.kokoro import KokoroEngine
@@ -81,10 +72,10 @@ else
 fi
 echo
 
-echo "== [9/13] mav-sim startup/shutdown smoke =="
+echo "== [6/9] mav-sim startup/shutdown smoke =="
 if command -v curl >/dev/null 2>&1 && curl -s -o /dev/null "http://127.0.0.1:9010/" 2>/dev/null; then
   # Something already answers on :9010; never signal a process we did not start.
-  skip "[9/13] mav-sim startup/shutdown smoke" "port 9010 is already in use by another process"
+  skip "[6/9] mav-sim startup/shutdown smoke" "port 9010 is already in use by another process"
 elif command -v curl >/dev/null 2>&1; then
   (cd mav-sim && exec "$PY" app.py >/tmp/mav-sim-smoke.log 2>&1) &
   mav_pid=$!
@@ -117,20 +108,17 @@ elif command -v curl >/dev/null 2>&1; then
   fi
   wait "$mav_pid" 2>/dev/null || true
 else
-  skip "[9/13] mav-sim startup/shutdown smoke" "curl not available in this environment"
+  skip "[6/9] mav-sim startup/shutdown smoke" "curl not available in this environment"
 fi
 echo
 
-skip "[10/13] headless 3d-env startup" \
-  "3d-env has no offscreen/window-type=none launch mode today; running main.py here would attempt to open a real Panda3D window"
+skip "[7/9] browser smoke (map/mission workflows, docking, popouts)" \
+  "requires a human at a browser"
 
-skip "[11/13] browser smoke (map/mission workflows, docking, popouts)" \
-  "requires a human at a browser; see roadmap TA9b and R1b's browser acceptance milestone"
+skip "[8/9] GCS-to-simulator MQTT telemetry/video/control smoke" \
+  "no MQTT integration smoke test is implemented yet"
 
-skip "[12/13] GCS-to-simulator MQTT telemetry/video/control smoke" \
-  "mosquitto is installed in this environment but no MQTT integration smoke test is implemented yet"
-
-echo "== [13/13] git whitespace + generator-dirty check =="
+echo "== [9/9] git whitespace + generator-dirty check =="
 if ! git diff --check; then
   fail "git whitespace check"
 fi

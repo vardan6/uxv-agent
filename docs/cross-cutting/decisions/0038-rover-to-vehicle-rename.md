@@ -31,7 +31,7 @@ two operator-config keys, and seven LLM-facing names. Roughly 80% of the
 occurrence count is simulator and frontend internals with no contract at all.
 
 Full evidence, per-file:
-[R5 contract surface](../research/2026-09-18-r5-rover-to-vehicle-contract-surface.md).
+R5 contract surface.
 
 ## Decision
 

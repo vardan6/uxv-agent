@@ -41,7 +41,6 @@ backend/data_*/
 backend/data-*/
 backend/webapp/
 frontend/node_modules/
-frontend/dist/
 *.tsbuildinfo
 node_modules/
 .runtime/

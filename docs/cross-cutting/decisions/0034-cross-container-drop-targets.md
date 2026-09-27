@@ -7,7 +7,7 @@
 (dockview shell),
 [operator-console.md](../../components/gcs/design/operator-console.md)
 (§Cross-boundary drag), roadmap UI8/UI9,
-[code review 2026-08-23](../../reviews/code-review-2026-08-23-cross-container-dnd.md).
+code review 2026-08-23.
 
 ## Context
 
@@ -94,7 +94,7 @@ also routes occupied-center drops to the actual pane under the pointer.
   lifecycle). Regression cover is the pure resolver plus handler-wiring tests;
   Chromium smoke is the authoritative gesture evidence. The current matrix is
   recorded in
-  [the UI8 browser smoke report](../../reviews/ui8-browser-smoke-2026-08-23.md).
+  the UI8 browser smoke report.
 - The dock registry this decision introduced for hit-testing is now also the
   source of destinations for the non-drag "Move to →" menu, so it has two
   consumers: a dock that fails to register loses both its cross-boundary drops

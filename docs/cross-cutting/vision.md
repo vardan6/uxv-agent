@@ -2,7 +2,7 @@
 
 *Consolidated 2026-06-20 from the 2026-05-21 vision drafts (the original vision.md and
 the chatgpt / claude / claude-v2 / codex companions, now in
-[docs/archive/cross-cutting/](../archive/cross-cutting/)). This is the single canonical
+docs/archive/cross-cutting/). This is the single canonical
 vision document.*
 
 ---

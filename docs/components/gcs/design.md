@@ -155,11 +155,7 @@ Current AI Chat behavior:
 - LLM provider configuration comes from `llm_providers` and `model_routing`
 - runtime chat calls go through the GCS LangChain provider registry
 - Agent mode is wired through `ToolRegistry`; tools cover rover state, scene summary, object queries, mission state, and replay analytics
-- terminal clients use the same `/api/ai/...` backend surface; the original CLI
-  delivery plan is retained only as
-  [historical context](../../archive/gcs/2026-06-16-ai-cli-plan.md)
-- the removal history for legacy `/intent` and `/plan` entry points is retained
-  in the [archive](../../archive/gcs/2026-06-17-intent-plan-cleanup.md)
+- terminal clients use the same `/api/ai/...` backend surface
 
 For the AI agent architecture and tool contract, see the [AI Agent component](../ai-agent/README.md).
 

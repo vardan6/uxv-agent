@@ -413,8 +413,8 @@ the code has been vehicle-agnostic since `VehicleProfile` started modelling
 The naming decision is [ADR 0037](./cross-cutting/decisions/0037-project-naming-and-directory-restructure.md).
 The current worktree and chosen repository name are `remote-uxv` after the
 scheduled R1 move. The older
-[split handoff](./cross-cutting/handoff-repo-split-and-rename-2026-09-02.md)
-and [strategy record](./cross-cutting/research/2026-08-10-project-naming-and-repo-split-strategy.md)
+split handoff
+and strategy record
 retain historical reasoning only.
 
 ## Workspace

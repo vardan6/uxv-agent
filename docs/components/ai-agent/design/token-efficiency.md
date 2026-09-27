@@ -2,8 +2,6 @@
 
 Related docs:
 
-- [Agent Tool Discoverability and Contracts](../../../cross-cutting/research/2026-06-18-agent-tool-discoverability-and-contracts.md)
-- [Tool Loading & Context Management](../../../cross-cutting/research/tool-loading-context-management.md)
 - [Tool Contract Standard](./tool-contract.md)
 
 ## Motivation
