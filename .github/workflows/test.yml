@@ -1,0 +1,26 @@
+name: test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies into the root .venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r backend/requirements-gcs.txt -r tts/requirements.txt \
+                                -r mav-sim/requirements.txt -r rag/requirements.txt \
+                                pytest pytest-cov
+      - name: Fast gate
+        run: bin/test-fast
