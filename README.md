@@ -89,3 +89,12 @@ Commits before the 2026-09 restructure use the old names (`gcs_server/`,
 `rag_service/`, `tts_service/`, `REMOTE_ROVER_*` environment variables); see
 [ADR 0037](./docs/cross-cutting/decisions/0037-project-naming-and-directory-restructure.md)
 for the mapping. The UI and some identifiers still say "Remote Rover".
+
+## License
+
+Copyright (C) 2026 vardan6.
+
+Licensed under the GNU Affero General Public License, version 3
+(`AGPL-3.0-only`) — see [LICENSE](./LICENSE). If you run a modified version as
+a network service, the AGPL requires you to offer its source to that service's
+users.
